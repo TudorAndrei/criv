@@ -19,6 +19,14 @@ pub(crate) struct Config {
     pub(crate) enforce_stages: Vec<String>,
     pub(crate) obsidian_plugin: bool,
     pub(crate) patterns: BTreeSet<String>,
+    pub(crate) pattern_defs: BTreeMap<String, PatternConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PatternConfig {
+    pub(crate) language: Option<String>,
+    pub(crate) pattern: Option<String>,
+    pub(crate) rule: Option<String>,
 }
 
 impl Default for Config {
@@ -35,6 +43,7 @@ impl Default for Config {
             enforce_stages: vec!["commit".into(), "push".into(), "ci".into()],
             obsidian_plugin: true,
             patterns: BTreeSet::new(),
+            pattern_defs: BTreeMap::new(),
         }
     }
 }
@@ -90,9 +99,45 @@ impl RawConfig {
             embeddings: self.index.embeddings.unwrap_or(defaults.embeddings),
             enforce_stages: self.enforce.stages.unwrap_or(defaults.enforce_stages),
             obsidian_plugin: self.obsidian.plugin.unwrap_or(defaults.obsidian_plugin),
-            patterns: self.patterns.into_keys().collect(),
+            patterns: self.patterns.keys().cloned().collect(),
+            pattern_defs: self
+                .patterns
+                .into_iter()
+                .map(|(id, value)| (id, PatternConfig::from_toml(value)))
+                .collect(),
         }
     }
+}
+
+impl PatternConfig {
+    fn from_toml(value: toml::Value) -> Self {
+        Self {
+            language: value
+                .get("language")
+                .and_then(toml::Value::as_str)
+                .map(str::to_string),
+            pattern: value
+                .get("pattern")
+                .and_then(toml::Value::as_str)
+                .map(str::to_string),
+            rule: value
+                .get("rule")
+                .and_then(toml::Value::as_str)
+                .map(str::to_string),
+        }
+    }
+
+    pub(crate) fn lexical_pattern(&self) -> Option<&str> {
+        self.pattern
+            .as_deref()
+            .or_else(|| self.rule.as_deref().and_then(extract_rule_pattern))
+    }
+}
+
+fn extract_rule_pattern(rule: &str) -> Option<&str> {
+    rule.lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix("pattern:").map(str::trim))
 }
 
 #[derive(Debug, Default, Deserialize)]

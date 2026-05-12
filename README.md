@@ -2,7 +2,7 @@
 
 `criv` turns a repository's `docs/` folder into a validated map of documentation, code references, and architectural decisions.
 
-This repository currently contains a dependency-light Rust MVP for the CLI and vault model. It implements:
+This repository currently contains a local Rust CLI and vault model. It implements:
 
 - `criv init` for idempotent vault scaffolding
 - `criv check` for note schema, ADR placement, wiki-link, target, pattern-reference, and supersession validation
@@ -10,12 +10,23 @@ This repository currently contains a dependency-light Rust MVP for the CLI and v
 - `criv query targets <note-id>`
 - `criv query cites <note-id>`
 - `criv query cited-by <note-id>`
+- `criv query governs <ADR-ID>`
+- `criv query governing <symbol>`
+- `criv query coverage`
+- `criv query nodes [--kind code|doc] [--without-docs]`
+- `criv query callers <symbol>`
+- `criv query callees <symbol>`
+- `criv query attack-surface`
+- `criv query diff <snapshot-a> <snapshot-b>`
 - `criv query orphan-docs`
 - `criv search --files <query>`
 - `criv search --grep <text>`
 - `criv search --notes <text>`
+- lexical structural-search fallbacks for `criv search '<pattern>'`, `--pattern-id`, and `--rule`
+- `criv watch --once` state and local snapshot writing
+- `criv enforce --stage commit|push|ci`
 
-The tree-sitter, ast-grep, fff-search, fastembed, watcher, enforcement, and full Obsidian rendering integrations are intentionally isolated as the next implementation layer.
+The tree-sitter, ast-grep, fff-search, fastembed, native lint integrations, and full Obsidian rendering integrations are intentionally isolated as the next implementation layer.
 
 ## Try It
 

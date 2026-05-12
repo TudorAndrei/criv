@@ -1,58 +1,47 @@
+use std::collections::BTreeSet;
+use std::fs;
 use std::path::Path;
+use std::process::Command;
+
+use clap::{Args as ClapArgs, ValueEnum};
 
 use crate::vault::{NoteKind, ResolvedLink, Vault, source_fragment_path};
-use crate::{Args, CrivError, Result};
+use crate::{CrivError, Result};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum Format {
     Text,
     Json,
 }
 
-#[derive(Debug)]
+#[derive(Debug, ClapArgs)]
 pub(crate) struct QueryOptions {
     name: String,
+    #[arg()]
     values: Vec<String>,
+    #[arg(long)]
+    by: Option<String>,
+    #[arg(long)]
+    kind: Option<String>,
+    #[arg(long)]
+    without_docs: bool,
+    #[arg(long, value_enum, default_value_t = Format::Text)]
     format: Format,
-}
-
-impl QueryOptions {
-    pub(crate) fn parse(mut args: Args) -> Result<Self> {
-        let Some(name) = args.next() else {
-            return Err(CrivError::usage("missing query name"));
-        };
-
-        let mut values = Vec::new();
-        let mut format = Format::Text;
-        while let Some(arg) = args.next() {
-            match arg.as_str() {
-                "--format" => {
-                    format = match args.expect_value("--format")?.as_str() {
-                        "text" => Format::Text,
-                        "json" => Format::Json,
-                        value => {
-                            return Err(CrivError::usage(format!(
-                                "unsupported query format `{value}`"
-                            )));
-                        }
-                    };
-                }
-                other => values.push(other.to_string()),
-            }
-        }
-
-        Ok(Self {
-            name,
-            values,
-            format,
-        })
-    }
 }
 
 pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
     let vault = Vault::load(root)?;
     let rows = match options.name.as_str() {
         "next-adr-id" => vec![next_adr_id(&vault)],
+        "callers" => {
+            let symbol = required_arg(&options, "symbol")?;
+            vault.source_graph().callers(symbol)
+        }
+        "callees" => {
+            let symbol = required_arg(&options, "symbol")?;
+            vault.source_graph().callees(symbol)
+        }
+        "attack-surface" => vault.source_graph().attack_surface(),
         "targets" => {
             let id = required_arg(&options, "note-id")?;
             targets(&vault, id)?
@@ -78,8 +67,17 @@ pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
             let symbol = required_arg(&options, "symbol")?;
             governing(&vault, symbol)
         }
-        "coverage" => coverage(&vault),
-        "nodes" => nodes(&vault, &options.values),
+        "coverage" => coverage(&vault, options.by.as_deref()),
+        "nodes" => nodes(&vault, options.kind.as_deref(), options.without_docs),
+        "diff" => {
+            let left = required_arg(&options, "ref-a")?;
+            let right = options
+                .values
+                .get(1)
+                .map(String::as_str)
+                .ok_or_else(|| CrivError::usage("query `diff` requires <ref-a> <ref-b>"))?;
+            diff(root, left, right)?
+        }
         other => {
             return Err(CrivError::usage(format!(
                 "query `{other}` is not implemented in this MVP"
@@ -253,7 +251,7 @@ fn governing(vault: &Vault, symbol: &str) -> Vec<String> {
     rows
 }
 
-fn coverage(vault: &Vault) -> Vec<String> {
+fn coverage(vault: &Vault, by: Option<&str>) -> Vec<String> {
     let governed = vault
         .notes
         .iter()
@@ -265,6 +263,12 @@ fn coverage(vault: &Vault) -> Vec<String> {
                 .flat_map(|pattern| vault.source_files_matching_glob(&pattern))
         })
         .collect::<std::collections::BTreeSet<_>>();
+    if by == Some("module") {
+        return coverage_by_module(vault, &governed);
+    }
+    if by == Some("adr") {
+        return coverage_by_adr(vault);
+    }
     vec![
         format!("source_files={}", vault.source_files().len()),
         format!("governed_files={}", governed.len()),
@@ -275,32 +279,62 @@ fn coverage(vault: &Vault) -> Vec<String> {
     ]
 }
 
-fn nodes(vault: &Vault, values: &[String]) -> Vec<String> {
-    let mut kind = None;
-    let mut without_docs = false;
-    let mut index = 0;
-    while index < values.len() {
-        match values[index].as_str() {
-            "--kind" => {
-                kind = values.get(index + 1).map(String::as_str);
-                index += 2;
-            }
-            "--without-docs" => {
-                without_docs = true;
-                index += 1;
-            }
-            _ => index += 1,
+fn coverage_by_module(vault: &Vault, governed: &BTreeSet<String>) -> Vec<String> {
+    let mut modules = std::collections::BTreeMap::<String, (usize, usize)>::new();
+    for source_file in vault.source_files() {
+        let module = source_file
+            .rsplit_once('/')
+            .map(|(parent, _)| parent)
+            .unwrap_or(".")
+            .to_string();
+        let entry = modules.entry(module).or_default();
+        entry.0 += 1;
+        if governed.contains(source_file) {
+            entry.1 += 1;
         }
     }
+    modules
+        .into_iter()
+        .map(|(module, (total, governed))| {
+            format!(
+                "module={module} source_files={total} governed_files={governed} ungoverned_files={}",
+                total.saturating_sub(governed)
+            )
+        })
+        .collect()
+}
 
+fn coverage_by_adr(vault: &Vault) -> Vec<String> {
+    let mut rows = Vec::new();
+    for note in &vault.notes {
+        if note.kind != NoteKind::Decision {
+            continue;
+        }
+        let governed = vault
+            .effective_governs(note)
+            .into_iter()
+            .flat_map(|pattern| vault.source_files_matching_glob(&pattern))
+            .collect::<BTreeSet<_>>();
+        rows.push(format!(
+            "adr={} governed_files={}",
+            note.display_id(),
+            governed.len()
+        ));
+    }
+    rows.sort();
+    rows
+}
+
+fn nodes(vault: &Vault, kind: Option<&str>, without_docs: bool) -> Vec<String> {
     let mut rows = Vec::new();
     match kind {
         Some("code") => {
-            for source_file in vault.source_files() {
-                if without_docs && !references(vault, source_file).is_empty() {
+            for symbol in vault.source_graph().symbols() {
+                let display = symbol.id.display();
+                if without_docs && !references(vault, &display).is_empty() {
                     continue;
                 }
-                rows.push(source_file.clone());
+                rows.push(display);
             }
         }
         Some("doc") => rows.extend(
@@ -324,6 +358,108 @@ fn nodes(vault: &Vault, values: &[String]) -> Vec<String> {
     }
     rows.sort();
     rows
+}
+
+fn diff(root: &Path, left: &str, right: &str) -> Result<Vec<String>> {
+    let left = load_snapshot(root, left)?;
+    let right = load_snapshot(root, right)?;
+    let left_nodes = json_string_set(&left, "/graph/nodes", "id");
+    let right_nodes = json_string_set(&right, "/graph/nodes", "id");
+    let left_edges = json_edge_set(&left);
+    let right_edges = json_edge_set(&right);
+
+    let mut rows = Vec::new();
+    rows.extend(
+        right_nodes
+            .difference(&left_nodes)
+            .map(|value| format!("node_added {value}")),
+    );
+    rows.extend(
+        left_nodes
+            .difference(&right_nodes)
+            .map(|value| format!("node_removed {value}")),
+    );
+    rows.extend(
+        right_edges
+            .difference(&left_edges)
+            .map(|value| format!("edge_added {value}")),
+    );
+    rows.extend(
+        left_edges
+            .difference(&right_edges)
+            .map(|value| format!("edge_removed {value}")),
+    );
+    rows.sort();
+    Ok(rows)
+}
+
+fn load_snapshot(root: &Path, id: &str) -> Result<serde_json::Value> {
+    let hash = if id == "latest" {
+        fs::read_to_string(root.join(".criv/latest"))?
+            .trim()
+            .to_string()
+    } else {
+        id.to_string()
+    };
+    let path = root.join(".criv/snapshots").join(format!("{hash}.json"));
+    let contents = if path.exists() {
+        fs::read_to_string(&path)
+            .map_err(|err| CrivError::new(format!("failed to read snapshot `{hash}`: {err}")))?
+    } else {
+        load_git_state(root, id)?
+    };
+    serde_json::from_str(&contents)
+        .map_err(|err| CrivError::new(format!("failed to parse snapshot `{id}`: {err}")))
+}
+
+fn load_git_state(root: &Path, id: &str) -> Result<String> {
+    let spec = format!("{id}:.criv/state.json");
+    let output = Command::new("git")
+        .current_dir(root)
+        .args(["show", &spec])
+        .output()
+        .map_err(|err| CrivError::new(format!("failed to invoke git for `{id}`: {err}")))?;
+    if output.status.success() {
+        String::from_utf8(output.stdout).map_err(|err| {
+            CrivError::new(format!(
+                "git ref `{id}` produced non-UTF-8 .criv/state.json: {err}"
+            ))
+        })
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(CrivError::new(format!(
+            "snapshot or git ref `{id}` does not resolve: {}",
+            stderr.trim()
+        )))
+    }
+}
+
+fn json_string_set(value: &serde_json::Value, pointer: &str, field: &str) -> BTreeSet<String> {
+    value
+        .pointer(pointer)
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| item.get(field).and_then(serde_json::Value::as_str))
+        .map(str::to_string)
+        .collect()
+}
+
+fn json_edge_set(value: &serde_json::Value) -> BTreeSet<String> {
+    value
+        .pointer("/graph/edges")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            Some(format!(
+                "{}:{}:{}",
+                item.get("from")?.as_str()?,
+                item.get("kind")?.as_str()?,
+                item.get("to")?.as_str()?
+            ))
+        })
+        .collect()
 }
 
 fn print_rows(rows: &[String], format: Format) {

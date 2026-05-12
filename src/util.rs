@@ -1,10 +1,22 @@
 use std::fs;
+use std::io::Read;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use crate::Result;
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
+
+use crate::{CrivError, Result};
 
 pub(crate) fn read_to_string(path: &Path) -> Result<String> {
     Ok(fs::read_to_string(path)?)
+}
+
+pub(crate) fn is_text_file(path: &Path) -> Result<bool> {
+    let mut file = fs::File::open(path)?;
+    let mut buffer = Vec::with_capacity(8192);
+    file.by_ref().take(8192).read_to_end(&mut buffer)?;
+    Ok(content_inspector::inspect(&buffer).is_text())
 }
 
 pub(crate) fn write_new(path: &Path, contents: &str) -> Result<bool> {
@@ -99,103 +111,138 @@ pub(crate) fn is_adr_id(value: &str) -> bool {
 }
 
 pub(crate) fn find_wiki_links_with_lines(markdown: &str) -> Vec<(usize, String)> {
-    let mut links = Vec::new();
-    let mut fenced = false;
-    for (line_index, line) in markdown.lines().enumerate() {
-        if line.trim_start().starts_with("```") {
-            fenced = !fenced;
-            continue;
-        }
-        if fenced {
-            continue;
-        }
+    let mut in_code_block = false;
+    let mut code_ranges = Vec::new();
 
-        let mut start = 0;
-        while let Some(open) = line[start..].find("[[") {
-            let open = start + open;
-            if inside_inline_code(line, open) {
-                start = open + 2;
-                continue;
+    for (event, range) in Parser::new(markdown).into_offset_iter() {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => {
+                in_code_block = true;
+                code_ranges.push(range);
             }
-            let body_start = open + 2;
-            if let Some(close) = line[body_start..].find("]]") {
-                let close = body_start + close;
-                links.push((line_index + 1, line[body_start..close].to_string()));
-                start = close + 2;
-            } else {
-                break;
+            Event::End(TagEnd::CodeBlock) => {
+                in_code_block = false;
+                code_ranges.push(range);
             }
+            Event::Code(_) => code_ranges.push(range),
+            _ if in_code_block => code_ranges.push(range),
+            _ => {}
+        }
+    }
+
+    let mut links = Vec::new();
+    let mut start = 0;
+    while let Some(open) = markdown[start..].find("[[") {
+        let open = start + open;
+        let body_start = open + 2;
+        if in_ranges(open, &code_ranges) {
+            start = body_start;
+            continue;
+        }
+        if let Some(close) = markdown[body_start..].find("]]") {
+            let close = body_start + close;
+            if !in_ranges(close, &code_ranges) {
+                links.push((
+                    line_number(markdown, open),
+                    markdown[body_start..close].to_string(),
+                ));
+            }
+            start = close + 2;
+        } else {
+            break;
         }
     }
     links
 }
 
-fn inside_inline_code(line: &str, byte_index: usize) -> bool {
-    let mut ticks = 0;
-    for (index, ch) in line.char_indices() {
-        if index >= byte_index {
-            break;
-        }
-        if ch == '`' {
-            ticks += 1;
+pub(crate) fn markdown_headings(markdown: &str) -> Vec<(usize, String, usize)> {
+    let mut headings = Vec::new();
+    let mut active: Option<(usize, usize, String)> = None;
+
+    for (event, range) in Parser::new(markdown).into_offset_iter() {
+        match event {
+            Event::Start(Tag::Heading { level, .. }) => {
+                active = Some((
+                    heading_level(level),
+                    line_number(markdown, range.start),
+                    String::new(),
+                ));
+            }
+            Event::Text(text) | Event::Code(text) => {
+                if let Some((_, _, heading)) = &mut active {
+                    heading.push_str(&text);
+                }
+            }
+            Event::End(TagEnd::Heading(_)) => {
+                if let Some((level, line, text)) = active.take() {
+                    let text = text.trim().to_string();
+                    if !text.is_empty() {
+                        headings.push((level, text, line));
+                    }
+                }
+            }
+            _ => {}
         }
     }
-    ticks % 2 == 1
+    headings
 }
 
 pub(crate) fn glob_matches(pattern: &str, value: &str) -> bool {
-    glob_parts(
-        &pattern.split('/').collect::<Vec<_>>(),
-        &value.split('/').collect::<Vec<_>>(),
-    )
+    let patterns = [pattern.to_string()];
+    GlobMatcher::new(&patterns).is_ok_and(|matcher| matcher.is_match(value))
 }
 
-fn glob_parts(pattern: &[&str], value: &[&str]) -> bool {
-    if pattern.is_empty() {
-        return value.is_empty();
-    }
-    if pattern[0] == "**" {
-        return glob_parts(&pattern[1..], value)
-            || (!value.is_empty() && glob_parts(pattern, &value[1..]));
-    }
-    !value.is_empty()
-        && glob_segment(pattern[0], value[0])
-        && glob_parts(&pattern[1..], &value[1..])
+#[derive(Debug, Clone)]
+pub(crate) struct GlobMatcher {
+    set: GlobSet,
 }
 
-fn glob_segment(pattern: &str, value: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-
-    let pattern = pattern.as_bytes();
-    let value = value.as_bytes();
-    let mut p = 0;
-    let mut v = 0;
-    let mut star = None;
-    let mut star_match = 0;
-
-    while v < value.len() {
-        if p < pattern.len() && pattern[p] == value[v] {
-            p += 1;
-            v += 1;
-        } else if p < pattern.len() && pattern[p] == b'*' {
-            star = Some(p);
-            p += 1;
-            star_match = v;
-        } else if let Some(star_pos) = star {
-            p = star_pos + 1;
-            star_match += 1;
-            v = star_match;
-        } else {
-            return false;
+impl GlobMatcher {
+    pub(crate) fn new(patterns: &[String]) -> Result<Self> {
+        let mut builder = GlobSetBuilder::new();
+        for pattern in patterns {
+            let glob = GlobBuilder::new(pattern)
+                .literal_separator(true)
+                .backslash_escape(true)
+                .build()
+                .map_err(|err| CrivError::new(format!("invalid glob `{pattern}`: {err}")))?;
+            builder.add(glob);
         }
+        Ok(Self {
+            set: builder
+                .build()
+                .map_err(|err| CrivError::new(format!("failed to compile globs: {err}")))?,
+        })
     }
 
-    while p < pattern.len() && pattern[p] == b'*' {
-        p += 1;
+    pub(crate) fn is_match(&self, value: &str) -> bool {
+        self.set.is_match(value)
     }
-    p == pattern.len()
+}
+
+fn in_ranges(byte_offset: usize, ranges: &[Range<usize>]) -> bool {
+    ranges
+        .iter()
+        .any(|range| byte_offset >= range.start && byte_offset < range.end)
+}
+
+fn line_number(markdown: &str, byte_offset: usize) -> usize {
+    markdown[..byte_offset.min(markdown.len())]
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .count()
+        + 1
+}
+
+fn heading_level(level: HeadingLevel) -> usize {
+    match level {
+        HeadingLevel::H1 => 1,
+        HeadingLevel::H2 => 2,
+        HeadingLevel::H3 => 3,
+        HeadingLevel::H4 => 4,
+        HeadingLevel::H5 => 5,
+        HeadingLevel::H6 => 6,
+    }
 }
 
 #[cfg(test)]

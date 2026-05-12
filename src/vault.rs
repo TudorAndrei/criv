@@ -5,8 +5,10 @@ use serde::Deserialize;
 
 use crate::Result;
 use crate::config::Config;
+use crate::source_graph::SourceGraph;
 use crate::util::{
-    find_wiki_links_with_lines, glob_matches, kebab, read_to_string, strip_prefix, walk_files,
+    GlobMatcher, find_wiki_links_with_lines, glob_matches, is_text_file, kebab,
+    markdown_headings as parse_markdown_headings, read_to_string, strip_prefix, walk_files,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +80,7 @@ pub(crate) struct Vault {
     filenames: BTreeMap<String, usize>,
     titles: BTreeMap<String, usize>,
     source_files: Vec<String>,
+    source_graph: SourceGraph,
     patterns: BTreeSet<String>,
 }
 
@@ -123,6 +126,7 @@ impl Vault {
         }
 
         let source_files = collect_source_files(root, &config)?;
+        let source_graph = SourceGraph::build(root, &source_files)?;
 
         Ok(Self {
             config,
@@ -131,6 +135,7 @@ impl Vault {
             filenames,
             titles,
             source_files,
+            source_graph,
             patterns,
         })
     }
@@ -218,6 +223,10 @@ impl Vault {
         &self.source_files
     }
 
+    pub(crate) fn source_graph(&self) -> &SourceGraph {
+        &self.source_graph
+    }
+
     pub(crate) fn patterns(&self) -> &BTreeSet<String> {
         &self.patterns
     }
@@ -267,7 +276,10 @@ fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
             line,
         })
         .collect();
-    note.headings = markdown_headings(&note.body);
+    note.headings = parse_markdown_headings(&note.body)
+        .into_iter()
+        .map(|(level, text, line)| Heading { level, text, line })
+        .collect();
     note.rel_path = rel_path;
     Ok(note)
 }
@@ -294,7 +306,7 @@ fn parse_frontmatter(
     let raw = if frontmatter.trim().is_empty() {
         RawFrontmatter::default()
     } else {
-        serde_yaml::from_str::<RawFrontmatter>(frontmatter)
+        serde_norway::from_str::<RawFrontmatter>(frontmatter)
             .map_err(|err| format!("failed to parse YAML frontmatter: {err}"))?
     };
 
@@ -373,6 +385,7 @@ fn pattern_link_id(target: &str) -> Option<&str> {
 
 fn collect_source_files(root: &Path, config: &Config) -> Result<Vec<String>> {
     let mut files = Vec::new();
+    let excludes = GlobMatcher::new(&config.source_exclude)?;
     for source_root in config.source_root_paths(root) {
         for entry in ignore::WalkBuilder::new(&source_root)
             .hidden(false)
@@ -390,7 +403,7 @@ fn collect_source_files(root: &Path, config: &Config) -> Result<Vec<String>> {
             }
             let path = entry.path();
             let rel = strip_prefix(&path, root);
-            if is_excluded(&config.source_exclude, &rel) {
+            if excludes.is_match(&rel) || !is_text_file(path)? {
                 continue;
             }
             files.push(rel);
@@ -400,37 +413,8 @@ fn collect_source_files(root: &Path, config: &Config) -> Result<Vec<String>> {
     Ok(files)
 }
 
-fn is_excluded(patterns: &[String], rel: &str) -> bool {
-    patterns.iter().any(|pattern| glob_matches(pattern, rel))
-}
-
 pub(crate) fn source_fragment_path(value: &str) -> &str {
     value.split('#').next().unwrap_or(value)
-}
-
-fn markdown_headings(body: &str) -> Vec<Heading> {
-    body.lines()
-        .enumerate()
-        .filter_map(|(index, line)| {
-            let trimmed = line.trim_start();
-            let hashes = trimmed.chars().take_while(|ch| *ch == '#').count();
-            if hashes == 0
-                || hashes > 6
-                || !trimmed.chars().nth(hashes).is_some_and(char::is_whitespace)
-            {
-                return None;
-            }
-            let text = trimmed[hashes..].trim().trim_matches('#').trim();
-            if text.is_empty() {
-                return None;
-            }
-            Some(Heading {
-                level: hashes,
-                text: text.to_string(),
-                line: index + 1,
-            })
-        })
-        .collect()
 }
 
 fn note_has_heading(note: &Note, heading: &str) -> bool {
@@ -531,10 +515,10 @@ targets:
 
     #[test]
     fn extracts_markdown_headings() {
-        let headings = markdown_headings("# One\ntext\n### Three ###\nnot heading");
+        let headings = parse_markdown_headings("# One\ntext\n### Three ###\nnot heading");
         assert_eq!(headings.len(), 2);
-        assert_eq!(headings[0].level, 1);
-        assert_eq!(headings[0].text, "One");
-        assert_eq!(headings[1].line, 3);
+        assert_eq!(headings[0].0, 1);
+        assert_eq!(headings[0].1, "One");
+        assert_eq!(headings[1].2, 3);
     }
 }

@@ -1,49 +1,25 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use clap::{Args as ClapArgs, ValueEnum};
+
+use crate::search;
 use crate::util::{is_adr_id, kebab};
 use crate::vault::{Note, NoteKind, ResolvedLink, Vault, source_fragment_path};
-use crate::{Args, CrivError, Result};
+use crate::{CrivError, Result};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum Format {
     Text,
     Json,
 }
 
-#[derive(Debug)]
+#[derive(Debug, ClapArgs)]
 pub(crate) struct CheckOptions {
+    #[arg(long, value_enum, default_value_t = Format::Text)]
     format: Format,
+    #[arg(long)]
     filter: Option<String>,
-}
-
-impl CheckOptions {
-    pub(crate) fn parse(mut args: Args) -> Result<Self> {
-        let mut options = Self {
-            format: Format::Text,
-            filter: None,
-        };
-
-        while let Some(arg) = args.next() {
-            match arg.as_str() {
-                "--format" => {
-                    options.format = match args.expect_value("--format")?.as_str() {
-                        "text" => Format::Text,
-                        "json" => Format::Json,
-                        value => {
-                            return Err(CrivError::usage(format!(
-                                "unsupported check format `{value}`"
-                            )));
-                        }
-                    };
-                }
-                "--filter" => options.filter = Some(args.expect_value("--filter")?),
-                other => return Err(CrivError::usage(format!("unknown check option `{other}`"))),
-            }
-        }
-
-        Ok(options)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +50,21 @@ impl Diagnostic {
 pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
     let vault = Vault::load(root)?;
     let mut diagnostics = validate(&vault);
+    diagnostics.extend(
+        policy_violations(root, &vault)?
+            .into_iter()
+            .map(|violation| {
+                error(
+                    "policy-violation",
+                    &violation.path,
+                    violation.line,
+                    format!(
+                        "{} policy `{}` matched `{}`",
+                        violation.adr_id, violation.pattern_id, violation.text
+                    ),
+                )
+            }),
+    );
 
     if let Some(filter) = &options.filter {
         diagnostics.retain(|diag| {
@@ -93,6 +84,47 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
     }
 
     Ok(())
+}
+
+struct PolicyViolation {
+    path: String,
+    line: Option<usize>,
+    adr_id: String,
+    pattern_id: String,
+    text: String,
+}
+
+fn policy_violations(root: &Path, vault: &Vault) -> Result<Vec<PolicyViolation>> {
+    let mut violations = Vec::new();
+    for note in &vault.notes {
+        if note.status.as_deref() != Some("accepted") {
+            continue;
+        }
+        let Some(adr_id) = &note.id else {
+            continue;
+        };
+        let scopes = vault.effective_governs(note);
+        for pattern in &note.policy_pattern_ids {
+            let pattern_id = format!("{adr_id}/{pattern}");
+            let rows = if let Some(pattern_def) = vault.config.pattern_defs.get(&pattern_id) {
+                if let Some(pattern_body) = pattern_def.lexical_pattern() {
+                    search::search_lexical_pattern(root, vault, pattern_body, &scopes)?
+                } else {
+                    Vec::new()
+                }
+            } else {
+                search::search_lexical_pattern(root, vault, pattern, &scopes)?
+            };
+            violations.extend(rows.into_iter().map(|row| PolicyViolation {
+                path: row.path,
+                line: row.line,
+                adr_id: adr_id.clone(),
+                pattern_id: pattern_id.clone(),
+                text: row.text,
+            }));
+        }
+    }
+    Ok(violations)
 }
 
 pub(crate) fn validate(vault: &Vault) -> Vec<Diagnostic> {

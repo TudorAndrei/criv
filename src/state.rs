@@ -4,6 +4,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
+use crate::source_graph::{Language, SymbolKind};
 use crate::vault::{NoteKind, ResolvedLink, Vault, source_fragment_path};
 use crate::{CrivError, Result};
 
@@ -22,6 +23,7 @@ pub(crate) struct State {
 
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct Graph {
+    root: String,
     nodes: Vec<Node>,
     edges: Vec<Edge>,
 }
@@ -29,6 +31,7 @@ pub(crate) struct Graph {
 #[derive(Debug, Serialize)]
 pub(crate) struct Node {
     id: String,
+    hash: String,
     kind: String,
     label: String,
     path: Option<String>,
@@ -39,6 +42,7 @@ pub(crate) struct Edge {
     from: String,
     to: String,
     kind: String,
+    hash: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -51,6 +55,7 @@ pub(crate) struct PatternMatch {
 #[derive(Debug, Serialize)]
 pub(crate) struct SourceIndexEntry {
     path: String,
+    mime: Option<String>,
     frecency: u32,
 }
 
@@ -60,17 +65,80 @@ impl State {
         let mut seen_nodes = BTreeSet::new();
         let mut seen_edges = BTreeSet::new();
 
-        for source_file in vault.source_files() {
+        for file in vault.source_graph().files.values() {
             add_node(
                 &mut graph,
                 &mut seen_nodes,
                 Node {
-                    id: code_node_id(source_file),
+                    id: code_node_id(&file.path),
+                    hash: String::new(),
                     kind: "code".into(),
-                    label: source_file.clone(),
-                    path: Some(source_file.clone()),
+                    label: format!("{} ({})", file.path, language_name(file.language)),
+                    path: Some(file.path.clone()),
                 },
             );
+        }
+
+        for file in vault.source_graph().files.values() {
+            let file_id = code_node_id(&file.path);
+            for import in &file.imports {
+                let import_id = import_node_id(&file.path, &import.module);
+                add_node(
+                    &mut graph,
+                    &mut seen_nodes,
+                    Node {
+                        id: import_id.clone(),
+                        hash: String::new(),
+                        kind: "import".into(),
+                        label: import.module.clone(),
+                        path: Some(format!("{}#L{}", file.path, import.line)),
+                    },
+                );
+                add_edge(&mut graph, &mut seen_edges, &file_id, &import_id, "imports");
+            }
+
+            for symbol in &file.symbols {
+                let symbol_id = symbol_node_id(&symbol.id.display());
+                add_node(
+                    &mut graph,
+                    &mut seen_nodes,
+                    Node {
+                        id: symbol_id.clone(),
+                        hash: String::new(),
+                        kind: symbol_kind(symbol.kind).into(),
+                        label: symbol.name.clone(),
+                        path: Some(format!("{}#L{}", symbol.id.path, symbol.line)),
+                    },
+                );
+                add_edge(
+                    &mut graph,
+                    &mut seen_edges,
+                    &file_id,
+                    &symbol_id,
+                    "contains",
+                );
+                for call in &symbol.calls {
+                    let target = vault
+                        .source_graph()
+                        .resolve_symbol(&call.target)
+                        .map(|target| symbol_node_id(&target.display()))
+                        .unwrap_or_else(|| external_call_node_id(&call.target));
+                    if target.starts_with("external-call:") {
+                        add_node(
+                            &mut graph,
+                            &mut seen_nodes,
+                            Node {
+                                id: target.clone(),
+                                hash: String::new(),
+                                kind: "external-call".into(),
+                                label: call.target.clone(),
+                                path: Some(format!("{}#L{}", symbol.id.path, call.line)),
+                            },
+                        );
+                    }
+                    add_edge(&mut graph, &mut seen_edges, &symbol_id, &target, "calls");
+                }
+            }
         }
 
         for note in &vault.notes {
@@ -84,6 +152,7 @@ impl State {
                 &mut seen_nodes,
                 Node {
                     id: note_id.clone(),
+                    hash: String::new(),
                     kind: kind.into(),
                     label: note
                         .title
@@ -112,6 +181,7 @@ impl State {
                     &mut seen_nodes,
                     Node {
                         id: heading_id.clone(),
+                        hash: String::new(),
                         kind: "doc-heading".into(),
                         label: heading.text.clone(),
                         path: Some(format!(
@@ -178,6 +248,7 @@ impl State {
                             &mut seen_nodes,
                             Node {
                                 id: pattern_id.clone(),
+                                hash: String::new(),
                                 kind: "pattern".into(),
                                 label: id,
                                 path: None,
@@ -202,6 +273,7 @@ impl State {
             .enumerate()
             .map(|(index, path)| SourceIndexEntry {
                 path: path.clone(),
+                mime: mime_guess::from_path(path).first_raw().map(str::to_string),
                 frecency: (vault.source_files().len() - index) as u32,
             })
             .collect::<Vec<_>>();
@@ -212,6 +284,7 @@ impl State {
             .iter()
             .map(|pattern| (pattern.clone(), Vec::new()))
             .collect::<BTreeMap<_, _>>();
+        graph.root = graph_root(&graph);
 
         Self {
             schema: STATE_SCHEMA,
@@ -222,23 +295,50 @@ impl State {
         }
     }
 
+    pub(crate) fn to_json(&self) -> Result<String> {
+        serde_json::to_string_pretty(self)
+            .map_err(|err| CrivError::new(format!("failed to serialize state: {err}")))
+    }
+
+    pub(crate) fn hash(&self) -> Result<String> {
+        let contents = self.to_json()?;
+        Ok(stable_hash(&contents))
+    }
+
     pub(crate) fn write(&self, root: &Path) -> Result<()> {
         let path = root.join(".criv/state.json");
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let contents = serde_json::to_string_pretty(self)
-            .map_err(|err| CrivError::new(format!("failed to serialize state: {err}")))?;
+        let contents = self.to_json()?;
         fs::write(path, format!("{contents}\n"))?;
         Ok(())
     }
+
+    pub(crate) fn write_snapshot(&self, root: &Path) -> Result<String> {
+        let hash = self.hash()?;
+        let criv_dir = root.join(".criv");
+        let snapshots = criv_dir.join("snapshots");
+        fs::create_dir_all(&criv_dir)?;
+        fs::create_dir_all(&snapshots)?;
+        let path = snapshots.join(format!("{hash}.json"));
+        if !path.exists() {
+            fs::write(path, format!("{}\n", self.to_json()?))?;
+        }
+        fs::write(criv_dir.join("latest"), format!("{hash}\n"))?;
+        Ok(hash)
+    }
 }
 
-pub(crate) fn write_state(root: &Path, vault: &Vault) -> Result<()> {
-    State::build(vault).write(root)
+pub(crate) fn write_state(root: &Path, vault: &Vault) -> Result<String> {
+    let state = State::build(vault);
+    state.write(root)?;
+    state.write_snapshot(root)
 }
 
 fn add_node(graph: &mut Graph, seen: &mut BTreeSet<String>, node: Node) {
+    let mut node = node;
+    node.hash = node_hash(&node);
     if seen.insert(node.id.clone()) {
         graph.nodes.push(node);
     }
@@ -247,12 +347,44 @@ fn add_node(graph: &mut Graph, seen: &mut BTreeSet<String>, node: Node) {
 fn add_edge(graph: &mut Graph, seen: &mut BTreeSet<String>, from: &str, to: &str, kind: &str) {
     let key = format!("{from}\0{to}\0{kind}");
     if seen.insert(key) {
-        graph.edges.push(Edge {
+        let mut edge = Edge {
             from: from.into(),
             to: to.into(),
             kind: kind.into(),
-        });
+            hash: String::new(),
+        };
+        edge.hash = edge_hash(&edge);
+        graph.edges.push(edge);
     }
+}
+
+fn node_hash(node: &Node) -> String {
+    stable_hash(&format!(
+        "node\0{}\0{}\0{}\0{}",
+        node.id,
+        node.kind,
+        node.label,
+        node.path.as_deref().unwrap_or("")
+    ))
+}
+
+fn edge_hash(edge: &Edge) -> String {
+    stable_hash(&format!("edge\0{}\0{}\0{}", edge.from, edge.kind, edge.to))
+}
+
+fn graph_root(graph: &Graph) -> String {
+    let mut hashes = graph
+        .nodes
+        .iter()
+        .map(|node| node.hash.as_str())
+        .chain(graph.edges.iter().map(|edge| edge.hash.as_str()))
+        .collect::<Vec<_>>();
+    hashes.sort();
+    stable_hash(&hashes.join("\n"))
+}
+
+fn stable_hash(value: &str) -> String {
+    blake3::hash(value.as_bytes()).to_hex().to_string()
 }
 
 pub(crate) fn note_node_id(id: &str) -> String {
@@ -265,4 +397,35 @@ pub(crate) fn code_node_id(path: &str) -> String {
 
 fn pattern_node_id(id: &str) -> String {
     format!("pattern:{id}")
+}
+
+fn import_node_id(path: &str, module: &str) -> String {
+    format!("import:{path}:{module}")
+}
+
+fn symbol_node_id(id: &str) -> String {
+    format!("symbol:{id}")
+}
+
+fn external_call_node_id(id: &str) -> String {
+    format!("external-call:{id}")
+}
+
+fn symbol_kind(kind: SymbolKind) -> &'static str {
+    match kind {
+        SymbolKind::Function => "function",
+        SymbolKind::Method => "method",
+        SymbolKind::Class => "class",
+    }
+}
+
+fn language_name(language: Language) -> &'static str {
+    match language {
+        Language::Rust => "rust",
+        Language::TypeScript => "typescript",
+        Language::JavaScript => "javascript",
+        Language::Python => "python",
+        Language::Go => "go",
+        Language::Unknown => "unknown",
+    }
 }

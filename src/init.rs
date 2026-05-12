@@ -1,27 +1,17 @@
 use std::fs;
 use std::path::Path;
 
+use clap::Args as ClapArgs;
+
+use crate::Result;
 use crate::util::{append_line_if_missing, write_new};
-use crate::{Args, CrivError, Result};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, ClapArgs)]
 pub(crate) struct InitOptions {
+    #[arg(long)]
     no_obsidian: bool,
+    #[arg(long)]
     no_skills: bool,
-}
-
-impl InitOptions {
-    pub(crate) fn parse(mut args: Args) -> Result<Self> {
-        let mut options = Self::default();
-        while let Some(arg) = args.next() {
-            match arg.as_str() {
-                "--no-obsidian" => options.no_obsidian = true,
-                "--no-skills" => options.no_skills = true,
-                other => return Err(CrivError::usage(format!("unknown init option `{other}`"))),
-            }
-        }
-        Ok(options)
-    }
 }
 
 pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
@@ -222,6 +212,7 @@ const { Notice, Plugin, PluginSettingTab, Setting } = require("obsidian");
 const DEFAULT_SETTINGS = {
   statePath: ".criv/state.json",
 };
+const EXPECTED_SCHEMA = "criv.state.v0";
 
 let wasmModule = null;
 
@@ -269,6 +260,10 @@ class CrivPlugin extends Plugin {
     const state = await this.readState();
     if (!state) {
       new Notice(`criv state is missing at ${this.settings.statePath}`);
+      return;
+    }
+    if (state.schema !== EXPECTED_SCHEMA) {
+      new Notice(`criv state schema ${state.schema ?? "unknown"} is not supported`);
       return;
     }
 
@@ -329,6 +324,7 @@ interface CrivSettings {
 const DEFAULT_SETTINGS: CrivSettings = {
   statePath: ".criv/state.json",
 };
+const EXPECTED_SCHEMA = "criv.state.v0";
 
 export default class CrivPlugin extends Plugin {
   settings: CrivSettings;
@@ -348,6 +344,10 @@ export default class CrivPlugin extends Plugin {
     const state = await this.readState();
     if (!state) {
       new Notice(`criv state is missing at ${this.settings.statePath}`);
+      return;
+    }
+    if (state.schema !== EXPECTED_SCHEMA) {
+      new Notice(`criv state schema ${state.schema ?? "unknown"} is not supported`);
       return;
     }
 

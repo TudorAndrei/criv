@@ -1,10 +1,12 @@
 use std::path::Path;
 
+use clap::{Args as ClapArgs, ValueEnum};
+
 use crate::util::{glob_matches, read_to_string};
 use crate::vault::Vault;
-use crate::{Args, CrivError, Result};
+use crate::{CrivError, Result};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum Format {
     Text,
     Json,
@@ -20,107 +22,147 @@ enum Mode {
     PatternId(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, ClapArgs)]
 pub(crate) struct SearchOptions {
-    mode: Option<Mode>,
+    #[arg(long)]
+    grep: Option<String>,
+    #[arg(long)]
+    files: Option<String>,
+    #[arg(long)]
+    notes: Option<String>,
+    #[arg(long)]
+    rule: Option<String>,
+    #[arg(long)]
+    pattern_id: Option<String>,
+    #[arg(long = "paths")]
     paths: Vec<String>,
+    #[arg(long)]
     semantic: bool,
+    #[arg(long)]
+    lang: Option<String>,
+    #[arg(long, value_enum, default_value_t = Format::Text)]
     format: Format,
+    pattern: Option<String>,
 }
 
 impl SearchOptions {
-    pub(crate) fn parse(mut args: Args) -> Result<Self> {
-        let mut options = Self {
-            mode: None,
-            paths: Vec::new(),
-            semantic: false,
-            format: Format::Text,
-        };
-
-        while let Some(arg) = args.next() {
-            match arg.as_str() {
-                "--grep" => options.set_mode(Mode::Grep(args.expect_value("--grep")?))?,
-                "--files" => options.set_mode(Mode::Files(args.expect_value("--files")?))?,
-                "--notes" => options.set_mode(Mode::Notes(args.expect_value("--notes")?))?,
-                "--rule" => options.set_mode(Mode::Rule(args.expect_value("--rule")?))?,
-                "--pattern-id" => {
-                    options.set_mode(Mode::PatternId(args.expect_value("--pattern-id")?))?
-                }
-                "--paths" => options.paths.push(args.expect_value("--paths")?),
-                "--semantic" => options.semantic = true,
-                "--lang" => {
-                    let _ = args.expect_value("--lang")?;
-                }
-                "--format" => {
-                    options.format = match args.expect_value("--format")?.as_str() {
-                        "text" => Format::Text,
-                        "json" => Format::Json,
-                        value => {
-                            return Err(CrivError::usage(format!(
-                                "unsupported search format `{value}`"
-                            )));
-                        }
-                    };
-                }
-                value if !value.starts_with('-') => {
-                    options.set_mode(Mode::Structural(value.to_string()))?;
-                }
-                other => return Err(CrivError::usage(format!("unknown search option `{other}`"))),
-            }
+    fn mode(&self) -> Result<Mode> {
+        let mut modes = Vec::new();
+        if let Some(value) = &self.grep {
+            modes.push(Mode::Grep(value.clone()));
+        }
+        if let Some(value) = &self.files {
+            modes.push(Mode::Files(value.clone()));
+        }
+        if let Some(value) = &self.notes {
+            modes.push(Mode::Notes(value.clone()));
+        }
+        if let Some(value) = &self.rule {
+            modes.push(Mode::Rule(value.clone()));
+        }
+        if let Some(value) = &self.pattern_id {
+            modes.push(Mode::PatternId(value.clone()));
+        }
+        if let Some(value) = &self.pattern {
+            modes.push(Mode::Structural(value.clone()));
         }
 
-        if options.mode.is_none() {
+        if modes.is_empty() {
             return Err(CrivError::usage(
                 "missing search mode; use --grep, --files, --notes, --pattern-id, --rule, or a structural pattern",
             ));
         }
-
-        Ok(options)
-    }
-
-    fn set_mode(&mut self, mode: Mode) -> Result<()> {
-        if self.mode.is_some() {
+        if modes.len() > 1 {
             return Err(CrivError::usage(
                 "only one search mode may be used at a time",
             ));
         }
-        self.mode = Some(mode);
-        Ok(())
+        Ok(modes.remove(0))
     }
 }
 
-#[derive(Debug)]
-struct Row {
-    path: String,
-    line: Option<usize>,
-    text: String,
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct Row {
+    pub(crate) path: String,
+    pub(crate) line: Option<usize>,
+    pub(crate) text: String,
 }
 
 pub(crate) fn run(root: &Path, options: SearchOptions) -> Result<()> {
     let vault = Vault::load(root)?;
-    let rows = match options.mode.as_ref().expect("checked") {
-        Mode::Grep(text) => grep(root, &vault, text, &options.paths)?,
-        Mode::Files(query) => files(&vault, query),
-        Mode::Notes(text) => notes(&vault, text, options.semantic),
-        Mode::Structural(pattern) => {
-            return Err(CrivError::new(format!(
-                "structural ast-grep search for `{pattern}` is not wired yet; use `--grep` for lexical source search in this MVP"
-            )));
-        }
-        Mode::Rule(rule) => {
-            return Err(CrivError::new(format!(
-                "ADR policy rule search for `{rule}` is not wired yet"
-            )));
-        }
-        Mode::PatternId(pattern_id) => {
-            return Err(CrivError::new(format!(
-                "registered pattern search for `{pattern_id}` is not wired yet"
-            )));
-        }
+    let mut paths = options.paths.clone();
+    if let Some(language) = &options.lang {
+        paths.push(language_glob(language).to_string());
+    }
+    let rows = match options.mode()? {
+        Mode::Grep(text) => grep(root, &vault, &text, &paths)?,
+        Mode::Files(query) => files(&vault, &query),
+        Mode::Notes(text) => notes(&vault, &text, options.semantic),
+        Mode::Structural(pattern) => grep(root, &vault, &pattern_to_needle(&pattern), &paths)?,
+        Mode::Rule(rule) => search_rule(root, &vault, &rule, &paths)?,
+        Mode::PatternId(pattern_id) => search_pattern_id(root, &vault, &pattern_id, &paths)?,
     };
 
     print_rows(&rows, options.format);
     Ok(())
+}
+
+fn search_pattern_id(
+    root: &Path,
+    vault: &Vault,
+    pattern_id: &str,
+    paths: &[String],
+) -> Result<Vec<Row>> {
+    let Some(pattern) = vault.config.pattern_defs.get(pattern_id) else {
+        return Err(CrivError::new(format!(
+            "registered pattern `{pattern_id}` does not resolve"
+        )));
+    };
+    let Some(pattern) = pattern.lexical_pattern() else {
+        return Err(CrivError::new(format!(
+            "registered pattern `{pattern_id}` has no searchable pattern body"
+        )));
+    };
+    let mut scoped_paths = paths.to_vec();
+    if let Some(language) = &vault.config.pattern_defs[pattern_id].language {
+        scoped_paths.push(language_glob(language).to_string());
+    }
+    grep(root, vault, &pattern_to_needle(pattern), &scoped_paths)
+}
+
+fn search_rule(root: &Path, vault: &Vault, adr_id: &str, paths: &[String]) -> Result<Vec<Row>> {
+    let note = vault
+        .resolve_note(adr_id)
+        .ok_or_else(|| CrivError::new(format!("decision `{adr_id}` does not resolve")))?;
+    let default_scopes;
+    let scopes = if paths.is_empty() {
+        default_scopes = vault.effective_governs(note);
+        &default_scopes
+    } else {
+        paths
+    };
+    let mut rows = Vec::new();
+    for pattern in &note.policy_pattern_ids {
+        let pattern_id = format!("{}/{}", note.display_id(), pattern);
+        let mut scoped_paths = scopes.to_vec();
+        let pattern_body = if let Some(pattern_def) = vault.config.pattern_defs.get(&pattern_id) {
+            if let Some(language) = &pattern_def.language {
+                scoped_paths.push(language_glob(language).to_string());
+            }
+            pattern_def.lexical_pattern().unwrap_or(pattern)
+        } else {
+            pattern
+        };
+        rows.extend(grep(
+            root,
+            vault,
+            &pattern_to_needle(pattern_body),
+            &scoped_paths,
+        )?);
+    }
+    rows.sort_by(|left, right| (&left.path, left.line).cmp(&(&right.path, right.line)));
+    rows.dedup_by(|left, right| left.path == right.path && left.line == right.line);
+    Ok(rows)
 }
 
 fn grep(root: &Path, vault: &Vault, text: &str, paths: &[String]) -> Result<Vec<Row>> {
@@ -145,6 +187,15 @@ fn grep(root: &Path, vault: &Vault, text: &str, paths: &[String]) -> Result<Vec<
     Ok(rows)
 }
 
+pub(crate) fn search_lexical_pattern(
+    root: &Path,
+    vault: &Vault,
+    pattern: &str,
+    paths: &[String],
+) -> Result<Vec<Row>> {
+    grep(root, vault, &pattern_to_needle(pattern), paths)
+}
+
 fn files(vault: &Vault, query: &str) -> Vec<Row> {
     let mut scored = vault
         .source_files()
@@ -167,21 +218,27 @@ fn files(vault: &Vault, query: &str) -> Vec<Row> {
 }
 
 fn notes(vault: &Vault, text: &str, semantic: bool) -> Vec<Row> {
-    let needle = text.to_lowercase();
-    let mut rows = Vec::new();
+    let query_terms = tokenize(text);
+    let mut scored = Vec::new();
     for note in &vault.notes {
-        let title_match = note
-            .title
-            .as_deref()
-            .is_some_and(|title| title.to_lowercase().contains(&needle));
-        if title_match || note.body.to_lowercase().contains(&needle) {
-            rows.push(Row {
-                path: note.rel_path.clone(),
-                line: None,
-                text: note.title.clone().unwrap_or_default(),
-            });
+        if let Some((score, excerpt)) = note_score(note, &query_terms) {
+            scored.push((score, note.rel_path.clone(), note_title(note), excerpt));
         }
     }
+    scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+
+    let mut rows = scored
+        .into_iter()
+        .map(|(_, path, title, excerpt)| Row {
+            path,
+            line: None,
+            text: if excerpt.is_empty() {
+                title
+            } else {
+                format!("{title} - {excerpt}")
+            },
+        })
+        .collect::<Vec<_>>();
     if semantic {
         rows.push(Row {
             path: "semantic".into(),
@@ -192,8 +249,113 @@ fn notes(vault: &Vault, text: &str, semantic: bool) -> Vec<Row> {
     rows
 }
 
+fn note_score(note: &crate::vault::Note, query_terms: &[String]) -> Option<(i32, String)> {
+    if query_terms.is_empty() {
+        return None;
+    }
+
+    let id = note.id.as_deref().unwrap_or_default().to_lowercase();
+    let title = note.title.as_deref().unwrap_or_default().to_lowercase();
+    let path = note.rel_path.to_lowercase();
+    let heading_text = note
+        .headings
+        .iter()
+        .map(|heading| heading.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    let body = note.body.to_lowercase();
+
+    let mut score = 0;
+    for term in query_terms {
+        let mut term_score = 0;
+        if id.contains(term) {
+            term_score += 150;
+        }
+        if title.contains(term) {
+            term_score += 100;
+        }
+        if path.contains(term) {
+            term_score += 50;
+        }
+        if heading_text.contains(term) {
+            term_score += 35;
+        }
+        term_score += body.matches(term).count().min(10) as i32 * 10;
+        if term_score == 0 {
+            return None;
+        }
+        score += term_score;
+    }
+
+    Some((score, excerpt(&note.body, query_terms)))
+}
+
+fn note_title(note: &crate::vault::Note) -> String {
+    note.title
+        .clone()
+        .or_else(|| note.id.clone())
+        .unwrap_or_else(|| note.rel_path.clone())
+}
+
+fn tokenize(value: &str) -> Vec<String> {
+    value
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|part| !part.is_empty())
+        .map(|part| part.to_ascii_lowercase())
+        .collect()
+}
+
+fn excerpt(body: &str, query_terms: &[String]) -> String {
+    let body_lower = body.to_lowercase();
+    let Some(offset) = query_terms
+        .iter()
+        .filter_map(|term| body_lower.find(term))
+        .min()
+    else {
+        return String::new();
+    };
+    let start = body[..offset]
+        .rfind(|ch: char| ['.', '\n'].contains(&ch))
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    let end = body[offset..]
+        .find(|ch: char| ['.', '\n'].contains(&ch))
+        .map(|index| offset + index)
+        .unwrap_or_else(|| body.len());
+    body[start..end].trim().to_string()
+}
+
 fn path_allowed(path: &str, patterns: &[String]) -> bool {
     patterns.is_empty() || patterns.iter().any(|pattern| glob_matches(pattern, path))
+}
+
+fn pattern_to_needle(pattern: &str) -> String {
+    pattern
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == ':' || ch == '.'))
+        .filter(|part| {
+            !part.is_empty()
+                && !part.starts_with('$')
+                && *part != "pattern"
+                && *part != "inside"
+                && *part != "kind"
+                && *part != "has"
+                && *part != "regex"
+        })
+        .max_by_key(|part| part.len())
+        .unwrap_or(pattern)
+        .to_string()
+}
+
+fn language_glob(language: &str) -> &'static str {
+    match language {
+        "rust" => "**/*.rs",
+        "typescript" => "**/*.ts",
+        "javascript" => "**/*.js",
+        "python" => "**/*.py",
+        "go" => "**/*.go",
+        _ => "**",
+    }
 }
 
 fn fuzzy_score(path: &str, query: &str) -> Option<i32> {
@@ -268,5 +430,41 @@ mod tests {
     fn fuzzy_score_accepts_subsequence() {
         assert!(fuzzy_score("src/auth/verify.rs", "svr").is_some());
         assert!(fuzzy_score("src/auth/verify.rs", "zzz").is_none());
+    }
+
+    #[test]
+    fn note_search_requires_all_terms_and_ranks_title_matches() {
+        let title = crate::vault::Note {
+            path: "docs/title.md".into(),
+            rel_path: "docs/title.md".into(),
+            id: Some("TITLE".into()),
+            kind: crate::vault::NoteKind::Doc,
+            title: Some("Async runtime".into()),
+            status: None,
+            body: "Background text".into(),
+            headings: Vec::new(),
+            targets_symbols: Vec::new(),
+            targets_scope: Vec::new(),
+            target_pattern_refs: Vec::new(),
+            target_pattern_ids: Vec::new(),
+            policy_pattern_ids: Vec::new(),
+            governs: Vec::new(),
+            supersedes: Vec::new(),
+            superseded_by: Vec::new(),
+            wiki_links: Vec::new(),
+            frontmatter_error: None,
+        };
+        let body = crate::vault::Note {
+            title: Some("Runtime notes".into()),
+            body: "This note talks about async work in detail.".into(),
+            rel_path: "docs/body.md".into(),
+            path: "docs/body.md".into(),
+            ..title.clone()
+        };
+
+        let title_score = note_score(&title, &tokenize("async")).unwrap().0;
+        let body_score = note_score(&body, &tokenize("async")).unwrap().0;
+        assert!(title_score > body_score);
+        assert!(note_score(&body, &tokenize("async missing")).is_none());
     }
 }
