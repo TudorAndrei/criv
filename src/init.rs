@@ -276,6 +276,8 @@ class CrivPlugin extends Plugin {
     this.registerView(VIEW_TYPE, (leaf) => new CrivSourceView(leaf, this));
     this.registerMarkdownPostProcessor((el) => this.decorateLinks(el));
     this.registerEditorSuggest(new CrivSourceSuggest(this));
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refreshSourcePanel()));
+    this.registerEvent(this.app.metadataCache.on("changed", () => this.refreshSourcePanel()));
     this.addSettingTab(new CrivSettingTab(this.app, this));
   }
 
@@ -329,6 +331,23 @@ class CrivPlugin extends Plugin {
 
   async getState() {
     return this.state ?? (await this.loadState());
+  }
+
+  async refreshSourcePanel() {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      if (leaf.view instanceof CrivSourceView) {
+        await leaf.view.render();
+      }
+    }
+  }
+
+  frontmatterPatternTargets(state) {
+    const file = this.app.workspace.getActiveFile();
+    if (!file) {
+      return [];
+    }
+    const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    return frontmatterPatternTargets(frontmatter, state);
   }
 
   async decorateLinks(el) {
@@ -409,6 +428,25 @@ class CrivSourceView extends ItemView {
       const row = container.createDiv({ cls: "criv-source-row" });
       row.createEl("button", { text: entry.path }).onclick = () => this.plugin.openExternal(entry.path);
       row.createSpan({ text: entry.mime ? ` ${entry.mime}` : "" });
+    }
+
+    const frontmatterPatterns = this.plugin.frontmatterPatternTargets(state);
+    container.createEl("h3", { text: "Current note pattern targets" });
+    if (frontmatterPatterns.length === 0) {
+      container.createEl("p", { text: "No frontmatter pattern targets." });
+    }
+    for (const target of frontmatterPatterns) {
+      const row = container.createDiv({ cls: "criv-pattern-row" });
+      row.addClass(target.status === "unresolved" ? "criv-warning" : "criv-pattern-ref");
+      row.createSpan({ text: `${target.source}: ${target.id}` });
+      row.createSpan({
+        text:
+          target.status === "local"
+            ? "local target"
+            : target.status === "resolved"
+              ? `${target.matches} match${target.matches === 1 ? "" : "es"}`
+              : "unresolved",
+      });
     }
 
     container.createEl("h3", { text: "Pattern matches" });
@@ -496,6 +534,64 @@ function sourceTooltip(state, source) {
 function patternTooltip(state, id) {
   const count = state.patterns?.[id]?.length ?? 0;
   return `${id}: ${count} match${count === 1 ? "" : "es"}`;
+}
+
+function frontmatterPatternTargets(frontmatter, state) {
+  const targets = [];
+  const noteId = stringValue(frontmatter?.id);
+  const targetObject = objectValue(frontmatter?.targets);
+  for (const pattern of patternList(targetObject?.patterns)) {
+    const target = frontmatterPatternTarget(pattern, "targets", noteId, state);
+    if (target) {
+      targets.push(target);
+    }
+  }
+
+  const policyObject = objectValue(frontmatter?.policy);
+  for (const pattern of patternList(policyObject?.patterns)) {
+    const target = frontmatterPatternTarget(pattern, "policy", noteId, state);
+    if (target) {
+      targets.push(target);
+    }
+  }
+  return targets;
+}
+
+function frontmatterPatternTarget(pattern, source, noteId, state) {
+  const object = objectValue(pattern);
+  const rawRef = object ? stringValue(object.ref) : null;
+  const rawId = object ? stringValue(object.id) : stringValue(pattern);
+  const id = rawRef ?? (source === "policy" && rawId && noteId ? `${noteId}/${rawId}` : rawId);
+  if (!id) {
+    return null;
+  }
+  if (source === "targets" && !rawRef) {
+    return { id, source, status: "local", matches: 0 };
+  }
+
+  const matches = state.patterns?.[id]?.length ?? 0;
+  const ids = state["registered-patterns"] ?? Object.keys(state.patterns ?? {});
+  return {
+    id,
+    source,
+    status: ids.includes(id) || state.patterns?.[id] ? "resolved" : "unresolved",
+    matches,
+  };
+}
+
+function patternList(value) {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  return value ? [value] : [];
+}
+
+function objectValue(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+
+function stringValue(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function looksLikeSourceOrPattern(target) {
@@ -599,6 +695,13 @@ interface CrivState {
   "source-index"?: SourceIndexEntry[];
 }
 
+interface FrontmatterPatternTarget {
+  id: string;
+  source: "targets" | "policy";
+  status: "resolved" | "local" | "unresolved";
+  matches: number;
+}
+
 export default class CrivPlugin extends Plugin {
   settings: CrivSettings;
   private state: CrivState | null = null;
@@ -619,6 +722,8 @@ export default class CrivPlugin extends Plugin {
     this.registerView(VIEW_TYPE, (leaf) => new CrivSourceView(leaf, this));
     this.registerMarkdownPostProcessor((el, ctx) => this.decorateLinks(el, ctx));
     this.registerEditorSuggest(new CrivSourceSuggest(this));
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refreshSourcePanel()));
+    this.registerEvent(this.app.metadataCache.on("changed", () => this.refreshSourcePanel()));
     this.addSettingTab(new CrivSettingTab(this.app, this));
   }
 
@@ -672,6 +777,23 @@ export default class CrivPlugin extends Plugin {
 
   async getState(): Promise<CrivState | null> {
     return this.state ?? (await this.loadState());
+  }
+
+  async refreshSourcePanel(): Promise<void> {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      if (leaf.view instanceof CrivSourceView) {
+        await leaf.view.render();
+      }
+    }
+  }
+
+  frontmatterPatternTargets(state: CrivState): FrontmatterPatternTarget[] {
+    const file = this.app.workspace.getActiveFile();
+    if (!file) {
+      return [];
+    }
+    const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
+    return frontmatterPatternTargets(frontmatter, state);
   }
 
   async decorateLinks(el: HTMLElement, _ctx: MarkdownPostProcessorContext) {
@@ -751,6 +873,25 @@ class CrivSourceView extends ItemView {
       const row = container.createDiv({ cls: "criv-source-row" });
       row.createEl("button", { text: entry.path }).onclick = () => this.plugin.openExternal(entry.path);
       row.createSpan({ text: entry.mime ? ` ${entry.mime}` : "" });
+    }
+
+    const frontmatterPatterns = this.plugin.frontmatterPatternTargets(state);
+    container.createEl("h3", { text: "Current note pattern targets" });
+    if (frontmatterPatterns.length === 0) {
+      container.createEl("p", { text: "No frontmatter pattern targets." });
+    }
+    for (const target of frontmatterPatterns) {
+      const row = container.createDiv({ cls: "criv-pattern-row" });
+      row.addClass(target.status === "unresolved" ? "criv-warning" : "criv-pattern-ref");
+      row.createSpan({ text: `${target.source}: ${target.id}` });
+      row.createSpan({
+        text:
+          target.status === "local"
+            ? "local target"
+            : target.status === "resolved"
+              ? `${target.matches} match${target.matches === 1 ? "" : "es"}`
+              : "unresolved",
+      });
     }
 
     container.createEl("h3", { text: "Pattern matches" });
@@ -837,6 +978,74 @@ function sourceTooltip(state: CrivState, source: SourceIndexEntry): string {
 function patternTooltip(state: CrivState, id: string): string {
   const count = state.patterns?.[id]?.length ?? 0;
   return `${id}: ${count} match${count === 1 ? "" : "es"}`;
+}
+
+function frontmatterPatternTargets(
+  frontmatter: Record<string, unknown> | undefined,
+  state: CrivState,
+): FrontmatterPatternTarget[] {
+  const targets: FrontmatterPatternTarget[] = [];
+  const noteId = stringValue(frontmatter?.id);
+  const targetObject = objectValue(frontmatter?.targets);
+  for (const pattern of patternList(targetObject?.patterns)) {
+    const target = frontmatterPatternTarget(pattern, "targets", noteId, state);
+    if (target) {
+      targets.push(target);
+    }
+  }
+
+  const policyObject = objectValue(frontmatter?.policy);
+  for (const pattern of patternList(policyObject?.patterns)) {
+    const target = frontmatterPatternTarget(pattern, "policy", noteId, state);
+    if (target) {
+      targets.push(target);
+    }
+  }
+  return targets;
+}
+
+function frontmatterPatternTarget(
+  pattern: unknown,
+  source: FrontmatterPatternTarget["source"],
+  noteId: string | null,
+  state: CrivState,
+): FrontmatterPatternTarget | null {
+  const object = objectValue(pattern);
+  const rawRef = object ? stringValue(object.ref) : null;
+  const rawId = object ? stringValue(object.id) : stringValue(pattern);
+  const id = rawRef ?? (source === "policy" && rawId && noteId ? `${noteId}/${rawId}` : rawId);
+  if (!id) {
+    return null;
+  }
+  if (source === "targets" && !rawRef) {
+    return { id, source, status: "local", matches: 0 };
+  }
+
+  const matches = state.patterns?.[id]?.length ?? 0;
+  const ids = state["registered-patterns"] ?? Object.keys(state.patterns ?? {});
+  return {
+    id,
+    source,
+    status: ids.includes(id) || state.patterns?.[id] ? "resolved" : "unresolved",
+    matches,
+  };
+}
+
+function patternList(value: unknown): unknown[] {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  return value ? [value] : [];
+}
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function looksLikeSourceOrPattern(target: string): boolean {
