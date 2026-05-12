@@ -5,6 +5,7 @@ mod init;
 mod query;
 mod search;
 mod source_graph;
+mod source_index;
 mod state;
 mod structural;
 mod util;

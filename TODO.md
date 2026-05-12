@@ -80,10 +80,10 @@
 
 ### Source Index
 
-- [ ] Add `fff-search` behind a `SourceIndex` trait.
-- [ ] Use fff for fuzzy file search.
-- [ ] Use fff for grep modes.
-- [ ] Use fff for partial-path reference resolution.
+- [x] Add `fff-search` behind a `SourceIndex` trait.
+- [x] Use fff for fuzzy file search.
+- [x] Use fff for grep modes.
+- [x] Use fff for partial-path reference resolution.
 - [ ] Use fff watcher events in `criv watch`.
 - [ ] Add incremental reparsing.
 - [ ] Add incremental pattern match updates.

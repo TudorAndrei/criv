@@ -21,6 +21,7 @@ ast-grep-language = { version = "0.42.2", default-features = false, features = [
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
 content_inspector = "0.2"
+fff-search = "0.7.3-nightly.ff81719"
 globset = "0.4"
 ignore = "0.4"
 mime_guess = "2"

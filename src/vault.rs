@@ -6,6 +6,7 @@ use serde::Deserialize;
 use crate::Result;
 use crate::config::Config;
 use crate::source_graph::SourceGraph;
+use crate::source_index::{FffSourceIndex, SourceIndex};
 use crate::util::{
     GlobMatcher, find_wiki_links_with_lines, glob_matches, is_text_file, kebab,
     markdown_headings as parse_markdown_headings, read_to_string, strip_prefix, walk_files,
@@ -80,6 +81,7 @@ pub(crate) struct Vault {
     filenames: BTreeMap<String, usize>,
     titles: BTreeMap<String, usize>,
     source_files: Vec<String>,
+    source_index: Box<dyn SourceIndex>,
     source_graph: SourceGraph,
     patterns: BTreeSet<String>,
 }
@@ -126,6 +128,7 @@ impl Vault {
         }
 
         let source_files = collect_source_files(root, &config)?;
+        let source_index = Box::new(FffSourceIndex::new(root, &source_files)?);
         let source_graph = SourceGraph::build(root, &source_files)?;
 
         Ok(Self {
@@ -135,6 +138,7 @@ impl Vault {
             filenames,
             titles,
             source_files,
+            source_index,
             source_graph,
             patterns,
         })
@@ -182,27 +186,7 @@ impl Vault {
     }
 
     pub(crate) fn resolve_source_path(&self, path: &str) -> Option<(String, bool)> {
-        if path.is_empty() || path.starts_with("match:") {
-            return None;
-        }
-
-        let path = path.trim();
-        if self.source_files.iter().any(|file| file == path) {
-            return Some((path.to_string(), false));
-        }
-
-        let matches = self
-            .source_files
-            .iter()
-            .filter(|file| file.ends_with(path) || file.rsplit('/').next() == Some(path))
-            .cloned()
-            .collect::<Vec<_>>();
-
-        match matches.as_slice() {
-            [] => None,
-            [one] => Some((one.clone(), false)),
-            many => Some((many[0].clone(), true)),
-        }
+        self.source_index.resolve_partial_path(path)
     }
 
     pub(crate) fn source_glob_has_match(&self, pattern: &str) -> bool {
@@ -225,6 +209,10 @@ impl Vault {
 
     pub(crate) fn source_graph(&self) -> &SourceGraph {
         &self.source_graph
+    }
+
+    pub(crate) fn source_index(&self) -> &dyn SourceIndex {
+        self.source_index.as_ref()
     }
 
     pub(crate) fn patterns(&self) -> &BTreeSet<String> {

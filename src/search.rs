@@ -2,8 +2,8 @@ use std::path::Path;
 
 use clap::{Args as ClapArgs, ValueEnum};
 
+use crate::source_index::SourceGrepMode;
 use crate::structural::{self, PatternSource, StructuralMatch};
-use crate::util::{glob_matches, read_to_string};
 use crate::vault::Vault;
 use crate::{CrivError, Result};
 
@@ -11,6 +11,23 @@ use crate::{CrivError, Result};
 enum Format {
     Text,
     Json,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum GrepMode {
+    Plain,
+    Regex,
+    Fuzzy,
+}
+
+impl From<GrepMode> for SourceGrepMode {
+    fn from(value: GrepMode) -> Self {
+        match value {
+            GrepMode::Plain => Self::Plain,
+            GrepMode::Regex => Self::Regex,
+            GrepMode::Fuzzy => Self::Fuzzy,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -27,6 +44,8 @@ enum Mode {
 pub(crate) struct SearchOptions {
     #[arg(long)]
     grep: Option<String>,
+    #[arg(long, value_enum, default_value_t = GrepMode::Plain)]
+    grep_mode: GrepMode,
     #[arg(long)]
     files: Option<String>,
     #[arg(long)]
@@ -98,8 +117,8 @@ pub(crate) fn run(root: &Path, options: SearchOptions) -> Result<()> {
         paths.push(structural::language_glob(language).to_string());
     }
     let rows = match options.mode()? {
-        Mode::Grep(text) => grep(root, &vault, &text, &paths)?,
-        Mode::Files(query) => files(&vault, &query),
+        Mode::Grep(text) => grep(&vault, &text, options.grep_mode.into(), &paths)?,
+        Mode::Files(query) => files(&vault, &query)?,
         Mode::Notes(text) => notes(&vault, &text, options.semantic),
         Mode::Structural(pattern) => structural_rows(structural::find(
             root,
@@ -157,47 +176,30 @@ fn search_rule(root: &Path, vault: &Vault, adr_id: &str, paths: &[String]) -> Re
     Ok(rows)
 }
 
-fn grep(root: &Path, vault: &Vault, text: &str, paths: &[String]) -> Result<Vec<Row>> {
-    let needle = text.to_lowercase();
-    let mut rows = Vec::new();
-    for source_file in vault.source_files() {
-        if !path_allowed(source_file, paths) {
-            continue;
-        }
-        let path = root.join(source_file);
-        let contents = read_to_string(&path)?;
-        for (line_index, line) in contents.lines().enumerate() {
-            if line.to_lowercase().contains(&needle) {
-                rows.push(Row {
-                    path: source_file.clone(),
-                    line: Some(line_index + 1),
-                    text: line.trim().to_string(),
-                });
-            }
-        }
-    }
-    Ok(rows)
+fn grep(vault: &Vault, text: &str, mode: SourceGrepMode, paths: &[String]) -> Result<Vec<Row>> {
+    Ok(vault
+        .source_index()
+        .grep(text, mode, paths)?
+        .into_iter()
+        .map(|matched| Row {
+            path: matched.path,
+            line: Some(matched.line),
+            text: matched.text,
+        })
+        .collect())
 }
 
-fn files(vault: &Vault, query: &str) -> Vec<Row> {
-    let mut scored = vault
-        .source_files()
-        .iter()
-        .filter_map(|path| fuzzy_score(path, query).map(|score| (score, path)))
-        .collect::<Vec<_>>();
-    scored.sort_by(|(left_score, left_path), (right_score, right_path)| {
-        right_score
-            .cmp(left_score)
-            .then_with(|| left_path.cmp(right_path))
-    });
-    scored
+fn files(vault: &Vault, query: &str) -> Result<Vec<Row>> {
+    Ok(vault
+        .source_index()
+        .fuzzy_files(query, 100)?
         .into_iter()
-        .map(|(_, path)| Row {
-            path: path.clone(),
+        .map(|hit| Row {
+            path: hit.path,
             line: None,
             text: String::new(),
         })
-        .collect()
+        .collect())
 }
 
 fn notes(vault: &Vault, text: &str, semantic: bool) -> Vec<Row> {
@@ -309,33 +311,6 @@ fn excerpt(body: &str, query_terms: &[String]) -> String {
     body[start..end].trim().to_string()
 }
 
-fn path_allowed(path: &str, patterns: &[String]) -> bool {
-    patterns.is_empty() || patterns.iter().any(|pattern| glob_matches(pattern, path))
-}
-
-fn fuzzy_score(path: &str, query: &str) -> Option<i32> {
-    let path_lower = path.to_lowercase();
-    let query_lower = query.to_lowercase();
-    if path_lower.contains(&query_lower) {
-        return Some(10_000 - path.len() as i32);
-    }
-
-    let mut score = 0;
-    let mut query_chars = query_lower.chars();
-    let mut current = query_chars.next()?;
-    for (index, ch) in path_lower.chars().enumerate() {
-        if ch == current {
-            score += 100 - index.min(80) as i32;
-            if let Some(next) = query_chars.next() {
-                current = next;
-            } else {
-                return Some(score);
-            }
-        }
-    }
-    None
-}
-
 fn structural_rows(matches: Vec<StructuralMatch>) -> Vec<Row> {
     matches
         .into_iter()
@@ -403,12 +378,6 @@ fn json_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn fuzzy_score_accepts_subsequence() {
-        assert!(fuzzy_score("src/auth/verify.rs", "svr").is_some());
-        assert!(fuzzy_score("src/auth/verify.rs", "zzz").is_none());
-    }
 
     #[test]
     fn note_search_requires_all_terms_and_ranks_title_matches() {

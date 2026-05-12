@@ -286,13 +286,15 @@ impl State {
         }
 
         let mut source_index = vault
-            .source_files()
-            .iter()
-            .enumerate()
-            .map(|(index, path)| SourceIndexEntry {
-                path: path.clone(),
-                mime: mime_guess::from_path(path).first_raw().map(str::to_string),
-                frecency: (vault.source_files().len() - index) as u32,
+            .source_index()
+            .entries()?
+            .into_iter()
+            .map(|entry| SourceIndexEntry {
+                mime: mime_guess::from_path(&entry.path)
+                    .first_raw()
+                    .map(str::to_string),
+                path: entry.path,
+                frecency: entry.frecency,
             })
             .collect::<Vec<_>>();
         source_index.sort_by(|left, right| left.path.cmp(&right.path));
