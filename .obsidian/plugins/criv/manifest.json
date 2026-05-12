@@ -1,0 +1,9 @@
+{
+  "id": "criv",
+  "name": "criv",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Inline code and pattern references backed by criv state.",
+  "author": "criv",
+  "isDesktopOnly": true
+}

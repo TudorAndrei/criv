@@ -1,0 +1,15 @@
+[package]
+name = "criv-wasm"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "WASM helpers for the criv Obsidian plugin"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde-wasm-bindgen = "0.6"
+serde_json = "1"
+wasm-bindgen = "0.2"

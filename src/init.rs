@@ -1,0 +1,594 @@
+use std::fs;
+use std::path::Path;
+
+use crate::util::{append_line_if_missing, write_new};
+use crate::{Args, CrivError, Result};
+
+#[derive(Debug, Default)]
+pub(crate) struct InitOptions {
+    no_obsidian: bool,
+    no_skills: bool,
+}
+
+impl InitOptions {
+    pub(crate) fn parse(mut args: Args) -> Result<Self> {
+        let mut options = Self::default();
+        while let Some(arg) = args.next() {
+            match arg.as_str() {
+                "--no-obsidian" => options.no_obsidian = true,
+                "--no-skills" => options.no_skills = true,
+                other => return Err(CrivError::usage(format!("unknown init option `{other}`"))),
+            }
+        }
+        Ok(options)
+    }
+}
+
+pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
+    let mut created = Vec::new();
+
+    if write_new(&root.join("criv.toml"), DEFAULT_CONFIG)? {
+        created.push("criv.toml");
+    }
+
+    fs::create_dir_all(root.join("docs/adr"))?;
+    fs::create_dir_all(root.join(".criv/snapshots"))?;
+
+    if write_new(&root.join(".criv/state.json"), DEFAULT_STATE)? {
+        created.push(".criv/state.json");
+    }
+
+    if write_new(&root.join("docs/adr/README.md"), ADR_README)? {
+        created.push("docs/adr/README.md");
+    }
+
+    if !options.no_skills {
+        for (path, contents) in SKILLS {
+            if write_new(&root.join(path), contents)? {
+                created.push(path);
+            }
+        }
+    }
+
+    if !options.no_obsidian {
+        for (path, contents) in OBSIDIAN_PLUGIN {
+            if write_new(&root.join(path), contents)? {
+                created.push(path);
+            }
+        }
+    }
+
+    append_line_if_missing(&root.join(".gitignore"), ".criv/")?;
+
+    if created.is_empty() {
+        println!("criv vault already initialized");
+    } else {
+        println!("initialized criv vault");
+        for path in created {
+            println!("created {path}");
+        }
+    }
+
+    Ok(())
+}
+
+const DEFAULT_CONFIG: &str = r#"[vault]
+docs = "docs"
+adr = "adr"
+
+[source]
+roots = ["src", "lib"]
+exclude = ["**/target/**", "**/node_modules/**"]
+languages = []
+
+[index]
+source = true
+notes = "memory"
+embeddings = false
+
+[enforce]
+stages = ["commit", "push", "ci"]
+
+[obsidian]
+plugin = true
+"#;
+
+const DEFAULT_STATE: &str = r#"{
+  "schema": "criv.state.v0",
+  "graph": { "nodes": [], "edges": [] },
+  "patterns": {},
+  "source-index": []
+}
+"#;
+
+const ADR_README: &str = r#"---
+id: ADR-README
+kind: doc
+title: Architectural Decisions
+tags: [criv]
+---
+
+# Architectural Decisions
+
+Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-title.md`.
+"#;
+
+const SKILL_MD: &str = r#"---
+id: CRIV-SKILL
+kind: doc
+title: Working with this criv vault
+tags: [criv, skill]
+---
+
+# Working with this criv vault
+
+Use this vault to document code, decisions, and references between them.
+
+- Write editorial docs with `kind: doc`.
+- Write architectural decisions with `kind: decision` in `docs/adr/`.
+- Reference code with wiki-links such as `[[src/lib.rs#some_symbol]]`.
+- Reference decisions and docs by `id`, filename, or title.
+- Run `criv check` before declaring documentation work complete.
+
+Related skills:
+
+- [[writing-decisions]]
+- [[referencing-code]]
+- [[checking-drift]]
+"#;
+
+const WRITING_DECISIONS: &str = r#"---
+id: writing-decisions
+kind: doc
+title: Writing decisions
+tags: [criv, skill]
+---
+
+# Writing decisions
+
+Decision notes use `kind: decision`, an ID like `ADR-0001`, and live under `docs/adr/`.
+
+Required fields:
+
+- `id`
+- `kind: decision`
+- `title`
+- `status`
+- `date`
+
+Use `governs:` to list path globs controlled by the decision. Use `policy.patterns:` for ast-grep rules that enforcement should evaluate.
+"#;
+
+const REFERENCING_CODE: &str = r#"---
+id: referencing-code
+kind: doc
+title: Referencing code
+tags: [criv, skill]
+---
+
+# Referencing code
+
+Use wiki-links for code, pattern, and note references.
+
+- Source file: `[[src/auth/verify.rs]]`
+- Source symbol: `[[src/auth/verify.rs#verify_token]]`
+- Source lines: `[[src/auth/verify.rs#L42-L67]]`
+- Pattern: `[[match:ADR-0007/no-block-on-in-handler]]`
+- Note: `[[ADR-0007]]`
+
+Partial source paths are allowed, but `criv check` warns when they are ambiguous.
+"#;
+
+const CHECKING_DRIFT: &str = r#"---
+id: checking-drift
+kind: doc
+title: Checking drift
+tags: [criv, skill]
+---
+
+# Checking drift
+
+Run `criv check` after editing documentation.
+
+Use `criv check --format json` when an agent or script needs machine-readable diagnostics.
+"#;
+
+const SKILLS: &[(&str, &str)] = &[
+    ("docs/SKILL.md", SKILL_MD),
+    ("docs/skills/writing-decisions.md", WRITING_DECISIONS),
+    ("docs/skills/referencing-code.md", REFERENCING_CODE),
+    ("docs/skills/checking-drift.md", CHECKING_DRIFT),
+];
+
+const PLUGIN_MANIFEST: &str = r#"{
+  "id": "criv",
+  "name": "criv",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Inline code and pattern references backed by criv state.",
+  "author": "criv",
+  "isDesktopOnly": true
+}
+"#;
+
+const PLUGIN_MAIN: &str = r#"/*
+THIS IS A GENERATED/BUNDLED FILE BY ESBUILD.
+Edit src/main.ts, then run npm run build in this plugin directory.
+*/
+"use strict";
+
+const { Notice, Plugin, PluginSettingTab, Setting } = require("obsidian");
+
+const DEFAULT_SETTINGS = {
+  statePath: ".criv/state.json",
+};
+
+let wasmModule = null;
+
+async function summarizeState(raw) {
+  const wasm = await loadWasm();
+  if (wasm) {
+    return wasm.summarize_state(raw);
+  }
+
+  const state = JSON.parse(raw);
+  return {
+    schema: state.schema,
+    node_count: Array.isArray(state.graph?.nodes) ? state.graph.nodes.length : 0,
+    edge_count: Array.isArray(state.graph?.edges) ? state.graph.edges.length : 0,
+    source_count: Array.isArray(state["source-index"]) ? state["source-index"].length : 0,
+    pattern_count: Array.isArray(state["registered-patterns"]) ? state["registered-patterns"].length : 0,
+    first_node_id: state.graph?.nodes?.[0]?.id,
+    first_edge: state.graph?.edges?.[0]
+      ? `${state.graph.edges[0].from}:${state.graph.edges[0].kind}:${state.graph.edges[0].to}`
+      : undefined,
+    first_source_path: state["source-index"]?.[0]?.path,
+  };
+}
+
+async function loadWasm() {
+  if (!wasmModule) {
+    wasmModule = import("./pkg/criv_wasm.js").catch(() => null);
+  }
+  return wasmModule;
+}
+
+class CrivPlugin extends Plugin {
+  async onload() {
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    this.addRibbonIcon("network", "criv status", async () => this.showStatus());
+    this.addCommand({
+      id: "show-criv-status",
+      name: "Show criv status",
+      callback: async () => this.showStatus(),
+    });
+    this.addSettingTab(new CrivSettingTab(this.app, this));
+  }
+
+  async showStatus() {
+    const state = await this.readState();
+    if (!state) {
+      new Notice(`criv state is missing at ${this.settings.statePath}`);
+      return;
+    }
+
+    new Notice(
+      `criv ${state.schema}: ${state.node_count} nodes, ${state.edge_count} edges, ${state.source_count} source files`
+    );
+  }
+
+  async readState() {
+    try {
+      const raw = await this.app.vault.adapter.read(this.settings.statePath);
+      return await summarizeState(raw);
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  async saveSettings() {
+    await this.saveData(this.settings);
+  }
+}
+
+class CrivSettingTab extends PluginSettingTab {
+  constructor(app, plugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
+
+  display() {
+    const { containerEl } = this;
+    containerEl.empty();
+
+    new Setting(containerEl)
+      .setName("State path")
+      .setDesc("Path to the criv watcher state file, relative to the vault root.")
+      .addText((text) =>
+        text
+          .setPlaceholder(".criv/state.json")
+          .setValue(this.plugin.settings.statePath)
+          .onChange(async (value) => {
+            this.plugin.settings.statePath = value.trim() || DEFAULT_SETTINGS.statePath;
+            await this.plugin.saveSettings();
+          })
+      );
+  }
+}
+
+module.exports = CrivPlugin;
+"#;
+
+const PLUGIN_TS_MAIN: &str = r#"import { Notice, Plugin, PluginSettingTab, Setting } from "obsidian";
+import { summarizeState } from "./wasm";
+
+interface CrivSettings {
+  statePath: string;
+}
+
+const DEFAULT_SETTINGS: CrivSettings = {
+  statePath: ".criv/state.json",
+};
+
+export default class CrivPlugin extends Plugin {
+  settings: CrivSettings;
+
+  async onload() {
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    this.addRibbonIcon("network", "criv status", async () => this.showStatus());
+    this.addCommand({
+      id: "show-criv-status",
+      name: "Show criv status",
+      callback: async () => this.showStatus(),
+    });
+    this.addSettingTab(new CrivSettingTab(this.app, this));
+  }
+
+  async showStatus() {
+    const state = await this.readState();
+    if (!state) {
+      new Notice(`criv state is missing at ${this.settings.statePath}`);
+      return;
+    }
+
+    new Notice(
+      `criv ${state.schema}: ${state.node_count} nodes, ${state.edge_count} edges, ${state.source_count} source files`,
+    );
+  }
+
+  async readState() {
+    try {
+      const raw = await this.app.vault.adapter.read(this.settings.statePath);
+      return await summarizeState(raw);
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  async saveSettings() {
+    await this.saveData(this.settings);
+  }
+}
+
+class CrivSettingTab extends PluginSettingTab {
+  plugin: CrivPlugin;
+
+  constructor(app: CrivPlugin["app"], plugin: CrivPlugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
+
+  display(): void {
+    const { containerEl } = this;
+    containerEl.empty();
+
+    new Setting(containerEl)
+      .setName("State path")
+      .setDesc("Path to the criv watcher state file, relative to the vault root.")
+      .addText((text) =>
+        text
+          .setPlaceholder(".criv/state.json")
+          .setValue(this.plugin.settings.statePath)
+          .onChange(async (value) => {
+            this.plugin.settings.statePath = value.trim() || DEFAULT_SETTINGS.statePath;
+            await this.plugin.saveSettings();
+          }),
+      );
+  }
+}
+"#;
+
+const PLUGIN_TS_WASM: &str = r#"export interface CrivStateSummary {
+  schema: string;
+  node_count: number;
+  edge_count: number;
+  source_count: number;
+  pattern_count: number;
+  first_node_id?: string;
+  first_edge?: string;
+  first_source_path?: string;
+}
+
+type CrivWasmModule = {
+  summarize_state(raw: string): CrivStateSummary;
+};
+
+let wasmModule: Promise<CrivWasmModule | null> | null = null;
+
+export async function summarizeState(raw: string): Promise<CrivStateSummary> {
+  const wasm = await loadWasm();
+  if (wasm) {
+    return wasm.summarize_state(raw);
+  }
+
+  const state = JSON.parse(raw);
+  return {
+    schema: state.schema,
+    node_count: Array.isArray(state.graph?.nodes) ? state.graph.nodes.length : 0,
+    edge_count: Array.isArray(state.graph?.edges) ? state.graph.edges.length : 0,
+    source_count: Array.isArray(state["source-index"]) ? state["source-index"].length : 0,
+    pattern_count: Array.isArray(state["registered-patterns"]) ? state["registered-patterns"].length : 0,
+    first_node_id: state.graph?.nodes?.[0]?.id,
+    first_edge: state.graph?.edges?.[0]
+      ? `${state.graph.edges[0].from}:${state.graph.edges[0].kind}:${state.graph.edges[0].to}`
+      : undefined,
+    first_source_path: state["source-index"]?.[0]?.path,
+  };
+}
+
+async function loadWasm(): Promise<CrivWasmModule | null> {
+  if (!wasmModule) {
+    wasmModule = import("../pkg/criv_wasm.js")
+      .then((module) => module as CrivWasmModule)
+      .catch(() => null);
+  }
+  return wasmModule;
+}
+"#;
+
+const PLUGIN_STYLES: &str = r#".criv-warning {
+  color: var(--text-error);
+}
+"#;
+
+const PLUGIN_PACKAGE: &str = r#"{
+  "name": "criv-obsidian-plugin",
+  "version": "0.1.0",
+  "description": "Obsidian companion plugin for criv vault state.",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "npm run build:wasm && tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "build:wasm": "wasm-pack build ../../../crates/criv-wasm --target bundler --out-dir ../../.obsidian/plugins/criv/pkg",
+    "version": "node version-bump.mjs && git add manifest.json versions.json",
+    "lint": "eslint ."
+  },
+  "keywords": ["obsidian", "obsidian-plugin", "criv"],
+  "license": "MIT",
+  "devDependencies": {
+    "@eslint/js": "9.30.1",
+    "@types/node": "^16.11.6",
+    "esbuild": "0.25.5",
+    "eslint-plugin-obsidianmd": "0.1.9",
+    "globals": "14.0.0",
+    "jiti": "2.6.1",
+    "tslib": "2.4.0",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "8.35.1",
+    "wasm-pack": "^0.13.1"
+  },
+  "dependencies": {
+    "obsidian": "latest"
+  }
+}
+"#;
+
+const PLUGIN_TSCONFIG: &str = r#"{
+  "compilerOptions": {
+    "baseUrl": "src",
+    "inlineSourceMap": true,
+    "inlineSources": true,
+    "module": "ESNext",
+    "target": "ES6",
+    "allowJs": true,
+    "noImplicitAny": true,
+    "noImplicitThis": true,
+    "noImplicitReturns": true,
+    "moduleResolution": "node",
+    "importHelpers": true,
+    "noUncheckedIndexedAccess": true,
+    "isolatedModules": true,
+    "strictNullChecks": true,
+    "strictBindCallApply": true,
+    "allowSyntheticDefaultImports": true,
+    "useUnknownInCatchVariables": true,
+    "lib": ["DOM", "ES5", "ES6", "ES7"]
+  },
+  "include": ["src/**/*.ts"]
+}
+"#;
+
+const PLUGIN_ESBUILD: &str = r#"import esbuild from "esbuild";
+import process from "process";
+import { builtinModules } from "node:module";
+
+const banner = `/*
+THIS IS A GENERATED/BUNDLED FILE BY ESBUILD.
+Edit src/main.ts, then run npm run build in this plugin directory.
+*/`;
+
+const prod = process.argv[2] === "production";
+const context = await esbuild.context({
+  banner: { js: banner },
+  entryPoints: ["src/main.ts"],
+  bundle: true,
+  external: [
+    "obsidian",
+    "electron",
+    "../pkg/criv_wasm.js",
+    "@codemirror/autocomplete",
+    "@codemirror/collab",
+    "@codemirror/commands",
+    "@codemirror/language",
+    "@codemirror/lint",
+    "@codemirror/search",
+    "@codemirror/state",
+    "@codemirror/view",
+    "@lezer/common",
+    "@lezer/highlight",
+    "@lezer/lr",
+    ...builtinModules,
+  ],
+  format: "cjs",
+  target: "es2018",
+  logLevel: "info",
+  sourcemap: prod ? false : "inline",
+  treeShaking: true,
+  outfile: "main.js",
+  minify: prod,
+});
+
+if (prod) {
+  await context.rebuild();
+  process.exit(0);
+} else {
+  await context.watch();
+}
+"#;
+
+const PLUGIN_VERSIONS: &str = r#"{
+  "0.1.0": "1.5.0"
+}
+"#;
+
+const PLUGIN_VERSION_BUMP: &str = r#"import { readFileSync, writeFileSync } from "fs";
+
+const targetVersion = process.env.npm_package_version;
+const manifest = JSON.parse(readFileSync("manifest.json", "utf8"));
+const { minAppVersion } = manifest;
+manifest.version = targetVersion;
+writeFileSync("manifest.json", JSON.stringify(manifest, null, "\t"));
+
+const versions = JSON.parse(readFileSync("versions.json", "utf8"));
+if (!Object.values(versions).includes(minAppVersion)) {
+  versions[targetVersion] = minAppVersion;
+  writeFileSync("versions.json", JSON.stringify(versions, null, "\t"));
+}
+"#;
+
+const OBSIDIAN_PLUGIN: &[(&str, &str)] = &[
+    (".obsidian/plugins/criv/manifest.json", PLUGIN_MANIFEST),
+    (".obsidian/plugins/criv/main.js", PLUGIN_MAIN),
+    (".obsidian/plugins/criv/styles.css", PLUGIN_STYLES),
+    (".obsidian/plugins/criv/src/main.ts", PLUGIN_TS_MAIN),
+    (".obsidian/plugins/criv/src/wasm.ts", PLUGIN_TS_WASM),
+    (".obsidian/plugins/criv/package.json", PLUGIN_PACKAGE),
+    (".obsidian/plugins/criv/tsconfig.json", PLUGIN_TSCONFIG),
+    (".obsidian/plugins/criv/esbuild.config.mjs", PLUGIN_ESBUILD),
+    (".obsidian/plugins/criv/versions.json", PLUGIN_VERSIONS),
+    (
+        ".obsidian/plugins/criv/version-bump.mjs",
+        PLUGIN_VERSION_BUMP,
+    ),
+];

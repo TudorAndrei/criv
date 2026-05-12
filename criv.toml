@@ -1,0 +1,19 @@
+[vault]
+docs = "docs"
+adr = "adr"
+
+[source]
+roots = ["src", "lib"]
+exclude = ["**/target/**", "**/node_modules/**"]
+languages = []
+
+[index]
+source = true
+notes = "memory"
+embeddings = false
+
+[enforce]
+stages = ["commit", "push", "ci"]
+
+[obsidian]
+plugin = true
