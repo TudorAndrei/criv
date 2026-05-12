@@ -58,18 +58,15 @@
 - [x] Evaluate `serde_yaml_ng` as an alternate YAML replacement.
 - [x] Evaluate `camino` for UTF-8 repo-relative path handling.
 - [x] Add native import-policy checks.
+- [x] Replace fallback source parser with tree-sitter.
+- [x] Add tree-sitter grammars for Rust.
+- [x] Add tree-sitter grammars for TypeScript.
+- [x] Add tree-sitter grammars for JavaScript.
+- [x] Add tree-sitter grammars for Python.
+- [x] Add tree-sitter grammars for Go.
+- [x] Extract precise symbol ranges.
 
 ## Missing For Spec Completeness
-
-### Source Graph
-
-- [ ] Replace fallback source parser with tree-sitter.
-- [ ] Add tree-sitter grammars for Rust.
-- [ ] Add tree-sitter grammars for TypeScript.
-- [ ] Add tree-sitter grammars for JavaScript.
-- [ ] Add tree-sitter grammars for Python.
-- [ ] Add tree-sitter grammars for Go.
-- [ ] Extract precise symbol ranges.
 
 ### Structural Search And Enforcement
 
@@ -94,9 +91,6 @@
 ### Note Retrieval
 
 - [ ] Add optional `fastembed` semantic note search.
-
-### Output And Snapshots
-
 
 ### Obsidian Plugin
 
@@ -128,6 +122,6 @@ target/debug/criv query diff latest latest
 ## Notes
 
 - Current structural search is a lexical fallback, not real ast-grep.
-- Current source graph extraction is conservative and parser-based, not tree-sitter.
+- Current source graph extraction is tree-sitter-backed with a conservative fallback.
 - Current Obsidian plugin reads state and uses a WASM helper, but does not yet render code previews or match lists.
 - `.criv/` is local state and intentionally ignored by git.

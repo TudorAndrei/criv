@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use tree_sitter::{Node, Parser};
+
 use crate::Result;
 use crate::util::read_to_string;
 
@@ -201,6 +203,293 @@ impl SourceGraph {
 }
 
 fn parse_source_file(path: &str, contents: &str) -> SourceFile {
+    parse_tree_sitter_file(path, contents)
+        .unwrap_or_else(|| parse_source_file_fallback(path, contents))
+}
+
+fn parse_tree_sitter_file(path: &str, contents: &str) -> Option<SourceFile> {
+    let language = Language::from_path(path);
+    let tree_sitter_language = tree_sitter_language(language)?;
+    let mut parser = Parser::new();
+    parser.set_language(&tree_sitter_language).ok()?;
+    let tree = parser.parse(contents, None)?;
+    if tree.root_node().has_error() {
+        return None;
+    }
+
+    let mut file = SourceFile {
+        path: path.into(),
+        language,
+        imports: Vec::new(),
+        symbols: Vec::new(),
+    };
+    collect_tree_sitter_nodes(tree.root_node(), contents, path, language, None, &mut file);
+    Some(file)
+}
+
+fn tree_sitter_language(language: Language) -> Option<tree_sitter::Language> {
+    match language {
+        Language::Rust => Some(tree_sitter_rust::LANGUAGE.into()),
+        Language::TypeScript => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
+        Language::JavaScript => Some(tree_sitter_javascript::LANGUAGE.into()),
+        Language::Python => Some(tree_sitter_python::LANGUAGE.into()),
+        Language::Go => Some(tree_sitter_go::LANGUAGE.into()),
+        Language::Unknown => None,
+    }
+}
+
+fn collect_tree_sitter_nodes(
+    node: Node<'_>,
+    contents: &str,
+    path: &str,
+    language: Language,
+    parent: Option<String>,
+    file: &mut SourceFile,
+) {
+    if let Some(import) = tree_sitter_import(node, contents, language) {
+        file.imports.push(Import {
+            module: import,
+            line: node.start_position().row + 1,
+        });
+    }
+
+    if let Some(symbol) = tree_sitter_symbol(node, contents, path, language, parent.as_deref()) {
+        let symbol_parent = if symbol.kind == SymbolKind::Class {
+            Some(symbol.name.clone())
+        } else {
+            parent.clone()
+        };
+        file.symbols.push(symbol);
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            collect_tree_sitter_nodes(child, contents, path, language, symbol_parent.clone(), file);
+        }
+        return;
+    }
+
+    let impl_parent = if language == Language::Rust && node.kind() == "impl_item" {
+        node_text(node, contents).and_then(|text| parse_rust_impl_target(&text))
+    } else {
+        parent
+    };
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_tree_sitter_nodes(child, contents, path, language, impl_parent.clone(), file);
+    }
+}
+
+fn tree_sitter_import(node: Node<'_>, contents: &str, language: Language) -> Option<String> {
+    match (language, node.kind()) {
+        (Language::Rust, "use_declaration") => node_text(node, contents).map(|text| {
+            text.trim()
+                .trim_start_matches("use ")
+                .trim_start_matches("pub use ")
+                .trim_end_matches(';')
+                .trim()
+                .to_string()
+        }),
+        (Language::TypeScript | Language::JavaScript, "import_statement") => {
+            descendant_of_kind(node, "string")
+                .and_then(|child| node_text(child, contents))
+                .map(|text| clean_js_module(&text))
+        }
+        (Language::Python, "import_statement" | "import_from_statement") => {
+            node_text(node, contents).and_then(|text| parse_import(text.trim(), language))
+        }
+        (Language::Go, "import_spec") => descendant_of_kind(node, "interpreted_string_literal")
+            .or_else(|| descendant_of_kind(node, "raw_string_literal"))
+            .and_then(|child| node_text(child, contents))
+            .map(|text| text.trim_matches('"').trim_matches('`').to_string()),
+        _ => None,
+    }
+}
+
+fn tree_sitter_symbol(
+    node: Node<'_>,
+    contents: &str,
+    path: &str,
+    language: Language,
+    parent: Option<&str>,
+) -> Option<Symbol> {
+    let (name, kind) = match (language, node.kind()) {
+        (Language::Rust, "function_item") => (
+            field_text(node, contents, "name")?,
+            if parent.is_some() {
+                SymbolKind::Method
+            } else {
+                SymbolKind::Function
+            },
+        ),
+        (Language::Rust, "struct_item" | "enum_item") => {
+            (field_text(node, contents, "name")?, SymbolKind::Class)
+        }
+        (Language::TypeScript | Language::JavaScript, "function_declaration")
+        | (Language::TypeScript | Language::JavaScript, "generator_function_declaration") => {
+            (field_text(node, contents, "name")?, SymbolKind::Function)
+        }
+        (Language::TypeScript | Language::JavaScript, "method_definition")
+        | (Language::TypeScript | Language::JavaScript, "method_signature") => {
+            (field_text(node, contents, "name")?, SymbolKind::Method)
+        }
+        (Language::TypeScript | Language::JavaScript, "class_declaration") => {
+            (field_text(node, contents, "name")?, SymbolKind::Class)
+        }
+        (Language::TypeScript | Language::JavaScript, "variable_declarator")
+            if has_descendant_kind(node, &["arrow_function", "function_expression"]) =>
+        {
+            (field_text(node, contents, "name")?, SymbolKind::Function)
+        }
+        (Language::Python, "function_definition") => (
+            field_text(node, contents, "name")?,
+            if parent.is_some() {
+                SymbolKind::Method
+            } else {
+                SymbolKind::Function
+            },
+        ),
+        (Language::Python, "class_definition") => {
+            (field_text(node, contents, "name")?, SymbolKind::Class)
+        }
+        (Language::Go, "function_declaration") => {
+            (field_text(node, contents, "name")?, SymbolKind::Function)
+        }
+        (Language::Go, "method_declaration") => {
+            (field_text(node, contents, "name")?, SymbolKind::Method)
+        }
+        (Language::Go, "type_spec") => (field_text(node, contents, "name")?, SymbolKind::Class),
+        _ => return None,
+    };
+
+    Some(Symbol {
+        id: SymbolId {
+            path: path.into(),
+            name: name.clone(),
+        },
+        name,
+        kind,
+        parent: parent.map(str::to_string),
+        exported: tree_sitter_exported(node, contents, language),
+        range: SymbolRange {
+            start_line: node.start_position().row + 1,
+            end_line: node.end_position().row + 1,
+        },
+        calls: tree_sitter_calls(node, contents, language),
+    })
+}
+
+fn tree_sitter_calls(node: Node<'_>, contents: &str, language: Language) -> Vec<Call> {
+    let mut calls = Vec::new();
+    collect_tree_sitter_calls(node, contents, language, &mut calls);
+    calls.sort_by(|left, right| (left.line, &left.target).cmp(&(right.line, &right.target)));
+    calls.dedup_by(|left, right| left.line == right.line && left.target == right.target);
+    calls
+}
+
+fn collect_tree_sitter_calls(
+    node: Node<'_>,
+    contents: &str,
+    language: Language,
+    calls: &mut Vec<Call>,
+) {
+    if node.kind() == "call_expression" || node.kind() == "call" {
+        let function = node
+            .child_by_field_name("function")
+            .or_else(|| first_named_child(node));
+        if let Some(target) = function.and_then(|child| call_target(child, contents)) {
+            if !is_call_keyword(&target, language) {
+                calls.push(Call {
+                    target,
+                    line: node.start_position().row + 1,
+                });
+            }
+        }
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_tree_sitter_calls(child, contents, language, calls);
+    }
+}
+
+fn call_target(node: Node<'_>, contents: &str) -> Option<String> {
+    match node.kind() {
+        "identifier" | "field_identifier" | "property_identifier" => node_text(node, contents),
+        "selector_expression" | "field_expression" | "member_expression" | "attribute" => node
+            .child_by_field_name("field")
+            .or_else(|| node.child_by_field_name("property"))
+            .or_else(|| node.child_by_field_name("attribute"))
+            .and_then(|child| node_text(child, contents))
+            .or_else(|| {
+                node_text(node, contents).and_then(|text| {
+                    text.rsplit(['.', ':'])
+                        .next()
+                        .map(str::trim)
+                        .map(str::to_string)
+                })
+            }),
+        _ => node_text(node, contents).and_then(|text| {
+            text.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+                .find(|part| !part.is_empty())
+                .map(str::to_string)
+        }),
+    }
+}
+
+fn tree_sitter_exported(node: Node<'_>, contents: &str, language: Language) -> bool {
+    match language {
+        Language::Rust => {
+            let mut cursor = node.walk();
+            node.children(&mut cursor)
+                .any(|child| child.kind() == "visibility_modifier")
+        }
+        Language::TypeScript | Language::JavaScript => {
+            node.parent()
+                .is_some_and(|parent| parent.kind() == "export_statement")
+                || node_text(node, contents)
+                    .is_some_and(|text| text.trim_start().starts_with("export "))
+        }
+        Language::Go => field_text(node, contents, "name")
+            .is_some_and(|name| name.chars().next().is_some_and(char::is_uppercase)),
+        Language::Python => {
+            field_text(node, contents, "name").is_some_and(|name| !name.starts_with('_'))
+        }
+        Language::Unknown => false,
+    }
+}
+
+fn field_text(node: Node<'_>, contents: &str, field: &str) -> Option<String> {
+    node.child_by_field_name(field)
+        .and_then(|child| node_text(child, contents))
+}
+
+fn node_text(node: Node<'_>, contents: &str) -> Option<String> {
+    node.utf8_text(contents.as_bytes()).ok().map(str::to_string)
+}
+
+fn first_named_child(node: Node<'_>) -> Option<Node<'_>> {
+    (0..node.named_child_count()).find_map(|index| node.named_child(index))
+}
+
+fn descendant_of_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
+    if node.kind() == kind {
+        return Some(node);
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if let Some(found) = descendant_of_kind(child, kind) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn has_descendant_kind(node: Node<'_>, kinds: &[&str]) -> bool {
+    kinds
+        .iter()
+        .any(|kind| descendant_of_kind(node, kind).is_some())
+}
+
+fn parse_source_file_fallback(path: &str, contents: &str) -> SourceFile {
     let language = Language::from_path(path);
     let mut file = SourceFile {
         path: path.into(),
@@ -711,5 +1000,56 @@ fn target() {}
             graph.callees("src/local.rs#caller"),
             vec!["src/local.rs#target"]
         );
+    }
+
+    #[test]
+    fn extracts_typescript_symbols_imports_and_calls() {
+        let file = parse_source_file(
+            "src/app.ts",
+            r#"
+import { api } from "./api";
+export class Service {
+  run() {
+    api();
+  }
+}
+const helper = () => api();
+"#,
+        );
+
+        assert_eq!(file.imports[0].module, "./api");
+        assert!(file.symbols.iter().any(|symbol| symbol.name == "Service"
+            && symbol.kind == SymbolKind::Class
+            && symbol.exported));
+        assert!(file.symbols.iter().any(|symbol| symbol.name == "run"
+            && symbol.kind == SymbolKind::Method
+            && symbol.parent.as_deref() == Some("Service")));
+        assert!(file.symbols.iter().any(|symbol| symbol.name == "helper"));
+    }
+
+    #[test]
+    fn extracts_go_symbols_imports_and_calls() {
+        let file = parse_source_file(
+            "main.go",
+            r#"
+package main
+import "fmt"
+type Server struct {}
+func main() {
+  fmt.Println("hi")
+}
+"#,
+        );
+
+        assert_eq!(file.imports[0].module, "fmt");
+        assert!(file.symbols.iter().any(|symbol| symbol.name == "Server"
+            && symbol.kind == SymbolKind::Class
+            && symbol.exported));
+        let main = file
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "main")
+            .unwrap();
+        assert_eq!(main.calls[0].target, "Println");
     }
 }
