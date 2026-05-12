@@ -212,12 +212,21 @@ Edit src/main.ts, then run npm run build in this plugin directory.
 */
 "use strict";
 
-const { Notice, Plugin, PluginSettingTab, Setting } = require("obsidian");
+const {
+  EditorSuggest,
+  ItemView,
+  Notice,
+  Plugin,
+  PluginSettingTab,
+  Setting,
+} = require("obsidian");
 
 const DEFAULT_SETTINGS = {
   statePath: ".criv/state.json",
+  externalEditorUrl: "vscode://file/{path}",
 };
 const EXPECTED_SCHEMA = "criv.state.v0";
+const VIEW_TYPE = "criv-source-panel";
 
 let wasmModule = null;
 
@@ -251,6 +260,7 @@ async function loadWasm() {
 
 class CrivPlugin extends Plugin {
   async onload() {
+    this.state = null;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     this.addRibbonIcon("network", "criv status", async () => this.showStatus());
     this.addCommand({
@@ -258,6 +268,14 @@ class CrivPlugin extends Plugin {
       name: "Show criv status",
       callback: async () => this.showStatus(),
     });
+    this.addCommand({
+      id: "open-criv-source-panel",
+      name: "Open criv source panel",
+      callback: async () => this.openSourcePanel(),
+    });
+    this.registerView(VIEW_TYPE, (leaf) => new CrivSourceView(leaf, this));
+    this.registerMarkdownPostProcessor((el) => this.decorateLinks(el));
+    this.registerEditorSuggest(new CrivSourceSuggest(this));
     this.addSettingTab(new CrivSettingTab(this.app, this));
   }
 
@@ -277,6 +295,15 @@ class CrivPlugin extends Plugin {
     );
   }
 
+  async openSourcePanel() {
+    const leaf = this.app.workspace.getRightLeaf(false);
+    if (!leaf) {
+      return;
+    }
+    await leaf.setViewState({ type: VIEW_TYPE, active: true });
+    this.app.workspace.revealLeaf(leaf);
+  }
+
   async readState() {
     try {
       const raw = await this.app.vault.adapter.read(this.settings.statePath);
@@ -286,9 +313,194 @@ class CrivPlugin extends Plugin {
     }
   }
 
+  async loadState() {
+    try {
+      const raw = await this.app.vault.adapter.read(this.settings.statePath);
+      const state = JSON.parse(raw);
+      if (state.schema !== EXPECTED_SCHEMA) {
+        return null;
+      }
+      this.state = state;
+      return state;
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  async getState() {
+    return this.state ?? (await this.loadState());
+  }
+
+  async decorateLinks(el) {
+    const state = await this.getState();
+    if (!state) {
+      return;
+    }
+    for (const anchor of Array.from(el.querySelectorAll("a.internal-link"))) {
+      const target = anchor.getAttribute("data-href") ?? anchor.textContent ?? "";
+      const source = resolveSource(state, target);
+      const pattern = resolvePattern(state, target);
+      if (source) {
+        anchor.addClass("criv-source-ref");
+        anchor.setAttribute("title", sourceTooltip(state, source));
+        continue;
+      }
+      if (pattern) {
+        anchor.addClass("criv-pattern-ref");
+        anchor.setAttribute("title", patternTooltip(state, pattern));
+        continue;
+      }
+      if (looksLikeSourceOrPattern(target)) {
+        anchor.addClass("criv-warning");
+        anchor.setAttribute("title", "Unresolved criv reference");
+      }
+    }
+  }
+
+  async sourceEntries() {
+    const state = await this.getState();
+    return state?.["source-index"] ?? [];
+  }
+
+  async patternIds() {
+    const state = await this.getState();
+    return state?.["registered-patterns"] ?? Object.keys(state?.patterns ?? {});
+  }
+
+  openExternal(path) {
+    const url = this.settings.externalEditorUrl.replace("{path}", encodeURI(path));
+    window.open(url);
+  }
+
   async saveSettings() {
     await this.saveData(this.settings);
   }
+}
+
+class CrivSourceView extends ItemView {
+  constructor(leaf, plugin) {
+    super(leaf);
+    this.plugin = plugin;
+  }
+
+  getViewType() {
+    return VIEW_TYPE;
+  }
+
+  getDisplayText() {
+    return "criv";
+  }
+
+  async onOpen() {
+    await this.render();
+  }
+
+  async render() {
+    const container = this.containerEl.children[1];
+    container.empty();
+    const state = await this.plugin.getState();
+    if (!state) {
+      container.createEl("p", { text: "criv state is unavailable." });
+      return;
+    }
+
+    container.createEl("h3", { text: "Source references" });
+    for (const entry of (state["source-index"] ?? []).slice(0, 100)) {
+      const row = container.createDiv({ cls: "criv-source-row" });
+      row.createEl("button", { text: entry.path }).onclick = () => this.plugin.openExternal(entry.path);
+      row.createSpan({ text: entry.mime ? ` ${entry.mime}` : "" });
+    }
+
+    container.createEl("h3", { text: "Pattern matches" });
+    for (const [id, matches] of Object.entries(state.patterns ?? {})) {
+      const row = container.createDiv({ cls: "criv-pattern-row" });
+      row.createSpan({ text: `${id}: ${matches.length}` });
+    }
+  }
+}
+
+class CrivSourceSuggest extends EditorSuggest {
+  constructor(plugin) {
+    super(plugin.app);
+    this.plugin = plugin;
+  }
+
+  onTrigger(cursor, editor) {
+    const line = editor.getLine(cursor.line).slice(0, cursor.ch);
+    const open = line.lastIndexOf("[[");
+    if (open === -1 || line.slice(open).includes("]]")) {
+      return null;
+    }
+    const query = line.slice(open + 2);
+    if (query.includes(" ") || query.startsWith("match:")) {
+      return null;
+    }
+    return {
+      start: { line: cursor.line, ch: open + 2 },
+      end: cursor,
+      query,
+    };
+  }
+
+  async getSuggestions(context) {
+    const query = context.query.toLowerCase();
+    return (await this.plugin.sourceEntries())
+      .filter((entry) => entry.path.toLowerCase().includes(query))
+      .slice(0, 20);
+  }
+
+  renderSuggestion(value, el) {
+    el.createDiv({ text: value.path });
+  }
+
+  selectSuggestion(value) {
+    if (!this.context) {
+      return;
+    }
+    this.context.editor.replaceRange(value.path, this.context.start, this.context.end);
+  }
+}
+
+function resolveSource(state, target) {
+  const normalized = cleanTarget(target).split('#')[0] ?? "";
+  if (!normalized || normalized.startsWith("match:")) {
+    return null;
+  }
+  const entries = state["source-index"] ?? [];
+  return (
+    entries.find((entry) => entry.path === normalized) ??
+    entries.find((entry) => entry.path.endsWith(normalized) || entry.path.split("/").pop() === normalized) ??
+    null
+  );
+}
+
+function resolvePattern(state, target) {
+  const clean = cleanTarget(target);
+  const id = clean.startsWith("match:") ? clean.slice("match:".length) : clean.split('#match:')[1];
+  if (!id) {
+    return null;
+  }
+  const ids = state["registered-patterns"] ?? Object.keys(state.patterns ?? {});
+  return ids.includes(id) ? id : null;
+}
+
+function cleanTarget(target) {
+  return target.split("|")[0]?.trim() ?? "";
+}
+
+function sourceTooltip(state, source) {
+  const node = state.graph?.nodes?.find((candidate) => candidate.path === source.path);
+  return node ? `${node.kind}: ${node.label}` : source.path;
+}
+
+function patternTooltip(state, id) {
+  const count = state.patterns?.[id]?.length ?? 0;
+  return `${id}: ${count} match${count === 1 ? "" : "es"}`;
+}
+
+function looksLikeSourceOrPattern(target) {
+  const clean = cleanTarget(target);
+  return clean.startsWith("match:") || /\.[a-z0-9]+(#.*)?$/i.test(clean);
 }
 
 class CrivSettingTab extends PluginSettingTab {
@@ -313,26 +525,83 @@ class CrivSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+
+    new Setting(containerEl)
+      .setName("External editor URL")
+      .setDesc("URL template for opening source files. Use {path} for the repo-relative source path.")
+      .addText((text) =>
+        text
+          .setPlaceholder("vscode://file/{path}")
+          .setValue(this.plugin.settings.externalEditorUrl)
+          .onChange(async (value) => {
+            this.plugin.settings.externalEditorUrl = value.trim() || DEFAULT_SETTINGS.externalEditorUrl;
+            await this.plugin.saveSettings();
+          })
+      );
   }
 }
 
 module.exports = CrivPlugin;
 "#;
 
-const PLUGIN_TS_MAIN: &str = r#"import { Notice, Plugin, PluginSettingTab, Setting } from "obsidian";
+const PLUGIN_TS_MAIN: &str = r#"import {
+  Editor,
+  EditorPosition,
+  EditorSuggest,
+  EditorSuggestContext,
+  EditorSuggestTriggerInfo,
+  ItemView,
+  MarkdownPostProcessorContext,
+  Notice,
+  Plugin,
+  PluginSettingTab,
+  Setting,
+  WorkspaceLeaf,
+} from "obsidian";
 import { summarizeState } from "./wasm";
 
 interface CrivSettings {
   statePath: string;
+  externalEditorUrl: string;
 }
 
 const DEFAULT_SETTINGS: CrivSettings = {
   statePath: ".criv/state.json",
+  externalEditorUrl: "vscode://file/{path}",
 };
 const EXPECTED_SCHEMA = "criv.state.v0";
+const VIEW_TYPE = "criv-source-panel";
+
+interface CrivNode {
+  id: string;
+  kind: string;
+  label: string;
+  path?: string;
+}
+
+interface PatternMatch {
+  file: string;
+  range?: string;
+  captures: Record<string, string>;
+}
+
+interface SourceIndexEntry {
+  path: string;
+  frecency: number;
+  mime?: string;
+}
+
+interface CrivState {
+  schema: string;
+  graph?: { nodes?: CrivNode[] };
+  patterns?: Record<string, PatternMatch[]>;
+  "registered-patterns"?: string[];
+  "source-index"?: SourceIndexEntry[];
+}
 
 export default class CrivPlugin extends Plugin {
   settings: CrivSettings;
+  private state: CrivState | null = null;
 
   async onload() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -342,6 +611,14 @@ export default class CrivPlugin extends Plugin {
       name: "Show criv status",
       callback: async () => this.showStatus(),
     });
+    this.addCommand({
+      id: "open-criv-source-panel",
+      name: "Open criv source panel",
+      callback: async () => this.openSourcePanel(),
+    });
+    this.registerView(VIEW_TYPE, (leaf) => new CrivSourceView(leaf, this));
+    this.registerMarkdownPostProcessor((el, ctx) => this.decorateLinks(el, ctx));
+    this.registerEditorSuggest(new CrivSourceSuggest(this));
     this.addSettingTab(new CrivSettingTab(this.app, this));
   }
 
@@ -361,6 +638,15 @@ export default class CrivPlugin extends Plugin {
     );
   }
 
+  async openSourcePanel() {
+    const leaf = this.app.workspace.getRightLeaf(false);
+    if (!leaf) {
+      return;
+    }
+    await leaf.setViewState({ type: VIEW_TYPE, active: true });
+    this.app.workspace.revealLeaf(leaf);
+  }
+
   async readState() {
     try {
       const raw = await this.app.vault.adapter.read(this.settings.statePath);
@@ -370,9 +656,192 @@ export default class CrivPlugin extends Plugin {
     }
   }
 
+  async loadState(): Promise<CrivState | null> {
+    try {
+      const raw = await this.app.vault.adapter.read(this.settings.statePath);
+      const state = JSON.parse(raw) as CrivState;
+      if (state.schema !== EXPECTED_SCHEMA) {
+        return null;
+      }
+      this.state = state;
+      return state;
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  async getState(): Promise<CrivState | null> {
+    return this.state ?? (await this.loadState());
+  }
+
+  async decorateLinks(el: HTMLElement, _ctx: MarkdownPostProcessorContext) {
+    const state = await this.getState();
+    if (!state) {
+      return;
+    }
+    for (const anchor of Array.from(el.querySelectorAll("a.internal-link"))) {
+      const target = anchor.getAttribute("data-href") ?? anchor.textContent ?? "";
+      const source = resolveSource(state, target);
+      const pattern = resolvePattern(state, target);
+      if (source) {
+        anchor.addClass("criv-source-ref");
+        anchor.setAttribute("title", sourceTooltip(state, source));
+        continue;
+      }
+      if (pattern) {
+        anchor.addClass("criv-pattern-ref");
+        anchor.setAttribute("title", patternTooltip(state, pattern));
+        continue;
+      }
+      if (looksLikeSourceOrPattern(target)) {
+        anchor.addClass("criv-warning");
+        anchor.setAttribute("title", "Unresolved criv reference");
+      }
+    }
+  }
+
+  async sourceEntries(): Promise<SourceIndexEntry[]> {
+    const state = await this.getState();
+    return state?.["source-index"] ?? [];
+  }
+
+  async patternIds(): Promise<string[]> {
+    const state = await this.getState();
+    return state?.["registered-patterns"] ?? Object.keys(state?.patterns ?? {});
+  }
+
+  openExternal(path: string) {
+    const url = this.settings.externalEditorUrl.replace("{path}", encodeURI(path));
+    window.open(url);
+  }
+
   async saveSettings() {
     await this.saveData(this.settings);
   }
+}
+
+class CrivSourceView extends ItemView {
+  constructor(leaf: WorkspaceLeaf, private plugin: CrivPlugin) {
+    super(leaf);
+  }
+
+  getViewType(): string {
+    return VIEW_TYPE;
+  }
+
+  getDisplayText(): string {
+    return "criv";
+  }
+
+  async onOpen() {
+    await this.render();
+  }
+
+  async render() {
+    const container = this.containerEl.children[1] as HTMLElement;
+    container.empty();
+    const state = await this.plugin.getState();
+    if (!state) {
+      container.createEl("p", { text: "criv state is unavailable." });
+      return;
+    }
+
+    container.createEl("h3", { text: "Source references" });
+    for (const entry of (state["source-index"] ?? []).slice(0, 100)) {
+      const row = container.createDiv({ cls: "criv-source-row" });
+      row.createEl("button", { text: entry.path }).onclick = () => this.plugin.openExternal(entry.path);
+      row.createSpan({ text: entry.mime ? ` ${entry.mime}` : "" });
+    }
+
+    container.createEl("h3", { text: "Pattern matches" });
+    for (const [id, matches] of Object.entries(state.patterns ?? {})) {
+      const row = container.createDiv({ cls: "criv-pattern-row" });
+      row.createSpan({ text: `${id}: ${matches.length}` });
+    }
+  }
+}
+
+class CrivSourceSuggest extends EditorSuggest<SourceIndexEntry> {
+  constructor(private plugin: CrivPlugin) {
+    super(plugin.app);
+  }
+
+  onTrigger(cursor: EditorPosition, editor: Editor): EditorSuggestTriggerInfo | null {
+    const line = editor.getLine(cursor.line).slice(0, cursor.ch);
+    const open = line.lastIndexOf("[[");
+    if (open === -1 || line.slice(open).includes("]]")) {
+      return null;
+    }
+    const query = line.slice(open + 2);
+    if (query.includes(" ") || query.startsWith("match:")) {
+      return null;
+    }
+    return {
+      start: { line: cursor.line, ch: open + 2 },
+      end: cursor,
+      query,
+    };
+  }
+
+  async getSuggestions(context: EditorSuggestContext): Promise<SourceIndexEntry[]> {
+    const query = context.query.toLowerCase();
+    return (await this.plugin.sourceEntries())
+      .filter((entry) => entry.path.toLowerCase().includes(query))
+      .slice(0, 20);
+  }
+
+  renderSuggestion(value: SourceIndexEntry, el: HTMLElement): void {
+    el.createDiv({ text: value.path });
+  }
+
+  selectSuggestion(value: SourceIndexEntry): void {
+    if (!this.context) {
+      return;
+    }
+    this.context.editor.replaceRange(value.path, this.context.start, this.context.end);
+  }
+}
+
+function resolveSource(state: CrivState, target: string): SourceIndexEntry | null {
+  const normalized = cleanTarget(target).split('#')[0] ?? "";
+  if (!normalized || normalized.startsWith("match:")) {
+    return null;
+  }
+  const entries = state["source-index"] ?? [];
+  return (
+    entries.find((entry) => entry.path === normalized) ??
+    entries.find((entry) => entry.path.endsWith(normalized) || entry.path.split("/").pop() === normalized) ??
+    null
+  );
+}
+
+function resolvePattern(state: CrivState, target: string): string | null {
+  const clean = cleanTarget(target);
+  const id = clean.startsWith("match:") ? clean.slice("match:".length) : clean.split('#match:')[1];
+  if (!id) {
+    return null;
+  }
+  const ids = state["registered-patterns"] ?? Object.keys(state.patterns ?? {});
+  return ids.includes(id) ? id : null;
+}
+
+function cleanTarget(target: string): string {
+  return target.split("|")[0]?.trim() ?? "";
+}
+
+function sourceTooltip(state: CrivState, source: SourceIndexEntry): string {
+  const node = state.graph?.nodes?.find((candidate) => candidate.path === source.path);
+  return node ? `${node.kind}: ${node.label}` : source.path;
+}
+
+function patternTooltip(state: CrivState, id: string): string {
+  const count = state.patterns?.[id]?.length ?? 0;
+  return `${id}: ${count} match${count === 1 ? "" : "es"}`;
+}
+
+function looksLikeSourceOrPattern(target: string): boolean {
+  const clean = cleanTarget(target);
+  return clean.startsWith("match:") || /\.[a-z0-9]+(#.*)?$/i.test(clean);
 }
 
 class CrivSettingTab extends PluginSettingTab {
@@ -396,6 +865,19 @@ class CrivSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.statePath)
           .onChange(async (value) => {
             this.plugin.settings.statePath = value.trim() || DEFAULT_SETTINGS.statePath;
+            await this.plugin.saveSettings();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("External editor URL")
+      .setDesc("URL template for opening source files. Use {path} for the repo-relative source path.")
+      .addText((text) =>
+        text
+          .setPlaceholder("vscode://file/{path}")
+          .setValue(this.plugin.settings.externalEditorUrl)
+          .onChange(async (value) => {
+            this.plugin.settings.externalEditorUrl = value.trim() || DEFAULT_SETTINGS.externalEditorUrl;
             await this.plugin.saveSettings();
           }),
       );
@@ -453,6 +935,31 @@ async function loadWasm(): Promise<CrivWasmModule | null> {
 
 const PLUGIN_STYLES: &str = r#".criv-warning {
   color: var(--text-error);
+}
+
+.criv-source-ref {
+  color: var(--text-accent);
+}
+
+.criv-pattern-ref {
+  color: var(--text-success);
+}
+
+.criv-source-row,
+.criv-pattern-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.25rem 0;
+}
+
+.criv-source-row button {
+  background: none;
+  border: 0;
+  color: var(--text-accent);
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
 }
 "#;
 

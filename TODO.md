@@ -94,13 +94,13 @@
 
 ### Obsidian Plugin
 
-- [ ] Add Obsidian source-reference hover previews.
-- [ ] Add Obsidian source-reference side panel.
-- [ ] Add Obsidian external editor URL support.
-- [ ] Add Obsidian pattern-reference rendering.
+- [x] Add Obsidian source-reference hover previews.
+- [x] Add Obsidian source-reference side panel.
+- [x] Add Obsidian external editor URL support.
+- [x] Add Obsidian pattern-reference rendering.
 - [ ] Add Obsidian frontmatter pattern target rendering.
-- [ ] Add Obsidian drift indicators.
-- [ ] Add Obsidian partial-path autocomplete.
+- [x] Add Obsidian drift indicators.
+- [x] Add Obsidian partial-path autocomplete.
 - [ ] Share link-resolution fixtures between CLI and plugin.
 
 ### Build And Release
