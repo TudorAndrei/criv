@@ -78,6 +78,11 @@ embeddings = false
 
 [enforce]
 stages = ["commit", "push", "ci"]
+# Optional native import policies:
+# [[enforce.imports]]
+# id = "no-infra-from-ui"
+# scope = ["src/ui/**"]
+# deny = ["crate::infra::*", "sqlx"]
 
 [obsidian]
 plugin = true

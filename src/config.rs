@@ -17,6 +17,7 @@ pub(crate) struct Config {
     pub(crate) notes_index: String,
     pub(crate) embeddings: bool,
     pub(crate) enforce_stages: Vec<String>,
+    pub(crate) import_policies: Vec<ImportPolicy>,
     pub(crate) obsidian_plugin: bool,
     pub(crate) patterns: BTreeSet<String>,
     pub(crate) pattern_defs: BTreeMap<String, PatternConfig>,
@@ -27,6 +28,13 @@ pub(crate) struct PatternConfig {
     pub(crate) language: Option<String>,
     pub(crate) pattern: Option<String>,
     pub(crate) rule: Option<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct ImportPolicy {
+    pub(crate) id: String,
+    pub(crate) scope: Vec<String>,
+    pub(crate) deny: Vec<String>,
 }
 
 impl Default for Config {
@@ -41,6 +49,7 @@ impl Default for Config {
             notes_index: "memory".into(),
             embeddings: false,
             enforce_stages: vec!["commit".into(), "push".into(), "ci".into()],
+            import_policies: Vec::new(),
             obsidian_plugin: true,
             patterns: BTreeSet::new(),
             pattern_defs: BTreeMap::new(),
@@ -98,6 +107,12 @@ impl RawConfig {
             notes_index: self.index.notes.unwrap_or(defaults.notes_index),
             embeddings: self.index.embeddings.unwrap_or(defaults.embeddings),
             enforce_stages: self.enforce.stages.unwrap_or(defaults.enforce_stages),
+            import_policies: self
+                .enforce
+                .imports
+                .into_iter()
+                .map(RawImportPolicy::into_policy)
+                .collect(),
             obsidian_plugin: self.obsidian.plugin.unwrap_or(defaults.obsidian_plugin),
             patterns: self.patterns.keys().cloned().collect(),
             pattern_defs: self
@@ -161,11 +176,63 @@ struct RawIndex {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(default)]
 struct RawEnforce {
     stages: Option<Vec<String>>,
+    imports: Vec<RawImportPolicy>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct RawImportPolicy {
+    id: Option<String>,
+    scope: Vec<String>,
+    deny: Vec<String>,
+}
+
+impl RawImportPolicy {
+    fn into_policy(self) -> ImportPolicy {
+        ImportPolicy {
+            id: self.id.unwrap_or_else(|| "import-policy".into()),
+            scope: if self.scope.is_empty() {
+                vec!["**".into()]
+            } else {
+                self.scope
+            },
+            deny: self.deny,
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct RawObsidian {
     plugin: Option<bool>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_import_policies() {
+        let raw = toml::from_str::<RawConfig>(
+            r#"
+[enforce]
+stages = ["ci"]
+
+[[enforce.imports]]
+id = "no-db-from-ui"
+scope = ["src/ui/**"]
+deny = ["crate::db"]
+"#,
+        )
+        .unwrap();
+
+        let config = raw.into_config();
+        assert_eq!(config.enforce_stages, vec!["ci"]);
+        assert_eq!(config.import_policies.len(), 1);
+        assert_eq!(config.import_policies[0].id, "no-db-from-ui");
+        assert_eq!(config.import_policies[0].scope, vec!["src/ui/**"]);
+        assert_eq!(config.import_policies[0].deny, vec!["crate::db"]);
+    }
 }

@@ -41,6 +41,7 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
 
     let changed_files = changed_files(root, options.stage);
     let violations = policy_violations(root, &vault, changed_files.as_ref())?;
+    let import_violations = import_policy_violations(&vault, changed_files.as_ref());
     let tool_files = enforcement_files(&vault, changed_files.as_ref());
     let tool_errors = run_native_tools(root, &tool_files)?;
 
@@ -69,6 +70,15 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
         return Err(CrivError::new(format!(
             "{} policy violation(s) found",
             violations.len()
+        )));
+    }
+    if !import_violations.is_empty() {
+        for violation in &import_violations {
+            println!("{violation}");
+        }
+        return Err(CrivError::new(format!(
+            "{} import policy violation(s) found",
+            import_violations.len()
         )));
     }
 
@@ -124,6 +134,39 @@ fn policy_violations(
         }
     }
     Ok(violations)
+}
+
+fn import_policy_violations(vault: &Vault, changed_files: Option<&Vec<String>>) -> Vec<String> {
+    let mut violations = Vec::new();
+    for policy in &vault.config.import_policies {
+        for file in vault.source_graph().files.values() {
+            if changed_files.is_some_and(|files| !files.contains(&file.path)) {
+                continue;
+            }
+            if !policy
+                .scope
+                .iter()
+                .any(|pattern| path_matches(pattern, &file.path))
+            {
+                continue;
+            }
+            for import in &file.imports {
+                if policy
+                    .deny
+                    .iter()
+                    .any(|pattern| import_matches(pattern, &import.module))
+                {
+                    violations.push(format!(
+                        "{}:{}: import policy `{}` denies `{}`",
+                        file.path, import.line, policy.id, import.module
+                    ));
+                }
+            }
+        }
+    }
+    violations.sort();
+    violations.dedup();
+    violations
 }
 
 fn changed_files(root: &Path, stage: Stage) -> Option<Vec<String>> {
@@ -265,6 +308,18 @@ fn matches_extension(path: &str, extensions: &[&str]) -> bool {
         .is_some_and(|extension| extensions.contains(&extension))
 }
 
+fn path_matches(pattern: &str, path: &str) -> bool {
+    crate::util::glob_matches(pattern, path)
+}
+
+fn import_matches(pattern: &str, module: &str) -> bool {
+    if pattern.contains('*') || pattern.contains('?') || pattern.contains('[') {
+        let normalized = module.replace("::", "/");
+        return crate::util::glob_matches(&pattern.replace("::", "/"), &normalized);
+    }
+    module == pattern || module.starts_with(&format!("{pattern}::"))
+}
+
 impl Stage {
     fn as_str(self) -> &'static str {
         match self {
@@ -272,5 +327,18 @@ impl Stage {
             Stage::Push => "push",
             Stage::Ci => "ci",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn import_patterns_match_exact_prefix_and_glob_forms() {
+        assert!(import_matches("crate::infra", "crate::infra::db"));
+        assert!(import_matches("crate::infra::*", "crate::infra::db"));
+        assert!(import_matches("sqlx", "sqlx"));
+        assert!(!import_matches("crate::infra", "crate::infrastructure"));
     }
 }

@@ -57,6 +57,7 @@
 - [x] Evaluate `infer` for magic-number detection for plugin previews and non-source assets.
 - [x] Evaluate `serde_yaml_ng` as an alternate YAML replacement.
 - [x] Evaluate `camino` for UTF-8 repo-relative path handling.
+- [x] Add native import-policy checks.
 
 ## Missing For Spec Completeness
 
@@ -96,10 +97,6 @@
 
 ### Output And Snapshots
 
-
-### Native Enforcement
-
-- [ ] Add native import-policy checks.
 
 ### Obsidian Plugin
 
