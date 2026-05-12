@@ -467,7 +467,7 @@ fn node_text(node: Node<'_>, contents: &str) -> Option<String> {
 }
 
 fn first_named_child(node: Node<'_>) -> Option<Node<'_>> {
-    (0..node.named_child_count()).find_map(|index| node.named_child(index))
+    (0..node.named_child_count()).find_map(|index| node.named_child(index as u32))
 }
 
 fn descendant_of_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {

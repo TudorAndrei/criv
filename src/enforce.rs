@@ -4,7 +4,6 @@ use std::process::Command;
 use clap::{Args as ClapArgs, ValueEnum};
 
 use crate::check;
-use crate::search;
 use crate::vault::Vault;
 use crate::{CrivError, Result};
 
@@ -112,23 +111,15 @@ fn policy_violations(
         let scopes = vault.effective_governs(note);
         for pattern in &note.policy_pattern_ids {
             let pattern_id = format!("{adr_id}/{pattern}");
-            let rows = if let Some(pattern_def) = vault.config.pattern_defs.get(&pattern_id) {
-                if let Some(pattern_body) = pattern_def.lexical_pattern() {
-                    search::search_lexical_pattern(root, vault, pattern_body, &scopes)?
-                } else {
-                    Vec::new()
-                }
-            } else {
-                search::search_lexical_pattern(root, vault, pattern, &scopes)?
-            };
+            let rows =
+                crate::structural::find_policy_pattern(root, vault, &pattern_id, pattern, &scopes)?;
             for row in rows {
                 if changed_files.is_some_and(|files| !files.contains(&row.path)) {
                     continue;
                 }
-                let line = row.line.map(|line| format!(":{line}")).unwrap_or_default();
                 violations.push(format!(
-                    "{}{}: {} policy `{pattern_id}` matched `{}`",
-                    row.path, line, adr_id, row.text
+                    "{}:{}: {} policy `{pattern_id}` matched `{}`",
+                    row.path, row.line, adr_id, row.text
                 ));
             }
         }

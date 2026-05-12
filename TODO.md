@@ -70,13 +70,13 @@
 
 ### Structural Search And Enforcement
 
-- [ ] Add `ast-grep-core`.
-- [ ] Compile TOML patterns as ast-grep rules.
-- [ ] Compile ADR `policy.patterns` as ast-grep rules.
-- [ ] Store ast-grep match ranges and captures in `.criv/state.json`.
-- [ ] Make `criv search '<pattern>'` structural.
-- [ ] Make `criv search --pattern-id <id>` structural.
-- [ ] Make `criv search --rule <ADR-ID>` structural.
+- [x] Add `ast-grep-core`.
+- [x] Compile TOML patterns as ast-grep rules.
+- [x] Compile ADR `policy.patterns` as ast-grep rules.
+- [x] Store ast-grep match ranges and captures in `.criv/state.json`.
+- [x] Make `criv search '<pattern>'` structural.
+- [x] Make `criv search --pattern-id <id>` structural.
+- [x] Make `criv search --rule <ADR-ID>` structural.
 
 ### Source Index
 
@@ -121,7 +121,7 @@ target/debug/criv query diff latest latest
 
 ## Notes
 
-- Current structural search is a lexical fallback, not real ast-grep.
+- Current structural search is ast-grep-backed for configured patterns, ADR policy patterns, and direct structural search.
 - Current source graph extraction is tree-sitter-backed with a conservative fallback.
 - Current Obsidian plugin reads state and uses a WASM helper, but does not yet render code previews or match lists.
 - `.criv/` is local state and intentionally ignored by git.

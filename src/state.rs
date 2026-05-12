@@ -5,6 +5,7 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::source_graph::{Language, SymbolKind};
+use crate::structural;
 use crate::vault::{NoteKind, ResolvedLink, Vault, source_fragment_path};
 use crate::{CrivError, Result};
 
@@ -60,7 +61,7 @@ pub(crate) struct SourceIndexEntry {
 }
 
 impl State {
-    pub(crate) fn build(vault: &Vault) -> Self {
+    pub(crate) fn build(root: &Path, vault: &Vault) -> Result<Self> {
         let mut graph = Graph::default();
         let mut seen_nodes = BTreeSet::new();
         let mut seen_edges = BTreeSet::new();
@@ -296,20 +297,22 @@ impl State {
             .collect::<Vec<_>>();
         source_index.sort_by(|left, right| left.path.cmp(&right.path));
 
-        let patterns = vault
-            .patterns()
-            .iter()
-            .map(|pattern| (pattern.clone(), Vec::new()))
-            .collect::<BTreeMap<_, _>>();
+        let mut patterns = BTreeMap::new();
+        for pattern_id in vault.patterns() {
+            patterns.insert(
+                pattern_id.clone(),
+                state_pattern_matches(root, vault, pattern_id)?,
+            );
+        }
         graph.root = graph_root(&graph);
 
-        Self {
+        Ok(Self {
             schema: STATE_SCHEMA,
             graph,
             registered_patterns: vault.patterns().iter().cloned().collect(),
             patterns,
             source_index,
-        }
+        })
     }
 
     pub(crate) fn to_json(&self) -> Result<String> {
@@ -348,9 +351,37 @@ impl State {
 }
 
 pub(crate) fn write_state(root: &Path, vault: &Vault) -> Result<String> {
-    let state = State::build(vault);
+    let state = State::build(root, vault)?;
     state.write(root)?;
     state.write_snapshot(root)
+}
+
+fn state_pattern_matches(
+    root: &Path,
+    vault: &Vault,
+    pattern_id: &str,
+) -> Result<Vec<PatternMatch>> {
+    let matches = if let Some((adr_id, local_id)) = pattern_id.split_once('/') {
+        let pattern = local_id;
+        let scopes = vault
+            .resolve_note(adr_id)
+            .map(|note| vault.effective_governs(note))
+            .unwrap_or_else(|| vec!["**".into()]);
+        structural::find_policy_pattern(root, vault, pattern_id, pattern, &scopes)?
+    } else if vault.config.pattern_defs.contains_key(pattern_id) {
+        structural::find_pattern_id(root, vault, pattern_id, &[])?
+    } else {
+        Vec::new()
+    };
+
+    Ok(matches
+        .into_iter()
+        .map(|matched| PatternMatch {
+            file: matched.path,
+            range: Some(matched.range),
+            captures: matched.captures,
+        })
+        .collect())
 }
 
 fn add_node(graph: &mut Graph, seen: &mut BTreeSet<String>, node: Node) {

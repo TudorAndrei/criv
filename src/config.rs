@@ -141,18 +141,6 @@ impl PatternConfig {
                 .map(str::to_string),
         }
     }
-
-    pub(crate) fn lexical_pattern(&self) -> Option<&str> {
-        self.pattern
-            .as_deref()
-            .or_else(|| self.rule.as_deref().and_then(extract_rule_pattern))
-    }
-}
-
-fn extract_rule_pattern(rule: &str) -> Option<&str> {
-    rule.lines()
-        .map(str::trim)
-        .find_map(|line| line.strip_prefix("pattern:").map(str::trim))
 }
 
 #[derive(Debug, Default, Deserialize)]

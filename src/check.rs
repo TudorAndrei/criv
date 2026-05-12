@@ -3,7 +3,6 @@ use std::path::Path;
 
 use clap::{Args as ClapArgs, ValueEnum};
 
-use crate::search;
 use crate::util::{is_adr_id, kebab};
 use crate::vault::{Note, NoteKind, ResolvedLink, Vault, source_fragment_path};
 use crate::{CrivError, Result};
@@ -106,18 +105,11 @@ fn policy_violations(root: &Path, vault: &Vault) -> Result<Vec<PolicyViolation>>
         let scopes = vault.effective_governs(note);
         for pattern in &note.policy_pattern_ids {
             let pattern_id = format!("{adr_id}/{pattern}");
-            let rows = if let Some(pattern_def) = vault.config.pattern_defs.get(&pattern_id) {
-                if let Some(pattern_body) = pattern_def.lexical_pattern() {
-                    search::search_lexical_pattern(root, vault, pattern_body, &scopes)?
-                } else {
-                    Vec::new()
-                }
-            } else {
-                search::search_lexical_pattern(root, vault, pattern, &scopes)?
-            };
+            let rows =
+                crate::structural::find_policy_pattern(root, vault, &pattern_id, pattern, &scopes)?;
             violations.extend(rows.into_iter().map(|row| PolicyViolation {
                 path: row.path,
-                line: row.line,
+                line: Some(row.line),
                 adr_id: adr_id.clone(),
                 pattern_id: pattern_id.clone(),
                 text: row.text,
@@ -262,15 +254,6 @@ fn validate_decision_note(
                 "policy pattern id may not be empty",
             ));
         }
-    }
-
-    if note.status.as_deref() == Some("accepted") && !note.policy_pattern_ids.is_empty() {
-        diagnostics.push(warning(
-            "policy-compile-skipped",
-            &note.rel_path,
-            None,
-            "accepted ADR policy patterns are registered, but ast-grep compilation is not wired in this MVP",
-        ));
     }
 }
 

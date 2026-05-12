@@ -6,6 +6,7 @@ mod query;
 mod search;
 mod source_graph;
 mod state;
+mod structural;
 mod util;
 mod vault;
 mod watch;

@@ -2,6 +2,7 @@ use std::path::Path;
 
 use clap::{Args as ClapArgs, ValueEnum};
 
+use crate::structural::{self, PatternSource, StructuralMatch};
 use crate::util::{glob_matches, read_to_string};
 use crate::vault::Vault;
 use crate::{CrivError, Result};
@@ -91,14 +92,22 @@ pub(crate) struct Row {
 pub(crate) fn run(root: &Path, options: SearchOptions) -> Result<()> {
     let vault = Vault::load(root)?;
     let mut paths = options.paths.clone();
-    if let Some(language) = &options.lang {
-        paths.push(language_glob(language).to_string());
+    if paths.is_empty()
+        && let Some(language) = &options.lang
+    {
+        paths.push(structural::language_glob(language).to_string());
     }
     let rows = match options.mode()? {
         Mode::Grep(text) => grep(root, &vault, &text, &paths)?,
         Mode::Files(query) => files(&vault, &query),
         Mode::Notes(text) => notes(&vault, &text, options.semantic),
-        Mode::Structural(pattern) => grep(root, &vault, &pattern_to_needle(&pattern), &paths)?,
+        Mode::Structural(pattern) => structural_rows(structural::find(
+            root,
+            &vault,
+            PatternSource::Pattern(&pattern),
+            &paths,
+            options.lang.as_deref(),
+        )?),
         Mode::Rule(rule) => search_rule(root, &vault, &rule, &paths)?,
         Mode::PatternId(pattern_id) => search_pattern_id(root, &vault, &pattern_id, &paths)?,
     };
@@ -113,21 +122,12 @@ fn search_pattern_id(
     pattern_id: &str,
     paths: &[String],
 ) -> Result<Vec<Row>> {
-    let Some(pattern) = vault.config.pattern_defs.get(pattern_id) else {
+    if !vault.config.pattern_defs.contains_key(pattern_id) {
         return Err(CrivError::new(format!(
             "registered pattern `{pattern_id}` does not resolve"
         )));
-    };
-    let Some(pattern) = pattern.lexical_pattern() else {
-        return Err(CrivError::new(format!(
-            "registered pattern `{pattern_id}` has no searchable pattern body"
-        )));
-    };
-    let mut scoped_paths = paths.to_vec();
-    if let Some(language) = &vault.config.pattern_defs[pattern_id].language {
-        scoped_paths.push(language_glob(language).to_string());
     }
-    grep(root, vault, &pattern_to_needle(pattern), &scoped_paths)
+    structural::find_pattern_id(root, vault, pattern_id, paths).map(structural_rows)
 }
 
 fn search_rule(root: &Path, vault: &Vault, adr_id: &str, paths: &[String]) -> Result<Vec<Row>> {
@@ -144,21 +144,13 @@ fn search_rule(root: &Path, vault: &Vault, adr_id: &str, paths: &[String]) -> Re
     let mut rows = Vec::new();
     for pattern in &note.policy_pattern_ids {
         let pattern_id = format!("{}/{}", note.display_id(), pattern);
-        let mut scoped_paths = scopes.to_vec();
-        let pattern_body = if let Some(pattern_def) = vault.config.pattern_defs.get(&pattern_id) {
-            if let Some(language) = &pattern_def.language {
-                scoped_paths.push(language_glob(language).to_string());
-            }
-            pattern_def.lexical_pattern().unwrap_or(pattern)
-        } else {
-            pattern
-        };
-        rows.extend(grep(
+        rows.extend(structural_rows(structural::find_policy_pattern(
             root,
             vault,
-            &pattern_to_needle(pattern_body),
-            &scoped_paths,
-        )?);
+            &pattern_id,
+            pattern,
+            scopes,
+        )?));
     }
     rows.sort_by(|left, right| (&left.path, left.line).cmp(&(&right.path, right.line)));
     rows.dedup_by(|left, right| left.path == right.path && left.line == right.line);
@@ -185,15 +177,6 @@ fn grep(root: &Path, vault: &Vault, text: &str, paths: &[String]) -> Result<Vec<
         }
     }
     Ok(rows)
-}
-
-pub(crate) fn search_lexical_pattern(
-    root: &Path,
-    vault: &Vault,
-    pattern: &str,
-    paths: &[String],
-) -> Result<Vec<Row>> {
-    grep(root, vault, &pattern_to_needle(pattern), paths)
 }
 
 fn files(vault: &Vault, query: &str) -> Vec<Row> {
@@ -330,34 +313,6 @@ fn path_allowed(path: &str, patterns: &[String]) -> bool {
     patterns.is_empty() || patterns.iter().any(|pattern| glob_matches(pattern, path))
 }
 
-fn pattern_to_needle(pattern: &str) -> String {
-    pattern
-        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_' || ch == ':' || ch == '.'))
-        .filter(|part| {
-            !part.is_empty()
-                && !part.starts_with('$')
-                && *part != "pattern"
-                && *part != "inside"
-                && *part != "kind"
-                && *part != "has"
-                && *part != "regex"
-        })
-        .max_by_key(|part| part.len())
-        .unwrap_or(pattern)
-        .to_string()
-}
-
-fn language_glob(language: &str) -> &'static str {
-    match language {
-        "rust" => "**/*.rs",
-        "typescript" => "**/*.ts",
-        "javascript" => "**/*.js",
-        "python" => "**/*.py",
-        "go" => "**/*.go",
-        _ => "**",
-    }
-}
-
 fn fuzzy_score(path: &str, query: &str) -> Option<i32> {
     let path_lower = path.to_lowercase();
     let query_lower = query.to_lowercase();
@@ -379,6 +334,29 @@ fn fuzzy_score(path: &str, query: &str) -> Option<i32> {
         }
     }
     None
+}
+
+fn structural_rows(matches: Vec<StructuralMatch>) -> Vec<Row> {
+    matches
+        .into_iter()
+        .map(|matched| Row {
+            path: matched.path,
+            line: Some(matched.line),
+            text: if matched.captures.is_empty() {
+                matched.text
+            } else {
+                format!("{} [{}]", matched.text, capture_summary(&matched.captures))
+            },
+        })
+        .collect()
+}
+
+fn capture_summary(captures: &std::collections::BTreeMap<String, String>) -> String {
+    captures
+        .iter()
+        .map(|(name, value)| format!("${name}={}", value.replace('\n', "\\n")))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn print_rows(rows: &[Row], format: Format) {
