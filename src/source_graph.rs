@@ -29,8 +29,16 @@ pub(crate) struct Symbol {
     pub(crate) id: SymbolId,
     pub(crate) name: String,
     pub(crate) kind: SymbolKind,
-    pub(crate) line: usize,
+    pub(crate) parent: Option<String>,
+    pub(crate) exported: bool,
+    pub(crate) range: SymbolRange,
     pub(crate) calls: Vec<Call>,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) struct SymbolRange {
+    pub(crate) start_line: usize,
+    pub(crate) end_line: usize,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
@@ -114,7 +122,7 @@ impl SourceGraph {
                     .calls
                     .iter()
                     .map(|call| {
-                        self.resolve_symbol(&call.target)
+                        self.resolve_call(&symbol.id, &call.target)
                             .map_or_else(|| call.target.clone(), |id| id.display())
                     })
                     .collect::<Vec<_>>()
@@ -133,7 +141,7 @@ impl SourceGraph {
         for file in self.files.values() {
             for symbol in &file.symbols {
                 if symbol.calls.iter().any(|call| {
-                    self.resolve_symbol(&call.target)
+                    self.resolve_call(&symbol.id, &call.target)
                         .is_some_and(|target| target == symbol_id)
                         || call.target == symbol_id.name
                 }) {
@@ -151,7 +159,7 @@ impl SourceGraph {
         for file in self.files.values() {
             for symbol in &file.symbols {
                 for call in &symbol.calls {
-                    if let Some(target) = self.resolve_symbol(&call.target) {
+                    if let Some(target) = self.resolve_call(&symbol.id, &call.target) {
                         called.insert(target);
                     }
                 }
@@ -162,7 +170,11 @@ impl SourceGraph {
             .files
             .values()
             .flat_map(|file| &file.symbols)
-            .filter(|symbol| !called.contains(&symbol.id))
+            .filter(|symbol| {
+                symbol.exported
+                    || symbol.name == "main"
+                    || (symbol.parent.is_none() && !called.contains(&symbol.id))
+            })
             .map(|symbol| symbol.id.display())
             .collect::<Vec<_>>();
         rows.sort();
@@ -171,6 +183,14 @@ impl SourceGraph {
 
     pub(crate) fn symbols(&self) -> impl Iterator<Item = &Symbol> {
         self.files.values().flat_map(|file| file.symbols.iter())
+    }
+
+    pub(crate) fn resolve_call(&self, caller: &SymbolId, target: &str) -> Option<SymbolId> {
+        self.files
+            .get(&caller.path)
+            .and_then(|file| file.symbols.iter().find(|symbol| symbol.name == target))
+            .map(|symbol| symbol.id.clone())
+            .or_else(|| self.resolve_symbol(target))
     }
 
     fn symbol(&self, id: &SymbolId) -> Option<&Symbol> {
@@ -192,7 +212,11 @@ fn parse_source_file(path: &str, contents: &str) -> SourceFile {
     let mut current_symbol: Option<usize> = None;
     let mut brace_depth = 0isize;
     let mut rust_impl_depth = 0isize;
+    let mut rust_impl_target: Option<String> = None;
     let mut python_indent: Option<usize> = None;
+    let mut python_class: Option<(String, usize)> = None;
+
+    let total_lines = contents.lines().count().max(1);
 
     for (index, line) in contents.lines().enumerate() {
         let line_no = index + 1;
@@ -210,8 +234,16 @@ fn parse_source_file(path: &str, contents: &str) -> SourceFile {
 
         if language == Language::Python {
             let indent = line.len() - line.trim_start().len();
+            if python_class.as_ref().is_some_and(|(_, class_indent)| {
+                indent <= *class_indent && !trimmed.starts_with('@')
+            }) {
+                python_class = None;
+            }
             if let Some(active_indent) = python_indent {
                 if indent <= active_indent && !trimmed.starts_with('@') {
+                    if let Some(symbol_index) = current_symbol {
+                        file.symbols[symbol_index].range.end_line = line_no.saturating_sub(1);
+                    }
                     current_symbol = None;
                     python_indent = None;
                 }
@@ -219,7 +251,21 @@ fn parse_source_file(path: &str, contents: &str) -> SourceFile {
         }
 
         let in_rust_impl = language == Language::Rust && rust_impl_depth > 0;
-        if let Some((name, kind)) = parse_symbol(trimmed, language, in_rust_impl) {
+        if let Some((name, mut kind)) = parse_symbol(trimmed, language, in_rust_impl) {
+            let parent = if language == Language::Rust && kind == SymbolKind::Method {
+                rust_impl_target.clone()
+            } else if language == Language::Python && kind == SymbolKind::Function {
+                let indent = line.len() - line.trim_start().len();
+                python_class
+                    .as_ref()
+                    .filter(|(_, class_indent)| indent > *class_indent)
+                    .map(|(class_name, _)| {
+                        kind = SymbolKind::Method;
+                        class_name.clone()
+                    })
+            } else {
+                None
+            };
             let id = SymbolId {
                 path: path.into(),
                 name: name.clone(),
@@ -228,12 +274,23 @@ fn parse_source_file(path: &str, contents: &str) -> SourceFile {
                 id,
                 name,
                 kind,
-                line: line_no,
+                parent,
+                exported: is_exported_symbol(trimmed, language),
+                range: SymbolRange {
+                    start_line: line_no,
+                    end_line: total_lines,
+                },
                 calls: Vec::new(),
             });
             current_symbol = Some(file.symbols.len() - 1);
             if language == Language::Python {
                 python_indent = Some(line.len() - line.trim_start().len());
+                if kind == SymbolKind::Class {
+                    python_class = Some((
+                        file.symbols.last().expect("pushed").name.clone(),
+                        line.len() - line.trim_start().len(),
+                    ));
+                }
             }
         }
 
@@ -251,19 +308,30 @@ fn parse_source_file(path: &str, contents: &str) -> SourceFile {
 
         if language != Language::Python {
             if language == Language::Rust && trimmed.starts_with("impl ") {
+                rust_impl_target = parse_rust_impl_target(trimmed);
                 rust_impl_depth += line.matches('{').count().max(1) as isize;
             } else if rust_impl_depth > 0 {
                 rust_impl_depth += line.matches('{').count() as isize;
                 rust_impl_depth -= line.matches('}').count() as isize;
                 rust_impl_depth = rust_impl_depth.max(0);
+                if rust_impl_depth == 0 {
+                    rust_impl_target = None;
+                }
             }
             brace_depth += line.matches('{').count() as isize;
             brace_depth -= line.matches('}').count() as isize;
             if brace_depth <= 0 {
+                if let Some(symbol_index) = current_symbol {
+                    file.symbols[symbol_index].range.end_line = line_no;
+                }
                 current_symbol = None;
                 brace_depth = 0;
             }
         }
+    }
+
+    if let Some(symbol_index) = current_symbol {
+        file.symbols[symbol_index].range.end_line = total_lines;
     }
 
     file
@@ -392,6 +460,23 @@ fn parse_calls(line: &str, language: Language) -> Vec<String> {
     calls
 }
 
+fn parse_rust_impl_target(line: &str) -> Option<String> {
+    let rest = line.strip_prefix("impl ")?.trim();
+    let rest = rest
+        .strip_prefix('<')
+        .and_then(|value| value.split_once('>').map(|(_, after)| after.trim()))
+        .unwrap_or(rest);
+    let target = if let Some((_, target)) = rest.split_once(" for ") {
+        target
+    } else {
+        rest
+    };
+    target
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        .find(|part| !part.is_empty())
+        .map(str::to_string)
+}
+
 fn after_keyword(line: &str, keyword: &str) -> Option<String> {
     let start = line.find(keyword)? + keyword.len();
     let rest = &line[start..];
@@ -458,6 +543,19 @@ fn is_call_keyword(token: &str, language: Language) -> bool {
     ) || (language == Language::Python && matches!(token, "print" | "len" | "str" | "int"))
 }
 
+fn is_exported_symbol(line: &str, language: Language) -> bool {
+    match language {
+        Language::Rust => line.starts_with("pub "),
+        Language::TypeScript | Language::JavaScript => line.starts_with("export "),
+        Language::Go => parse_symbol(line, language, false)
+            .is_some_and(|(name, _)| name.chars().next().is_some_and(char::is_uppercase)),
+        Language::Python => {
+            parse_symbol(line, language, false).is_some_and(|(name, _)| !name.starts_with('_'))
+        }
+        Language::Unknown => false,
+    }
+}
+
 impl Language {
     fn from_path(path: &str) -> Self {
         match Path::new(path).extension().and_then(|ext| ext.to_str()) {
@@ -490,6 +588,13 @@ fn helper() {}
 
         assert_eq!(file.imports[0].module, "crate::other");
         assert_eq!(file.symbols[0].name, "run");
+        assert_eq!(
+            file.symbols[0].range,
+            SymbolRange {
+                start_line: 3,
+                end_line: 5
+            }
+        );
         assert_eq!(file.symbols[0].calls[0].target, "helper");
     }
 
@@ -505,6 +610,7 @@ impl Thing {
         );
 
         assert_eq!(file.symbols[0].kind, SymbolKind::Method);
+        assert_eq!(file.symbols[0].parent.as_deref(), Some("Thing"));
     }
 
     #[test]
@@ -521,6 +627,89 @@ def work():
         );
 
         assert_eq!(file.imports[0].module, "os");
+        assert_eq!(
+            file.symbols[0].range,
+            SymbolRange {
+                start_line: 3,
+                end_line: 4
+            }
+        );
         assert_eq!(file.symbols[0].calls[0].target, "work");
+    }
+
+    #[test]
+    fn marks_python_class_functions_as_methods() {
+        let file = parse_source_file(
+            "x.py",
+            r#"
+class Worker:
+    def run(self):
+        helper()
+"#,
+        );
+
+        assert_eq!(file.symbols[0].kind, SymbolKind::Class);
+        assert_eq!(file.symbols[1].kind, SymbolKind::Method);
+        assert_eq!(file.symbols[1].parent.as_deref(), Some("Worker"));
+    }
+
+    #[test]
+    fn attack_surface_keeps_exported_symbols_even_when_called() {
+        let file = parse_source_file(
+            "src/lib.rs",
+            r#"
+pub fn api() {
+  helper();
+}
+fn caller() {
+  api();
+}
+fn helper() {}
+"#,
+        );
+        let mut graph = SourceGraph::default();
+        for symbol in &file.symbols {
+            graph
+                .symbol_index
+                .entry(symbol.name.clone())
+                .or_default()
+                .push(symbol.id.clone());
+        }
+        graph.files.insert(file.path.clone(), file);
+
+        let rows = graph.attack_surface();
+        assert!(rows.contains(&"src/lib.rs#api".to_string()));
+        assert!(rows.contains(&"src/lib.rs#caller".to_string()));
+        assert!(!rows.contains(&"src/lib.rs#helper".to_string()));
+    }
+
+    #[test]
+    fn call_resolution_prefers_symbols_in_the_callers_file() {
+        let local = parse_source_file(
+            "src/local.rs",
+            r#"
+fn caller() {
+  target();
+}
+fn target() {}
+"#,
+        );
+        let other = parse_source_file("src/other.rs", "fn target() {}\n");
+        let mut graph = SourceGraph::default();
+        for file in [local, other] {
+            for symbol in &file.symbols {
+                graph
+                    .symbol_index
+                    .entry(symbol.name.clone())
+                    .or_default()
+                    .push(symbol.id.clone());
+            }
+            graph.files.insert(file.path.clone(), file);
+        }
+
+        assert_eq!(
+            graph.callees("src/local.rs#caller"),
+            vec!["src/local.rs#target"]
+        );
     }
 }

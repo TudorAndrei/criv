@@ -45,15 +45,20 @@
 - [x] Add CI-oriented full enforcement mode.
 - [x] Add stage-specific changed-file detection for commit/push.
 - [x] Add Obsidian schema-version check.
+- [x] Add `query nodes --kind code --without-docs` against precise symbols.
+- [x] Add release automation docs for crates.io publishing.
+- [x] Add ESLint integration for JS/TS import policies.
+- [x] Add Ruff integration for Python import policies.
+- [x] Add graceful missing-tool diagnostics for ESLint/Ruff.
+- [x] Extract reliable containment edges for modules/classes/methods.
+- [x] Add attack-surface semantics beyond uncalled symbols.
+- [x] Improve call resolution beyond name matching.
+- [x] Evaluate `miette` for validation diagnostics with source spans.
+- [x] Evaluate `infer` for magic-number detection for plugin previews and non-source assets.
+- [x] Evaluate `serde_yaml_ng` as an alternate YAML replacement.
+- [x] Evaluate `camino` for UTF-8 repo-relative path handling.
 
 ## Missing For Spec Completeness
-
-### Dependency Cleanup
-
-- [ ] Evaluate `miette` for validation diagnostics with source spans.
-- [ ] Evaluate `infer` for magic-number detection for plugin previews and non-source assets.
-- [ ] Evaluate `serde_yaml_ng` as an alternate YAML replacement.
-- [ ] Evaluate `camino` for UTF-8 repo-relative path handling.
 
 ### Source Graph
 
@@ -64,8 +69,6 @@
 - [ ] Add tree-sitter grammars for Python.
 - [ ] Add tree-sitter grammars for Go.
 - [ ] Extract precise symbol ranges.
-- [ ] Extract reliable containment edges for modules/classes/methods.
-- [ ] Improve call resolution beyond name matching.
 
 ### Structural Search And Enforcement
 
@@ -93,15 +96,10 @@
 
 ### Output And Snapshots
 
-- [ ] Add attack-surface semantics beyond uncalled symbols.
-- [ ] Add `query nodes --kind code --without-docs` against precise symbols.
 
 ### Native Enforcement
 
 - [ ] Add native import-policy checks.
-- [ ] Add ESLint integration for JS/TS import policies.
-- [ ] Add Ruff integration for Python import policies.
-- [ ] Add graceful missing-tool diagnostics for ESLint/Ruff.
 
 ### Obsidian Plugin
 
@@ -118,7 +116,6 @@
 
 - [ ] Build and check the plugin with `npm run build`.
 - [ ] Build WASM package with `wasm-pack`.
-- [ ] Add release automation docs for crates.io publishing.
 
 ## Current Verification Commands
 

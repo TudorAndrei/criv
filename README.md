@@ -48,3 +48,5 @@ docs/
 ```
 
 `.criv/` is local state and is ignored by git.
+
+Release steps are documented in [docs/releasing.md](docs/releasing.md).

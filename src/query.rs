@@ -188,7 +188,9 @@ fn orphan_docs(vault: &Vault) -> Vec<String> {
 }
 
 fn references(vault: &Vault, symbol: &str) -> Vec<String> {
-    let Some((path, _)) = vault.resolve_source_path(source_fragment_path(symbol)) else {
+    let source_path = source_fragment_path(symbol);
+    let requested_fragment = source_fragment_name(symbol);
+    let Some((path, _)) = vault.resolve_source_path(source_path) else {
         return Vec::new();
     };
 
@@ -197,17 +199,11 @@ fn references(vault: &Vault, symbol: &str) -> Vec<String> {
         let frontmatter_refs = note
             .targets_symbols
             .iter()
-            .filter_map(|target| vault.resolve_source_path(source_fragment_path(target)))
-            .any(|(target_path, _)| target_path == path);
-        let body_refs = note.wiki_links.iter().any(|link| {
-            matches!(
-                vault.resolve_link(&link.target),
-                ResolvedLink::Source {
-                    path: resolved_path,
-                    ..
-                } if resolved_path == path
-            )
-        });
+            .any(|target| target_matches_source(vault, target, &path, requested_fragment));
+        let body_refs = note
+            .wiki_links
+            .iter()
+            .any(|link| target_matches_source(vault, &link.target, &path, requested_fragment));
         if frontmatter_refs || body_refs {
             rows.push(note.display_id().to_string());
         }
@@ -215,6 +211,26 @@ fn references(vault: &Vault, symbol: &str) -> Vec<String> {
     rows.sort();
     rows.dedup();
     rows
+}
+
+fn target_matches_source(
+    vault: &Vault,
+    target: &str,
+    resolved_path: &str,
+    requested_fragment: Option<&str>,
+) -> bool {
+    let target = target.split('|').next().unwrap_or(target).trim();
+    let target_path = source_fragment_path(target);
+    let Some((path, _)) = vault.resolve_source_path(target_path) else {
+        return false;
+    };
+    if path != resolved_path {
+        return false;
+    }
+    match requested_fragment {
+        Some(fragment) => source_fragment_name(target) == Some(fragment),
+        None => true,
+    }
 }
 
 fn governs(vault: &Vault, adr_id: &str) -> Result<Vec<String>> {
@@ -482,4 +498,9 @@ fn print_rows(rows: &[String], format: Format) {
 
 fn json_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn source_fragment_name(value: &str) -> Option<&str> {
+    let fragment = value.split('|').next().unwrap_or(value).split_once('#')?.1;
+    (!fragment.is_empty() && !fragment.starts_with('L')).then_some(fragment)
 }

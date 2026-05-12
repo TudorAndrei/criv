@@ -107,7 +107,10 @@ impl State {
                         hash: String::new(),
                         kind: symbol_kind(symbol.kind).into(),
                         label: symbol.name.clone(),
-                        path: Some(format!("{}#L{}", symbol.id.path, symbol.line)),
+                        path: Some(format!(
+                            "{}#L{}-L{}",
+                            symbol.id.path, symbol.range.start_line, symbol.range.end_line
+                        )),
                     },
                 );
                 add_edge(
@@ -117,10 +120,24 @@ impl State {
                     &symbol_id,
                     "contains",
                 );
+                if let Some(parent) = &symbol.parent {
+                    if let Some(parent_id) = vault
+                        .source_graph()
+                        .resolve_symbol(&format!("{}#{}", symbol.id.path, parent))
+                    {
+                        add_edge(
+                            &mut graph,
+                            &mut seen_edges,
+                            &symbol_node_id(&parent_id.display()),
+                            &symbol_id,
+                            "contains",
+                        );
+                    }
+                }
                 for call in &symbol.calls {
                     let target = vault
                         .source_graph()
-                        .resolve_symbol(&call.target)
+                        .resolve_call(&symbol.id, &call.target)
                         .map(|target| symbol_node_id(&target.display()))
                         .unwrap_or_else(|| external_call_node_id(&call.target));
                     if target.starts_with("external-call:") {
