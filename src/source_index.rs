@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -8,7 +8,7 @@ use fff_search::{
     SharedFilePicker, SharedFrecency, parse_grep_query,
 };
 
-use crate::util::glob_matches;
+use crate::util::{GlobMatcher, glob_matches};
 use crate::{CrivError, Result};
 
 const SCAN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -45,27 +45,34 @@ pub(crate) trait SourceIndex: std::fmt::Debug {
     fn grep(&self, query: &str, mode: SourceGrepMode, paths: &[String]) -> Result<Vec<GrepHit>>;
     fn resolve_partial_path(&self, path: &str) -> Option<(String, bool)>;
     fn entries(&self) -> Result<Vec<IndexedSource>>;
+    fn source_fingerprint(&self) -> Result<String>;
 }
 
 #[derive(Debug)]
 pub(crate) struct FffSourceIndex {
-    source_files: Vec<String>,
-    source_set: BTreeSet<String>,
+    source_roots: Vec<String>,
+    source_excludes: GlobMatcher,
     picker: SharedFilePicker,
     _frecency: SharedFrecency,
 }
 
 impl FffSourceIndex {
-    pub(crate) fn new(root: &Path, source_files: &[String]) -> Result<Self> {
+    pub(crate) fn new(
+        root: &Path,
+        source_roots: &[String],
+        source_exclude: &[String],
+        watch: bool,
+    ) -> Result<Self> {
         let picker = SharedFilePicker::default();
         let frecency = SharedFrecency::default();
+        let source_excludes = GlobMatcher::new(source_exclude)?;
         FilePicker::new_with_shared_state(
             picker.clone(),
             frecency.clone(),
             FilePickerOptions {
                 base_path: root.to_string_lossy().to_string(),
                 mode: FFFMode::Ai,
-                watch: false,
+                watch,
                 ..Default::default()
             },
         )
@@ -74,10 +81,13 @@ impl FffSourceIndex {
         if !picker.wait_for_scan(SCAN_TIMEOUT) {
             return Err(CrivError::new("timed out scanning source files with fff"));
         }
+        if watch && !picker.wait_for_watcher(SCAN_TIMEOUT) {
+            return Err(CrivError::new("timed out starting fff source watcher"));
+        }
 
         Ok(Self {
-            source_files: source_files.to_vec(),
-            source_set: source_files.iter().cloned().collect(),
+            source_roots: normalize_source_roots(source_roots),
+            source_excludes,
             picker,
             _frecency: frecency,
         })
@@ -95,7 +105,32 @@ impl FffSourceIndex {
     }
 
     fn indexed_path(&self, path: String) -> Option<String> {
-        self.source_set.contains(&path).then_some(path)
+        self.source_path_allowed(&path).then_some(path)
+    }
+
+    fn source_path_allowed(&self, path: &str) -> bool {
+        !self.source_excludes.is_match(path)
+            && self
+                .source_roots
+                .iter()
+                .any(|root| root == "." || path == root || path.starts_with(&format!("{root}/")))
+    }
+
+    fn source_files(&self) -> Result<Vec<String>> {
+        self.with_picker(|picker| {
+            let mut files = picker
+                .get_files()
+                .iter()
+                .filter(|file| !file.is_binary() && !file.is_deleted())
+                .filter_map(|file| {
+                    let path = file.relative_path(picker);
+                    self.source_path_allowed(&path).then_some(path)
+                })
+                .collect::<Vec<_>>();
+            files.sort();
+            files.dedup();
+            files
+        })
     }
 }
 
@@ -113,7 +148,7 @@ impl SourceIndex for FffSourceIndex {
                     current_file: None,
                     pagination: PaginationArgs {
                         offset: 0,
-                        limit: limit.max(self.source_files.len()),
+                        limit: limit.max(picker.get_files().len()),
                     },
                     ..Default::default()
                 },
@@ -163,7 +198,7 @@ impl SourceIndex for FffSourceIndex {
                     continue;
                 };
                 let path = file.relative_path(picker);
-                if !self.source_set.contains(&path) || !path_allowed(&path, paths) {
+                if !self.source_path_allowed(&path) || !path_allowed(&path, paths) {
                     continue;
                 }
                 rows.push(GrepHit {
@@ -182,7 +217,8 @@ impl SourceIndex for FffSourceIndex {
         }
 
         let path = path.trim();
-        if self.source_set.contains(path) {
+        let source_files = self.source_files().ok()?;
+        if source_files.iter().any(|source_file| source_file == path) {
             return Some((path.to_string(), false));
         }
 
@@ -196,7 +232,7 @@ impl SourceIndex for FffSourceIndex {
             .collect::<Vec<_>>();
 
         let matches = if fff_matches.is_empty() {
-            self.source_files
+            source_files
                 .iter()
                 .filter(|file| file.ends_with(path) || file.rsplit('/').next() == Some(path))
                 .cloned()
@@ -219,25 +255,50 @@ impl SourceIndex for FffSourceIndex {
                 .iter()
                 .filter_map(|file| {
                     let path = file.relative_path(picker);
-                    self.source_set
-                        .contains(&path)
+                    (!file.is_binary() && !file.is_deleted() && self.source_path_allowed(&path))
                         .then_some((path, file.total_frecency_score().max(0) as u32))
                 })
                 .collect::<BTreeMap<_, _>>()
         })?;
         let mut entries = self
-            .source_files
-            .iter()
+            .source_files()?
+            .into_iter()
             .map(|path| IndexedSource {
-                path: path.clone(),
-                frecency: frecency_by_path.get(path).copied().unwrap_or(0),
+                frecency: frecency_by_path.get(&path).copied().unwrap_or(0),
+                path,
             })
             .collect::<Vec<_>>();
         entries.sort_by(|left, right| left.path.cmp(&right.path));
         Ok(entries)
     }
+
+    fn source_fingerprint(&self) -> Result<String> {
+        let fingerprint = self.with_picker(|picker| {
+            let mut rows = picker
+                .get_files()
+                .iter()
+                .filter(|file| !file.is_binary() && !file.is_deleted())
+                .filter_map(|file| {
+                    let path = file.relative_path(picker);
+                    self.source_path_allowed(&path)
+                        .then_some(format!("{path}\0{}\0{}", file.size, file.modified))
+                })
+                .collect::<Vec<_>>();
+            rows.sort();
+            rows.join("\n")
+        })?;
+        Ok(blake3::hash(fingerprint.as_bytes()).to_hex().to_string())
+    }
 }
 
 fn path_allowed(path: &str, patterns: &[String]) -> bool {
     patterns.is_empty() || patterns.iter().any(|pattern| glob_matches(pattern, path))
+}
+
+fn normalize_source_roots(source_roots: &[String]) -> Vec<String> {
+    source_roots
+        .iter()
+        .map(|root| root.trim().trim_matches('/').to_string())
+        .filter(|root| !root.is_empty())
+        .collect()
 }

@@ -11,7 +11,7 @@ use crate::{CrivError, Result};
 
 pub(crate) const STATE_SCHEMA: &str = "criv.state.v0";
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct State {
     schema: &'static str,
     graph: Graph,
@@ -22,14 +22,14 @@ pub(crate) struct State {
     source_index: Vec<SourceIndexEntry>,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub(crate) struct Graph {
     root: String,
     nodes: Vec<Node>,
     edges: Vec<Edge>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct Node {
     id: String,
     hash: String,
@@ -38,7 +38,7 @@ pub(crate) struct Node {
     path: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct Edge {
     from: String,
     to: String,
@@ -46,14 +46,14 @@ pub(crate) struct Edge {
     hash: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub(crate) struct PatternMatch {
     file: String,
     range: Option<String>,
     captures: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct SourceIndexEntry {
     path: String,
     mime: Option<String>,
@@ -62,6 +62,15 @@ pub(crate) struct SourceIndexEntry {
 
 impl State {
     pub(crate) fn build(root: &Path, vault: &Vault) -> Result<Self> {
+        Self::build_incremental(root, vault, None, &[])
+    }
+
+    pub(crate) fn build_incremental(
+        root: &Path,
+        vault: &Vault,
+        previous: Option<&State>,
+        changed_files: &[String],
+    ) -> Result<Self> {
         let mut graph = Graph::default();
         let mut seen_nodes = BTreeSet::new();
         let mut seen_edges = BTreeSet::new();
@@ -303,7 +312,7 @@ impl State {
         for pattern_id in vault.patterns() {
             patterns.insert(
                 pattern_id.clone(),
-                state_pattern_matches(root, vault, pattern_id)?,
+                incremental_pattern_matches(root, vault, previous, changed_files, pattern_id)?,
             );
         }
         graph.root = graph_root(&graph);
@@ -358,10 +367,56 @@ pub(crate) fn write_state(root: &Path, vault: &Vault) -> Result<String> {
     state.write_snapshot(root)
 }
 
+pub(crate) fn write_state_incremental(
+    root: &Path,
+    vault: &Vault,
+    previous: Option<&State>,
+    changed_files: &[String],
+) -> Result<(String, State)> {
+    let state = State::build_incremental(root, vault, previous, changed_files)?;
+    state.write(root)?;
+    let snapshot = state.write_snapshot(root)?;
+    Ok((snapshot, state))
+}
+
+fn incremental_pattern_matches(
+    root: &Path,
+    vault: &Vault,
+    previous: Option<&State>,
+    changed_files: &[String],
+    pattern_id: &str,
+) -> Result<Vec<PatternMatch>> {
+    let Some(previous_matches) = previous.and_then(|state| state.patterns.get(pattern_id)) else {
+        return state_pattern_matches(root, vault, pattern_id, &[]);
+    };
+    if changed_files.is_empty() {
+        return Ok(previous_matches.clone());
+    }
+
+    let changed_set = changed_files.iter().cloned().collect::<BTreeSet<_>>();
+    let mut matches = previous_matches
+        .iter()
+        .filter(|matched| !changed_set.contains(&matched.file))
+        .cloned()
+        .collect::<Vec<_>>();
+    matches.extend(state_pattern_matches(
+        root,
+        vault,
+        pattern_id,
+        changed_files,
+    )?);
+    matches.sort_by(|left, right| {
+        (&left.file, &left.range, &left.captures).cmp(&(&right.file, &right.range, &right.captures))
+    });
+    matches.dedup();
+    Ok(matches)
+}
+
 fn state_pattern_matches(
     root: &Path,
     vault: &Vault,
     pattern_id: &str,
+    paths: &[String],
 ) -> Result<Vec<PatternMatch>> {
     let matches = if let Some((adr_id, local_id)) = pattern_id.split_once('/') {
         let pattern = local_id;
@@ -369,9 +424,50 @@ fn state_pattern_matches(
             .resolve_note(adr_id)
             .map(|note| vault.effective_governs(note))
             .unwrap_or_else(|| vec!["**".into()]);
-        structural::find_policy_pattern(root, vault, pattern_id, pattern, &scopes)?
+        let scoped_paths = scoped_changed_paths(paths, &scopes);
+        if let Some(configured) = vault.config.pattern_defs.get(pattern_id) {
+            if let Some(source) = structural::pattern_source(configured) {
+                let scoped_paths = if paths.is_empty() {
+                    scoped_paths
+                } else {
+                    let Some(scoped_paths) =
+                        configured_pattern_paths(&scoped_paths, configured.language.as_deref())
+                    else {
+                        return Ok(Vec::new());
+                    };
+                    scoped_paths
+                };
+                structural::find(
+                    root,
+                    vault,
+                    source,
+                    &scoped_paths,
+                    configured.language.as_deref(),
+                )?
+            } else {
+                Vec::new()
+            }
+        } else {
+            structural::find(
+                root,
+                vault,
+                structural::PatternSource::Pattern(pattern),
+                &scoped_paths,
+                None,
+            )?
+        }
     } else if vault.config.pattern_defs.contains_key(pattern_id) {
-        structural::find_pattern_id(root, vault, pattern_id, &[])?
+        let pattern = &vault.config.pattern_defs[pattern_id];
+        if paths.is_empty() {
+            structural::find_pattern_id(root, vault, pattern_id, &[])?
+        } else if let Some(source) = structural::pattern_source(pattern) {
+            let Some(paths) = configured_pattern_paths(paths, pattern.language.as_deref()) else {
+                return Ok(Vec::new());
+            };
+            structural::find(root, vault, source, &paths, pattern.language.as_deref())?
+        } else {
+            Vec::new()
+        }
     } else {
         Vec::new()
     };
@@ -384,6 +480,37 @@ fn state_pattern_matches(
             captures: matched.captures,
         })
         .collect())
+}
+
+fn scoped_changed_paths(paths: &[String], scopes: &[String]) -> Vec<String> {
+    if paths.is_empty() {
+        return scopes.to_vec();
+    }
+    paths
+        .iter()
+        .filter(|path| {
+            scopes
+                .iter()
+                .any(|scope| crate::util::glob_matches(scope, path))
+        })
+        .cloned()
+        .collect()
+}
+
+fn configured_pattern_paths(paths: &[String], language: Option<&str>) -> Option<Vec<String>> {
+    if paths.is_empty() {
+        return Some(Vec::new());
+    }
+    let Some(language) = language else {
+        return Some(paths.to_vec());
+    };
+    let language_glob = structural::language_glob(language);
+    let paths = paths
+        .iter()
+        .filter(|path| crate::util::glob_matches(language_glob, path))
+        .cloned()
+        .collect::<Vec<_>>();
+    (!paths.is_empty()).then_some(paths)
 }
 
 fn add_node(graph: &mut Graph, seen: &mut BTreeSet<String>, node: Node) {

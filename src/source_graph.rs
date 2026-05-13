@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::path::Path;
+use std::time::UNIX_EPOCH;
 
 use tree_sitter::{Node, Parser};
 
@@ -9,6 +11,8 @@ use crate::util::read_to_string;
 #[derive(Debug, Default, Clone)]
 pub(crate) struct SourceGraph {
     pub(crate) files: BTreeMap<String, SourceFile>,
+    file_fingerprints: BTreeMap<String, String>,
+    changed_files: Vec<String>,
     symbol_index: BTreeMap<String, Vec<SymbolId>>,
 }
 
@@ -80,12 +84,27 @@ pub(crate) enum Language {
 }
 
 impl SourceGraph {
-    pub(crate) fn build(root: &Path, source_files: &[String]) -> Result<Self> {
+    pub(crate) fn build_incremental(
+        root: &Path,
+        source_files: &[String],
+        previous: Option<&Self>,
+    ) -> Result<Self> {
         let mut graph = Self::default();
         for source_file in source_files {
             let path = root.join(source_file);
-            let contents = read_to_string(&path)?;
-            let parsed = parse_source_file(source_file, &contents);
+            let fingerprint = source_file_fingerprint(&path)?;
+            let reused = previous
+                .filter(|previous| {
+                    previous.file_fingerprints.get(source_file) == Some(&fingerprint)
+                })
+                .and_then(|previous| previous.files.get(source_file).cloned());
+            let parsed = if let Some(parsed) = reused {
+                parsed
+            } else {
+                graph.changed_files.push(source_file.clone());
+                let contents = read_to_string(&path)?;
+                parse_source_file(source_file, &contents)
+            };
             for symbol in &parsed.symbols {
                 graph
                     .symbol_index
@@ -93,7 +112,19 @@ impl SourceGraph {
                     .or_default()
                     .push(symbol.id.clone());
             }
+            graph
+                .file_fingerprints
+                .insert(source_file.clone(), fingerprint);
             graph.files.insert(source_file.clone(), parsed);
+        }
+        if let Some(previous) = previous {
+            for previous_file in previous.file_fingerprints.keys() {
+                if !graph.file_fingerprints.contains_key(previous_file) {
+                    graph.changed_files.push(previous_file.clone());
+                }
+            }
+            graph.changed_files.sort();
+            graph.changed_files.dedup();
         }
         Ok(graph)
     }
@@ -187,6 +218,10 @@ impl SourceGraph {
         self.files.values().flat_map(|file| file.symbols.iter())
     }
 
+    pub(crate) fn changed_files(&self) -> &[String] {
+        &self.changed_files
+    }
+
     pub(crate) fn resolve_call(&self, caller: &SymbolId, target: &str) -> Option<SymbolId> {
         self.files
             .get(&caller.path)
@@ -200,6 +235,17 @@ impl SourceGraph {
             .get(&id.path)
             .and_then(|file| file.symbols.iter().find(|symbol| &symbol.id == id))
     }
+}
+
+fn source_file_fingerprint(path: &Path) -> Result<String> {
+    let metadata = fs::metadata(path)?;
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    Ok(format!("{}\0{modified}", metadata.len()))
 }
 
 fn parse_source_file(path: &str, contents: &str) -> SourceFile {

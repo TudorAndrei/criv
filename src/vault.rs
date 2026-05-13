@@ -96,6 +96,13 @@ pub(crate) enum ResolvedLink {
 
 impl Vault {
     pub(crate) fn load(root: &Path) -> Result<Self> {
+        Self::load_incremental(root, None)
+    }
+
+    pub(crate) fn load_incremental(
+        root: &Path,
+        previous_graph: Option<&SourceGraph>,
+    ) -> Result<Self> {
         let config = Config::load(root)?;
         let docs_path = config.docs_path(root);
         let notes = walk_files(&docs_path, Some("md"))?
@@ -128,8 +135,13 @@ impl Vault {
         }
 
         let source_files = collect_source_files(root, &config)?;
-        let source_index = Box::new(FffSourceIndex::new(root, &source_files)?);
-        let source_graph = SourceGraph::build(root, &source_files)?;
+        let source_index = Box::new(FffSourceIndex::new(
+            root,
+            &config.source_roots,
+            &config.source_exclude,
+            false,
+        )?);
+        let source_graph = SourceGraph::build_incremental(root, &source_files, previous_graph)?;
 
         Ok(Self {
             config,
@@ -508,5 +520,80 @@ targets:
         assert_eq!(headings[0].0, 1);
         assert_eq!(headings[0].1, "One");
         assert_eq!(headings[1].2, 3);
+    }
+
+    #[test]
+    fn shared_link_resolution_fixture_matches_vault() {
+        #[derive(Deserialize)]
+        struct Fixture {
+            cases: Vec<Case>,
+        }
+
+        #[derive(Deserialize)]
+        struct Case {
+            target: String,
+            source: Option<String>,
+            pattern: Option<String>,
+        }
+
+        let fixture: Fixture =
+            serde_json::from_str(include_str!("../fixtures/link-resolution.json")).unwrap();
+        let root = unique_temp_dir("criv-link-fixtures");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("docs/adr")).unwrap();
+        std::fs::write(
+            root.join("criv.toml"),
+            r#"
+[source]
+roots = ["src"]
+"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
+        std::fs::write(
+            root.join("docs/adr/0001.md"),
+            r#"---
+id: ADR-0001
+kind: decision
+title: Test decision
+status: accepted
+policy:
+  patterns:
+    - id: no-block-on
+---
+
+# Test decision
+"#,
+        )
+        .unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+        for case in fixture.cases {
+            match (vault.resolve_link(&case.target), case.source, case.pattern) {
+                (ResolvedLink::Source { path, .. }, Some(expected), None) => {
+                    assert_eq!(path, expected, "{}", case.target);
+                }
+                (ResolvedLink::Pattern { id }, None, Some(expected)) => {
+                    assert_eq!(id, expected, "{}", case.target);
+                }
+                (ResolvedLink::Broken, None, None) => {}
+                (actual, source, pattern) => {
+                    panic!(
+                        "unexpected resolution for {}: {:?}, expected source={:?} pattern={:?}",
+                        case.target, actual, source, pattern
+                    );
+                }
+            }
+        }
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{}-{unique}", std::process::id()))
     }
 }

@@ -1,0 +1,62 @@
+{
+  "state": {
+    "schema": "criv.state.v0",
+    "graph": {
+      "nodes": [
+        {
+          "id": "code:src/lib.rs",
+          "hash": "fixture",
+          "kind": "code",
+          "label": "src/lib.rs (rust)",
+          "path": "src/lib.rs"
+        }
+      ],
+      "edges": [],
+      "root": "fixture"
+    },
+    "registered-patterns": ["ADR-0001/no-block-on"],
+    "patterns": {
+      "ADR-0001/no-block-on": [
+        {
+          "file": "src/lib.rs",
+          "range": "L1:C1-L1:C10",
+          "captures": {}
+        }
+      ]
+    },
+    "source-index": [
+      {
+        "path": "src/lib.rs",
+        "mime": "text/x-rust",
+        "frecency": 0
+      }
+    ]
+  },
+  "cases": [
+    {
+      "target": "src/lib.rs#run",
+      "source": "src/lib.rs",
+      "pattern": null
+    },
+    {
+      "target": "lib.rs",
+      "source": "src/lib.rs",
+      "pattern": null
+    },
+    {
+      "target": "match:ADR-0001/no-block-on",
+      "source": null,
+      "pattern": "ADR-0001/no-block-on"
+    },
+    {
+      "target": "ADR-0001#match:ADR-0001/no-block-on",
+      "source": null,
+      "pattern": "ADR-0001/no-block-on"
+    },
+    {
+      "target": "missing.rs",
+      "source": null,
+      "pattern": null
+    }
+  ]
+}

@@ -7,7 +7,10 @@ use clap::Args as ClapArgs;
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 
 use crate::check;
-use crate::state;
+use crate::config::Config;
+use crate::source_graph::SourceGraph;
+use crate::source_index::{FffSourceIndex, SourceIndex};
+use crate::state::{self, State};
 use crate::vault::Vault;
 use crate::{CrivError, Result};
 
@@ -20,15 +23,19 @@ pub(crate) struct WatchOptions {
 }
 
 pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
-    rebuild(root)?;
+    let mut vault = rebuild(root, None)?;
     if options.once {
         return Ok(());
     }
+    let mut source_graph = vault.source_graph().clone();
+    let mut state = State::build(root, &vault)?;
     let _lock = WatchLock::acquire(root)?;
 
-    let vault = Vault::load(root)?;
-    let docs_path = vault.config.docs_path(root);
-    let source_roots = vault.config.source_root_paths(root);
+    let config = Config::load(root)?;
+    let docs_path = config.docs_path(root);
+    let source_index =
+        FffSourceIndex::new(root, &config.source_roots, &config.source_exclude, true)?;
+    let mut source_fingerprint = source_index.source_fingerprint()?;
 
     let (tx, rx) = mpsc::channel::<DebounceEventResult>();
     let mut debouncer = new_debouncer(Duration::from_millis(250), move |event| {
@@ -40,12 +47,6 @@ pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
         .watcher()
         .watch(&docs_path, RecursiveMode::Recursive)
         .map_err(|err| CrivError::new(format!("failed to watch docs: {err}")))?;
-    for source_root in source_roots {
-        debouncer
-            .watcher()
-            .watch(&source_root, RecursiveMode::Recursive)
-            .map_err(|err| CrivError::new(format!("failed to watch source root: {err}")))?;
-    }
 
     if let Some(port) = options.port {
         println!(
@@ -55,29 +56,71 @@ pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
         println!("criv watch running");
     }
 
-    for event in rx {
-        match event {
-            Ok(events) if events.is_empty() => {}
-            Ok(_) => {
-                if let Err(err) = rebuild(root) {
-                    eprintln!("criv watch: {err}");
-                }
+    loop {
+        let mut docs_changed = false;
+        let mut source_changed = false;
+        match rx.recv_timeout(Duration::from_millis(250)) {
+            Ok(event) => match event {
+                Ok(events) if events.is_empty() => {}
+                Ok(_) => docs_changed = true,
+                Err(err) => eprintln!("criv watch: watcher error: {err}"),
+            },
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+
+        match source_index.source_fingerprint() {
+            Ok(next_fingerprint) if next_fingerprint != source_fingerprint => {
+                source_fingerprint = next_fingerprint;
+                source_changed = true;
             }
-            Err(err) => eprintln!("criv watch: watcher error: {err}"),
+            Ok(_) => {}
+            Err(err) => eprintln!("criv watch: source index error: {err}"),
+        }
+
+        if docs_changed || source_changed {
+            let previous_graph = (!docs_changed).then_some(&source_graph);
+            let previous_state = (!docs_changed).then_some(&state);
+            match rebuild_incremental(root, previous_graph, previous_state) {
+                Ok((next_vault, next_state)) => {
+                    vault = next_vault;
+                    state = next_state;
+                    source_graph = vault.source_graph().clone();
+                }
+                Err(err) => eprintln!("criv watch: {err}"),
+            }
         }
     }
 
     Ok(())
 }
 
-fn rebuild(root: &Path) -> Result<()> {
-    let vault = Vault::load(root)?;
+fn rebuild(root: &Path, previous_graph: Option<&SourceGraph>) -> Result<Vault> {
+    let vault = Vault::load_incremental(root, previous_graph)?;
     let diagnostics = check::validate(&vault);
     let snapshot = state::write_state(root, &vault)?;
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();
     println!("state updated: snapshot {snapshot}, {errors} errors, {warnings} warnings");
-    Ok(())
+    Ok(vault)
+}
+
+fn rebuild_incremental(
+    root: &Path,
+    previous_graph: Option<&SourceGraph>,
+    previous_state: Option<&State>,
+) -> Result<(Vault, State)> {
+    let vault = Vault::load_incremental(root, previous_graph)?;
+    let diagnostics = check::validate(&vault);
+    let changed_files = previous_state
+        .map(|_| vault.source_graph().changed_files())
+        .unwrap_or(&[]);
+    let (snapshot, state) =
+        state::write_state_incremental(root, &vault, previous_state, changed_files)?;
+    let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
+    let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();
+    println!("state updated: snapshot {snapshot}, {errors} errors, {warnings} warnings");
+    Ok((vault, state))
 }
 
 struct WatchLock {
