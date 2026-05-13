@@ -1,3 +1,161 @@
 .criv-warning {
   color: var(--text-error);
 }
+
+.criv-source-ref {
+  color: var(--text-accent);
+}
+
+.criv-pattern-ref {
+  color: var(--text-success);
+}
+
+.criv-panel {
+  padding: 12px;
+}
+
+.criv-panel-header {
+  align-items: center;
+  border-bottom: 1px solid var(--background-modifier-border);
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+}
+
+.criv-panel-header h3,
+.criv-section-title {
+  font-size: 13px;
+  font-weight: 650;
+  margin: 0;
+}
+
+.criv-panel-header span {
+  background: var(--background-modifier-hover);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 11px;
+  min-width: 22px;
+  padding: 2px 8px;
+  text-align: center;
+}
+
+.criv-section-title {
+  margin-top: 18px;
+}
+
+.criv-empty {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin: 10px 0 14px;
+}
+
+.criv-source-card {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  margin: 10px 0;
+  overflow: hidden;
+}
+
+.criv-source-card-head,
+.criv-pattern-row {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.criv-source-card-head {
+  background: var(--background-secondary);
+  justify-content: space-between;
+  padding: 7px 8px;
+}
+
+.criv-source-card-head button {
+  background: none;
+  border: 0;
+  color: var(--text-accent);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  padding: 0;
+  text-align: left;
+}
+
+.criv-source-card-head span {
+  color: var(--text-muted);
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
+.criv-pattern-row {
+  border-bottom: 1px solid var(--background-modifier-border);
+  font-size: 12px;
+  justify-content: space-between;
+  padding: 6px 0;
+}
+
+.criv-hover-preview {
+  background: var(--background-primary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28);
+  max-height: 420px;
+  overflow: hidden;
+  pointer-events: none;
+  position: fixed;
+  z-index: var(--layer-popover, 1000);
+}
+
+.criv-preview-body {
+  min-width: 0;
+}
+
+.criv-preview-path {
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  color: var(--text-normal);
+  font-size: 12px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+  padding: 7px 9px;
+}
+
+.criv-preview-meta {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  padding: 6px 9px 0;
+}
+
+.criv-preview-meta span {
+  background: var(--background-modifier-hover);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 10px;
+  padding: 1px 7px;
+}
+
+.criv-source-preview {
+  background: var(--background-primary-alt);
+  color: var(--text-normal);
+  font-size: 11px;
+  line-height: 1.45;
+  margin: 7px 8px 8px;
+  max-height: 300px;
+  overflow: auto;
+  padding: 8px;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.criv-preview-loading,
+.criv-preview-error {
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 10px;
+}
+
+.criv-preview-error {
+  color: var(--text-error);
+}

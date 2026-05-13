@@ -14,6 +14,7 @@ type CrivWasmModule = {
 };
 
 let wasmModule: Promise<CrivWasmModule | null> | null = null;
+const WASM_RUNTIME_PATH = "./pkg/criv_wasm.js";
 
 export async function summarizeState(raw: string): Promise<CrivStateSummary> {
   const wasm = await loadWasm();
@@ -40,7 +41,7 @@ export async function summarizeState(raw: string): Promise<CrivStateSummary> {
 
 async function loadWasm(): Promise<CrivWasmModule | null> {
   if (!wasmModule) {
-    wasmModule = import("../pkg/criv_wasm.js")
+    wasmModule = import(WASM_RUNTIME_PATH)
       .then((module) => module as CrivWasmModule)
       .catch(() => null);
   }
