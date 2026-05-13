@@ -16,3 +16,5 @@ Required fields:
 - `date`
 
 Use `governs:` to list path globs controlled by the decision. Use `policy.patterns:` for ast-grep rules that enforcement should evaluate.
+
+Accepted ADRs are immutable. Do not edit, delete, or rename an existing ADR to change a decision. Create a new ADR and use `supersedes:` to point to the older decision when the new decision replaces it.

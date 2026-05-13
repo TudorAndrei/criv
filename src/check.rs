@@ -398,23 +398,13 @@ fn validate_supersession(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
 
     for (id, note) in &decisions {
         for old_id in &note.supersedes {
-            match decisions.get(old_id.as_str()) {
-                None => diagnostics.push(error(
+            if !decisions.contains_key(old_id.as_str()) {
+                diagnostics.push(error(
                     "unknown-supersedes",
                     &note.rel_path,
                     None,
                     format!("supersedes references unknown decision `{old_id}`"),
-                )),
-                Some(old_note) => {
-                    if !old_note.superseded_by.iter().any(|value| value == id) {
-                        diagnostics.push(error(
-                            "inconsistent-supersession",
-                            &note.rel_path,
-                            None,
-                            format!("`{old_id}` must list `{id}` in superseded_by"),
-                        ));
-                    }
-                }
+                ));
             }
         }
 
@@ -484,7 +474,7 @@ fn visit_supersession(
 
     stack.push(id.to_string());
     if let Some(note) = decisions.get(id) {
-        for next in &note.superseded_by {
+        for next in &note.supersedes {
             visit_supersession(next, decisions, seen, stack, cycles);
         }
     }
@@ -587,10 +577,33 @@ mod tests {
     fn cycles_are_detected() {
         let mut a = empty_decision("ADR-0001");
         let mut b = empty_decision("ADR-0002");
-        a.superseded_by.push("ADR-0002".into());
-        b.superseded_by.push("ADR-0001".into());
+        a.supersedes.push("ADR-0002".into());
+        b.supersedes.push("ADR-0001".into());
         let decisions = BTreeMap::from([("ADR-0001", &a), ("ADR-0002", &b)]);
         assert!(!supersession_cycles(&decisions).is_empty());
+    }
+
+    #[test]
+    fn supersedes_does_not_require_old_adr_backlink() {
+        let mut old = empty_decision("ADR-0001");
+        let mut new = empty_decision("ADR-0002");
+        new.supersedes.push("ADR-0001".into());
+        let vault = test_vault(vec![old.clone(), new]);
+
+        let diagnostics = validate(&vault);
+
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diag| diag.code != "inconsistent-supersession")
+        );
+        old.superseded_by.push("ADR-0003".into());
+        let vault = test_vault(vec![old]);
+        assert!(
+            validate(&vault)
+                .iter()
+                .any(|diag| diag.code == "unknown-superseded-by")
+        );
     }
 
     fn empty_decision(id: &str) -> Note {
@@ -614,5 +627,9 @@ mod tests {
             wiki_links: Vec::new(),
             frontmatter_error: None,
         }
+    }
+
+    fn test_vault(notes: Vec<Note>) -> Vault {
+        Vault::from_parts_for_test(notes)
     }
 }

@@ -1,3 +1,4 @@
+use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -38,9 +39,19 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();
 
-    let changed_files = changed_files(root, options.stage);
+    let changed_entries = changed_entries(root, options.stage);
+    let changed_files = if options.stage == Stage::Ci {
+        None
+    } else {
+        changed_entries.as_ref().map(changed_entry_paths)
+    };
     let violations = policy_violations(root, &vault, changed_files.as_ref())?;
     let import_violations = import_policy_violations(&vault, changed_files.as_ref());
+    let adr_violations = adr_immutability_violations(
+        &vault.config.docs_dir,
+        &vault.config.adr_dir,
+        changed_entries.as_ref(),
+    );
     let tool_files = enforcement_files(&vault, changed_files.as_ref());
     let tool_errors = run_native_tools(root, &tool_files)?;
 
@@ -78,6 +89,15 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
         return Err(CrivError::new(format!(
             "{} import policy violation(s) found",
             import_violations.len()
+        )));
+    }
+    if !adr_violations.is_empty() {
+        for violation in &adr_violations {
+            println!("{violation}");
+        }
+        return Err(CrivError::new(format!(
+            "{} ADR immutability violation(s) found",
+            adr_violations.len()
         )));
     }
 
@@ -160,16 +180,59 @@ fn import_policy_violations(vault: &Vault, changed_files: Option<&Vec<String>>) 
     violations
 }
 
-fn changed_files(root: &Path, stage: Stage) -> Option<Vec<String>> {
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct ChangedEntry {
+    status: ChangeStatus,
+    path: String,
+    previous_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum ChangeStatus {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+    Copied,
+    Other,
+}
+
+fn changed_entries(root: &Path, stage: Stage) -> Option<Vec<ChangedEntry>> {
     match stage {
-        Stage::Commit => git_changed_files(root, &["diff", "--name-only", "--cached"]),
-        Stage::Push => git_changed_files(root, &["diff", "--name-only", "@{upstream}...HEAD"])
-            .or_else(|| git_changed_files(root, &["diff", "--name-only", "HEAD~1..HEAD"])),
-        Stage::Ci => None,
+        Stage::Commit => git_changed_entries(root, &["diff", "--name-status", "--cached"]),
+        Stage::Push => git_changed_entries(root, &["diff", "--name-status", "@{upstream}...HEAD"])
+            .or_else(|| git_changed_entries(root, &["diff", "--name-status", "HEAD~1..HEAD"])),
+        Stage::Ci => ci_changed_entries(root),
     }
 }
 
-fn git_changed_files(root: &Path, args: &[&str]) -> Option<Vec<String>> {
+fn ci_changed_entries(root: &Path) -> Option<Vec<ChangedEntry>> {
+    if let Ok(base_ref) = env::var("CRIV_BASE_REF") {
+        if let Some(entries) =
+            git_changed_entries(root, &["diff", "--name-status", &base_ref, "HEAD"])
+        {
+            return Some(entries);
+        }
+    }
+
+    if let Ok(base_ref) = env::var("GITHUB_BASE_REF") {
+        let origin_ref = format!("origin/{base_ref}");
+        if let Some(entries) =
+            git_changed_entries(root, &["diff", "--name-status", &origin_ref, "HEAD"])
+        {
+            return Some(entries);
+        }
+        if let Some(entries) =
+            git_changed_entries(root, &["diff", "--name-status", &base_ref, "HEAD"])
+        {
+            return Some(entries);
+        }
+    }
+
+    git_changed_entries(root, &["diff", "--name-status", "HEAD"])
+}
+
+fn git_changed_entries(root: &Path, args: &[&str]) -> Option<Vec<ChangedEntry>> {
     let output = Command::new("git")
         .current_dir(root)
         .args(args)
@@ -179,14 +242,90 @@ fn git_changed_files(root: &Path, args: &[&str]) -> Option<Vec<String>> {
         return None;
     }
     let stdout = String::from_utf8(output.stdout).ok()?;
-    Some(
-        stdout
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(str::to_string)
-            .collect(),
-    )
+    parse_changed_entries(&stdout)
+}
+
+fn parse_changed_entries(stdout: &str) -> Option<Vec<ChangedEntry>> {
+    let mut entries = Vec::new();
+    for line in stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let fields = line.split('\t').collect::<Vec<_>>();
+        let status = fields.first().and_then(|field| field.chars().next())?;
+        let change_status = match status {
+            'A' => ChangeStatus::Added,
+            'M' | 'T' => ChangeStatus::Modified,
+            'D' => ChangeStatus::Deleted,
+            'R' => ChangeStatus::Renamed,
+            'C' => ChangeStatus::Copied,
+            _ => ChangeStatus::Other,
+        };
+        let (path, previous_path) = match change_status {
+            ChangeStatus::Renamed | ChangeStatus::Copied => {
+                let previous_path = fields.get(1)?.to_string();
+                let path = fields.get(2)?.to_string();
+                (path, Some(previous_path))
+            }
+            _ => (fields.get(1)?.to_string(), None),
+        };
+        entries.push(ChangedEntry {
+            status: change_status,
+            path,
+            previous_path,
+        });
+    }
+    Some(entries)
+}
+
+fn changed_entry_paths(entries: &Vec<ChangedEntry>) -> Vec<String> {
+    entries
+        .iter()
+        .filter(|entry| entry.status != ChangeStatus::Deleted)
+        .map(|entry| entry.path.clone())
+        .collect()
+}
+
+fn adr_immutability_violations(
+    docs_dir: &str,
+    adr_dir: &str,
+    changed_entries: Option<&Vec<ChangedEntry>>,
+) -> Vec<String> {
+    let Some(entries) = changed_entries else {
+        return Vec::new();
+    };
+
+    let mut violations = Vec::new();
+    for entry in entries {
+        if matches!(entry.status, ChangeStatus::Added | ChangeStatus::Copied) {
+            continue;
+        }
+
+        let path = entry.previous_path.as_deref().unwrap_or(&entry.path);
+        if !is_adr_file(docs_dir, adr_dir, path) {
+            continue;
+        }
+
+        let display_path = entry
+            .previous_path
+            .as_ref()
+            .map(|previous| format!("{previous} -> {}", entry.path))
+            .unwrap_or_else(|| entry.path.clone());
+        violations.push(format!(
+            "{display_path}: ADR files are immutable; add a new ADR with `supersedes` instead of modifying an existing one"
+        ));
+    }
+    violations
+}
+
+fn is_adr_file(docs_dir: &str, adr_dir: &str, path: &str) -> bool {
+    let adr_prefix = format!("{docs_dir}/{adr_dir}/");
+    path.starts_with(&adr_prefix)
+        && path != format!("{adr_prefix}README.md")
+        && Path::new(path)
+            .extension()
+            .is_some_and(|extension| extension == "md")
 }
 
 fn enforcement_files(vault: &Vault, changed_files: Option<&Vec<String>>) -> Vec<String> {
@@ -331,5 +470,54 @@ mod tests {
         assert!(import_matches("crate::infra::*", "crate::infra::db"));
         assert!(import_matches("sqlx", "sqlx"));
         assert!(!import_matches("crate::infra", "crate::infrastructure"));
+    }
+
+    #[test]
+    fn parses_git_name_status_entries() {
+        let entries = parse_changed_entries(
+            "A\tdocs/adr/0012-new.md\nM\tsrc/enforce.rs\nR100\tdocs/adr/0001-old.md\tdocs/adr/0001-renamed.md\n",
+        )
+        .unwrap();
+
+        assert_eq!(entries[0].status, ChangeStatus::Added);
+        assert_eq!(entries[0].path, "docs/adr/0012-new.md");
+        assert_eq!(entries[2].status, ChangeStatus::Renamed);
+        assert_eq!(
+            entries[2].previous_path.as_deref(),
+            Some("docs/adr/0001-old.md")
+        );
+        assert_eq!(entries[2].path, "docs/adr/0001-renamed.md");
+    }
+
+    #[test]
+    fn adr_immutability_allows_new_adrs_but_blocks_existing_changes() {
+        let entries = vec![
+            ChangedEntry {
+                status: ChangeStatus::Added,
+                path: "docs/adr/0012-new.md".into(),
+                previous_path: None,
+            },
+            ChangedEntry {
+                status: ChangeStatus::Modified,
+                path: "docs/adr/0002-existing.md".into(),
+                previous_path: None,
+            },
+            ChangedEntry {
+                status: ChangeStatus::Renamed,
+                path: "docs/adr/0003-renamed.md".into(),
+                previous_path: Some("docs/adr/0003-existing.md".into()),
+            },
+            ChangedEntry {
+                status: ChangeStatus::Modified,
+                path: "docs/adr/README.md".into(),
+                previous_path: None,
+            },
+        ];
+
+        let violations = adr_immutability_violations("docs", "adr", Some(&entries));
+
+        assert_eq!(violations.len(), 2);
+        assert!(violations[0].contains("0002-existing"));
+        assert!(violations[1].contains("0003-existing"));
     }
 }

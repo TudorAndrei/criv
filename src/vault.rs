@@ -238,6 +238,72 @@ impl Vault {
             note.governs.clone()
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn from_parts_for_test(notes: Vec<Note>) -> Self {
+        let mut note_ids = BTreeMap::new();
+        let mut filenames = BTreeMap::new();
+        let mut titles = BTreeMap::new();
+        for (index, note) in notes.iter().enumerate() {
+            if let Some(id) = &note.id {
+                note_ids.entry(id.to_lowercase()).or_insert(index);
+            }
+            if let Some(stem) = note.filename_stem() {
+                filenames.entry(stem.to_lowercase()).or_insert(index);
+            }
+            if let Some(title) = &note.title {
+                titles.entry(title.to_lowercase()).or_insert(index);
+            }
+        }
+
+        Self {
+            config: Config::default(),
+            notes,
+            note_ids,
+            filenames,
+            titles,
+            source_files: Vec::new(),
+            source_index: Box::new(EmptySourceIndex),
+            source_graph: SourceGraph::default(),
+            patterns: BTreeSet::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct EmptySourceIndex;
+
+#[cfg(test)]
+impl SourceIndex for EmptySourceIndex {
+    fn fuzzy_files(
+        &self,
+        _query: &str,
+        _limit: usize,
+    ) -> Result<Vec<crate::source_index::FileHit>> {
+        Ok(Vec::new())
+    }
+
+    fn grep(
+        &self,
+        _query: &str,
+        _mode: crate::source_index::SourceGrepMode,
+        _paths: &[String],
+    ) -> Result<Vec<crate::source_index::GrepHit>> {
+        Ok(Vec::new())
+    }
+
+    fn resolve_partial_path(&self, _path: &str) -> Option<(String, bool)> {
+        None
+    }
+
+    fn entries(&self) -> Result<Vec<crate::source_index::IndexedSource>> {
+        Ok(Vec::new())
+    }
+
+    fn source_fingerprint(&self) -> Result<String> {
+        Ok(String::new())
+    }
 }
 
 fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
