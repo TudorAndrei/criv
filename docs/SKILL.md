@@ -17,6 +17,7 @@ Use this vault to document code, decisions, and references between them.
 
 Related skills:
 
+- [[criv-me]]
 - [[writing-decisions]]
 - [[referencing-code]]
 - [[checking-drift]]

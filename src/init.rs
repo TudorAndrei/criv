@@ -137,9 +137,35 @@ Use this vault to document code, decisions, and references between them.
 
 Related skills:
 
+- [[criv-me]]
 - [[writing-decisions]]
 - [[referencing-code]]
 - [[checking-drift]]
+"#;
+
+const CRIV_ME: &str = r#"---
+id: criv-me
+kind: doc
+title: Criv Me
+tags: [criv, skill, decisions]
+---
+
+# Criv Me
+
+Use `criv-me` to develop plans and decisions against the existing criv vault.
+
+Core workflow:
+
+- Read relevant docs, ADRs, and code before accepting a premise.
+- Ask one decision question at a time, and include the recommended answer.
+- If code or criv state can answer the question, inspect that instead of asking.
+- Challenge ambiguous terms, hidden constraints, ADR conflicts, and mismatches between code and docs.
+- Capture settled durable decisions in criv ADRs; capture ordinary explanation in `kind: doc` notes.
+- Use criv wiki-links when referencing source files, symbols, patterns, docs, and ADRs.
+- Run `criv watch --once` and `criv check` after documentation changes.
+
+Do not import `CONTEXT.md` conventions from non-criv workflows. In criv, the docs
+and ADR graph is the source of project language, rationale, and governance.
 "#;
 
 const WRITING_DECISIONS: &str = r#"---
@@ -200,6 +226,7 @@ Use `criv check --format json` when an agent or script needs machine-readable di
 
 const SKILLS: &[(&str, &str)] = &[
     ("docs/SKILL.md", SKILL_MD),
+    ("docs/skills/criv-me.md", CRIV_ME),
     ("docs/skills/writing-decisions.md", WRITING_DECISIONS),
     ("docs/skills/referencing-code.md", REFERENCING_CODE),
     ("docs/skills/checking-drift.md", CHECKING_DRIFT),
@@ -223,6 +250,46 @@ Core workflow:
 - Use `criv enforce --stage ci` before finishing changes that affect ADR-governed code.
 
 Write docs and ADRs with wiki-links to source paths, symbols, patterns, and notes.
+"#;
+
+const AGENT_SKILL_CRIV_ME: &str = r#"---
+name: criv-me
+description: Use when the user wants to develop a plan, make architectural or product decisions, stress-test a proposal against existing criv docs/ADRs/code, and capture settled rationale in the criv documentation graph.
+---
+
+# criv-me
+
+Use `criv-me` as a decision-development mode for criv vaults.
+
+## Grounding
+
+- Treat existing criv docs, ADRs, wiki-links, governed scopes, and source code as the decision context.
+- Start by finding relevant docs and ADRs with `rg`, `criv query`, or direct reads from `docs/`.
+- Inspect source code when it can answer a factual question. Ask the user only for intent, tradeoffs, constraints, or choices that the repo cannot determine.
+- Do not import `CONTEXT.md` conventions from other workflows. In criv, docs and ADRs already carry project language, rationale, and governance.
+
+## Session style
+
+- Interview the user one decision at a time.
+- For each question, give your recommended answer and the reasoning behind it.
+- Walk dependencies in order: clarify terms and constraints before irreversible architecture, then implementation boundaries, enforcement, tests, rollout, and documentation.
+- Challenge fuzzy or overloaded terms by proposing a precise project term.
+- Challenge claims that conflict with code, existing docs, ADRs, or governed scopes.
+- Use concrete scenarios and edge cases to expose unclear boundaries.
+
+## Capturing outcomes
+
+- Update criv docs inline when a settled explanation should persist.
+- Create or update an ADR only when the decision is hard to reverse, surprising without context, and the result of a real tradeoff.
+- Use the existing criv ADR format under `docs/adr/`: `id`, `kind: decision`, `title`, `status`, `date`, and relevant `governs:` scopes.
+- Link decisions and docs to source with criv wiki-links such as `[[src/lib.rs#run]]`, `[[src/lib.rs#L10-L20]]`, `[[match:ADR-0007/pattern-id]]`, and `[[ADR-0007]]`.
+- Prefer updating or superseding an existing ADR over creating a duplicate decision note.
+
+## Validation
+
+- Run `criv watch --once` after docs, ADR, or code changes to refresh `.criv/state.json`.
+- Run `criv check` before declaring documentation work complete.
+- Run `criv enforce --stage ci` when the session changes ADR-governed code or policy patterns.
 "#;
 
 const AGENT_SKILL_WRITING_DECISIONS: &str = r#"---
@@ -279,6 +346,7 @@ Use `criv check --format json` when an agent or script needs machine-readable di
 
 const AGENT_SKILLS: &[(&str, &str)] = &[
     (".agents/skills/criv/SKILL.md", AGENT_SKILL_CRIV),
+    (".agents/skills/criv-me/SKILL.md", AGENT_SKILL_CRIV_ME),
     (
         ".agents/skills/writing-decisions/SKILL.md",
         AGENT_SKILL_WRITING_DECISIONS,
@@ -295,6 +363,7 @@ const AGENT_SKILLS: &[(&str, &str)] = &[
 
 const CLAUDE_SKILLS: &[(&str, &str)] = &[
     (".claude/skills/criv/SKILL.md", AGENT_SKILL_CRIV),
+    (".claude/skills/criv-me/SKILL.md", AGENT_SKILL_CRIV_ME),
     (
         ".claude/skills/writing-decisions/SKILL.md",
         AGENT_SKILL_WRITING_DECISIONS,

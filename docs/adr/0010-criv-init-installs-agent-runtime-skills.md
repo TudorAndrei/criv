@@ -24,8 +24,8 @@ Extend `criv init` in [[src/init.rs]] so the tool idempotently creates runtime
 skill directories and `SKILL.md` files under both `.agents/skills` and
 `.claude/skills`, in addition to the normal vault documentation under `docs/`.
 
-The generated runtime skills cover criv workflow, writing decisions,
-referencing code, and checking drift.
+The generated runtime skills cover criv workflow, criv-backed decision
+development, writing decisions, referencing code, and checking drift.
 
 ## Consequences
 
