@@ -8,6 +8,10 @@ description = "Local docs-to-code knowledge graph validator and query tool"
 [workspace]
 members = ["crates/criv-wasm"]
 
+[features]
+default = []
+embeddings = ["dep:fastembed"]
+
 [dependencies]
 ast-grep-config = "0.42.2"
 ast-grep-core = "0.42.2"
@@ -21,6 +25,10 @@ ast-grep-language = { version = "0.42.2", default-features = false, features = [
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
 content_inspector = "0.2"
+fastembed = { version = "5", optional = true, default-features = false, features = [
+    "hf-hub-rustls-tls",
+    "ort-download-binaries-rustls-tls",
+] }
 fff-search = "0.7.3-nightly.ff81719"
 globset = "0.4"
 ignore = "0.4"

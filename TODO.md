@@ -90,7 +90,7 @@
 
 ### Note Retrieval
 
-- [ ] Add optional `fastembed` semantic note search.
+- [x] Add optional `fastembed` semantic note search.
 
 ### Obsidian Plugin
 

@@ -119,7 +119,7 @@ pub(crate) fn run(root: &Path, options: SearchOptions) -> Result<()> {
     let rows = match options.mode()? {
         Mode::Grep(text) => grep(&vault, &text, options.grep_mode.into(), &paths)?,
         Mode::Files(query) => files(&vault, &query)?,
-        Mode::Notes(text) => notes(&vault, &text, options.semantic),
+        Mode::Notes(text) => notes(root, &vault, &text, options.semantic)?,
         Mode::Structural(pattern) => structural_rows(structural::find(
             root,
             &vault,
@@ -202,7 +202,20 @@ fn files(vault: &Vault, query: &str) -> Result<Vec<Row>> {
         .collect())
 }
 
-fn notes(vault: &Vault, text: &str, semantic: bool) -> Vec<Row> {
+fn notes(root: &Path, vault: &Vault, text: &str, semantic: bool) -> Result<Vec<Row>> {
+    if semantic {
+        if !vault.config.embeddings {
+            return Err(CrivError::new(
+                "semantic note search requires `index.embeddings = true` in criv.toml",
+            ));
+        }
+        return semantic_notes(root, vault, text);
+    }
+
+    Ok(lexical_notes(vault, text))
+}
+
+fn lexical_notes(vault: &Vault, text: &str) -> Vec<Row> {
     let query_terms = tokenize(text);
     let mut scored = Vec::new();
     for note in &vault.notes {
@@ -212,7 +225,7 @@ fn notes(vault: &Vault, text: &str, semantic: bool) -> Vec<Row> {
     }
     scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
 
-    let mut rows = scored
+    scored
         .into_iter()
         .map(|(_, path, title, excerpt)| Row {
             path,
@@ -223,15 +236,128 @@ fn notes(vault: &Vault, text: &str, semantic: bool) -> Vec<Row> {
                 format!("{title} - {excerpt}")
             },
         })
-        .collect::<Vec<_>>();
-    if semantic {
-        rows.push(Row {
-            path: "semantic".into(),
-            line: None,
-            text: "semantic embeddings are not enabled in this MVP".into(),
-        });
+        .collect::<Vec<_>>()
+}
+
+#[cfg(feature = "embeddings")]
+fn semantic_notes(root: &Path, vault: &Vault, text: &str) -> Result<Vec<Row>> {
+    use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
+
+    if text.trim().is_empty() {
+        return Ok(Vec::new());
     }
-    rows
+
+    let cache_dir = root.join(".criv").join("embeddings");
+    std::fs::create_dir_all(&cache_dir)?;
+
+    let mut model = TextEmbedding::try_new(
+        InitOptions::new(EmbeddingModel::AllMiniLML6V2)
+            .with_cache_dir(cache_dir)
+            .with_show_download_progress(false),
+    )
+    .map_err(|err| CrivError::new(format!("failed to initialize fastembed: {err}")))?;
+
+    let query = format!("query: {}", text.trim());
+    let documents = vault
+        .notes
+        .iter()
+        .map(|note| format!("passage: {}\n{}", note_title(note), note.body))
+        .collect::<Vec<_>>();
+    if documents.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let query_embedding = model
+        .embed([query], None)
+        .map_err(|err| CrivError::new(format!("failed to embed query: {err}")))?
+        .into_iter()
+        .next()
+        .ok_or_else(|| CrivError::new("fastembed returned no query embedding"))?;
+    let document_embeddings = model
+        .embed(documents, None)
+        .map_err(|err| CrivError::new(format!("failed to embed notes: {err}")))?;
+
+    Ok(semantic_rows(
+        &vault.notes,
+        &query_embedding,
+        &document_embeddings,
+    ))
+}
+
+#[cfg(not(feature = "embeddings"))]
+fn semantic_notes(_root: &Path, _vault: &Vault, _text: &str) -> Result<Vec<Row>> {
+    Err(CrivError::new(
+        "semantic note search requires building criv with `--features embeddings`",
+    ))
+}
+
+#[cfg(any(feature = "embeddings", test))]
+fn semantic_rows(
+    notes: &[crate::vault::Note],
+    query_embedding: &[f32],
+    document_embeddings: &[Vec<f32>],
+) -> Vec<Row> {
+    let mut scored = notes
+        .iter()
+        .zip(document_embeddings)
+        .filter_map(|(note, embedding)| {
+            cosine_similarity(query_embedding, embedding).map(|score| {
+                (
+                    score,
+                    note.rel_path.clone(),
+                    note_title(note),
+                    semantic_excerpt(&note.body),
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    scored.sort_by(|left, right| {
+        right
+            .0
+            .partial_cmp(&left.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.1.cmp(&right.1))
+    });
+    scored
+        .into_iter()
+        .take(20)
+        .map(|(_, path, title, excerpt)| Row {
+            path,
+            line: None,
+            text: if excerpt.is_empty() {
+                title
+            } else {
+                format!("{title} - {excerpt}")
+            },
+        })
+        .collect()
+}
+
+#[cfg(any(feature = "embeddings", test))]
+fn cosine_similarity(left: &[f32], right: &[f32]) -> Option<f32> {
+    if left.len() != right.len() || left.is_empty() {
+        return None;
+    }
+    let mut dot = 0.0;
+    let mut left_norm = 0.0;
+    let mut right_norm = 0.0;
+    for (left, right) in left.iter().zip(right) {
+        dot += left * right;
+        left_norm += left * left;
+        right_norm += right * right;
+    }
+    if left_norm == 0.0 || right_norm == 0.0 {
+        return None;
+    }
+    Some(dot / (left_norm.sqrt() * right_norm.sqrt()))
+}
+
+#[cfg(any(feature = "embeddings", test))]
+fn semantic_excerpt(body: &str) -> String {
+    body.split_whitespace()
+        .take(28)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn note_score(note: &crate::vault::Note, query_terms: &[String]) -> Option<(i32, String)> {
@@ -413,5 +539,48 @@ mod tests {
         let body_score = note_score(&body, &tokenize("async")).unwrap().0;
         assert!(title_score > body_score);
         assert!(note_score(&body, &tokenize("async missing")).is_none());
+    }
+
+    #[test]
+    fn semantic_rows_rank_by_cosine_similarity() {
+        let one = crate::vault::Note {
+            path: "docs/one.md".into(),
+            rel_path: "docs/one.md".into(),
+            id: Some("ONE".into()),
+            kind: crate::vault::NoteKind::Doc,
+            title: Some("One".into()),
+            status: None,
+            body: "first body".into(),
+            headings: Vec::new(),
+            targets_symbols: Vec::new(),
+            targets_scope: Vec::new(),
+            target_pattern_refs: Vec::new(),
+            target_pattern_ids: Vec::new(),
+            policy_pattern_ids: Vec::new(),
+            governs: Vec::new(),
+            supersedes: Vec::new(),
+            superseded_by: Vec::new(),
+            wiki_links: Vec::new(),
+            frontmatter_error: None,
+        };
+        let two = crate::vault::Note {
+            title: Some("Two".into()),
+            rel_path: "docs/two.md".into(),
+            path: "docs/two.md".into(),
+            body: "second body".into(),
+            ..one.clone()
+        };
+
+        let rows = semantic_rows(&[one, two], &[1.0, 0.0], &[vec![0.2, 0.8], vec![0.9, 0.1]]);
+
+        assert_eq!(rows[0].path, "docs/two.md");
+        assert_eq!(rows[1].path, "docs/one.md");
+    }
+
+    #[test]
+    fn cosine_similarity_rejects_mismatched_or_zero_vectors() {
+        assert_eq!(cosine_similarity(&[1.0], &[1.0, 2.0]), None);
+        assert_eq!(cosine_similarity(&[0.0, 0.0], &[1.0, 0.0]), None);
+        assert_eq!(cosine_similarity(&[1.0, 0.0], &[1.0, 0.0]), Some(1.0));
     }
 }
