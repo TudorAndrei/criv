@@ -27,7 +27,9 @@ export async function summarizeState(raw: string): Promise<CrivStateSummary> {
     node_count: Array.isArray(state.graph?.nodes) ? state.graph.nodes.length : 0,
     edge_count: Array.isArray(state.graph?.edges) ? state.graph.edges.length : 0,
     source_count: Array.isArray(state["source-index"]) ? state["source-index"].length : 0,
-    pattern_count: Array.isArray(state["registered-patterns"]) ? state["registered-patterns"].length : 0,
+    pattern_count: Array.isArray(state["registered-patterns"])
+      ? state["registered-patterns"].length
+      : 0,
     first_node_id: state.graph?.nodes?.[0]?.id,
     first_edge: state.graph?.edges?.[0]
       ? `${state.graph.edges[0].from}:${state.graph.edges[0].kind}:${state.graph.edges[0].to}`

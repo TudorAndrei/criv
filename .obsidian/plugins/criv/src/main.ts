@@ -39,7 +39,7 @@ export default class CrivPlugin extends Plugin {
     try {
       const raw = await this.app.vault.adapter.read(this.settings.statePath);
       return await summarizeState(raw);
-    } catch (_err) {
+    } catch {
       return null;
     }
   }

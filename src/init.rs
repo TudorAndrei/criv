@@ -310,7 +310,7 @@ class CrivPlugin extends Plugin {
     try {
       const raw = await this.app.vault.adapter.read(this.settings.statePath);
       return await summarizeState(raw);
-    } catch (_err) {
+    } catch {
       return null;
     }
   }
@@ -324,7 +324,7 @@ class CrivPlugin extends Plugin {
       }
       this.state = state;
       return state;
-    } catch (_err) {
+    } catch {
       return null;
     }
   }
@@ -756,7 +756,7 @@ export default class CrivPlugin extends Plugin {
     try {
       const raw = await this.app.vault.adapter.read(this.settings.statePath);
       return await summarizeState(raw);
-    } catch (_err) {
+    } catch {
       return null;
     }
   }
@@ -770,7 +770,7 @@ export default class CrivPlugin extends Plugin {
       }
       this.state = state;
       return state;
-    } catch (_err) {
+    } catch {
       return null;
     }
   }
@@ -1123,7 +1123,9 @@ export async function summarizeState(raw: string): Promise<CrivStateSummary> {
     node_count: Array.isArray(state.graph?.nodes) ? state.graph.nodes.length : 0,
     edge_count: Array.isArray(state.graph?.edges) ? state.graph.edges.length : 0,
     source_count: Array.isArray(state["source-index"]) ? state["source-index"].length : 0,
-    pattern_count: Array.isArray(state["registered-patterns"]) ? state["registered-patterns"].length : 0,
+    pattern_count: Array.isArray(state["registered-patterns"])
+      ? state["registered-patterns"].length
+      : 0,
     first_node_id: state.graph?.nodes?.[0]?.id,
     first_edge: state.graph?.edges?.[0]
       ? `${state.graph.edges[0].from}:${state.graph.edges[0].kind}:${state.graph.edges[0].to}`
@@ -1183,21 +1185,19 @@ const PLUGIN_PACKAGE: &str = r#"{
     "build": "npm run build:wasm && tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "build:wasm": "wasm-pack build ../../../crates/criv-wasm --target bundler --out-dir ../../.obsidian/plugins/criv/pkg",
     "version": "node version-bump.mjs && git add manifest.json versions.json",
-    "lint": "eslint ."
+    "lint": "oxlint src esbuild.config.mjs version-bump.mjs",
+    "format": "oxfmt --write src esbuild.config.mjs version-bump.mjs",
+    "format:check": "oxfmt --check src esbuild.config.mjs version-bump.mjs"
   },
   "keywords": ["obsidian", "obsidian-plugin", "criv"],
   "license": "MIT",
   "devDependencies": {
-    "@eslint/js": "9.30.1",
     "@types/node": "^16.11.6",
     "esbuild": "0.25.5",
-    "eslint-plugin-obsidianmd": "0.1.9",
-    "globals": "14.0.0",
-    "jiti": "2.6.1",
+    "oxfmt": "^0.49.0",
+    "oxlint": "^1.64.0",
     "tslib": "2.4.0",
-    "typescript": "^5.8.3",
-    "typescript-eslint": "8.35.1",
-    "wasm-pack": "^0.13.1"
+    "typescript": "^5.8.3"
   },
   "dependencies": {
     "obsidian": "latest"
