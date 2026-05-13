@@ -21,3 +21,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[ADR-0008]] - Optional semantic note search
 - [[ADR-0009]] - Obsidian plugin as state consumer
 - [[ADR-0010]] - `criv init` installs agent runtime skills
+- [[ADR-0011]] - Embed runtime skill templates as assets

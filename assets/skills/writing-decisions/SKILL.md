@@ -1,8 +1,6 @@
 ---
-id: writing-decisions
-kind: doc
-title: Writing decisions
-tags: [criv, skill]
+name: writing-decisions
+description: Use when creating or updating criv ADRs under docs/adr with required metadata, governs scopes, and policy patterns.
 ---
 
 # Writing decisions

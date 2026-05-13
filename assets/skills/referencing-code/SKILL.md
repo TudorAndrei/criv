@@ -1,8 +1,6 @@
 ---
-id: referencing-code
-kind: doc
-title: Referencing code
-tags: [criv, skill]
+name: referencing-code
+description: Use when adding criv wiki-links from docs or ADRs to source files, symbols, line ranges, patterns, and notes.
 ---
 
 # Referencing code
