@@ -1,6 +1,7 @@
 [tools]
 hk = "1.45.0"
 actionlint = "1.7.12"
+"aqua:zizmorcore/zizmor" = "1.24.1"
 cocogitto = "7.0.0"
 "cargo:cargo-release" = "1.1.2"
 

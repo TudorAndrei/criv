@@ -21,13 +21,17 @@ mise install
 
 The mise postinstall hook runs `hk install --mise`, so Git hook execution goes
 through `mise x` and uses the pinned tool versions, including hk and
-actionlint. Release tooling is also pinned here: Cocogitto calculates the next
-SemVer version from conventional commits, and cargo-release updates Cargo
-workspace versions. `HK_PKL_BACKEND=pklr` keeps hk self-contained by avoiding a
-separate `pkl` CLI requirement.
+actionlint. GitHub Actions security analysis is pinned here too: zizmor checks
+workflow, composite action, and Dependabot definitions for risky CI/CD patterns.
+Release tooling is also pinned here: Cocogitto calculates the next SemVer
+version from conventional commits, and cargo-release updates Cargo workspace
+versions. `HK_PKL_BACKEND=pklr` keeps hk self-contained by avoiding a separate
+`pkl` CLI requirement.
 
 Workflow YAML under `.github/workflows/` is checked with actionlint in
-`pre-commit` and the full `check` hook.
+`pre-commit` and the full `check` hook. zizmor runs in offline mode in the same
+hooks so local validation does not require a GitHub token or network access.
+This follow-up hook decision is [[ADR-0018]].
 
 Manual task entry points are:
 

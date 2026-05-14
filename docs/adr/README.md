@@ -28,3 +28,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[ADR-0015]] - Size optimized release profile
 - [[ADR-0016]] - Conventional commit SemVer release automation
 - [[ADR-0017]] - Deprecate Intel macOS release archives
+- [[ADR-0018]] - Offline zizmor Actions security check

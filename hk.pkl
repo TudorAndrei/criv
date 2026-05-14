@@ -38,6 +38,18 @@ local actionlint = new Step {
   check = "actionlint"
 }
 
+local zizmor = new Step {
+  glob = List(
+    ".github/workflows/*.yml",
+    ".github/workflows/*.yaml",
+    "**/action.yml",
+    "**/action.yaml",
+    ".github/dependabot.yml",
+    ".github/dependabot.yaml",
+  )
+  check = "zizmor --offline --strict-collection ."
+}
+
 hooks {
   ["commit-msg"] {
     steps {
@@ -51,6 +63,7 @@ hooks {
     steps {
       ["cargo-fmt"] = cargo_fmt
       ["actionlint"] = actionlint
+      ["zizmor"] = zizmor
       ["criv-check"] = staged_docs
       ["criv-enforce"] = enforce_commit
     }
@@ -69,6 +82,7 @@ hooks {
       ["cargo-fmt"] = cargo_fmt
       ["cargo-clippy"] = cargo_clippy
       ["actionlint"] = actionlint
+      ["zizmor"] = zizmor
       ["cargo-test"] = cargo_test
       ["criv-check"] = staged_docs
       ["criv-enforce-ci"] = enforce_ci

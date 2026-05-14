@@ -54,8 +54,11 @@ mise install
 The mise postinstall hook runs `hk install --mise`, so Git hooks execute through
 `mise x` and use the tool versions from `mise.toml`. The config sets
 `HK_PKL_BACKEND=pklr`, so hk does not require a separate `pkl` CLI.
+Workflow definitions are checked with actionlint and zizmor; zizmor runs
+offline so local checks do not require a GitHub token.
 The hook policy is captured in `docs/tooling.md` and
-`docs/adr/0013-mise-managed-hk-hook-toolchain.md`.
+`docs/adr/0013-mise-managed-hk-hook-toolchain.md`, with the zizmor addition in
+`docs/adr/0018-offline-zizmor-actions-security-check.md`.
 
 Useful manual commands:
 
