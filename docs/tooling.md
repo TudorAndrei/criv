@@ -20,8 +20,12 @@ mise install
 ```
 
 The mise postinstall hook runs `hk install --mise`, so Git hook execution goes
-through `mise x` and uses the pinned hk version. `HK_PKL_BACKEND=pklr` keeps hk
-self-contained by avoiding a separate `pkl` CLI requirement.
+through `mise x` and uses the pinned tool versions, including hk and
+actionlint. `HK_PKL_BACKEND=pklr` keeps hk self-contained by avoiding a separate
+`pkl` CLI requirement.
+
+Workflow YAML under `.github/workflows/` is checked with actionlint in
+`pre-commit` and the full `check` hook.
 
 Manual task entry points are:
 

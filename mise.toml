@@ -1,5 +1,6 @@
 [tools]
 hk = "1.45.0"
+actionlint = "1.7.12"
 
 [env]
 HK_MISE = "1"

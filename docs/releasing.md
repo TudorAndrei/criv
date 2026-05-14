@@ -52,3 +52,10 @@ Current tag names use:
 
 - `vX.Y.Z` for the root CLI crate.
 - `criv-wasm-vX.Y.Z` for the WASM helper crate.
+
+Release binary automation should run only when a `v*` root CLI release tag is
+pushed. The workflow should build `criv` archives for Linux and macOS on amd64
+and arm64, plus Windows amd64 when practical. Asset names should be predictable
+by OS and architecture, include checksums, and preserve `criv --version` as the
+installer smoke test for future aqua and mise registry entries. This decision
+is captured in [[ADR-0014]].

@@ -7,15 +7,18 @@
 - CLI commands for `init`, `check`, `query`, `search`, `watch`, and `enforce`.
 - Real TOML/YAML parsing for `criv.toml` and markdown frontmatter.
 - Vault scanning, note resolution, wiki-link validation, ADR validation, supersession checks, and pattern ID collision checks.
-- A source graph foundation that extracts files, imports, symbols, and simple call edges for Rust, TypeScript, JavaScript, Python, and Go.
+- A tree-sitter-backed source graph that extracts files, imports, symbols, ranges, containment, and call edges for Rust, TypeScript, JavaScript, Python, and Go, with conservative fallback behavior where parsing fails.
 - State writing to `.criv/state.json`.
 - Content-addressed local snapshots under `.criv/snapshots/` plus `.criv/latest`.
-- Local snapshot diff support through `criv query diff <snapshot-a> <snapshot-b>`.
-- Obsidian sample-plugin-style TypeScript scaffold with a Rust WASM helper crate.
-- Stage-aware `criv enforce`, currently backed by validation plus a lexical policy-pattern fallback.
-- Foundation crates wired for CLI parsing, typed errors, glob matching, markdown event parsing, MIME classification, binary-file detection, stable snapshot hashing, YAML frontmatter parsing, and debounced watcher events.
+- Local snapshot diff support through `criv query diff <snapshot-a> <snapshot-b>` plus git-ref diff resolution.
+- fff-backed fuzzy file search, grep, partial-path resolution, and source watch integration.
+- ast-grep-backed direct search, configured pattern search, ADR policy search, state match storage, check failures, and enforcement.
+- Incremental watch rebuilds that reuse unchanged source graph parsing and unchanged pattern match results.
+- Obsidian sample-plugin-style TypeScript scaffold with source previews, pattern rendering, drift indicators, autocomplete, shared link-resolution fixtures, and a Rust WASM helper crate.
+- Stage-aware `criv enforce`, backed by validation, native import-policy checks, ast-grep policy checks, and graceful ESLint/Ruff integration.
+- Foundation crates wired for CLI parsing, typed errors, glob matching, markdown event parsing, MIME classification, binary-file detection, stable snapshot hashing, YAML frontmatter parsing, debounced watcher events, tree-sitter parsing, ast-grep search, fff indexing, and optional semantic embeddings.
 
-This is not yet the full spec implementation. The current source graph and structural search are conservative fallbacks intended to establish CLI behavior, graph shape, state format, and integration boundaries before linking the heavier backends.
+The TODO-defined spec-completeness items are now implemented. Remaining work should focus on hardening, fixtures, performance measurement, and release discipline rather than replacing placeholder backends.
 
 ## Architecture Direction
 
@@ -34,7 +37,9 @@ Backend boundaries to preserve:
 - `enforce` owns ADR policy evaluation and future ESLint/Ruff integration.
 - `crates/criv-wasm` owns plugin-side Rust helpers.
 
-## Next Milestones
+## Completed Milestones And Hardening Targets
+
+The milestones below have their first implementation pass complete. Keep them as architecture checkpoints and use them to guide hardening work before release.
 
 ### 1. Dependency Cleanup and Foundation Crates
 
@@ -151,8 +156,18 @@ Current tags:
 - `v0.1.0`
 - `criv-wasm-v0.1.0`
 
+Release automation target:
+
+- Maintain a GitHub Actions workflow that builds `criv` release binaries only when a `v*` release tag is pushed.
+- Build Linux and macOS assets on amd64 and arm64, and Windows amd64 if practical.
+- Archive each binary with predictable asset names so installers can select by OS and architecture.
+- Include checksums, and prefer GitHub artifact attestations when the workflow is ready for public release assets.
+- Keep `criv --version` working as the installer smoke test.
+- Use the release assets as the foundation for future aqua and mise registry entries.
+
 Before the next release:
 
+- Verify the GitHub Actions binary-build workflow by pushing the next `v*` release tag.
 - Run `cargo test --workspace`.
 - Run `cargo fmt --check`.
 - Run `target/debug/criv check`.

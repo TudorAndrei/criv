@@ -33,6 +33,11 @@ local enforce_ci = new Step {
   check = "cargo run --quiet -- enforce --stage ci"
 }
 
+local actionlint = new Step {
+  glob = List(".github/workflows/*.yml", ".github/workflows/*.yaml")
+  check = "actionlint"
+}
+
 hooks {
   ["commit-msg"] {
     steps {
@@ -45,6 +50,7 @@ hooks {
     stash = "git"
     steps {
       ["cargo-fmt"] = cargo_fmt
+      ["actionlint"] = actionlint
       ["criv-check"] = staged_docs
       ["criv-enforce"] = enforce_commit
     }
@@ -62,6 +68,7 @@ hooks {
     steps {
       ["cargo-fmt"] = cargo_fmt
       ["cargo-clippy"] = cargo_clippy
+      ["actionlint"] = actionlint
       ["cargo-test"] = cargo_test
       ["criv-check"] = staged_docs
       ["criv-enforce-ci"] = enforce_ci
