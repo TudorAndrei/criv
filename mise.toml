@@ -20,6 +20,10 @@ run = "hk fix"
 description = "Run the hk pre-commit hook"
 run = "hk run pre-commit"
 
+[tasks.commit-msg]
+description = "Run the hk commit-msg hook"
+run = "hk run commit-msg"
+
 [tasks.pre-push]
 description = "Run the hk pre-push hook"
 run = "hk run pre-push"

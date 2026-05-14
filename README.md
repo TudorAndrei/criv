@@ -58,6 +58,7 @@ The mise postinstall hook runs `hk install --mise`, so Git hooks execute through
 Useful manual commands:
 
 ```sh
+mise run commit-msg -- .git/COMMIT_EDITMSG
 mise run pre-commit
 mise run pre-push
 mise run check

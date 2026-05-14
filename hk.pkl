@@ -33,7 +33,17 @@ local enforce_ci = new Step {
   check = "cargo run --quiet -- enforce --stage ci"
 }
 
+local conventional_commit = new Step {
+  check = "hk util check-conventional-commit {{commit_msg_file}}"
+}
+
 hooks {
+  ["commit-msg"] {
+    steps {
+      ["conventional-commit"] = conventional_commit
+    }
+  }
+
   ["pre-commit"] {
     fix = true
     stash = "git"
