@@ -160,8 +160,8 @@ Release automation target:
 
 - Maintain a GitHub Actions workflow that builds `criv` release binaries only when a `v*` release tag is pushed.
 - Build Linux and macOS assets on amd64 and arm64, and Windows amd64 if practical.
-- Archive each binary with predictable asset names so installers can select by OS and architecture.
-- Include checksums, and prefer GitHub artifact attestations when the workflow is ready for public release assets.
+- Archive each binary with hk-style Rust target-triple names so installers can select by platform.
+- Include checksums and GitHub build provenance attestations for public release assets.
 - Keep `criv --version` working as the installer smoke test.
 - Use the release assets as the foundation for future aqua and mise registry entries.
 

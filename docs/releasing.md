@@ -54,8 +54,14 @@ Current tag names use:
 - `criv-wasm-vX.Y.Z` for the WASM helper crate.
 
 Release binary automation should run only when a `v*` root CLI release tag is
-pushed. The workflow should build `criv` archives for Linux and macOS on amd64
-and arm64, plus Windows amd64 when practical. Asset names should be predictable
-by OS and architecture, include checksums, and preserve `criv --version` as the
-installer smoke test for future aqua and mise registry entries. This decision
-is captured in [[ADR-0014]].
+pushed. The workflow should build `criv` archives named by Rust target triple:
+
+- `criv-x86_64-unknown-linux-gnu.tar.gz`
+- `criv-aarch64-unknown-linux-gnu.tar.gz`
+- `criv-x86_64-apple-darwin.tar.gz`
+- `criv-aarch64-apple-darwin.tar.gz`
+- `criv-x86_64-pc-windows-msvc.zip`
+
+Release assets should include `SHA256SUMS.txt`, GitHub build provenance
+attestations, and `criv --version` as the installer smoke test for future aqua
+and mise registry entries. This decision is captured in [[ADR-0014]].
