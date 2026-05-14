@@ -1,0 +1,7 @@
+[global]
+disable = ["MD013", "MD025", "MD041"]
+exclude = [
+    ".criv/**",
+    ".obsidian/**",
+    "target/**",
+]

@@ -5,7 +5,7 @@
 This repository currently contains a local Rust CLI and vault model. It implements:
 
 - `criv init` for idempotent vault scaffolding
-- `criv check` for note schema, ADR placement, wiki-link, target, pattern-reference, and supersession validation
+- `criv check` for Markdown formatting, note schema, ADR placement, wiki-link, target, pattern-reference, and supersession validation
 - `criv query next-adr-id`
 - `criv query targets <note-id>`
 - `criv query cites <note-id>`
@@ -32,9 +32,14 @@ The tree-sitter, ast-grep, fff-search, fastembed, native lint integrations, and 
 
 ```sh
 cargo run -- check
+cargo run -- check --fix
 cargo run -- query next-adr-id
 cargo run -- search --files main
 ```
+
+`criv check` embeds `rumdl` as a Rust crate for Markdown formatting checks. Use
+`criv check --fix` to apply fixable Markdown formatting changes before
+validation.
 
 ## Vault Layout
 

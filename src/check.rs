@@ -1,7 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::path::Path;
 
 use clap::{Args as ClapArgs, ValueEnum};
+use ignore::WalkBuilder;
+use rumdl_lib::config::Config as RumdlConfig;
+use rumdl_lib::fix_coordinator::FixCoordinator;
+use rumdl_lib::rule::{LintWarning, Rule};
+use rumdl_lib::rules::{all_rules, filter_rules};
 
 use crate::util::{is_adr_id, kebab};
 use crate::vault::{Note, NoteKind, ResolvedLink, Vault, source_fragment_path};
@@ -19,6 +25,8 @@ pub(crate) struct CheckOptions {
     format: Format,
     #[arg(long)]
     filter: Option<String>,
+    #[arg(long)]
+    fix: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,8 +55,9 @@ impl Diagnostic {
 }
 
 pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
+    let mut diagnostics = validate_markdown_format(root, options.fix)?;
     let vault = Vault::load(root)?;
-    let mut diagnostics = validate(&vault);
+    diagnostics.extend(validate(&vault));
     diagnostics.extend(
         policy_violations(root, &vault)?
             .into_iter()
@@ -83,6 +92,159 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn validate_markdown_format(root: &Path, fix: bool) -> Result<Vec<Diagnostic>> {
+    let config = load_rumdl_config(root)?;
+    let files = markdown_files(root, &config);
+    let mut diagnostics = Vec::new();
+
+    for rel_path in files {
+        let path = root.join(&rel_path);
+        let mut contents = crate::util::read_to_string(&path)?;
+        if fix {
+            apply_markdown_fixes(&path, &rel_path, &mut contents, &config, &mut diagnostics)?;
+        }
+
+        let rules = rules_for_file(&path, &config);
+        match rumdl_lib::lint(
+            &contents,
+            &rules,
+            false,
+            config.get_flavor_for_file(&path),
+            Some(path.clone()),
+            Some(&config),
+        ) {
+            Ok(warnings) => {
+                diagnostics.extend(
+                    warnings
+                        .into_iter()
+                        .map(|warning| markdown_diagnostic(&rel_path, warning)),
+                );
+            }
+            Err(err) => diagnostics.push(error(
+                "markdown-format",
+                &rel_path,
+                None,
+                format!("rumdl failed: {err}"),
+            )),
+        }
+    }
+
+    Ok(diagnostics)
+}
+
+fn load_rumdl_config(root: &Path) -> Result<RumdlConfig> {
+    let mut config = match rumdl_lib::config::SourcedConfig::discover_config_for_dir(root, root) {
+        Some(path) => rumdl_lib::config::SourcedConfig::load_config_for_path(&path, root)
+            .map_err(|err| CrivError::new(format!("failed to load rumdl config: {err}")))?,
+        None => RumdlConfig::default(),
+    };
+    config.project_root = Some(root.to_path_buf());
+    Ok(config)
+}
+
+fn markdown_files(root: &Path, config: &RumdlConfig) -> Vec<String> {
+    let mut files = WalkBuilder::new(root)
+        .git_ignore(config.global.respect_gitignore)
+        .git_global(config.global.respect_gitignore)
+        .git_exclude(config.global.respect_gitignore)
+        .build()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry
+                .file_type()
+                .is_some_and(|file_type| file_type.is_file())
+        })
+        .filter_map(|entry| {
+            let path = entry.into_path();
+            is_markdown_file(&path).then(|| relative_path(root, &path))
+        })
+        .filter(|path| {
+            config.global.include.is_empty()
+                || config
+                    .global
+                    .include
+                    .iter()
+                    .any(|pattern| crate::util::glob_matches(pattern, path))
+        })
+        .filter(|path| {
+            !config
+                .global
+                .exclude
+                .iter()
+                .any(|pattern| crate::util::glob_matches(pattern, path))
+        })
+        .collect::<Vec<_>>();
+    files.sort();
+    files
+}
+
+fn apply_markdown_fixes(
+    path: &Path,
+    rel_path: &str,
+    contents: &mut String,
+    config: &RumdlConfig,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Result<()> {
+    let rules = rules_for_file(path, config);
+    let original = contents.clone();
+    let result = FixCoordinator::new()
+        .apply_fixes_iterative(&rules, &[], contents, config, 10, Some(path))
+        .map_err(|err| CrivError::new(format!("rumdl failed to fix {rel_path}: {err}")))?;
+    if *contents != original {
+        fs::write(path, contents.as_bytes())?;
+    }
+
+    if !result.converged {
+        let detail = if result.conflicting_rules.is_empty() {
+            "fix loop did not converge".into()
+        } else {
+            format!(
+                "fix loop did not converge; conflicting rules: {}",
+                result.conflicting_rules.join(", ")
+            )
+        };
+        diagnostics.push(error("markdown-format", rel_path, None, detail));
+    }
+
+    Ok(())
+}
+
+fn rules_for_file(path: &Path, config: &RumdlConfig) -> Vec<Box<dyn Rule>> {
+    let rules = filter_rules(&all_rules(config), &config.global);
+    let ignored_rules = config.get_ignored_rules_for_file(path);
+    if ignored_rules.is_empty() {
+        return rules;
+    }
+
+    rules
+        .into_iter()
+        .filter(|rule| !ignored_rules.contains(rule.name()))
+        .collect()
+}
+
+fn markdown_diagnostic(path: &str, warning: LintWarning) -> Diagnostic {
+    let rule = warning.rule_name.as_deref().unwrap_or("rumdl");
+    error(
+        "markdown-format",
+        path,
+        Some(warning.line),
+        format!("{rule}: {}", warning.message),
+    )
+}
+
+fn is_markdown_file(path: &Path) -> bool {
+    mime_guess::from_path(path)
+        .first()
+        .is_some_and(|mime| mime.essence_str() == "text/markdown")
+}
+
+fn relative_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 struct PolicyViolation {
@@ -604,6 +766,31 @@ mod tests {
                 .iter()
                 .any(|diag| diag.code == "unknown-superseded-by")
         );
+    }
+
+    #[test]
+    fn rumdl_fixes_markdown_content_in_process() {
+        let path = unique_temp_file("criv-rumdl-fix", "README.md");
+        let mut contents = "# Title\n\n\nBody\n".to_string();
+        fs::write(&path, &contents).unwrap();
+        let config = RumdlConfig::default();
+        let mut diagnostics = Vec::new();
+
+        apply_markdown_fixes(&path, "README.md", &mut contents, &config, &mut diagnostics).unwrap();
+
+        assert!(diagnostics.is_empty());
+        assert_eq!(contents, "# Title\n\nBody\n");
+        assert_eq!(fs::read_to_string(&path).unwrap(), contents);
+    }
+
+    fn unique_temp_file(prefix: &str, name: &str) -> std::path::PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("{prefix}-{}-{unique}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        dir.join(name)
     }
 
     fn empty_decision(id: &str) -> Note {

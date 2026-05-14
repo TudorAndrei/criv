@@ -19,6 +19,9 @@ target/debug/criv watch --once
 target/debug/criv query diff latest latest
 ```
 
+`target/debug/criv check` embeds `rumdl` as a Rust crate, so Markdown formatting
+does not require a separate `rumdl` executable.
+
 Build plugin artifacts when the Obsidian plugin is part of the release:
 
 ```sh
