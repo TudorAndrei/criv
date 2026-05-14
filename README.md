@@ -1,76 +1,79 @@
 # criv
 
-`criv` turns a repository's `docs/` folder into a validated map of documentation, code references, and architectural decisions.
+`criv` is a local CLI for keeping repository documentation connected to the code
+it describes. It turns a repo's `docs/` folder into a validated knowledge graph
+of notes, source references, architectural decisions, policy patterns, and local
+state that other tools can read.
 
-This repository currently contains a local Rust CLI and vault model. It implements:
+## What
 
-- `criv init` for idempotent vault scaffolding
-- `criv check` for Markdown formatting, note schema, ADR placement, wiki-link, target, pattern-reference, and supersession validation
-- `criv query next-adr-id`
-- `criv query targets <note-id>`
-- `criv query cites <note-id>`
-- `criv query cited-by <note-id>`
-- `criv query governs <ADR-ID>`
-- `criv query governing <symbol>`
-- `criv query coverage`
-- `criv query nodes [--kind code|doc] [--without-docs]`
-- `criv query callers <symbol>`
-- `criv query callees <symbol>`
-- `criv query attack-surface`
-- `criv query diff <snapshot-a> <snapshot-b>`
-- `criv query orphan-docs`
-- `criv search --files <query>`
-- `criv search --grep <text>`
-- `criv search --notes <text>`
-- lexical structural-search fallbacks for `criv search '<pattern>'`, `--pattern-id`, and `--rule`
-- `criv watch --once` state and local snapshot writing
-- `criv enforce --stage commit|push|ci`
+`criv` gives a codebase an executable documentation layer:
 
-The tree-sitter, ast-grep, fff-search, fastembed, native lint integrations, and full Obsidian rendering integrations are intentionally isolated as the next implementation layer.
+- `criv init` creates the vault files, ADR directory, agent runtime skills, and
+  Obsidian companion plugin scaffold.
+- `criv check` validates Markdown formatting, note schema, ADR placement,
+  wiki-links, source targets, pattern references, and ADR supersession rules.
+- `criv watch --once` writes `.criv/state.json` and content-addressed local
+  snapshots for downstream tools.
+- `criv query ...` asks the graph about targets, citations, ADR governance,
+  coverage, callers, callees, attack surface, diffs, and orphaned docs.
+- `criv search ...` searches files, text, notes, and structural policy patterns.
+- `criv enforce --stage commit|push|ci` runs stage-aware documentation and policy
+  checks.
 
-## Try It
+`.criv/` is local generated state and should stay ignored by git.
+
+## Why
+
+Most repository documentation drifts because it is written beside the code but
+not checked against it. `criv` makes that relationship explicit:
+
+- Docs can point at source files, symbols, structural patterns, and notes.
+- ADRs can govern the code paths and policy patterns they affect.
+- Validation catches broken wiki-links, unresolved source references, malformed
+  metadata, and unsafe ADR changes before they land.
+- Generated state gives editors, automation, and review tools a stable local
+  snapshot of the documentation graph.
+
+The goal is not to replace source control, linters, or an editor. The goal is to
+make design knowledge inspectable and enforceable in the same local workflow as
+the code.
+
+## Install
+
+Install the Rust CLI from the repository:
 
 ```sh
-cargo run -- check
-cargo run -- check --fix
-cargo run -- query next-adr-id
-cargo run -- search --files main
+cargo install --git https://github.com/TudorAndrei/criv criv
 ```
 
-`criv check` embeds `rumdl` as a Rust crate for Markdown formatting checks. Use
-`criv check --fix` to apply fixable Markdown formatting changes before
-validation.
-
-## Git Hooks
-
-This repository includes an [hk](https://hk.jdx.dev/) configuration in `hk.pkl`
-and a [mise](https://mise.jdx.dev/) integration in `mise.toml`. Install the
-project tools with:
+For local development in this repository, install the pinned project tools:
 
 ```sh
 mise install
 ```
 
 The mise postinstall hook runs `hk install --mise`, so Git hooks execute through
-`mise x` and use the tool versions from `mise.toml`. The config sets
-`HK_PKL_BACKEND=pklr`, so hk does not require a separate `pkl` CLI.
-Workflow definitions are checked with actionlint and zizmor; zizmor runs
-offline so local checks do not require a GitHub token.
-The hook policy is captured in `docs/tooling.md` and
-`docs/adr/0013-mise-managed-hk-hook-toolchain.md`, with the zizmor addition in
-`docs/adr/0018-offline-zizmor-actions-security-check.md`.
+`mise x` and use the tool versions from `mise.toml`. The hook policy is
+documented in [docs/tooling.md](docs/tooling.md).
 
-Useful manual commands:
+You can also run the CLI from a checkout without installing it globally:
 
 ```sh
-mise run commit-msg -- .git/COMMIT_EDITMSG
-mise run pre-commit
-mise run pre-push
-mise run check
-mise run fix
+cargo run -- check
+cargo run -- query coverage
+cargo run -- search --files main
 ```
 
-## Vault Layout
+## How
+
+Initialize a repository:
+
+```sh
+criv init
+```
+
+This creates the default vault layout:
 
 ```text
 criv.toml
@@ -79,8 +82,89 @@ docs/
   skills/
   adr/
 .criv/
+.obsidian/plugins/criv/
 ```
 
-`.criv/` is local state and is ignored by git.
+Use `--no-skills` or `--no-obsidian` if you do not want those generated
+templates:
+
+```sh
+criv init --no-skills
+criv init --no-obsidian
+```
+
+Check the vault before committing documentation or code changes:
+
+```sh
+criv check
+criv check --fix
+```
+
+Refresh generated state when docs or source files change:
+
+```sh
+criv watch --once
+```
+
+Ask the graph focused questions:
+
+```sh
+criv query next-adr-id
+criv query coverage
+criv query nodes --kind code --without-docs
+criv query governs ADR-0001
+criv query governing src/main.rs
+criv query diff latest latest
+```
+
+Search code and notes:
+
+```sh
+criv search --files main
+criv search --grep "watch --once"
+criv search --notes "Obsidian"
+criv search --rule docs/policies/no-unsafe.yml
+```
+
+Run the same enforcement path used by hooks and CI:
+
+```sh
+criv enforce --stage commit
+criv enforce --stage push
+criv enforce --stage ci
+```
+
+In this repository, the common manual tasks are:
+
+```sh
+mise run pre-commit
+mise run pre-push
+mise run check
+mise run fix
+```
+
+## Obsidian Extension
+
+`criv init` installs an Obsidian companion plugin scaffold under
+`.obsidian/plugins/criv/` unless `--no-obsidian` is passed. The plugin is a UI
+over `.criv/state.json`: it reads the CLI-generated graph state, validates the
+schema version, renders source and pattern context, offers source autocomplete,
+and delegates shared helper logic to the `criv-wasm` crate.
+
+Build the plugin when working on its templates or WASM helper:
+
+```sh
+cd .obsidian/plugins/criv
+npm install
+npm run build
+```
+
+Then run `criv watch --once` from the repository root so Obsidian has fresh
+state to read.
+
+The plugin intentionally stays a consumer of local state. Source editing,
+validation, policy enforcement, and graph generation remain owned by the CLI.
+
+## Releases
 
 Release steps are documented in [docs/releasing.md](docs/releasing.md).
