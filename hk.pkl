@@ -1,0 +1,72 @@
+amends "package://github.com/jdx/hk/releases/download/v1.45.0/hk@1.45.0#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v1.45.0/hk@1.45.0#/Builtins.pkl"
+
+local cargo_fmt = (Builtins.cargo_fmt) {
+  workspace_indicator = "Cargo.toml"
+}
+
+local cargo_clippy = (Builtins.cargo_clippy) {
+  workspace_indicator = "Cargo.toml"
+}
+
+local staged_docs = new Step {
+  glob = List("**/*.md", "criv.toml", ".rumdl.toml")
+  check_first = true
+  check = "cargo run --quiet -- check"
+  fix = "cargo run --quiet -- check --fix"
+}
+
+local enforce_commit = new Step {
+  check = "cargo run --quiet -- enforce --stage commit"
+}
+
+local enforce_push = new Step {
+  check = "cargo run --quiet -- enforce --stage push"
+}
+
+local cargo_test = new Step {
+  glob = List("**/*.rs", "Cargo.toml", "Cargo.lock")
+  check = "cargo test --workspace"
+}
+
+local enforce_ci = new Step {
+  check = "cargo run --quiet -- enforce --stage ci"
+}
+
+hooks {
+  ["pre-commit"] {
+    fix = true
+    stash = "git"
+    steps {
+      ["cargo-fmt"] = cargo_fmt
+      ["criv-check"] = staged_docs
+      ["criv-enforce"] = enforce_commit
+    }
+  }
+
+  ["pre-push"] {
+    steps {
+      ["cargo-clippy"] = cargo_clippy
+      ["cargo-test"] = cargo_test
+      ["criv-enforce"] = enforce_push
+    }
+  }
+
+  ["check"] {
+    steps {
+      ["cargo-fmt"] = cargo_fmt
+      ["cargo-clippy"] = cargo_clippy
+      ["cargo-test"] = cargo_test
+      ["criv-check"] = staged_docs
+      ["criv-enforce-ci"] = enforce_ci
+    }
+  }
+
+  ["fix"] {
+    fix = true
+    steps {
+      ["cargo-fmt"] = cargo_fmt
+      ["criv-check"] = staged_docs
+    }
+  }
+}

@@ -41,6 +41,29 @@ cargo run -- search --files main
 `criv check --fix` to apply fixable Markdown formatting changes before
 validation.
 
+## Git Hooks
+
+This repository includes an [hk](https://hk.jdx.dev/) configuration in `hk.pkl`
+and a [mise](https://mise.jdx.dev/) integration in `mise.toml`. Install the
+project tools with:
+
+```sh
+mise install
+```
+
+The mise postinstall hook runs `hk install --mise`, so Git hooks execute through
+`mise x` and use the tool versions from `mise.toml`. The config sets
+`HK_PKL_BACKEND=pklr`, so hk does not require a separate `pkl` CLI.
+
+Useful manual commands:
+
+```sh
+mise run pre-commit
+mise run pre-push
+mise run check
+mise run fix
+```
+
 ## Vault Layout
 
 ```text

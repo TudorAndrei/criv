@@ -1,0 +1,25 @@
+[tools]
+hk = "1.45.0"
+
+[env]
+HK_MISE = "1"
+HK_PKL_BACKEND = "pklr"
+
+[hooks]
+postinstall = "hk install --mise"
+
+[tasks.check]
+description = "Run all hk checks against the repository"
+run = "hk check --all"
+
+[tasks.fix]
+description = "Run hk fixes against modified files"
+run = "hk fix"
+
+[tasks.pre-commit]
+description = "Run the hk pre-commit hook"
+run = "hk run pre-commit"
+
+[tasks.pre-push]
+description = "Run the hk pre-push hook"
+run = "hk run pre-push"

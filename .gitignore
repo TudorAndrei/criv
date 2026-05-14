@@ -1,3 +1,5 @@
 /target
 .criv/
 .obsidian/plugins/criv/node_modules/
+hk.local.pkl
+.config/hk.local.pkl
