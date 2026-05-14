@@ -54,6 +54,8 @@ mise install
 The mise postinstall hook runs `hk install --mise`, so Git hooks execute through
 `mise x` and use the tool versions from `mise.toml`. The config sets
 `HK_PKL_BACKEND=pklr`, so hk does not require a separate `pkl` CLI.
+The hook policy is captured in `docs/tooling.md` and
+`docs/adr/0013-mise-managed-hk-hook-toolchain.md`.
 
 Useful manual commands:
 

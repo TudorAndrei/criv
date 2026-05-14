@@ -3,7 +3,7 @@ docs = "docs"
 adr = "adr"
 
 [source]
-roots = ["src", "lib"]
+roots = ["src", "lib", "hk.pkl", "mise.toml", "README.md"]
 exclude = ["**/target/**", "**/node_modules/**"]
 languages = []
 
