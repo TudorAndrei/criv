@@ -79,9 +79,13 @@ pushed. The workflow should build `criv` archives named by Rust target triple:
 
 - `criv-x86_64-unknown-linux-gnu.tar.gz`
 - `criv-aarch64-unknown-linux-gnu.tar.gz`
-- `criv-x86_64-apple-darwin.tar.gz`
 - `criv-aarch64-apple-darwin.tar.gz`
 - `criv-x86_64-pc-windows-msvc.zip`
+
+Intel macOS release archives are deprecated by [[ADR-0017]] because the hosted
+Intel macOS runner is the slowest release job. Apple Silicon macOS remains the
+supported macOS binary target. Reintroduce `criv-x86_64-apple-darwin.tar.gz`
+only if there is measured user demand or a faster runner path.
 
 Release assets should include `SHA256SUMS.txt`, GitHub build provenance
 attestations, and `criv --version` as the installer smoke test for future aqua
