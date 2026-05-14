@@ -137,6 +137,8 @@
 }
 
 .criv-source-preview {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
   background: var(--background-primary-alt);
   color: var(--text-normal);
   font-size: 11px;
@@ -146,6 +148,38 @@
   overflow: auto;
   padding: 8px;
   tab-size: 2;
+}
+
+.criv-source-lines {
+  background: var(--background-secondary);
+  border-right: 1px solid var(--background-modifier-border);
+  color: var(--text-faint);
+  font: inherit;
+  line-height: inherit;
+  margin: 0;
+  padding: 8px 7px 8px 0;
+  text-align: right;
+  user-select: none;
+}
+
+.criv-source-code {
+  min-width: 0;
+}
+
+.criv-source-code,
+.criv-source-code pre,
+.criv-source-code code {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.criv-source-code pre {
+  background: transparent;
+  margin: 0;
+  padding: 8px;
+}
+
+.criv-source-code code {
   white-space: pre;
 }
 

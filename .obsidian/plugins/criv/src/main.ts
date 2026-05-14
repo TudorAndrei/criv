@@ -1,10 +1,13 @@
 import {
+  App,
+  Component,
   Editor,
   EditorPosition,
   EditorSuggest,
   EditorSuggestContext,
   EditorSuggestTriggerInfo,
   ItemView,
+  MarkdownRenderer,
   MarkdownPostProcessorContext,
   Notice,
   Plugin,
@@ -110,7 +113,9 @@ export default class CrivPlugin extends Plugin {
     this.registerDomEvent(document, "mouseover", (event) => this.handleDocumentMouseOver(event));
     this.registerDomEvent(document, "mouseout", (event) => this.handleDocumentMouseOut(event));
     this.registerEditorSuggest(new CrivSourceSuggest(this));
-    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refreshSourcePanel()));
+    this.registerEvent(
+      this.app.workspace.on("active-leaf-change", () => this.refreshSourcePanel()),
+    );
     this.registerEvent(this.app.metadataCache.on("changed", () => this.refreshSourcePanel()));
     this.addSettingTab(new CrivSettingTab(this.app, this));
     this.app.workspace.onLayoutReady(() => {
@@ -331,7 +336,7 @@ export default class CrivPlugin extends Plugin {
       if (request !== this.hoverRequest || this.hoverEl !== preview) {
         return;
       }
-      renderPreview(preview, data, false);
+      await renderPreview(this.app, this, preview, data, false);
     } catch {
       if (request !== this.hoverRequest || this.hoverEl !== preview) {
         return;
@@ -353,7 +358,10 @@ export default class CrivPlugin extends Plugin {
 }
 
 class CrivSourceView extends ItemView {
-  constructor(leaf: WorkspaceLeaf, private plugin: CrivPlugin) {
+  constructor(
+    leaf: WorkspaceLeaf,
+    private plugin: CrivPlugin,
+  ) {
     super(leaf);
   }
 
@@ -424,7 +432,7 @@ class CrivSourceView extends ItemView {
 
     try {
       const preview = await this.plugin.sourcePreview(source);
-      renderPreview(card, preview, true);
+      await renderPreview(this.app, this, card, preview, true);
     } catch {
       renderPreviewError(card, source.entry.path);
     }
@@ -566,7 +574,8 @@ function resolveSource(state: CrivState, target: string): LinkedSource | null {
   const entry =
     entries.find((candidate) => candidate.path === normalized) ??
     entries.find(
-      (candidate) => candidate.path.endsWith(normalized) || candidate.path.split("/").pop() === normalized,
+      (candidate) =>
+        candidate.path.endsWith(normalized) || candidate.path.split("/").pop() === normalized,
     );
   if (!entry) {
     return null;
@@ -602,7 +611,13 @@ function patternTooltip(state: CrivState, id: string): string {
   return `${id}: ${count} match${count === 1 ? "" : "es"}`;
 }
 
-function renderPreview(container: HTMLElement, preview: SourcePreview, compact: boolean): void {
+async function renderPreview(
+  app: App,
+  component: Component,
+  container: HTMLElement,
+  preview: SourcePreview,
+  compact: boolean,
+): Promise<void> {
   container.querySelector(".criv-preview-loading")?.remove();
   container.querySelector(".criv-preview-error")?.remove();
   const existing = container.querySelector(".criv-preview-body");
@@ -618,10 +633,13 @@ function renderPreview(container: HTMLElement, preview: SourcePreview, compact: 
   if (preview.truncated) {
     meta.createSpan({ text: "truncated" });
   }
-  body.createEl("pre", {
-    cls: "criv-source-preview",
-    text: withLineNumbers(preview.text, preview.startLine),
+  const source = body.createDiv({ cls: "criv-source-preview" });
+  source.createEl("pre", {
+    cls: "criv-source-lines",
+    text: lineNumbers(preview.text, preview.startLine),
   });
+  const code = source.createDiv({ cls: "criv-source-code" });
+  await MarkdownRenderer.render(app, fencedCodeBlock(preview), code, preview.path, component);
 }
 
 function renderPreviewError(container: HTMLElement, path: string): void {
@@ -655,11 +673,21 @@ function parseLineRange(fragment: string | null): { start: number; end: number }
   return { start: Math.max(1, start), end: Math.max(start, end) };
 }
 
-function withLineNumbers(text: string, startLine: number): string {
+function lineNumbers(text: string, startLine: number): string {
   return text
     .split("\n")
-    .map((line, index) => `${String(startLine + index).padStart(4, " ")}  ${line}`)
+    .map((_line, index) => String(startLine + index).padStart(4, " "))
     .join("\n");
+}
+
+function fencedCodeBlock(preview: SourcePreview): string {
+  const language = /^[a-z0-9_-]+$/i.test(preview.language) ? preview.language : "text";
+  const longestFence = Math.max(
+    2,
+    ...Array.from(preview.text.matchAll(/`+/g), (match) => match[0].length),
+  );
+  const fence = "`".repeat(longestFence + 1);
+  return `${fence}${language}\n${preview.text}\n${fence}`;
 }
 
 function languageForPath(path: string): string {
@@ -782,13 +810,16 @@ class CrivSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("External editor URL")
-      .setDesc("URL template for opening source files. Use {path} for the repo-relative source path.")
+      .setDesc(
+        "URL template for opening source files. Use {path} for the repo-relative source path.",
+      )
       .addText((text) =>
         text
           .setPlaceholder("vscode://file/{path}")
           .setValue(this.plugin.settings.externalEditorUrl)
           .onChange(async (value) => {
-            this.plugin.settings.externalEditorUrl = value.trim() || DEFAULT_SETTINGS.externalEditorUrl;
+            this.plugin.settings.externalEditorUrl =
+              value.trim() || DEFAULT_SETTINGS.externalEditorUrl;
             await this.plugin.saveSettings();
           }),
       );
