@@ -481,7 +481,7 @@ dependencies = [
 
 [[package]]
 name = "criv"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ast-grep-config",
  "ast-grep-core",
@@ -513,7 +513,7 @@ dependencies = [
 
 [[package]]
 name = "criv-wasm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde-wasm-bindgen",
