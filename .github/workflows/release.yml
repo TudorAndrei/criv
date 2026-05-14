@@ -122,13 +122,14 @@ jobs:
         shell: bash
         run: |
           cd dist
-          sha256sum criv-* > SHA256SUMS.txt
+          sha256sum criv-*.tar.gz criv-*.zip > SHA256SUMS.txt
 
       - name: Attest release assets
         uses: actions/attest-build-provenance@v4.1.0
         with:
           subject-path: |
-            dist/criv-*
+            dist/criv-*.tar.gz
+            dist/criv-*.zip
             dist/SHA256SUMS.txt
 
       - name: Publish release assets
@@ -139,4 +140,4 @@ jobs:
         run: |
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || \
             gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes "criv $GITHUB_REF_NAME"
-          gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.zip dist/SHA256SUMS.txt --clobber
