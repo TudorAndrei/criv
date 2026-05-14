@@ -65,3 +65,9 @@ pushed. The workflow should build `criv` archives named by Rust target triple:
 Release assets should include `SHA256SUMS.txt`, GitHub build provenance
 attestations, and `criv --version` as the installer smoke test for future aqua
 and mise registry entries. This decision is captured in [[ADR-0014]].
+
+Release binaries use the workspace release profile in [[Cargo.toml]]: symbols
+are stripped, size optimization is enabled, LTO runs at link time, codegen uses
+one unit, and release panics abort. This keeps downloadable artifacts smaller
+without requiring nightly Rust or post-build binary packing. The profile
+decision is captured in [[ADR-0015]].

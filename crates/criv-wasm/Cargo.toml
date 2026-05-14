@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 description = "WASM helpers for the criv Obsidian plugin"
+repository = "https://github.com/TudorAndrei/criv"
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]

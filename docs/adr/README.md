@@ -25,3 +25,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[ADR-0012]] - ADR immutability enforcement
 - [[ADR-0013]] - Mise managed hk hook toolchain
 - [[ADR-0014]] - Tag triggered release binary workflow
+- [[ADR-0015]] - Size optimized release profile
