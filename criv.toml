@@ -3,7 +3,7 @@ docs = "docs"
 adr = "adr"
 
 [source]
-roots = ["src", "lib", ".github/workflows", "Cargo.toml", "hk.pkl", "mise.toml", "README.md"]
+roots = ["src", "lib", "scripts", ".github/workflows", "Cargo.toml", "cog.toml", "hk.pkl", "mise.toml", "README.md"]
 exclude = ["**/target/**", "**/node_modules/**"]
 languages = []
 

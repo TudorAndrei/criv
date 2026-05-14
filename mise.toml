@@ -1,6 +1,8 @@
 [tools]
 hk = "1.45.0"
 actionlint = "1.7.12"
+cocogitto = "7.0.0"
+"cargo:cargo-release" = "1.1.2"
 
 [env]
 HK_MISE = "1"
@@ -16,6 +18,14 @@ run = "hk check --all"
 [tasks.fix]
 description = "Run hk fixes against modified files"
 run = "hk fix"
+
+[tasks.release-plan]
+description = "Show the next SemVer version from conventional commits"
+run = "cog bump --dry-run --auto"
+
+[tasks.release-auto]
+description = "Cut a tag-only release from conventional commits"
+run = "bash scripts/release-auto.sh"
 
 [tasks.pre-commit]
 description = "Run the hk pre-commit hook"

@@ -21,8 +21,10 @@ mise install
 
 The mise postinstall hook runs `hk install --mise`, so Git hook execution goes
 through `mise x` and uses the pinned tool versions, including hk and
-actionlint. `HK_PKL_BACKEND=pklr` keeps hk self-contained by avoiding a separate
-`pkl` CLI requirement.
+actionlint. Release tooling is also pinned here: Cocogitto calculates the next
+SemVer version from conventional commits, and cargo-release updates Cargo
+workspace versions. `HK_PKL_BACKEND=pklr` keeps hk self-contained by avoiding a
+separate `pkl` CLI requirement.
 
 Workflow YAML under `.github/workflows/` is checked with actionlint in
 `pre-commit` and the full `check` hook.
@@ -35,6 +37,8 @@ mise run pre-commit
 mise run pre-push
 mise run check
 mise run fix
+mise run release-plan
+mise run release-auto
 ```
 
 Use `hk validate` after editing `hk.pkl`. Prefer hk built-ins when one exists;

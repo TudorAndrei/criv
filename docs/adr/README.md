@@ -26,3 +26,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[ADR-0013]] - Mise managed hk hook toolchain
 - [[ADR-0014]] - Tag triggered release binary workflow
 - [[ADR-0015]] - Size optimized release profile
+- [[ADR-0016]] - Conventional commit SemVer release automation

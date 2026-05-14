@@ -6,7 +6,8 @@ title: Releasing criv
 
 # Releasing criv
 
-Use `cargo-release` for workspace release tagging and version changes.
+Use Cocogitto to calculate the next SemVer version from conventional commits,
+then use `cargo-release` to update workspace Cargo versions.
 
 Before preparing a release, run:
 
@@ -33,11 +34,29 @@ This runs `wasm-pack` through the plugin build script. If only the Rust CLI is
 being released and the generated plugin scaffold is unchanged, document that
 choice in the release notes.
 
+Preview the next automatically selected version:
+
+```sh
+mise run release-plan
+```
+
 For a tag-only release:
 
 ```sh
-cargo release patch --workspace --no-publish
+mise run release-auto
 ```
+
+`release-auto` is implemented by [[scripts/release-auto.sh]]. It requires a
+clean `main` branch, asks Cocogitto for the next version with
+`cog bump --dry-run --auto`, updates workspace Cargo versions, runs the
+pre-release checks above, commits the version bump, creates `vX.Y.Z` and
+`criv-wasm-vX.Y.Z`, and pushes the commit and tags.
+
+Conventional commits drive the automatic bump: `fix` produces a patch release,
+`feat` produces a minor release, and `!` or `BREAKING CHANGE:` produces a major
+release. While criv is still in `0.y.z`, Cocogitto will not automatically select
+`1.0.0`; cut that intentionally with a manual versioned release if needed. This
+decision is captured in [[ADR-0016]].
 
 For crates.io publishing, confirm the package metadata first:
 
@@ -46,7 +65,9 @@ cargo package --workspace --allow-dirty
 cargo publish --dry-run
 ```
 
-Then run the matching `cargo release` command without `--no-publish`.
+Then run the matching `cargo release` command without `--no-publish`. Crates.io
+publishing remains manual for now; `release-auto` only cuts the tag-triggered
+binary release.
 
 Current tag names use:
 
