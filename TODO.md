@@ -1,1 +1,0 @@
-- add syntax highlight in obsidian plugin
