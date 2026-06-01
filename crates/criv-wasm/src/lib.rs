@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -5,11 +7,12 @@ use wasm_bindgen::prelude::*;
 pub fn summarize_state(raw: &str) -> Result<JsValue, JsValue> {
     let state = serde_json::from_str::<CrivState>(raw)
         .map_err(|err| JsValue::from_str(&format!("invalid criv state JSON: {err}")))?;
+    let source_paths = unique_source_paths(&state.source_index);
     serde_wasm_bindgen::to_value(&StateSummary {
         schema: state.schema,
         node_count: state.graph.nodes.len(),
         edge_count: state.graph.edges.len(),
-        source_count: state.source_index.len(),
+        source_count: source_paths.len(),
         pattern_count: state.registered_patterns.len(),
         first_node_id: state.graph.nodes.first().map(|node| node.id.clone()),
         first_edge: state
@@ -17,9 +20,18 @@ pub fn summarize_state(raw: &str) -> Result<JsValue, JsValue> {
             .edges
             .first()
             .map(|edge| format!("{}:{}:{}", edge.from, edge.kind, edge.to)),
-        first_source_path: state.source_index.first().map(|entry| entry.path.clone()),
+        first_source_path: source_paths.into_iter().next(),
     })
     .map_err(|err| JsValue::from_str(&format!("failed to encode criv summary: {err}")))
+}
+
+fn unique_source_paths(source_index: &[SourceIndexEntry]) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    source_index
+        .iter()
+        .filter(|entry| !entry.path.is_empty() && seen.insert(entry.path.clone()))
+        .map(|entry| entry.path.clone())
+        .collect()
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,5 +100,24 @@ mod tests {
         assert_eq!(state.graph.nodes.len(), 1);
         assert_eq!(state.registered_patterns, vec!["legacy"]);
         assert_eq!(state.source_index.len(), 1);
+    }
+
+    #[test]
+    fn deduplicates_source_paths_for_summary() {
+        let source_index = vec![
+            SourceIndexEntry {
+                path: "src/lib.rs".into(),
+            },
+            SourceIndexEntry {
+                path: "src/lib.rs".into(),
+            },
+            SourceIndexEntry {
+                path: "src/main.rs".into(),
+            },
+        ];
+
+        let paths = unique_source_paths(&source_index);
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths, vec!["src/lib.rs", "src/main.rs"]);
     }
 }

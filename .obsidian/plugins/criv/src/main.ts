@@ -148,12 +148,14 @@ export default class CrivPlugin extends Plugin {
   }
 
   async ensureSourcePanel(reveal: boolean): Promise<void> {
-    const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
+    const existing = this.sourcePanelLeaf();
     if (existing) {
       if (reveal) {
         this.app.workspace.revealLeaf(existing);
       }
-      await this.refreshSourcePanel();
+      if (existing.view instanceof CrivSourceView) {
+        await existing.view.render();
+      }
       return;
     }
 
@@ -195,11 +197,18 @@ export default class CrivPlugin extends Plugin {
   }
 
   async refreshSourcePanel(): Promise<void> {
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-      if (leaf.view instanceof CrivSourceView) {
-        await leaf.view.render();
-      }
+    const leaf = this.sourcePanelLeaf();
+    if (leaf?.view instanceof CrivSourceView) {
+      await leaf.view.render();
     }
+  }
+
+  private sourcePanelLeaf(): WorkspaceLeaf | null {
+    const [first, ...duplicates] = this.app.workspace.getLeavesOfType(VIEW_TYPE);
+    for (const duplicate of duplicates) {
+      duplicate.detach();
+    }
+    return first ?? null;
   }
 
   frontmatterPatternTargets(state: CrivState): FrontmatterPatternTarget[] {
@@ -273,7 +282,7 @@ export default class CrivPlugin extends Plugin {
 
   async sourceEntries(): Promise<SourceIndexEntry[]> {
     const state = await this.getState();
-    return state?.["source-index"] ?? [];
+    return sourceEntries(state);
   }
 
   async patternIds(): Promise<string[]> {
@@ -487,11 +496,22 @@ function linkedSourcesFromMarkdown(markdown: string, state: CrivState): LinkedSo
     .filter((source): source is LinkedSource => source !== null);
   const seen = new Set<string>();
   return links.filter((source) => {
-    const key = `${source.entry.path}#${source.fragment ?? ""}`;
-    if (seen.has(key)) {
+    if (seen.has(source.entry.path)) {
       return false;
     }
-    seen.add(key);
+    seen.add(source.entry.path);
+    return true;
+  });
+}
+
+function sourceEntries(state: CrivState | null | undefined): SourceIndexEntry[] {
+  const entries = state?.["source-index"] ?? [];
+  const seen = new Set<string>();
+  return entries.filter((entry) => {
+    if (!entry.path || seen.has(entry.path)) {
+      return false;
+    }
+    seen.add(entry.path);
     return true;
   });
 }
@@ -518,8 +538,6 @@ function resolvePatternFromElement(state: CrivState, element: HTMLElement): stri
 
 function linkTargets(element: HTMLElement): string[] {
   const targets: string[] = [];
-  addTarget(targets, element.getAttribute("data-href"));
-
   const dataHref = element.getAttribute("data-href");
   if (dataHref) {
     addTarget(targets, dataHref);
@@ -570,7 +588,7 @@ function resolveSource(state: CrivState, target: string): LinkedSource | null {
   if (!normalized || normalized.startsWith("match:")) {
     return null;
   }
-  const entries = state["source-index"] ?? [];
+  const entries = sourceEntries(state);
   const entry =
     entries.find((candidate) => candidate.path === normalized) ??
     entries.find(
