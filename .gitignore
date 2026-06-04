@@ -1,5 +1,6 @@
 /target
 .criv/
+.obsidian/graph.json
 .obsidian/workspace.json
 .obsidian/plugins/criv/node_modules/
 hk.local.pkl
