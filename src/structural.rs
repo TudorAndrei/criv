@@ -81,10 +81,8 @@ pub(crate) fn find(
         }
     }
 
-    if !compiled_any_language {
-        if let Some(err) = first_compile_error {
-            return Err(err);
-        }
+    if !compiled_any_language && let Some(err) = first_compile_error {
+        return Err(err);
     }
 
     rows.sort_by(|left, right| {

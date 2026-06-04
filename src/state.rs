@@ -130,19 +130,18 @@ impl State {
                     &symbol_id,
                     "contains",
                 );
-                if let Some(parent) = &symbol.parent {
-                    if let Some(parent_id) = vault
+                if let Some(parent) = &symbol.parent
+                    && let Some(parent_id) = vault
                         .source_graph()
                         .resolve_symbol(&format!("{}#{}", symbol.id.path, parent))
-                    {
-                        add_edge(
-                            &mut graph,
-                            &mut seen_edges,
-                            &symbol_node_id(&parent_id.display()),
-                            &symbol_id,
-                            "contains",
-                        );
-                    }
+                {
+                    add_edge(
+                        &mut graph,
+                        &mut seen_edges,
+                        &symbol_node_id(&parent_id.display()),
+                        &symbol_id,
+                        "contains",
+                    );
                 }
                 for call in &symbol.calls {
                     let target = vault

@@ -26,13 +26,14 @@ does not require a separate `rumdl` executable.
 Build plugin artifacts when the Obsidian plugin is part of the release:
 
 ```sh
-cd .obsidian/plugins/criv
-npm run build
+mise run plugin-build
 ```
 
-This runs `wasm-pack` through the plugin build script. If only the Rust CLI is
-being released and the generated plugin scaffold is unchanged, document that
-choice in the release notes.
+This wraps the plugin's `npm run build` script in `mise x rust@1.95.0` so
+`wasm-pack` sees the mise-managed Rust and Cargo toolchain, including the
+installed `wasm32-unknown-unknown` target. If only the Rust CLI is being
+released and the generated plugin scaffold is unchanged, document that choice in
+the release notes.
 
 Preview the next automatically selected version:
 
@@ -58,7 +59,13 @@ release. While criv is still in `0.y.z`, Cocogitto will not automatically select
 `1.0.0`; cut that intentionally with a manual versioned release if needed. This
 decision is captured in [[ADR-0016]].
 
-For crates.io publishing, confirm the package metadata first:
+The next release remains git-tag-only. Do not publish `criv` to crates.io until
+the CLI API, state schema compatibility policy, and installer story are stable
+enough to support registry consumers. The tag-triggered GitHub binary release is
+the authoritative distribution path for now.
+
+When crates.io publishing is intentionally enabled later, confirm the package
+metadata first:
 
 ```sh
 cargo package --workspace --allow-dirty

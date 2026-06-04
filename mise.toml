@@ -1,4 +1,5 @@
 [tools]
+rust = "1.95.0"
 hk = "1.45.0"
 actionlint = "1.7.12"
 "aqua:zizmorcore/zizmor" = "1.24.1"
@@ -27,6 +28,14 @@ run = "cog bump --dry-run --auto"
 [tasks.release-auto]
 description = "Cut a tag-only release from conventional commits"
 run = "bash scripts/release-auto.sh"
+
+[tasks.perf]
+description = "Measure criv local performance on this or another vault"
+run = "bash scripts/measure-performance.sh"
+
+[tasks.plugin-build]
+description = "Build the Obsidian plugin bundle and WASM helper"
+run = "mise x rust@1.95.0 -- npm --prefix .obsidian/plugins/criv run build"
 
 [tasks.pre-commit]
 description = "Run the hk pre-commit hook"

@@ -442,13 +442,13 @@ fn collect_tree_sitter_calls(
         let function = node
             .child_by_field_name("function")
             .or_else(|| first_named_child(node));
-        if let Some(target) = function.and_then(|child| call_target(child, contents)) {
-            if !is_call_keyword(&target, language) {
-                calls.push(Call {
-                    target,
-                    line: node.start_position().row + 1,
-                });
-            }
+        if let Some(target) = function.and_then(|child| call_target(child, contents))
+            && !is_call_keyword(&target, language)
+        {
+            calls.push(Call {
+                target,
+                line: node.start_position().row + 1,
+            });
         }
     }
     let mut cursor = node.walk();
@@ -574,14 +574,15 @@ fn parse_source_file_fallback(path: &str, contents: &str) -> SourceFile {
             }) {
                 python_class = None;
             }
-            if let Some(active_indent) = python_indent {
-                if indent <= active_indent && !trimmed.starts_with('@') {
-                    if let Some(symbol_index) = current_symbol {
-                        file.symbols[symbol_index].range.end_line = line_no.saturating_sub(1);
-                    }
-                    current_symbol = None;
-                    python_indent = None;
+            if let Some(active_indent) = python_indent
+                && indent <= active_indent
+                && !trimmed.starts_with('@')
+            {
+                if let Some(symbol_index) = current_symbol {
+                    file.symbols[symbol_index].range.end_line = line_no.saturating_sub(1);
                 }
+                current_symbol = None;
+                python_indent = None;
             }
         }
 
@@ -738,10 +739,8 @@ fn parse_symbol(
                 Some((name, SymbolKind::Function))
             } else if let Some(name) = const_function_name(line) {
                 Some((name, SymbolKind::Function))
-            } else if let Some(name) = after_keyword(line, "class ") {
-                Some((name, SymbolKind::Class))
             } else {
-                None
+                after_keyword(line, "class ").map(|name| (name, SymbolKind::Class))
             }
         }
         Language::Python => {

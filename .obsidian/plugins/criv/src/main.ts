@@ -1,13 +1,10 @@
 import {
-  App,
-  Component,
   Editor,
   EditorPosition,
   EditorSuggest,
   EditorSuggestContext,
   EditorSuggestTriggerInfo,
   ItemView,
-  MarkdownRenderer,
   MarkdownPostProcessorContext,
   Notice,
   Plugin,
@@ -15,6 +12,31 @@ import {
   Setting,
   WorkspaceLeaf,
 } from "obsidian";
+import { RangeSetBuilder } from "@codemirror/state";
+import {
+  Decoration,
+  DecorationSet,
+  EditorView,
+  PluginValue,
+  ViewPlugin,
+  ViewUpdate,
+} from "@codemirror/view";
+import {
+  CrivState,
+  FrontmatterPatternTarget,
+  LinkedSource,
+  SourceIndexEntry,
+  crivLinkRanges,
+  frontmatterPatternTargets,
+  linkedSourcesFromMarkdown,
+  looksLikeSourceOrPattern,
+  patternTooltip,
+  resolvePattern,
+  resolveSource,
+  sourceEntries,
+  sourceSuggestions,
+  sourceTooltip,
+} from "./core";
 import { summarizeState } from "./wasm";
 
 interface CrivSettings {
@@ -40,31 +62,6 @@ const LINK_TARGET_SELECTOR = [
   ".cm-underline",
 ].join(",");
 
-interface CrivNode {
-  id: string;
-  kind: string;
-  label: string;
-  path?: string;
-}
-
-interface PatternMatch {
-  file: string;
-  range?: string;
-  captures: Record<string, string>;
-}
-
-interface SourceIndexEntry {
-  path: string;
-  frecency: number;
-  mime?: string;
-}
-
-interface LinkedSource {
-  target: string;
-  fragment: string | null;
-  entry: SourceIndexEntry;
-}
-
 interface SourcePreview {
   path: string;
   language: string;
@@ -73,24 +70,10 @@ interface SourcePreview {
   truncated: boolean;
 }
 
-interface CrivState {
-  schema: string;
-  graph?: { nodes?: CrivNode[] };
-  patterns?: Record<string, PatternMatch[]>;
-  "registered-patterns"?: string[];
-  "source-index"?: SourceIndexEntry[];
-}
-
-interface FrontmatterPatternTarget {
-  id: string;
-  source: "targets" | "policy";
-  status: "resolved" | "local" | "unresolved";
-  matches: number;
-}
-
 export default class CrivPlugin extends Plugin {
   settings: CrivSettings;
   private state: CrivState | null = null;
+  private stateError: string | null = null;
   private hoverEl: HTMLElement | null = null;
   private hoverSourceKey: string | null = null;
   private hoverRequest = 0;
@@ -108,6 +91,15 @@ export default class CrivPlugin extends Plugin {
       name: "Open criv source panel",
       callback: async () => this.openSourcePanel(),
     });
+    this.addCommand({
+      id: "reload-criv-state",
+      name: "Reload criv state",
+      callback: async () => {
+        await this.reloadState();
+        await this.refreshSourcePanel();
+      },
+    });
+    this.registerEditorExtension(crivDriftExtension(this));
     this.registerView(VIEW_TYPE, (leaf) => new CrivSourceView(leaf, this));
     this.registerMarkdownPostProcessor((el, ctx) => this.decorateLinks(el, ctx));
     this.registerDomEvent(document, "mouseover", (event) => this.handleDocumentMouseOver(event));
@@ -119,6 +111,7 @@ export default class CrivPlugin extends Plugin {
     this.registerEvent(this.app.metadataCache.on("changed", () => this.refreshSourcePanel()));
     this.addSettingTab(new CrivSettingTab(this.app, this));
     this.app.workspace.onLayoutReady(() => {
+      void this.loadState().then(() => this.app.workspace.updateOptions());
       void this.ensureSourcePanel(false);
     });
   }
@@ -183,11 +176,16 @@ export default class CrivPlugin extends Plugin {
       const raw = await this.app.vault.adapter.read(this.settings.statePath);
       const state = JSON.parse(raw) as CrivState;
       if (state.schema !== EXPECTED_SCHEMA) {
+        this.state = null;
+        this.stateError = `Unsupported criv state schema ${state.schema ?? "unknown"}`;
         return null;
       }
       this.state = state;
+      this.stateError = null;
       return state;
-    } catch {
+    } catch (error) {
+      this.state = null;
+      this.stateError = `Could not read ${this.settings.statePath}: ${errorMessage(error)}`;
       return null;
     }
   }
@@ -196,7 +194,22 @@ export default class CrivPlugin extends Plugin {
     return this.state ?? (await this.loadState());
   }
 
+  stateStatus(): string {
+    return this.stateError ?? `criv state is unavailable at ${this.settings.statePath}.`;
+  }
+
+  cachedState(): CrivState | null {
+    return this.state;
+  }
+
+  async reloadState(): Promise<CrivState | null> {
+    const state = await this.loadState();
+    this.app.workspace.updateOptions();
+    return state;
+  }
+
   async refreshSourcePanel(): Promise<void> {
+    await this.reloadState();
     const leaf = this.sourcePanelLeaf();
     if (leaf?.view instanceof CrivSourceView) {
       await leaf.view.render();
@@ -345,7 +358,7 @@ export default class CrivPlugin extends Plugin {
       if (request !== this.hoverRequest || this.hoverEl !== preview) {
         return;
       }
-      await renderPreview(this.app, this, preview, data, false);
+      renderPreview(preview, data, false);
     } catch {
       if (request !== this.hoverRequest || this.hoverEl !== preview) {
         return;
@@ -392,7 +405,7 @@ class CrivSourceView extends ItemView {
     container.addClass("criv-panel");
     const state = await this.plugin.getState();
     if (!state) {
-      container.createEl("p", { cls: "criv-empty", text: "criv state is unavailable." });
+      container.createEl("p", { cls: "criv-empty", text: this.plugin.stateStatus() });
       return;
     }
 
@@ -426,9 +439,36 @@ class CrivSourceView extends ItemView {
           target.status === "local"
             ? "local target"
             : target.status === "resolved"
-              ? `${target.matches} match${target.matches === 1 ? "" : "es"}`
+              ? `${target.matches.length} match${target.matches.length === 1 ? "" : "es"}`
               : "unresolved",
       });
+      this.renderPatternMatches(container, target);
+    }
+  }
+
+  private renderPatternMatches(container: HTMLElement, target: FrontmatterPatternTarget): void {
+    if (target.status === "local" || target.status === "unresolved") {
+      return;
+    }
+    const list = container.createDiv({ cls: "criv-pattern-match-list" });
+    if (target.matches.length === 0) {
+      list.createDiv({ cls: "criv-pattern-match-empty", text: "No matches" });
+      return;
+    }
+    for (const match of target.matches) {
+      const item = list.createDiv({ cls: "criv-pattern-match" });
+      const head = item.createDiv({ cls: "criv-pattern-match-head" });
+      head.createSpan({ text: match.file });
+      head.createSpan({ text: match.range ?? "range unavailable" });
+      const captures = Object.entries(match.captures);
+      if (captures.length > 0) {
+        const captureList = item.createDiv({ cls: "criv-pattern-captures" });
+        for (const [name, value] of captures) {
+          const capture = captureList.createDiv({ cls: "criv-pattern-capture" });
+          capture.createSpan({ text: `$${name}` });
+          capture.createEl("code", { text: value });
+        }
+      }
     }
   }
 
@@ -441,7 +481,7 @@ class CrivSourceView extends ItemView {
 
     try {
       const preview = await this.plugin.sourcePreview(source);
-      await renderPreview(this.app, this, card, preview, true);
+      renderPreview(card, preview, true);
     } catch {
       renderPreviewError(card, source.entry.path);
     }
@@ -471,10 +511,7 @@ class CrivSourceSuggest extends EditorSuggest<SourceIndexEntry> {
   }
 
   async getSuggestions(context: EditorSuggestContext): Promise<SourceIndexEntry[]> {
-    const query = context.query.toLowerCase();
-    return (await this.plugin.sourceEntries())
-      .filter((entry) => entry.path.toLowerCase().includes(query))
-      .slice(0, 20);
+    return sourceSuggestions(await this.plugin.getState(), context.query, 20);
   }
 
   renderSuggestion(value: SourceIndexEntry, el: HTMLElement): void {
@@ -487,33 +524,6 @@ class CrivSourceSuggest extends EditorSuggest<SourceIndexEntry> {
     }
     this.context.editor.replaceRange(value.path, this.context.start, this.context.end);
   }
-}
-
-function linkedSourcesFromMarkdown(markdown: string, state: CrivState): LinkedSource[] {
-  const links = Array.from(markdown.matchAll(/\[\[([^\]]+)\]\]/g))
-    .map((match) => match[1] ?? "")
-    .map((target) => resolveSource(state, target))
-    .filter((source): source is LinkedSource => source !== null);
-  const seen = new Set<string>();
-  return links.filter((source) => {
-    if (seen.has(source.entry.path)) {
-      return false;
-    }
-    seen.add(source.entry.path);
-    return true;
-  });
-}
-
-function sourceEntries(state: CrivState | null | undefined): SourceIndexEntry[] {
-  const entries = state?.["source-index"] ?? [];
-  const seen = new Set<string>();
-  return entries.filter((entry) => {
-    if (!entry.path || seen.has(entry.path)) {
-      return false;
-    }
-    seen.add(entry.path);
-    return true;
-  });
 }
 
 function resolveSourceFromElement(state: CrivState, element: HTMLElement): LinkedSource | null {
@@ -582,60 +592,7 @@ function addTarget(targets: string[], value: string | null | undefined): void {
   }
 }
 
-function resolveSource(state: CrivState, target: string): LinkedSource | null {
-  const clean = cleanTarget(target);
-  const normalized = clean.split("#")[0] ?? "";
-  if (!normalized || normalized.startsWith("match:")) {
-    return null;
-  }
-  const entries = sourceEntries(state);
-  const entry =
-    entries.find((candidate) => candidate.path === normalized) ??
-    entries.find(
-      (candidate) =>
-        candidate.path.endsWith(normalized) || candidate.path.split("/").pop() === normalized,
-    );
-  if (!entry) {
-    return null;
-  }
-  return {
-    target,
-    fragment: clean.includes("#") ? clean.split("#").slice(1).join("#") : null,
-    entry,
-  };
-}
-
-function resolvePattern(state: CrivState, target: string): string | null {
-  const clean = cleanTarget(target);
-  const id = clean.startsWith("match:") ? clean.slice("match:".length) : clean.split("#match:")[1];
-  if (!id) {
-    return null;
-  }
-  const ids = state["registered-patterns"] ?? Object.keys(state.patterns ?? {});
-  return ids.includes(id) ? id : null;
-}
-
-function cleanTarget(target: string): string {
-  return target.split("|")[0]?.trim() ?? "";
-}
-
-function sourceTooltip(state: CrivState, source: SourceIndexEntry): string {
-  const node = state.graph?.nodes?.find((candidate) => candidate.path === source.path);
-  return node ? `${node.kind}: ${node.label}` : source.path;
-}
-
-function patternTooltip(state: CrivState, id: string): string {
-  const count = state.patterns?.[id]?.length ?? 0;
-  return `${id}: ${count} match${count === 1 ? "" : "es"}`;
-}
-
-async function renderPreview(
-  app: App,
-  component: Component,
-  container: HTMLElement,
-  preview: SourcePreview,
-  compact: boolean,
-): Promise<void> {
+function renderPreview(container: HTMLElement, preview: SourcePreview, compact: boolean): void {
   container.querySelector(".criv-preview-loading")?.remove();
   container.querySelector(".criv-preview-error")?.remove();
   const existing = container.querySelector(".criv-preview-body");
@@ -656,8 +613,7 @@ async function renderPreview(
     cls: "criv-source-lines",
     text: lineNumbers(preview.text, preview.startLine),
   });
-  const code = source.createDiv({ cls: "criv-source-code" });
-  await MarkdownRenderer.render(app, fencedCodeBlock(preview), code, preview.path, component);
+  renderHighlightedCode(source, preview);
 }
 
 function renderPreviewError(container: HTMLElement, path: string): void {
@@ -698,16 +654,6 @@ function lineNumbers(text: string, startLine: number): string {
     .join("\n");
 }
 
-function fencedCodeBlock(preview: SourcePreview): string {
-  const language = /^[a-z0-9_-]+$/i.test(preview.language) ? preview.language : "text";
-  const longestFence = Math.max(
-    2,
-    ...Array.from(preview.text.matchAll(/`+/g), (match) => match[0].length),
-  );
-  const fence = "`".repeat(longestFence + 1);
-  return `${fence}${language}\n${preview.text}\n${fence}`;
-}
-
 function languageForPath(path: string): string {
   const extension = path.split(".").pop()?.toLowerCase();
   switch (extension) {
@@ -728,77 +674,233 @@ function languageForPath(path: string): string {
   }
 }
 
-function frontmatterPatternTargets(
-  frontmatter: Record<string, unknown> | undefined,
-  state: CrivState,
-): FrontmatterPatternTarget[] {
-  const targets: FrontmatterPatternTarget[] = [];
-  const noteId = stringValue(frontmatter?.id);
-  const targetObject = objectValue(frontmatter?.targets);
-  for (const pattern of patternList(targetObject?.patterns)) {
-    const target = frontmatterPatternTarget(pattern, "targets", noteId, state);
-    if (target) {
-      targets.push(target);
+interface HighlightToken {
+  text: string;
+  className?: string;
+}
+
+function renderHighlightedCode(container: HTMLElement, preview: SourcePreview): void {
+  const pre = container.createEl("pre", {
+    cls: "criv-source-code criv-source-code-highlighted",
+  });
+  const code = pre.createEl("code", {
+    cls: `language-${safeCssSegment(preview.language)}`,
+  });
+  const lines = preview.text.split("\n");
+  lines.forEach((line, lineIndex) => {
+    for (const token of highlightLine(line, preview.language)) {
+      if (token.className) {
+        code.createSpan({ cls: token.className, text: token.text });
+      } else {
+        code.appendText(token.text);
+      }
+    }
+    if (lineIndex + 1 < lines.length) {
+      code.appendText("\n");
+    }
+  });
+}
+
+function highlightLine(line: string, language: string): HighlightToken[] {
+  const tokens: HighlightToken[] = [];
+  const tokenPattern =
+    language === "python"
+      ? /#.*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b/g
+      : /\/\/.*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b/g;
+  let cursor = 0;
+  for (const match of line.matchAll(tokenPattern)) {
+    const index = match.index ?? cursor;
+    if (index > cursor) {
+      tokens.push({ text: line.slice(cursor, index) });
+    }
+    const text = match[0];
+    tokens.push({ text, className: highlightClass(text, language) });
+    cursor = index + text.length;
+  }
+  if (cursor < line.length) {
+    tokens.push({ text: line.slice(cursor) });
+  }
+  return tokens;
+}
+
+function highlightClass(token: string, language: string): string | undefined {
+  if (token.startsWith("//") || (language === "python" && token.startsWith("#"))) {
+    return "criv-token-comment";
+  }
+  if (token.startsWith('"') || token.startsWith("'") || token.startsWith("`")) {
+    return "criv-token-string";
+  }
+  if (/^\d/.test(token)) {
+    return "criv-token-number";
+  }
+  if (keywordSet(language).has(token)) {
+    return "criv-token-keyword";
+  }
+  if (literalSet(language).has(token)) {
+    return "criv-token-literal";
+  }
+  if (/^[A-Z][A-Za-z0-9_]*$/.test(token)) {
+    return "criv-token-type";
+  }
+  return undefined;
+}
+
+function keywordSet(language: string): Set<string> {
+  switch (language) {
+    case "rust":
+      return new Set([
+        "as",
+        "async",
+        "await",
+        "const",
+        "crate",
+        "enum",
+        "fn",
+        "for",
+        "if",
+        "impl",
+        "let",
+        "match",
+        "mod",
+        "mut",
+        "pub",
+        "return",
+        "self",
+        "static",
+        "struct",
+        "trait",
+        "type",
+        "use",
+        "where",
+        "while",
+      ]);
+    case "typescript":
+    case "javascript":
+      return new Set([
+        "async",
+        "await",
+        "class",
+        "const",
+        "else",
+        "export",
+        "for",
+        "from",
+        "function",
+        "if",
+        "import",
+        "interface",
+        "let",
+        "new",
+        "private",
+        "return",
+        "type",
+      ]);
+    case "python":
+      return new Set([
+        "as",
+        "async",
+        "await",
+        "class",
+        "def",
+        "elif",
+        "else",
+        "for",
+        "from",
+        "if",
+        "import",
+        "in",
+        "lambda",
+        "return",
+        "self",
+        "while",
+      ]);
+    case "go":
+      return new Set([
+        "const",
+        "defer",
+        "else",
+        "for",
+        "func",
+        "go",
+        "if",
+        "import",
+        "interface",
+        "package",
+        "range",
+        "return",
+        "struct",
+        "type",
+        "var",
+      ]);
+    default:
+      return new Set();
+  }
+}
+
+function literalSet(language: string): Set<string> {
+  if (language === "python") {
+    return new Set(["False", "None", "True"]);
+  }
+  return new Set(["false", "null", "true", "undefined"]);
+}
+
+function safeCssSegment(value: string): string {
+  return /^[a-z0-9_-]+$/i.test(value) ? value : "text";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+class CrivEditorDriftPlugin implements PluginValue {
+  decorations: DecorationSet;
+
+  constructor(
+    view: EditorView,
+    private plugin: CrivPlugin,
+  ) {
+    this.decorations = this.buildDecorations(view);
+  }
+
+  update(update: ViewUpdate): void {
+    if (update.docChanged || update.viewportChanged) {
+      this.decorations = this.buildDecorations(update.view);
     }
   }
 
-  const policyObject = objectValue(frontmatter?.policy);
-  for (const pattern of patternList(policyObject?.patterns)) {
-    const target = frontmatterPatternTarget(pattern, "policy", noteId, state);
-    if (target) {
-      targets.push(target);
+  buildDecorations(view: EditorView): DecorationSet {
+    const state = this.plugin.cachedState();
+    if (!state) {
+      return Decoration.none;
     }
+    const builder = new RangeSetBuilder<Decoration>();
+    for (const { from, to } of view.visibleRanges) {
+      const text = view.state.sliceDoc(from, to);
+      for (const range of crivLinkRanges(text, state)) {
+        if (range.status !== "unresolved") {
+          continue;
+        }
+        builder.add(
+          from + range.from,
+          from + range.to,
+          Decoration.mark({
+            class: "criv-editor-warning",
+            attributes: {
+              "data-criv-target": range.target,
+              title: "Unresolved criv reference",
+            },
+          }),
+        );
+      }
+    }
+    return builder.finish();
   }
-  return targets;
 }
 
-function frontmatterPatternTarget(
-  pattern: unknown,
-  source: FrontmatterPatternTarget["source"],
-  noteId: string | null,
-  state: CrivState,
-): FrontmatterPatternTarget | null {
-  const object = objectValue(pattern);
-  const rawRef = object ? stringValue(object.ref) : null;
-  const rawId = object ? stringValue(object.id) : stringValue(pattern);
-  const id = rawRef ?? (source === "policy" && rawId && noteId ? `${noteId}/${rawId}` : rawId);
-  if (!id) {
-    return null;
-  }
-  if (source === "targets" && !rawRef) {
-    return { id, source, status: "local", matches: 0 };
-  }
-
-  const matches = state.patterns?.[id]?.length ?? 0;
-  const ids = state["registered-patterns"] ?? Object.keys(state.patterns ?? {});
-  return {
-    id,
-    source,
-    status: ids.includes(id) || state.patterns?.[id] ? "resolved" : "unresolved",
-    matches,
-  };
-}
-
-function patternList(value: unknown): unknown[] {
-  if (Array.isArray(value)) {
-    return value;
-  }
-  return value ? [value] : [];
-}
-
-function objectValue(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function stringValue(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function looksLikeSourceOrPattern(target: string): boolean {
-  const clean = cleanTarget(target);
-  return clean.startsWith("match:") || /\.[a-z0-9]+(#.*)?$/i.test(clean);
+function crivDriftExtension(plugin: CrivPlugin) {
+  return ViewPlugin.fromClass<CrivEditorDriftPlugin, CrivPlugin>(CrivEditorDriftPlugin, {
+    decorations: (value) => value.decorations,
+  }).of(plugin);
 }
 
 class CrivSettingTab extends PluginSettingTab {

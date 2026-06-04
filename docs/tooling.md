@@ -6,6 +6,7 @@ targets:
   symbols:
     - mise.toml
     - hk.pkl
+    - scripts/measure-performance.sh
 ---
 
 # Tooling and Git Hooks
@@ -41,9 +42,29 @@ mise run pre-commit
 mise run pre-push
 mise run check
 mise run fix
+mise run perf
+mise run plugin-build
 mise run release-plan
 mise run release-auto
 ```
+
+`mise run perf` runs [[scripts/measure-performance.sh]] against the current
+vault by default. Pass another vault root to measure larger repositories:
+
+```sh
+mise run perf -- /path/to/large/criv-vault
+```
+
+The script records cold and warm `watch --once` timings, source-index file
+search startup, validation, CI enforcement, and a no-op snapshot diff. Use those
+numbers before changing source graph parsing, source indexing, snapshot writing,
+or pattern matching behavior.
+
+`mise run plugin-build` builds the Obsidian companion plugin and its Rust WASM
+helper from the repository root. It wraps `.obsidian/plugins/criv`'s
+`npm run build` script in `mise x rust@1.95.0`, so `wasm-pack` uses the
+mise-managed Rust and Cargo toolchain instead of whichever Rust appears first in
+the shell environment.
 
 Use `hk validate` after editing `hk.pkl`. Prefer hk built-ins when one exists;
 the commit message hook uses `Builtins.check_conventional_commit` instead of a

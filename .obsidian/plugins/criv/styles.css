@@ -2,6 +2,11 @@
   color: var(--text-error);
 }
 
+.criv-editor-warning {
+  border-bottom: 1px wavy var(--text-error);
+  color: var(--text-error);
+}
+
 .criv-source-ref {
   color: var(--text-accent);
 }
@@ -95,6 +100,64 @@
   padding: 6px 0;
 }
 
+.criv-pattern-match-list {
+  border-bottom: 1px solid var(--background-modifier-border);
+  display: grid;
+  gap: 6px;
+  padding: 7px 0 9px;
+}
+
+.criv-pattern-match,
+.criv-pattern-match-empty {
+  background: var(--background-secondary);
+  border-radius: 4px;
+  font-size: 11px;
+  padding: 6px 7px;
+}
+
+.criv-pattern-match-empty {
+  color: var(--text-muted);
+}
+
+.criv-pattern-match-head {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.criv-pattern-match-head span:first-child {
+  color: var(--text-normal);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.criv-pattern-match-head span:last-child {
+  color: var(--text-muted);
+  flex: 0 0 auto;
+}
+
+.criv-pattern-captures {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.criv-pattern-capture {
+  display: grid;
+  gap: 4px;
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+
+.criv-pattern-capture span {
+  color: var(--text-muted);
+}
+
+.criv-pattern-capture code {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .criv-hover-preview {
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
@@ -166,21 +229,47 @@
   min-width: 0;
 }
 
-.criv-source-code,
 .criv-source-code pre,
 .criv-source-code code {
   font-size: inherit;
   line-height: inherit;
 }
 
-.criv-source-code pre {
+.criv-source-code {
   background: transparent;
+  font: inherit;
   margin: 0;
   padding: 8px;
 }
 
 .criv-source-code code {
+  color: var(--text-normal);
+  display: block;
+  font: inherit;
   white-space: pre;
+}
+
+.criv-token-comment {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+.criv-token-keyword {
+  color: var(--color-purple);
+  font-weight: 600;
+}
+
+.criv-token-literal,
+.criv-token-number {
+  color: var(--color-orange);
+}
+
+.criv-token-string {
+  color: var(--color-green);
+}
+
+.criv-token-type {
+  color: var(--color-cyan);
 }
 
 .criv-preview-loading,

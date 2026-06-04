@@ -43,14 +43,14 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
     let changed_files = if options.stage == Stage::Ci {
         None
     } else {
-        changed_entries.as_ref().map(changed_entry_paths)
+        changed_entries.as_deref().map(changed_entry_paths)
     };
     let violations = policy_violations(root, &vault, changed_files.as_ref())?;
     let import_violations = import_policy_violations(&vault, changed_files.as_ref());
     let adr_violations = adr_immutability_violations(
         &vault.config.docs_dir,
         &vault.config.adr_dir,
-        changed_entries.as_ref(),
+        changed_entries.as_deref(),
     );
     let tool_files = enforcement_files(&vault, changed_files.as_ref());
     let tool_errors = run_native_tools(root, &tool_files)?;
@@ -207,12 +207,11 @@ fn changed_entries(root: &Path, stage: Stage) -> Option<Vec<ChangedEntry>> {
 }
 
 fn ci_changed_entries(root: &Path) -> Option<Vec<ChangedEntry>> {
-    if let Ok(base_ref) = env::var("CRIV_BASE_REF") {
-        if let Some(entries) =
+    if let Ok(base_ref) = env::var("CRIV_BASE_REF")
+        && let Some(entries) =
             git_changed_entries(root, &["diff", "--name-status", &base_ref, "HEAD"])
-        {
-            return Some(entries);
-        }
+    {
+        return Some(entries);
     }
 
     if let Ok(base_ref) = env::var("GITHUB_BASE_REF") {
@@ -279,7 +278,7 @@ fn parse_changed_entries(stdout: &str) -> Option<Vec<ChangedEntry>> {
     Some(entries)
 }
 
-fn changed_entry_paths(entries: &Vec<ChangedEntry>) -> Vec<String> {
+fn changed_entry_paths(entries: &[ChangedEntry]) -> Vec<String> {
     entries
         .iter()
         .filter(|entry| entry.status != ChangeStatus::Deleted)
@@ -290,7 +289,7 @@ fn changed_entry_paths(entries: &Vec<ChangedEntry>) -> Vec<String> {
 fn adr_immutability_violations(
     docs_dir: &str,
     adr_dir: &str,
-    changed_entries: Option<&Vec<ChangedEntry>>,
+    changed_entries: Option<&[ChangedEntry]>,
 ) -> Vec<String> {
     let Some(entries) = changed_entries else {
         return Vec::new();

@@ -385,25 +385,25 @@ fn validate_decision_note(
         ));
     }
 
-    if let Some(filename) = note.path.file_name().map(|value| value.to_string_lossy()) {
-        if is_adr_id(id) {
-            let suffix = &id[4..];
-            let expected_prefix = format!("{suffix}-");
-            let title_kebab = note.title.as_deref().map(kebab).unwrap_or_default();
-            let title_matches = title_kebab.is_empty()
-                || filename == format!("{suffix}-{title_kebab}.md")
-                || filename.starts_with(&expected_prefix);
+    if let Some(filename) = note.path.file_name().map(|value| value.to_string_lossy())
+        && is_adr_id(id)
+    {
+        let suffix = &id[4..];
+        let expected_prefix = format!("{suffix}-");
+        let title_kebab = note.title.as_deref().map(kebab).unwrap_or_default();
+        let title_matches = title_kebab.is_empty()
+            || filename == format!("{suffix}-{title_kebab}.md")
+            || filename.starts_with(&expected_prefix);
 
-            if !title_matches {
-                diagnostics.push(error(
-                    "adr-filename",
-                    &note.rel_path,
-                    None,
-                    format!(
-                        "ADR filename should start with `{expected_prefix}` and follow NNNN-kebab-case-title.md"
-                    ),
-                ));
-            }
+        if !title_matches {
+            diagnostics.push(error(
+                "adr-filename",
+                &note.rel_path,
+                None,
+                format!(
+                    "ADR filename should start with `{expected_prefix}` and follow NNNN-kebab-case-title.md"
+                ),
+            ));
         }
     }
 

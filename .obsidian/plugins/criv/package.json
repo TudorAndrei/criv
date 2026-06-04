@@ -9,9 +9,10 @@
     "build": "npm run build:wasm && tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
     "build:wasm": "wasm-pack build ../../../crates/criv-wasm --target bundler --out-dir ../../.obsidian/plugins/criv/pkg",
     "version": "node version-bump.mjs && git add manifest.json versions.json",
-    "lint": "oxlint src esbuild.config.mjs version-bump.mjs",
-    "format": "oxfmt --write src esbuild.config.mjs version-bump.mjs",
-    "format:check": "oxfmt --check src esbuild.config.mjs version-bump.mjs"
+    "lint": "oxlint src test esbuild.config.mjs version-bump.mjs",
+    "test": "node test/core.test.mjs",
+    "format": "oxfmt --write src test esbuild.config.mjs version-bump.mjs",
+    "format:check": "oxfmt --check src test esbuild.config.mjs version-bump.mjs"
   },
   "keywords": [
     "obsidian",

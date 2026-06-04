@@ -157,11 +157,11 @@ fn cited_by(vault: &Vault, id: &str) -> Result<Vec<String>> {
             continue;
         }
         for link in &note.wiki_links {
-            if let ResolvedLink::Note { id } = vault.resolve_link(&link.target) {
-                if id == target_id {
-                    rows.push(note.display_id().to_string());
-                    break;
-                }
+            if let ResolvedLink::Note { id } = vault.resolve_link(&link.target)
+                && id == target_id
+            {
+                rows.push(note.display_id().to_string());
+                break;
             }
         }
     }

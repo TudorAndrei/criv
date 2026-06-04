@@ -72,6 +72,7 @@ pub(crate) fn obsidian_plugin() -> Result<Vec<TemplateFile>> {
         ),
         TemplateFile::borrowed(".obsidian/plugins/criv/main.js", PLUGIN_MAIN),
         TemplateFile::borrowed(".obsidian/plugins/criv/styles.css", PLUGIN_STYLES),
+        TemplateFile::borrowed(".obsidian/plugins/criv/src/core.ts", PLUGIN_TS_CORE),
         TemplateFile::borrowed(".obsidian/plugins/criv/src/main.ts", PLUGIN_TS_MAIN),
         TemplateFile::borrowed(".obsidian/plugins/criv/src/wasm.ts", PLUGIN_TS_WASM),
         TemplateFile::generated(
@@ -94,6 +95,10 @@ pub(crate) fn obsidian_plugin() -> Result<Vec<TemplateFile>> {
         TemplateFile::borrowed(
             ".obsidian/plugins/criv/fixtures/link-resolution.json",
             PLUGIN_LINK_RESOLUTION_FIXTURES,
+        ),
+        TemplateFile::borrowed(
+            ".obsidian/plugins/criv/test/core.test.mjs",
+            PLUGIN_CORE_TEST,
         ),
     ])
 }
@@ -273,13 +278,17 @@ fn plugin_package() -> PluginPackage {
             ("dev", "node esbuild.config.mjs"),
             (
                 "format",
-                "oxfmt --write src esbuild.config.mjs version-bump.mjs",
+                "oxfmt --write src test esbuild.config.mjs version-bump.mjs",
             ),
             (
                 "format:check",
-                "oxfmt --check src esbuild.config.mjs version-bump.mjs",
+                "oxfmt --check src test esbuild.config.mjs version-bump.mjs",
             ),
-            ("lint", "oxlint src esbuild.config.mjs version-bump.mjs"),
+            (
+                "lint",
+                "oxlint src test esbuild.config.mjs version-bump.mjs",
+            ),
+            ("test", "node test/core.test.mjs"),
             (
                 "version",
                 "node version-bump.mjs && git add manifest.json versions.json",
@@ -415,11 +424,13 @@ const CLAUDE_SKILLS: &[StaticTemplate] = &[
 ];
 
 const PLUGIN_MAIN: &str = include_str!("../../.obsidian/plugins/criv/main.js");
+const PLUGIN_TS_CORE: &str = include_str!("../../.obsidian/plugins/criv/src/core.ts");
 const PLUGIN_TS_MAIN: &str = include_str!("../../.obsidian/plugins/criv/src/main.ts");
 const PLUGIN_TS_WASM: &str = include_str!("../../.obsidian/plugins/criv/src/wasm.ts");
 const PLUGIN_STYLES: &str = include_str!("../../.obsidian/plugins/criv/styles.css");
 const PLUGIN_ESBUILD: &str = include_str!("../../.obsidian/plugins/criv/esbuild.config.mjs");
 const PLUGIN_LINK_RESOLUTION_FIXTURES: &str = include_str!("../../fixtures/link-resolution.json");
+const PLUGIN_CORE_TEST: &str = include_str!("../../.obsidian/plugins/criv/test/core.test.mjs");
 
 const PLUGIN_VERSION_BUMP: &str = r#"import { readFileSync, writeFileSync } from "fs";
 

@@ -184,10 +184,11 @@ impl Vault {
 
         let note_target = target.split('#').next().unwrap_or(target);
         if let Some(note) = self.resolve_note(note_target) {
-            if let Some((_, heading)) = target.split_once('#') {
-                if !heading.is_empty() && !note_has_heading(note, heading) {
-                    return ResolvedLink::Broken;
-                }
+            if let Some((_, heading)) = target.split_once('#')
+                && !heading.is_empty()
+                && !note_has_heading(note, heading)
+            {
+                return ResolvedLink::Broken;
             }
             return ResolvedLink::Note {
                 id: note.display_id().to_string(),
@@ -468,7 +469,7 @@ fn collect_source_files(root: &Path, config: &Config) -> Result<Vec<String>> {
                 continue;
             }
             let path = entry.path();
-            let rel = strip_prefix(&path, root);
+            let rel = strip_prefix(path, root);
             if excludes.is_match(&rel) || !is_text_file(path)? {
                 continue;
             }
