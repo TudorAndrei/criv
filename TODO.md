@@ -27,6 +27,9 @@
 - Done: the release workflow has been hardened after the failed `v0.1.1` and
   `v0.2.0` tag-triggered workflow conclusions by removing the Intel macOS job,
   pinning Actions to full SHAs, and uploading only archive/checksum assets.
-- Pending external release action: verify the hardened GitHub Actions binary
-  workflow by pushing the next intentional `v*` release tag and confirming the
-  workflow run finishes successfully.
+- Done: the hardened GitHub Actions binary workflow was verified by the
+  `v0.3.0` tag-triggered run, which completed successfully and published
+  `criv-aarch64-apple-darwin.tar.gz`,
+  `criv-aarch64-unknown-linux-gnu.tar.gz`,
+  `criv-x86_64-unknown-linux-gnu.tar.gz`,
+  `criv-x86_64-pc-windows-msvc.zip`, and `SHA256SUMS.txt`.

@@ -21,14 +21,11 @@
   enforcement.
 - Foundation crates wired for CLI parsing, typed errors, glob matching, markdown event parsing, MIME classification, binary-file detection, stable snapshot hashing, YAML frontmatter parsing, debounced watcher events, tree-sitter parsing, ast-grep search, fff indexing, and optional semantic embeddings.
 
-The Rust backend and Obsidian plugin milestones have first implementation
-passes. Release workflow hardening has a local implementation pass, but the
-latest observed tag-triggered runs for `v0.1.1` and `v0.2.0` ended with failed
-workflow conclusions. The `v0.2.0` release did publish binary assets,
-checksums, and provenance attestation, and the workflow has since been hardened
-to remove the Intel macOS job, pin Actions to full SHAs, and upload only archive
-and checksum assets. Remaining work is the external tag push that verifies this
-hardened GitHub release automation on the next intentional release.
+The Rust backend, Obsidian plugin, release workflow, and local validation
+milestones have first implementation passes. Release workflow hardening was
+verified by the `v0.3.0` tag-triggered GitHub Actions run, which completed
+successfully after building, smoke-testing, packaging, checksumming, attesting,
+and publishing the release assets.
 
 ## Architecture Direction
 
@@ -178,9 +175,11 @@ Use `cargo-release` for workspace releases.
 
 Current tags:
 
+- `v0.3.0`
 - `v0.2.0`
 - `v0.1.1`
 - `v0.1.0`
+- `criv-wasm-v0.3.0`
 - `criv-wasm-v0.2.0`
 - `criv-wasm-v0.1.1`
 - `criv-wasm-v0.1.0`
@@ -188,7 +187,8 @@ Current tags:
 Release automation target:
 
 - Maintain a GitHub Actions workflow that builds `criv` release binaries only when a `v*` release tag is pushed.
-- Build Linux and macOS assets on amd64 and arm64, and Windows amd64 if practical.
+- Build Linux assets on amd64 and arm64, macOS on Apple Silicon, and Windows on
+  amd64.
 - Archive each binary with hk-style Rust target-triple names so installers can select by platform.
 - Include checksums and GitHub build provenance attestations for public release assets.
 - Keep `criv --version` working as the installer smoke test.
@@ -196,8 +196,6 @@ Release automation target:
 
 Before the next release:
 
-- Verify the hardened GitHub Actions binary-build workflow by pushing the next
-  `v*` release tag and confirming the workflow run finishes successfully.
 - Run `cargo test --workspace`.
 - Run `cargo fmt --check`.
 - Run `target/debug/criv check`.
@@ -210,13 +208,9 @@ Before the next release:
 
 ## Next Implementation Steps
 
-1. Verify the release workflow during the next intentional release.
-   The implementation is local-tag ready, but full verification requires pushing
-   the next `v*` tag so GitHub Actions builds, attests, publishes the assets,
-   and records a successful workflow conclusion.
-2. Keep adding regression fixtures when bugs are found.
+1. Keep adding regression fixtures when bugs are found.
    The current plugin resolver fixture covers source links, pattern links,
    autocomplete ranking, pattern match exposure, and editor drift ranges.
-3. Use the performance script before shared backend changes.
+2. Use the performance script before shared backend changes.
    `mise run perf` records cold/warm watch timing, source-index startup,
    validation, enforcement, and diff timings for this or a larger vault.
