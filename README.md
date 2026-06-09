@@ -9,8 +9,8 @@ state that other tools can read.
 
 `criv` gives a codebase an executable documentation layer:
 
-- `criv init` creates the vault files, ADR directory, agent runtime skills, and
-  Obsidian companion plugin scaffold.
+- `criv init` creates the vault files, ADR directory, Git hooks, agent runtime
+  skills, and Obsidian companion plugin scaffold.
 - `criv check` validates Markdown formatting, note schema, ADR placement,
   wiki-links, source targets, pattern references, and ADR supersession rules.
 - `criv watch --once` writes `.criv/state.json` and content-addressed local
@@ -82,16 +82,29 @@ docs/
   skills/
   adr/
 .criv/
+.githooks/
 .obsidian/plugins/criv/
 ```
 
-Use `--no-skills` or `--no-obsidian` if you do not want those generated
-templates:
+When run inside a non-bare Git repository, `criv init` also creates
+`.githooks/pre-commit` and `.githooks/pre-push`, then sets the local Git config
+`core.hooksPath` to `.githooks`. The generated hooks run `criv watch --once`,
+`criv check`, and stage-specific `criv enforce` commands during normal Git
+workflows. They use `criv` from `PATH`, falling back to `./target/debug/criv`
+in development checkouts when that binary exists.
+
+Use `--no-skills`, `--no-obsidian`, or `--no-hooks` if you do not want those
+generated templates or hooks:
 
 ```sh
 criv init --no-skills
 criv init --no-obsidian
+criv init --no-hooks
 ```
+
+Existing hook files and non-criv `core.hooksPath` settings are preserved by
+default. Use `--force-hooks` to replace `.githooks/pre-commit`,
+`.githooks/pre-push`, and an existing `core.hooksPath` value.
 
 Check the vault before committing documentation or code changes:
 

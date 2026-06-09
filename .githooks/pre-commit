@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+cd '.'
+if command -v criv >/dev/null 2>&1; then
+  CRIV_BIN="$(command -v criv)"
+elif [ -x ./target/debug/criv ]; then
+  CRIV_BIN="./target/debug/criv"
+else
+  echo "criv hook failed: criv is not on PATH" >&2
+  exit 127
+fi
+"$CRIV_BIN" watch --once
+"$CRIV_BIN" check
+"$CRIV_BIN" enforce --stage commit

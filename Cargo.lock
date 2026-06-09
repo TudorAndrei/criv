@@ -491,6 +491,7 @@ dependencies = [
  "content_inspector",
  "fastembed",
  "fff-search",
+ "git2",
  "globset",
  "ignore",
  "mime_guess",

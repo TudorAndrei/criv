@@ -7,9 +7,10 @@ use std::fs;
 use std::path::Path;
 
 use clap::Args as ClapArgs;
+use git2::{ErrorCode, Repository};
 
-use crate::Result;
-use crate::util::{append_line_if_missing, write_new};
+use crate::util::{append_line_if_missing, normalize_rel, write_new};
+use crate::{CrivError, Result};
 
 #[derive(Debug, Default, ClapArgs)]
 pub(crate) struct InitOptions {
@@ -17,10 +18,15 @@ pub(crate) struct InitOptions {
     no_obsidian: bool,
     #[arg(long)]
     no_skills: bool,
+    #[arg(long)]
+    no_hooks: bool,
+    #[arg(long)]
+    force_hooks: bool,
 }
 
 pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
     let mut created = Vec::new();
+    let mut hook_messages = Vec::new();
 
     write_template(
         root,
@@ -63,6 +69,10 @@ pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
 
     append_line_if_missing(&root.join(".gitignore"), ".criv/")?;
 
+    if !options.no_hooks {
+        hook_messages = install_git_hooks(root, options.force_hooks)?;
+    }
+
     if created.is_empty() {
         println!("criv vault already initialized");
     } else {
@@ -71,8 +81,125 @@ pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
             println!("created {path}");
         }
     }
+    for message in hook_messages {
+        println!("{message}");
+    }
 
     Ok(())
+}
+
+fn install_git_hooks(root: &Path, force: bool) -> Result<Vec<String>> {
+    let Some(repo) = discover_worktree(root)? else {
+        return Ok(vec![
+            "skipped Git hooks: not inside a Git repository".to_string(),
+        ]);
+    };
+
+    let Some(workdir) = repo.workdir() else {
+        return Ok(vec![
+            "skipped Git hooks: bare repositories do not have a worktree".to_string(),
+        ]);
+    };
+
+    let workdir = fs::canonicalize(workdir)?;
+    let root = fs::canonicalize(root)?;
+    let relative_root = repo_relative_root(&workdir, &root)?;
+    let hooks_dir = workdir.join(".githooks");
+    fs::create_dir_all(&hooks_dir)?;
+
+    let messages = vec![
+        write_hook(
+            &hooks_dir.join("pre-commit"),
+            &templates::pre_commit_hook(&relative_root),
+            force,
+        )?,
+        write_hook(
+            &hooks_dir.join("pre-push"),
+            &templates::pre_push_hook(&relative_root),
+            force,
+        )?,
+        configure_hooks_path(&repo, force)?,
+    ];
+
+    Ok(messages)
+}
+
+fn discover_worktree(root: &Path) -> Result<Option<Repository>> {
+    match Repository::discover(root) {
+        Ok(repo) => Ok(Some(repo)),
+        Err(err) if err.code() == ErrorCode::NotFound => Ok(None),
+        Err(err) => Err(CrivError::new(format!(
+            "failed to discover Git repository: {err}"
+        ))),
+    }
+}
+
+fn repo_relative_root(workdir: &Path, root: &Path) -> Result<String> {
+    if root == workdir {
+        return Ok(".".to_string());
+    }
+    let relative = root.strip_prefix(workdir).map_err(|_| {
+        CrivError::new(format!(
+            "criv root `{}` is outside Git worktree `{}`",
+            root.display(),
+            workdir.display()
+        ))
+    })?;
+    Ok(normalize_rel(relative))
+}
+
+fn write_hook(path: &Path, contents: &str, force: bool) -> Result<String> {
+    let hook_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("hook");
+    if path.exists() && !force {
+        return Ok(format!(
+            "skipped Git hook .githooks/{hook_name}: already exists"
+        ));
+    }
+    let existed = path.exists();
+    fs::write(path, contents)?;
+    set_executable(path)?;
+    let action = if existed { "wrote" } else { "created" };
+    Ok(format!("{action} Git hook .githooks/{hook_name}"))
+}
+
+#[cfg(unix)]
+fn set_executable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut permissions = fs::metadata(path)?.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn set_executable(_path: &Path) -> Result<()> {
+    Ok(())
+}
+
+fn configure_hooks_path(repo: &Repository, force: bool) -> Result<String> {
+    let mut config = repo
+        .config()
+        .map_err(|err| CrivError::new(format!("failed to open Git configuration: {err}")))?;
+    match config.get_string("core.hooksPath") {
+        Ok(value) if value == ".githooks" => {
+            Ok("Git core.hooksPath already set to .githooks".to_string())
+        }
+        Ok(value) if !force => Ok(format!(
+            "skipped Git core.hooksPath: already set to `{value}`"
+        )),
+        Ok(_) | Err(_) => {
+            config
+                .set_str("core.hooksPath", ".githooks")
+                .map_err(|err| {
+                    CrivError::new(format!("failed to set Git core.hooksPath: {err}"))
+                })?;
+            Ok("configured Git core.hooksPath=.githooks".to_string())
+        }
+    }
 }
 
 fn write_templates(

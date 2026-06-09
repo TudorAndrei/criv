@@ -41,6 +41,7 @@ fastembed = { version = "5", optional = true, default-features = false, features
 ] }
 fff-search = "0.7.3-nightly.ff81719"
 globset = "0.4"
+git2 = { version = "0.20", default-features = false }
 ignore = "0.4"
 mime_guess = "2"
 notify = "8"

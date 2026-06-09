@@ -11,6 +11,8 @@ fn init_writes_parseable_structured_templates() {
         InitOptions {
             no_obsidian: false,
             no_skills: true,
+            no_hooks: false,
+            force_hooks: false,
         },
     )
     .unwrap();
@@ -44,6 +46,188 @@ fn init_writes_parseable_structured_templates() {
 
     let _ = std::fs::remove_dir_all(root);
 }
+
+#[test]
+fn init_installs_git_hooks_by_default() {
+    let root = unique_temp_dir("criv-init-hooks");
+    git2::Repository::init(&root).unwrap();
+
+    run(&root, fast_options()).unwrap();
+
+    let repo = git2::Repository::open(&root).unwrap();
+    assert_eq!(
+        repo.config().unwrap().get_string("core.hooksPath").unwrap(),
+        ".githooks"
+    );
+
+    let pre_commit = std::fs::read_to_string(root.join(".githooks/pre-commit")).unwrap();
+    assert!(pre_commit.contains("cd '.'"));
+    assert!(pre_commit.contains("CRIV_BIN=\"$(command -v criv)\""));
+    assert!(pre_commit.contains("CRIV_BIN=\"./target/debug/criv\""));
+    assert!(pre_commit.contains("\"$CRIV_BIN\" watch --once"));
+    assert!(pre_commit.contains("\"$CRIV_BIN\" check"));
+    assert!(pre_commit.contains("\"$CRIV_BIN\" enforce --stage commit"));
+
+    let pre_push = std::fs::read_to_string(root.join(".githooks/pre-push")).unwrap();
+    assert!(pre_push.contains("cd '.'"));
+    assert!(pre_push.contains("CRIV_BIN=\"$(command -v criv)\""));
+    assert!(pre_push.contains("\"$CRIV_BIN\" enforce --stage push"));
+
+    assert_executable(root.join(".githooks/pre-commit"));
+    assert_executable(root.join(".githooks/pre-push"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn init_hooks_cd_to_nested_criv_root() {
+    let root = unique_temp_dir("criv-init-hooks-nested");
+    git2::Repository::init(&root).unwrap();
+    let vault = root.join("docs-vault");
+    std::fs::create_dir_all(&vault).unwrap();
+
+    run(&vault, fast_options()).unwrap();
+
+    let pre_commit = std::fs::read_to_string(root.join(".githooks/pre-commit")).unwrap();
+    assert!(pre_commit.contains("cd 'docs-vault'"));
+    assert!(vault.join("criv.toml").exists());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn init_hooks_are_idempotent_without_force() {
+    let root = unique_temp_dir("criv-init-hooks-idempotent");
+    git2::Repository::init(&root).unwrap();
+
+    run(&root, fast_options()).unwrap();
+    let hook = root.join(".githooks/pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\necho custom\n").unwrap();
+
+    run(&root, fast_options()).unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(&hook).unwrap(),
+        "#!/bin/sh\necho custom\n"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn init_force_hooks_overwrites_hooks_and_hookspath() {
+    let root = unique_temp_dir("criv-init-hooks-force");
+    let repo = git2::Repository::init(&root).unwrap();
+    repo.config()
+        .unwrap()
+        .set_str("core.hooksPath", "custom-hooks")
+        .unwrap();
+    std::fs::create_dir_all(root.join(".githooks")).unwrap();
+    std::fs::write(root.join(".githooks/pre-push"), "#!/bin/sh\necho custom\n").unwrap();
+
+    let mut options = fast_options();
+    options.force_hooks = true;
+    run(&root, options).unwrap();
+
+    assert_eq!(
+        repo.config().unwrap().get_string("core.hooksPath").unwrap(),
+        ".githooks"
+    );
+    assert!(
+        std::fs::read_to_string(root.join(".githooks/pre-push"))
+            .unwrap()
+            .contains("\"$CRIV_BIN\" enforce --stage push")
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn init_preserves_existing_non_criv_hookspath_without_force() {
+    let root = unique_temp_dir("criv-init-hooks-existing-hookspath");
+    let repo = git2::Repository::init(&root).unwrap();
+    repo.config()
+        .unwrap()
+        .set_str("core.hooksPath", "custom-hooks")
+        .unwrap();
+
+    run(&root, fast_options()).unwrap();
+
+    assert_eq!(
+        repo.config().unwrap().get_string("core.hooksPath").unwrap(),
+        "custom-hooks"
+    );
+    assert!(root.join(".githooks/pre-commit").exists());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn init_no_hooks_skips_hook_installation() {
+    let root = unique_temp_dir("criv-init-hooks-disabled");
+    git2::Repository::init(&root).unwrap();
+    let mut options = fast_options();
+    options.no_hooks = true;
+
+    run(&root, options).unwrap();
+
+    assert!(!root.join(".githooks").exists());
+    assert!(
+        git2::Repository::open(&root)
+            .unwrap()
+            .config()
+            .unwrap()
+            .get_string("core.hooksPath")
+            .is_err()
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn init_outside_git_repo_skips_hooks_without_failing() {
+    let root = unique_temp_dir("criv-init-hooks-no-git");
+
+    run(&root, fast_options()).unwrap();
+
+    assert!(root.join("criv.toml").exists());
+    assert!(!root.join(".githooks").exists());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn init_bare_git_repo_skips_hooks_without_failing() {
+    let root = unique_temp_dir("criv-init-hooks-bare");
+    git2::Repository::init_bare(&root).unwrap();
+
+    run(&root, fast_options()).unwrap();
+
+    assert!(root.join("criv.toml").exists());
+    assert!(!root.join(".githooks").exists());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+fn fast_options() -> InitOptions {
+    InitOptions {
+        no_obsidian: true,
+        no_skills: true,
+        no_hooks: false,
+        force_hooks: false,
+    }
+}
+
+#[cfg(unix)]
+fn assert_executable(path: PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = std::fs::metadata(path).unwrap().permissions().mode();
+    assert_ne!(mode & 0o111, 0);
+}
+
+#[cfg(not(unix))]
+fn assert_executable(_path: PathBuf) {}
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let unique = std::time::SystemTime::now()
