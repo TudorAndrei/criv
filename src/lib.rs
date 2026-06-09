@@ -125,9 +125,12 @@ fn usage_help(args: &[String]) -> Option<String> {
     let (path, long) = help_request(args)?;
     let mut spec = usage_spec();
     remove_hidden_from_help(&mut spec.cmd);
+    normalize_help_usage(&mut spec.cmd);
     let command = command_for_path(&spec, &path)?;
 
-    Some(usage::docs::cli::render_help(&spec, command, long))
+    Some(normalize_help_output(&usage::docs::cli::render_help(
+        &spec, command, long,
+    )))
 }
 
 fn remove_hidden_from_help(command: &mut usage::SpecCommand) {
@@ -136,6 +139,39 @@ fn remove_hidden_from_help(command: &mut usage::SpecCommand) {
     for subcommand in command.subcommands.values_mut() {
         remove_hidden_from_help(subcommand);
     }
+}
+
+fn normalize_help_usage(command: &mut usage::SpecCommand) {
+    command.usage = clean_required_flag_usage(&command.usage);
+    for subcommand in command.subcommands.values_mut() {
+        normalize_help_usage(subcommand);
+    }
+}
+
+fn clean_required_flag_usage(usage: &str) -> String {
+    let mut cleaned = String::new();
+    let mut rest = usage;
+
+    while let Some(start) = rest.find("<--") {
+        cleaned.push_str(&rest[..start]);
+        let flag = &rest[start + 1..];
+        let Some(end) = flag.find(">>") else {
+            cleaned.push_str(&rest[start..]);
+            return cleaned;
+        };
+
+        cleaned.push_str(&flag[..=end]);
+        rest = &flag[end + 2..];
+    }
+
+    cleaned.push_str(rest);
+    cleaned
+}
+
+fn normalize_help_output(help: &str) -> String {
+    help.replace("[FLAGS]", "[OPTIONS]")
+        .replace("<FLAGS>", "<OPTIONS>")
+        .replace("\nFlags:", "\nOptions:")
 }
 
 fn help_request(args: &[String]) -> Option<(Vec<&str>, bool)> {
@@ -191,7 +227,10 @@ mod tests {
         assert!(root.contains("Commands:"));
         assert!(!root.contains("--usage"));
         assert!(query.contains("Usage: criv query"));
+        assert!(query.contains("[OPTIONS]"));
         assert!(query.contains("--without-docs"));
+        assert!(root.contains("enforce --stage <STAGE>"));
+        assert!(!root.contains("enforce <--stage <STAGE>>"));
     }
 
     #[test]
@@ -202,5 +241,25 @@ mod tests {
 
         assert!(root.contains("Usage: criv"));
         assert!(query.contains("Usage: criv query"));
+    }
+
+    #[test]
+    fn usage_help_uses_options_language() {
+        let check =
+            usage_help(&["check".to_string(), "--help".to_string()]).expect("help should render");
+
+        assert!(check.contains("Usage: criv check [OPTIONS]"));
+        assert!(check.contains("Options:"));
+        assert!(!check.contains("[FLAGS]"));
+        assert!(!check.contains("Flags:"));
+    }
+
+    #[test]
+    fn usage_help_cleans_required_flag_placeholders() {
+        let enforce =
+            usage_help(&["help".to_string(), "enforce".to_string()]).expect("help should render");
+
+        assert!(enforce.contains("Usage: criv enforce --stage <STAGE>"));
+        assert!(!enforce.contains("<--stage <STAGE>>"));
     }
 }
