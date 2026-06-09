@@ -147,6 +147,14 @@ criv enforce --stage push
 criv enforce --stage ci
 ```
 
+Generate a Usage spec for completions, Markdown, or manpages:
+
+```sh
+criv --usage | usage generate completion --file - zsh criv
+criv --usage | usage generate markdown --file - --out-file docs/cli.md
+criv --usage | usage generate manpage --file - --out-file criv.1
+```
+
 In this repository, the common manual tasks are:
 
 ```sh

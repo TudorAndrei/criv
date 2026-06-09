@@ -12,6 +12,8 @@ mod util;
 mod vault;
 mod watch;
 
+use std::io::Write;
+
 use clap::{CommandFactory, Parser, Subcommand, error::ErrorKind};
 
 pub type Result<T> = std::result::Result<T, CrivError>;
@@ -51,6 +53,8 @@ impl CrivError {
     after_help = "Implemented query names: next-adr-id, targets, references, cites, cited-by, governs, governing, coverage, nodes, callers, callees, attack-surface, diff, orphan-docs."
 )]
 struct Cli {
+    #[arg(long = "usage", hide = true)]
+    usage: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -67,6 +71,11 @@ enum Command {
 
 pub fn run(args: Vec<String>) -> Result<()> {
     let cwd = std::env::current_dir()?;
+    if let Some(help) = usage_help(&args) {
+        print!("{help}");
+        return Ok(());
+    }
+
     let cli = match Cli::try_parse_from(std::iter::once("criv".to_string()).chain(args)) {
         Ok(cli) => cli,
         Err(err)
@@ -81,6 +90,11 @@ pub fn run(args: Vec<String>) -> Result<()> {
         Err(err) => return Err(CrivError::usage(err.to_string())),
     };
 
+    if cli.usage {
+        write_usage_spec(&mut std::io::stdout().lock());
+        return Ok(());
+    }
+
     match cli.command {
         None => {
             Cli::command().print_help()?;
@@ -93,5 +107,100 @@ pub fn run(args: Vec<String>) -> Result<()> {
         Some(Command::Search(options)) => search::run(&cwd, options),
         Some(Command::Watch(options)) => watch::run(&cwd, options),
         Some(Command::Enforce(options)) => enforce::run(&cwd, options),
+    }
+}
+
+fn write_usage_spec(writer: &mut dyn Write) {
+    writeln!(writer, "{}", usage_spec()).expect("write usage spec");
+}
+
+fn usage_spec() -> usage::Spec {
+    let spec: usage::Spec = (&Cli::command()).into();
+    spec.to_string()
+        .parse()
+        .expect("derived usage spec should parse")
+}
+
+fn usage_help(args: &[String]) -> Option<String> {
+    let (path, long) = help_request(args)?;
+    let mut spec = usage_spec();
+    remove_hidden_from_help(&mut spec.cmd);
+    let command = command_for_path(&spec, &path)?;
+
+    Some(usage::docs::cli::render_help(&spec, command, long))
+}
+
+fn remove_hidden_from_help(command: &mut usage::SpecCommand) {
+    command.flags.retain(|flag| !flag.hide);
+    command.subcommands.retain(|_, command| !command.hide);
+    for subcommand in command.subcommands.values_mut() {
+        remove_hidden_from_help(subcommand);
+    }
+}
+
+fn help_request(args: &[String]) -> Option<(Vec<&str>, bool)> {
+    match args {
+        [] => Some((Vec::new(), true)),
+        [flag] if flag == "-h" => Some((Vec::new(), false)),
+        [flag] if flag == "--help" => Some((Vec::new(), true)),
+        [command, flag] if flag == "-h" => Some((vec![command.as_str()], false)),
+        [command, flag] if flag == "--help" => Some((vec![command.as_str()], true)),
+        [help] if help == "help" => Some((Vec::new(), true)),
+        [help, path @ ..] if help == "help" => {
+            Some((path.iter().map(String::as_str).collect(), true))
+        }
+        _ => None,
+    }
+}
+
+fn command_for_path<'a>(spec: &'a usage::Spec, path: &[&str]) -> Option<&'a usage::SpecCommand> {
+    let mut command = &spec.cmd;
+    for segment in path {
+        command = command.find_subcommand(segment)?;
+    }
+    Some(command)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{usage_help, write_usage_spec};
+
+    #[test]
+    fn usage_spec_includes_criv_commands() {
+        let mut output = Vec::new();
+        write_usage_spec(&mut output);
+
+        let spec = String::from_utf8(output).expect("usage spec should be utf-8");
+
+        assert!(spec.contains("bin criv"));
+        assert!(spec.contains("flag --usage hide=#true"));
+        assert!(spec.contains("cmd check"));
+        assert!(spec.contains("cmd query"));
+        assert!(spec.contains("cmd enforce"));
+    }
+
+    #[test]
+    fn usage_help_renders_root_and_subcommand_help() {
+        let root = usage_help(&["help".to_string()]).expect("root help should render");
+        let default = usage_help(&[]).expect("default help should render");
+        let query = usage_help(&["help".to_string(), "query".to_string()])
+            .expect("query help should render");
+
+        assert!(root.contains("Usage: criv"));
+        assert_eq!(root, default);
+        assert!(root.contains("Commands:"));
+        assert!(!root.contains("--usage"));
+        assert!(query.contains("Usage: criv query"));
+        assert!(query.contains("--without-docs"));
+    }
+
+    #[test]
+    fn usage_help_renders_flag_help_forms() {
+        let root = usage_help(&["--help".to_string()]).expect("root help should render");
+        let query = usage_help(&["query".to_string(), "--help".to_string()])
+            .expect("query help should render");
+
+        assert!(root.contains("Usage: criv"));
+        assert!(query.contains("Usage: criv query"));
     }
 }
