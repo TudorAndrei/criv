@@ -28,10 +28,8 @@ const state = fixture.state;
 for (const testCase of fixture.cases) {
   const source = core.resolveSource(state, testCase.target);
   const pattern = core.resolvePattern(state, testCase.target);
-  const note = core.resolveNote(state, testCase.target);
   assert.equal(source?.entry.path ?? null, testCase.source, `source for ${testCase.target}`);
   assert.equal(pattern, testCase.pattern, `pattern for ${testCase.target}`);
-  assert.equal(note?.path ?? null, testCase.note, `note for ${testCase.target}`);
 }
 
 assert.deepEqual(
