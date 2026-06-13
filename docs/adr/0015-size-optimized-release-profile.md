@@ -13,7 +13,7 @@ governs:
 ## Context
 
 criv release binaries are intended for direct download and package-manager
-installation, as described by [[ADR-0014]] and [[releasing]]. A default Rust
+installation, as described by [[0014-tag-triggered-release-binary-workflow|ADR-0014]] and [[releasing]]. A default Rust
 release build on macOS produced an 18,754,544 byte `criv` binary.
 
 The upstream `johnthagen/min-sized-rust` guidance recommends first applying
@@ -40,7 +40,7 @@ surprise, or a substantially different programming model.
 ## Consequences
 
 Release artifacts are substantially smaller without changing the published
-archive names or the tag-triggered release workflow from [[ADR-0014]].
+archive names or the tag-triggered release workflow from [[0014-tag-triggered-release-binary-workflow|ADR-0014]].
 
 Release builds become slower because LTO and a single codegen unit reduce
 parallel compilation. Panics in release builds abort instead of unwinding, so

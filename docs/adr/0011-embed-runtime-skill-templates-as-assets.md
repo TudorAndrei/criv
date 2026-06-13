@@ -12,14 +12,14 @@ governs:
 
 ## Context
 
-[[ADR-0010]] established that `criv init` creates agent runtime skills under
+[[0010-criv-init-installs-agent-runtime-skills|ADR-0010]] established that `criv init` creates agent runtime skills under
 `.agents/skills` and `.claude/skills`, but it also kept duplicate skill notes
 under `docs/`. That made vault documentation and runtime skill installation
 share the same content surface even though the runtime skills already exist as
 agent source files in this repository.
 
 Accepted ADRs are append-only records. This ADR records the follow-up decision
-instead of changing [[ADR-0010]].
+instead of changing [[0010-criv-init-installs-agent-runtime-skills|ADR-0010]].
 
 ## Decision
 

@@ -15,7 +15,7 @@ governs:
 
 Accepted ADRs describe decisions that other code and documentation can rely on.
 The repository already treats follow-up decisions as new ADRs instead of edits
-to accepted records, as shown by [[ADR-0011]] referencing [[ADR-0010]].
+to accepted records, as shown by [[0011-embed-runtime-skill-templates-as-assets|ADR-0011]] referencing [[0010-criv-init-installs-agent-runtime-skills|ADR-0010]].
 
 That convention was documented but not enforced. A contributor could still
 modify, delete, or rename an existing ADR file, and the supersession validator

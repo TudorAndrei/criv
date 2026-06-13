@@ -551,7 +551,7 @@ fn validate_links(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
                             .portable_note_target(&link.target)
                             .map(|target| format!("; use `[[{target}]]` instead"))
                             .unwrap_or_default();
-                        diagnostics.push(warning(
+                        diagnostics.push(error(
                             "non-portable-note-link",
                             &note.rel_path,
                             Some(link.line),

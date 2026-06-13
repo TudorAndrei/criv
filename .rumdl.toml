@@ -1,5 +1,5 @@
 [global]
-disable = ["MD013", "MD025", "MD041"]
+disable = ["MD013", "MD025", "MD041", "MD075"]
 exclude = [
     ".criv/**",
     ".obsidian/**",

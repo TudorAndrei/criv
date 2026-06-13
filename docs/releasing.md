@@ -57,7 +57,7 @@ Conventional commits drive the automatic bump: `fix` produces a patch release,
 `feat` produces a minor release, and `!` or `BREAKING CHANGE:` produces a major
 release. While criv is still in `0.y.z`, Cocogitto will not automatically select
 `1.0.0`; cut that intentionally with a manual versioned release if needed. This
-decision is captured in [[ADR-0016]].
+decision is captured in [[0016-conventional-commit-semver-release-automation|ADR-0016]].
 
 The next release remains git-tag-only. Do not publish `criv` to crates.io until
 the CLI API, state schema compatibility policy, and installer story are stable
@@ -89,17 +89,17 @@ pushed. The workflow should build `criv` archives named by Rust target triple:
 - `criv-aarch64-apple-darwin.tar.gz`
 - `criv-x86_64-pc-windows-msvc.zip`
 
-Intel macOS release archives are deprecated by [[ADR-0017]] because the hosted
+Intel macOS release archives are deprecated by [[0017-deprecate-intel-macos-release-archives|ADR-0017]] because the hosted
 Intel macOS runner is the slowest release job. Apple Silicon macOS remains the
 supported macOS binary target. Reintroduce `criv-x86_64-apple-darwin.tar.gz`
 only if there is measured user demand or a faster runner path.
 
 Release assets should include `SHA256SUMS.txt`, GitHub build provenance
 attestations, and `criv --version` as the installer smoke test for future aqua
-and mise registry entries. This decision is captured in [[ADR-0014]].
+and mise registry entries. This decision is captured in [[0014-tag-triggered-release-binary-workflow|ADR-0014]].
 
 Release binaries use the workspace release profile in [[Cargo.toml]]: symbols
 are stripped, size optimization is enabled, LTO runs at link time, codegen uses
 one unit, and release panics abort. This keeps downloadable artifacts smaller
 without requiring nightly Rust or post-build binary packing. The profile
-decision is captured in [[ADR-0015]].
+decision is captured in [[0015-size-optimized-release-profile|ADR-0015]].

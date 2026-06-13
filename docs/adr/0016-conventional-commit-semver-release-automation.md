@@ -15,7 +15,7 @@ governs:
 ## Context
 
 criv already enforces conventional commit messages through [[hk.pkl]] and uses a
-tag-triggered binary workflow in [[ADR-0014]]. The release process in
+tag-triggered binary workflow in [[0014-tag-triggered-release-binary-workflow|ADR-0014]]. The release process in
 [[releasing]] still required choosing `major`, `minor`, or `patch` manually with
 `cargo-release`, even though the commit history contains enough structured
 information for most releases.

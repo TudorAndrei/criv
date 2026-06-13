@@ -14,7 +14,7 @@ governs:
 
 ## Context
 
-[[ADR-0014]] established tag-triggered release binaries for Linux and macOS on
+[[0014-tag-triggered-release-binary-workflow|ADR-0014]] established tag-triggered release binaries for Linux and macOS on
 amd64 and arm64, plus Windows amd64 when practical. The Intel macOS
 `x86_64-apple-darwin` job runs on the hosted `macos-15-intel` runner and has
 become the slowest release job in the matrix, delaying publish completion for

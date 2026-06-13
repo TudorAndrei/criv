@@ -12,7 +12,7 @@ targets:
 # Tooling and Git Hooks
 
 The repository uses [[mise.toml]] to install the project hook runner and
-[[hk.pkl]] to define the hook behavior. The decision record is [[ADR-0013]].
+[[hk.pkl]] to define the hook behavior. The decision record is [[0013-mise-managed-hk-hook-toolchain|ADR-0013]].
 
 Run the initial setup with:
 
@@ -32,7 +32,7 @@ versions. `HK_PKL_BACKEND=pklr` keeps hk self-contained by avoiding a separate
 Workflow YAML under `.github/workflows/` is checked with actionlint in
 `pre-commit` and the full `check` hook. zizmor runs in offline mode in the same
 hooks so local validation does not require a GitHub token or network access.
-This follow-up hook decision is [[ADR-0018]].
+This follow-up hook decision is [[0018-offline-zizmor-actions-security-check|ADR-0018]].
 
 Manual task entry points are:
 

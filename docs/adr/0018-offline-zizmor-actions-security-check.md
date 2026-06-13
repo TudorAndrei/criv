@@ -17,7 +17,7 @@ governs:
 
 ## Context
 
-[[ADR-0013]] established mise-managed hk checks and already runs actionlint for
+[[0013-mise-managed-hk-hook-toolchain|ADR-0013]] established mise-managed hk checks and already runs actionlint for
 workflow syntax and GitHub Actions semantics. criv's release workflow in
 [[.github/workflows/release.yml]] builds and publishes release assets, requests
 attestation and contents write permissions in the publish job, and depends on

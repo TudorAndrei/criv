@@ -14,8 +14,8 @@ governs:
 
 ## Context
 
-[[ADR-0001]] makes the Rust CLI the public interface for humans, agents, hooks,
-and downstream tooling. [[ADR-0003]] already chose Clap as the command parser in
+[[0001-local-cli-vault-architecture|ADR-0001]] makes the Rust CLI the public interface for humans, agents, hooks,
+and downstream tooling. [[0003-adopt-proven-foundation-crates|ADR-0003]] already chose Clap as the command parser in
 [[src/lib.rs]], so criv has one authoritative command tree for help text,
 subcommands, flags, and parser behavior.
 
