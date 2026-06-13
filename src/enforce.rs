@@ -43,14 +43,19 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
     let changed_files = if options.stage == Stage::Ci {
         None
     } else {
-        changed_entries.as_deref().map(changed_entry_paths)
+        changed_entries
+            .as_ref()
+            .map(|changes| changed_entry_paths(&changes.entries))
     };
     let violations = policy_violations(root, &vault, changed_files.as_ref())?;
     let import_violations = import_policy_violations(&vault, changed_files.as_ref());
     let adr_violations = adr_immutability_violations(
         &vault.config.docs_dir,
         &vault.config.adr_dir,
-        changed_entries.as_deref(),
+        changed_entries
+            .as_ref()
+            .map(|changes| changes.entries.as_slice()),
+        |entry| is_allowed_adr_link_migration(root, changed_entries.as_ref(), entry),
     );
     let tool_files = enforcement_files(&vault, changed_files.as_ref());
     let tool_errors = run_native_tools(root, &tool_files)?;
@@ -181,6 +186,13 @@ fn import_policy_violations(vault: &Vault, changed_files: Option<&Vec<String>>) 
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
+struct ChangedSet {
+    entries: Vec<ChangedEntry>,
+    old_ref: Option<String>,
+    new_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
 struct ChangedEntry {
     status: ChangeStatus,
     path: String,
@@ -197,38 +209,65 @@ enum ChangeStatus {
     Other,
 }
 
-fn changed_entries(root: &Path, stage: Stage) -> Option<Vec<ChangedEntry>> {
+fn changed_entries(root: &Path, stage: Stage) -> Option<ChangedSet> {
     match stage {
-        Stage::Commit => git_changed_entries(root, &["diff", "--name-status", "--cached"]),
-        Stage::Push => git_changed_entries(root, &["diff", "--name-status", "@{upstream}...HEAD"])
-            .or_else(|| git_changed_entries(root, &["diff", "--name-status", "HEAD~1..HEAD"])),
+        Stage::Commit => git_changed_set(
+            root,
+            &["diff", "--name-status", "--cached"],
+            Some("HEAD"),
+            Some(":"),
+        ),
+        Stage::Push => git_changed_set(
+            root,
+            &["diff", "--name-status", "@{upstream}...HEAD"],
+            Some("@{upstream}"),
+            Some("HEAD"),
+        )
+        .or_else(|| {
+            git_changed_set(
+                root,
+                &["diff", "--name-status", "HEAD~1..HEAD"],
+                Some("HEAD~1"),
+                Some("HEAD"),
+            )
+        }),
         Stage::Ci => ci_changed_entries(root),
     }
 }
 
-fn ci_changed_entries(root: &Path) -> Option<Vec<ChangedEntry>> {
+fn ci_changed_entries(root: &Path) -> Option<ChangedSet> {
     if let Ok(base_ref) = env::var("CRIV_BASE_REF")
-        && let Some(entries) =
-            git_changed_entries(root, &["diff", "--name-status", &base_ref, "HEAD"])
+        && let Some(changes) = git_changed_set(
+            root,
+            &["diff", "--name-status", &base_ref, "HEAD"],
+            Some(&base_ref),
+            Some("HEAD"),
+        )
     {
-        return Some(entries);
+        return Some(changes);
     }
 
     if let Ok(base_ref) = env::var("GITHUB_BASE_REF") {
         let origin_ref = format!("origin/{base_ref}");
-        if let Some(entries) =
-            git_changed_entries(root, &["diff", "--name-status", &origin_ref, "HEAD"])
-        {
-            return Some(entries);
+        if let Some(changes) = git_changed_set(
+            root,
+            &["diff", "--name-status", &origin_ref, "HEAD"],
+            Some(&origin_ref),
+            Some("HEAD"),
+        ) {
+            return Some(changes);
         }
-        if let Some(entries) =
-            git_changed_entries(root, &["diff", "--name-status", &base_ref, "HEAD"])
-        {
-            return Some(entries);
+        if let Some(changes) = git_changed_set(
+            root,
+            &["diff", "--name-status", &base_ref, "HEAD"],
+            Some(&base_ref),
+            Some("HEAD"),
+        ) {
+            return Some(changes);
         }
     }
 
-    git_changed_entries(root, &["diff", "--name-status", "HEAD"])
+    git_changed_set(root, &["diff", "--name-status", "HEAD"], Some("HEAD"), None)
 }
 
 fn git_changed_entries(root: &Path, args: &[&str]) -> Option<Vec<ChangedEntry>> {
@@ -242,6 +281,19 @@ fn git_changed_entries(root: &Path, args: &[&str]) -> Option<Vec<ChangedEntry>> 
     }
     let stdout = String::from_utf8(output.stdout).ok()?;
     parse_changed_entries(&stdout)
+}
+
+fn git_changed_set(
+    root: &Path,
+    args: &[&str],
+    old_ref: Option<&str>,
+    new_ref: Option<&str>,
+) -> Option<ChangedSet> {
+    git_changed_entries(root, args).map(|entries| ChangedSet {
+        entries,
+        old_ref: old_ref.map(str::to_string),
+        new_ref: new_ref.map(str::to_string),
+    })
 }
 
 fn parse_changed_entries(stdout: &str) -> Option<Vec<ChangedEntry>> {
@@ -290,6 +342,7 @@ fn adr_immutability_violations(
     docs_dir: &str,
     adr_dir: &str,
     changed_entries: Option<&[ChangedEntry]>,
+    mut is_allowed_change: impl FnMut(&ChangedEntry) -> bool,
 ) -> Vec<String> {
     let Some(entries) = changed_entries else {
         return Vec::new();
@@ -305,6 +358,9 @@ fn adr_immutability_violations(
         if !is_adr_file(docs_dir, adr_dir, path) {
             continue;
         }
+        if entry.status == ChangeStatus::Modified && is_allowed_change(entry) {
+            continue;
+        }
 
         let display_path = entry
             .previous_path
@@ -316,6 +372,98 @@ fn adr_immutability_violations(
         ));
     }
     violations
+}
+
+fn is_allowed_adr_link_migration(
+    root: &Path,
+    changes: Option<&ChangedSet>,
+    entry: &ChangedEntry,
+) -> bool {
+    if entry.status != ChangeStatus::Modified {
+        return false;
+    }
+    let Some(changes) = changes else {
+        return false;
+    };
+    let Some(old) = read_changed_content(root, changes.old_ref.as_deref(), &entry.path) else {
+        return false;
+    };
+    let Some(new) = read_changed_content(root, changes.new_ref.as_deref(), &entry.path) else {
+        return false;
+    };
+    is_mechanical_wikilink_portability_migration(&old, &new)
+}
+
+fn read_changed_content(root: &Path, git_ref: Option<&str>, path: &str) -> Option<String> {
+    let Some(git_ref) = git_ref else {
+        return std::fs::read_to_string(root.join(path)).ok();
+    };
+    let object = if git_ref == ":" {
+        format!(":{path}")
+    } else {
+        format!("{git_ref}:{path}")
+    };
+    let output = Command::new("git")
+        .current_dir(root)
+        .args(["show", &object])
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8(output.stdout).ok())
+        .flatten()
+}
+
+fn is_mechanical_wikilink_portability_migration(old: &str, new: &str) -> bool {
+    old != new && normalize_portable_adr_links(new) == old
+}
+
+fn normalize_portable_adr_links(markdown: &str) -> String {
+    let mut normalized = String::with_capacity(markdown.len());
+    let mut start = 0;
+    while let Some(open) = markdown[start..].find("[[") {
+        let open = start + open;
+        let body_start = open + 2;
+        let Some(close_offset) = markdown[body_start..].find("]]") else {
+            break;
+        };
+        let close = body_start + close_offset;
+        normalized.push_str(&markdown[start..open]);
+        let body = &markdown[body_start..close];
+        if let Some(alias) = portable_adr_link_alias(body) {
+            normalized.push_str("[[");
+            normalized.push_str(alias);
+            normalized.push_str("]]");
+        } else {
+            normalized.push_str(&markdown[open..close + 2]);
+        }
+        start = close + 2;
+    }
+    normalized.push_str(&markdown[start..]);
+    normalized
+}
+
+fn portable_adr_link_alias(body: &str) -> Option<&str> {
+    let (target, alias) = body.split_once('|')?;
+    let alias = alias.trim();
+    let alias_base = alias.split('#').next().unwrap_or(alias);
+    if !crate::util::is_adr_id(alias_base) {
+        return None;
+    }
+    let target_fragment = target.split_once('#').map(|(_, fragment)| fragment);
+    let alias_fragment = alias.split_once('#').map(|(_, fragment)| fragment);
+    if target_fragment != alias_fragment {
+        return None;
+    }
+    let number = &alias_base[4..];
+    let target_base = target.split('#').next().unwrap_or(target).trim();
+    let basename = target_base
+        .trim_end_matches(".md")
+        .split('/')
+        .next_back()
+        .unwrap_or(target_base);
+    (basename == number || basename.starts_with(&format!("{number}-"))).then_some(alias)
 }
 
 fn is_adr_file(docs_dir: &str, adr_dir: &str, path: &str) -> bool {
@@ -513,10 +661,47 @@ mod tests {
             },
         ];
 
-        let violations = adr_immutability_violations("docs", "adr", Some(&entries));
+        let violations = adr_immutability_violations("docs", "adr", Some(&entries), |_| false);
 
         assert_eq!(violations.len(), 2);
         assert!(violations[0].contains("0002-existing"));
         assert!(violations[1].contains("0003-existing"));
+    }
+
+    #[test]
+    fn mechanical_adr_link_migrations_are_allowed() {
+        let old = "See [[ADR-0010]] and [[ADR-0001#Context]].\n";
+        let new = "See [[0010-criv-init-installs-agent-runtime-skills|ADR-0010]] and [[docs/adr/0001-local-cli-vault-architecture#Context|ADR-0001#Context]].\n";
+
+        assert!(is_mechanical_wikilink_portability_migration(old, new));
+    }
+
+    #[test]
+    fn mechanical_adr_link_migrations_reject_content_edits() {
+        let old = "See [[ADR-0010]].\n";
+        let new = "Changed decision text and see [[0010-criv-init-installs-agent-runtime-skills|ADR-0010]].\n";
+
+        assert!(!is_mechanical_wikilink_portability_migration(old, new));
+    }
+
+    #[test]
+    fn mechanical_adr_link_migrations_reject_mismatched_targets() {
+        let old = "See [[ADR-0010]].\n";
+        let new = "See [[0011-embed-runtime-skill-templates-as-assets|ADR-0010]].\n";
+
+        assert!(!is_mechanical_wikilink_portability_migration(old, new));
+    }
+
+    #[test]
+    fn adr_immutability_gate_can_allow_proven_link_migration() {
+        let entries = vec![ChangedEntry {
+            status: ChangeStatus::Modified,
+            path: "docs/adr/0002-existing.md".into(),
+            previous_path: None,
+        }];
+
+        let violations = adr_immutability_violations("docs", "adr", Some(&entries), |_| true);
+
+        assert!(violations.is_empty());
     }
 }
