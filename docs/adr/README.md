@@ -30,3 +30,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[ADR-0017]] - Deprecate Intel macOS release archives
 - [[ADR-0018]] - Offline zizmor Actions security check
 - [[ADR-0019]] - Export Usage CLI spec and help
+- [[0020-portable-note-wikilinks|ADR-0020]] - Portable note wikilinks
