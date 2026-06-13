@@ -31,3 +31,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0018-offline-zizmor-actions-security-check|ADR-0018]] - Offline zizmor Actions security check
 - [[0019-export-usage-cli-spec|ADR-0019]] - Export Usage CLI spec and help
 - [[0020-portable-note-wikilinks|ADR-0020]] - Portable note wikilinks
+- [[0021-audit-remediation-boundaries|ADR-0021]] - Audit remediation boundaries

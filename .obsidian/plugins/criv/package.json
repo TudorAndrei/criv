@@ -21,14 +21,17 @@
   ],
   "license": "MIT",
   "devDependencies": {
-    "@types/node": "^16.11.6",
+    "@types/node": "16.18.126",
     "esbuild": "0.25.5",
-    "oxfmt": "^0.49.0",
-    "oxlint": "^1.64.0",
+    "oxfmt": "0.49.0",
+    "oxlint": "1.64.0",
     "tslib": "2.4.0",
-    "typescript": "^5.8.3"
+    "typescript": "5.8.3"
   },
   "dependencies": {
-    "obsidian": "latest"
+    "obsidian": "1.12.3"
+  },
+  "allowScripts": {
+    "esbuild@0.25.5": true
   }
 }

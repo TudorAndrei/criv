@@ -301,6 +301,8 @@ struct PluginPackage {
     #[serde(rename = "devDependencies")]
     dev_dependencies: BTreeMap<&'static str, &'static str>,
     dependencies: BTreeMap<&'static str, &'static str>,
+    #[serde(rename = "allowScripts")]
+    allow_scripts: BTreeMap<&'static str, bool>,
 }
 
 fn plugin_package() -> PluginPackage {
@@ -341,14 +343,15 @@ fn plugin_package() -> PluginPackage {
         keywords: vec!["obsidian", "obsidian-plugin", "criv"],
         license: "MIT",
         dev_dependencies: BTreeMap::from([
-            ("@types/node", "^16.11.6"),
+            ("@types/node", "16.18.126"),
             ("esbuild", "0.25.5"),
-            ("oxfmt", "^0.49.0"),
-            ("oxlint", "^1.64.0"),
+            ("oxfmt", "0.49.0"),
+            ("oxlint", "1.64.0"),
             ("tslib", "2.4.0"),
-            ("typescript", "^5.8.3"),
+            ("typescript", "5.8.3"),
         ]),
-        dependencies: BTreeMap::from([("obsidian", "latest")]),
+        dependencies: BTreeMap::from([("obsidian", "1.12.3")]),
+        allow_scripts: BTreeMap::from([("esbuild@0.25.5", true)]),
     }
 }
 

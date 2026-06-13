@@ -175,9 +175,8 @@ and delegates shared helper logic to the `criv-wasm` crate.
 Build the plugin when working on its templates or WASM helper:
 
 ```sh
-cd .obsidian/plugins/criv
-npm install
-npm run build
+npm --prefix .obsidian/plugins/criv ci
+mise run plugin-build
 ```
 
 Then run `criv watch --once` from the repository root so Obsidian has fresh
