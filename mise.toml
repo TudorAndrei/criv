@@ -40,6 +40,18 @@ run = "bash scripts/measure-performance.sh"
 description = "Build the Obsidian plugin bundle and WASM helper"
 run = "mise x rust@1.95.0 node@26.3.0 npm:npm@11.16.0 cargo:wasm-pack@0.14.0 -- npm --prefix .obsidian/plugins/criv run build"
 
+[tasks.plugin-lint]
+description = "Lint the Obsidian plugin source"
+run = "mise x node@26.3.0 npm:npm@11.16.0 -- npm --prefix .obsidian/plugins/criv run lint"
+
+[tasks.plugin-format-check]
+description = "Check Obsidian plugin formatting"
+run = "mise x node@26.3.0 npm:npm@11.16.0 -- npm --prefix .obsidian/plugins/criv run format:check"
+
+[tasks.plugin-test]
+description = "Run Obsidian plugin tests"
+run = "mise x node@26.3.0 npm:npm@11.16.0 -- npm --prefix .obsidian/plugins/criv test"
+
 [tasks.pre-commit]
 description = "Run the hk pre-commit hook"
 run = "hk run pre-commit"

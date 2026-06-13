@@ -29,6 +29,38 @@ local cargo_test = new Step {
   check = "cargo test --workspace"
 }
 
+local plugin_files = List(
+  ".obsidian/plugins/criv/package.json",
+  ".obsidian/plugins/criv/package-lock.json",
+  ".obsidian/plugins/criv/tsconfig.json",
+  ".obsidian/plugins/criv/**/*.ts",
+  ".obsidian/plugins/criv/**/*.mjs",
+  ".obsidian/plugins/criv/test/**/*.mjs",
+  ".obsidian/plugins/criv/fixtures/**/*.json",
+  "crates/criv-wasm/**",
+  "mise.toml",
+)
+
+local plugin_format_check = new Step {
+  glob = plugin_files
+  check = "mise run plugin-format-check"
+}
+
+local plugin_lint = new Step {
+  glob = plugin_files
+  check = "mise run plugin-lint"
+}
+
+local plugin_test = new Step {
+  glob = plugin_files
+  check = "mise run plugin-test"
+}
+
+local plugin_build = new Step {
+  glob = plugin_files
+  check = "mise run plugin-build"
+}
+
 local enforce_ci = new Step {
   check = "cargo run --quiet -- enforce --stage ci"
 }
@@ -84,6 +116,10 @@ hooks {
       ["actionlint"] = actionlint
       ["zizmor"] = zizmor
       ["cargo-test"] = cargo_test
+      ["plugin-format-check"] = plugin_format_check
+      ["plugin-lint"] = plugin_lint
+      ["plugin-test"] = plugin_test
+      ["plugin-build"] = plugin_build
       ["criv-check"] = staged_docs
       ["criv-enforce-ci"] = enforce_ci
     }
