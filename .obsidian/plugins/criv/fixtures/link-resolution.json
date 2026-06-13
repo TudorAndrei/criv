@@ -9,6 +9,13 @@
           "kind": "code",
           "label": "src/lib.rs (rust)",
           "path": "src/lib.rs"
+        },
+        {
+          "id": "note:ADR-0001",
+          "hash": "fixture",
+          "kind": "decision",
+          "label": "Local CLI vault architecture",
+          "path": "docs/adr/0001-local-cli-vault-architecture.md"
         }
       ],
       "edges": [],
@@ -36,27 +43,38 @@
     {
       "target": "src/lib.rs#run",
       "source": "src/lib.rs",
-      "pattern": null
+      "pattern": null,
+      "note": null
     },
     {
       "target": "lib.rs",
       "source": "src/lib.rs",
-      "pattern": null
+      "pattern": null,
+      "note": null
     },
     {
       "target": "match:ADR-0001/no-block-on",
       "source": null,
-      "pattern": "ADR-0001/no-block-on"
+      "pattern": "ADR-0001/no-block-on",
+      "note": null
     },
     {
       "target": "ADR-0001#match:ADR-0001/no-block-on",
       "source": null,
-      "pattern": "ADR-0001/no-block-on"
+      "pattern": "ADR-0001/no-block-on",
+      "note": null
+    },
+    {
+      "target": "0001-local-cli-vault-architecture|ADR-0001",
+      "source": null,
+      "pattern": null,
+      "note": "docs/adr/0001-local-cli-vault-architecture.md"
     },
     {
       "target": "missing.rs",
       "source": null,
-      "pattern": null
+      "pattern": null,
+      "note": null
     }
   ]
 }

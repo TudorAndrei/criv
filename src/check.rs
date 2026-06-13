@@ -544,7 +544,24 @@ fn validate_links(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
                         ));
                     }
                 }
-                ResolvedLink::Pattern { .. } | ResolvedLink::Note { .. } => {}
+                ResolvedLink::Pattern { .. } => {}
+                ResolvedLink::Note { .. } => {
+                    if !vault.is_file_backed_note_target(&link.target) {
+                        let suggestion = vault
+                            .portable_note_target(&link.target)
+                            .map(|target| format!("; use `[[{target}]]` instead"))
+                            .unwrap_or_default();
+                        diagnostics.push(warning(
+                            "non-portable-note-link",
+                            &note.rel_path,
+                            Some(link.line),
+                            format!(
+                                "wiki-link `[[{}]]` resolves through note metadata but does not target an existing markdown file{suggestion}",
+                                link.raw
+                            ),
+                        ));
+                    }
+                }
             }
         }
     }
@@ -734,6 +751,7 @@ fn json_escape(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vault::WikiLink;
 
     #[test]
     fn cycles_are_detected() {
@@ -765,6 +783,40 @@ mod tests {
             validate(&vault)
                 .iter()
                 .any(|diag| diag.code == "unknown-superseded-by")
+        );
+    }
+
+    #[test]
+    fn metadata_only_note_links_are_non_portable() {
+        let target = decision_note("ADR-0001", "docs/adr/0001-local-cli-vault-architecture.md");
+        let mut source = decision_note("ADR-0002", "docs/adr/0002-context.md");
+        source.wiki_links.push(wiki_link("ADR-0001"));
+        let vault = test_vault(vec![target, source]);
+
+        let diagnostics = validate(&vault);
+
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diag| diag.code == "non-portable-note-link")
+        );
+    }
+
+    #[test]
+    fn file_backed_note_links_are_portable() {
+        let target = decision_note("ADR-0001", "docs/adr/0001-local-cli-vault-architecture.md");
+        let mut source = decision_note("ADR-0002", "docs/adr/0002-context.md");
+        source
+            .wiki_links
+            .push(wiki_link("0001-local-cli-vault-architecture|ADR-0001"));
+        let vault = test_vault(vec![target, source]);
+
+        let diagnostics = validate(&vault);
+
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diag| diag.code != "non-portable-note-link")
         );
     }
 
@@ -813,6 +865,21 @@ mod tests {
             superseded_by: Vec::new(),
             wiki_links: Vec::new(),
             frontmatter_error: None,
+        }
+    }
+
+    fn decision_note(id: &str, rel_path: &str) -> Note {
+        let mut note = empty_decision(id);
+        note.path = rel_path.into();
+        note.rel_path = rel_path.into();
+        note
+    }
+
+    fn wiki_link(target: &str) -> WikiLink {
+        WikiLink {
+            raw: target.into(),
+            target: target.into(),
+            line: 1,
         }
     }
 

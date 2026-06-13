@@ -165,6 +165,46 @@ impl Vault {
             .and_then(|index| self.notes.get(*index))
     }
 
+    pub(crate) fn is_file_backed_note_target(&self, target: &str) -> bool {
+        let target = target.split('|').next().unwrap_or(target).trim();
+        let target_without_heading = target.split('#').next().unwrap_or(target).trim();
+        let key = target_without_heading.to_lowercase();
+        let Some(note) = self.resolve_note(target_without_heading) else {
+            return false;
+        };
+
+        if note
+            .filename_stem()
+            .is_some_and(|stem| stem.eq_ignore_ascii_case(&key))
+        {
+            return true;
+        }
+
+        let rel_path = note.rel_path.to_lowercase();
+        key == rel_path || rel_path.strip_suffix(".md") == Some(key.as_str())
+    }
+
+    pub(crate) fn portable_note_target(&self, target: &str) -> Option<String> {
+        let target = target.split('|').next().unwrap_or(target).trim();
+        let (target_without_heading, heading) = target
+            .split_once('#')
+            .map(|(base, heading)| (base, Some(heading)))
+            .unwrap_or((target, None));
+        let note = self.resolve_note(target_without_heading.trim())?;
+        let mut portable = note.filename_stem()?;
+        if let Some(heading) = heading
+            && !heading.is_empty()
+        {
+            portable.push('#');
+            portable.push_str(heading);
+        }
+        if portable == target {
+            Some(portable)
+        } else {
+            Some(format!("{portable}|{target}"))
+        }
+    }
+
     pub(crate) fn resolve_link(&self, target: &str) -> ResolvedLink {
         let target = target.split('|').next().unwrap_or(target).trim();
         let target_without_heading = target.split('#').next().unwrap_or(target);
@@ -601,6 +641,7 @@ targets:
             target: String,
             source: Option<String>,
             pattern: Option<String>,
+            note: Option<String>,
         }
 
         let fixture: Fixture =
@@ -618,36 +659,45 @@ roots = ["src"]
         .unwrap();
         std::fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
         std::fs::write(
-            root.join("docs/adr/0001.md"),
+            root.join("docs/adr/0001-local-cli-vault-architecture.md"),
             r#"---
 id: ADR-0001
 kind: decision
-title: Test decision
+title: Local CLI vault architecture
 status: accepted
 policy:
   patterns:
     - id: no-block-on
 ---
 
-# Test decision
+# Local CLI vault architecture
 "#,
         )
         .unwrap();
 
         let vault = Vault::load(&root).unwrap();
         for case in fixture.cases {
-            match (vault.resolve_link(&case.target), case.source, case.pattern) {
-                (ResolvedLink::Source { path, .. }, Some(expected), None) => {
+            match (
+                vault.resolve_link(&case.target),
+                case.source,
+                case.pattern,
+                case.note,
+            ) {
+                (ResolvedLink::Source { path, .. }, Some(expected), None, None) => {
                     assert_eq!(path, expected, "{}", case.target);
                 }
-                (ResolvedLink::Pattern { id }, None, Some(expected)) => {
+                (ResolvedLink::Pattern { id }, None, Some(expected), None) => {
                     assert_eq!(id, expected, "{}", case.target);
                 }
-                (ResolvedLink::Broken, None, None) => {}
-                (actual, source, pattern) => {
+                (ResolvedLink::Note { id }, None, None, Some(expected)) => {
+                    assert_eq!(id, expected, "{}", case.target);
+                    assert!(vault.resolve_note(&expected).is_some(), "{}", case.target);
+                }
+                (ResolvedLink::Broken, None, None, None) => {}
+                (actual, source, pattern, note) => {
                     panic!(
-                        "unexpected resolution for {}: {:?}, expected source={:?} pattern={:?}",
-                        case.target, actual, source, pattern
+                        "unexpected resolution for {}: {:?}, expected source={:?} pattern={:?} note={:?}",
+                        case.target, actual, source, pattern, note
                     );
                 }
             }

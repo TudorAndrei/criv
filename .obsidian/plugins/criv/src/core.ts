@@ -23,6 +23,13 @@ export interface LinkedSource {
   entry: SourceIndexEntry;
 }
 
+export interface LinkedNote {
+  target: string;
+  fragment: string | null;
+  node: CrivNode;
+  path: string;
+}
+
 export interface CrivState {
   schema: string;
   graph?: { nodes?: CrivNode[] };
@@ -42,7 +49,7 @@ export interface CrivLinkRange {
   from: number;
   to: number;
   target: string;
-  kind: "source" | "pattern" | "unknown";
+  kind: "source" | "pattern" | "note" | "unknown";
   status: "resolved" | "unresolved";
 }
 
@@ -127,6 +134,24 @@ export function resolveSource(state: CrivState, target: string): LinkedSource | 
   };
 }
 
+export function resolveNote(state: CrivState, target: string): LinkedNote | null {
+  const clean = cleanTarget(target);
+  const normalized = clean.split("#")[0]?.trim() ?? "";
+  if (!normalized || normalized.startsWith("match:") || clean.includes("#match:")) {
+    return null;
+  }
+  const node = resolveNoteNode(state, normalized);
+  if (!node?.path) {
+    return null;
+  }
+  return {
+    target,
+    fragment: clean.includes("#") ? clean.split("#").slice(1).join("#") : null,
+    node,
+    path: node.path,
+  };
+}
+
 export function resolvePattern(state: CrivState, target: string): string | null {
   const clean = cleanTarget(target);
   const id = clean.startsWith("match:") ? clean.slice("match:".length) : clean.split("#match:")[1];
@@ -140,6 +165,10 @@ export function resolvePattern(state: CrivState, target: string): string | null 
 export function sourceTooltip(state: CrivState, source: SourceIndexEntry): string {
   const node = state.graph?.nodes?.find((candidate) => candidate.path === source.path);
   return node ? `${node.kind}: ${node.label}` : source.path;
+}
+
+export function noteTooltip(note: LinkedNote): string {
+  return `${note.node.kind}: ${note.node.label}`;
 }
 
 export function patternTooltip(state: CrivState, id: string): string {
@@ -187,6 +216,11 @@ export function crivLinkRanges(text: string, state: CrivState): CrivLinkRange[] 
       ranges.push({ from, to, target: rawTarget, kind: "pattern", status: "resolved" });
       continue;
     }
+    const note = resolveNote(state, rawTarget);
+    if (note) {
+      ranges.push({ from, to, target: rawTarget, kind: "note", status: "resolved" });
+      continue;
+    }
     if (looksLikeSourceOrPattern(rawTarget)) {
       ranges.push({ from, to, target: rawTarget, kind: "unknown", status: "unresolved" });
     }
@@ -213,6 +247,34 @@ function resolveSourceEntry(state: CrivState, targetPath: string): SourceIndexEn
     ) ??
     null
   );
+}
+
+function resolveNoteNode(state: CrivState, target: string): CrivNode | null {
+  const key = target.toLowerCase();
+  const nodes = (state.graph?.nodes ?? []).filter(isNoteNode);
+  return (
+    nodes.find((candidate) => noteKey(candidate) === key) ??
+    nodes.find((candidate) => noteFilenameStem(candidate) === key) ??
+    nodes.find((candidate) => candidate.path?.toLowerCase() === key) ??
+    nodes.find((candidate) => candidate.label.toLowerCase() === key) ??
+    null
+  );
+}
+
+function noteKey(node: CrivNode): string | null {
+  return isNoteNode(node) ? node.id.replace(/^note:/, "").toLowerCase() : null;
+}
+
+function noteFilenameStem(node: CrivNode): string | null {
+  if (!isNoteNode(node) || !node.path) {
+    return null;
+  }
+  const basename = node.path.split("/").pop() ?? node.path;
+  return basename.replace(/\.md$/i, "").toLowerCase();
+}
+
+function isNoteNode(node: CrivNode): boolean {
+  return (node.kind === "doc" || node.kind === "decision") && node.id.startsWith("note:");
 }
 
 function sourceMatchScore(path: string, query: string): number | null {
