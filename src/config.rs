@@ -12,13 +12,10 @@ pub(crate) struct Config {
     pub(crate) adr_dir: String,
     pub(crate) source_roots: Vec<String>,
     pub(crate) source_exclude: Vec<String>,
-    pub(crate) languages: Vec<String>,
     pub(crate) source_index: bool,
-    pub(crate) notes_index: String,
     pub(crate) embeddings: bool,
     pub(crate) enforce_stages: Vec<String>,
     pub(crate) import_policies: Vec<ImportPolicy>,
-    pub(crate) obsidian_plugin: bool,
     pub(crate) patterns: BTreeSet<String>,
     pub(crate) pattern_defs: BTreeMap<String, PatternConfig>,
 }
@@ -44,13 +41,10 @@ impl Default for Config {
             adr_dir: "adr".into(),
             source_roots: vec!["src".into(), "lib".into()],
             source_exclude: vec!["**/target/**".into(), "**/node_modules/**".into()],
-            languages: Vec::new(),
             source_index: true,
-            notes_index: "memory".into(),
             embeddings: false,
             enforce_stages: vec!["commit".into(), "push".into(), "ci".into()],
             import_policies: Vec::new(),
-            obsidian_plugin: true,
             patterns: BTreeSet::new(),
             pattern_defs: BTreeMap::new(),
         }
@@ -90,7 +84,6 @@ struct RawConfig {
     source: RawSource,
     index: RawIndex,
     enforce: RawEnforce,
-    obsidian: RawObsidian,
     patterns: BTreeMap<String, toml::Value>,
 }
 
@@ -102,9 +95,7 @@ impl RawConfig {
             adr_dir: self.vault.adr.unwrap_or(defaults.adr_dir),
             source_roots: self.source.roots.unwrap_or(defaults.source_roots),
             source_exclude: self.source.exclude.unwrap_or(defaults.source_exclude),
-            languages: self.source.languages.unwrap_or(defaults.languages),
             source_index: self.index.source.unwrap_or(defaults.source_index),
-            notes_index: self.index.notes.unwrap_or(defaults.notes_index),
             embeddings: self.index.embeddings.unwrap_or(defaults.embeddings),
             enforce_stages: self.enforce.stages.unwrap_or(defaults.enforce_stages),
             import_policies: self
@@ -113,7 +104,6 @@ impl RawConfig {
                 .into_iter()
                 .map(RawImportPolicy::into_policy)
                 .collect(),
-            obsidian_plugin: self.obsidian.plugin.unwrap_or(defaults.obsidian_plugin),
             patterns: self.patterns.keys().cloned().collect(),
             pattern_defs: self
                 .patterns
@@ -153,13 +143,11 @@ struct RawVault {
 struct RawSource {
     roots: Option<Vec<String>>,
     exclude: Option<Vec<String>>,
-    languages: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct RawIndex {
     source: Option<bool>,
-    notes: Option<String>,
     embeddings: Option<bool>,
 }
 
@@ -192,11 +180,6 @@ impl RawImportPolicy {
     }
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct RawObsidian {
-    plugin: Option<bool>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,5 +205,30 @@ deny = ["crate::db"]
         assert_eq!(config.import_policies[0].id, "no-db-from-ui");
         assert_eq!(config.import_policies[0].scope, vec!["src/ui/**"]);
         assert_eq!(config.import_policies[0].deny, vec!["crate::db"]);
+    }
+
+    #[test]
+    fn parses_supported_index_config_and_ignores_removed_knobs() {
+        let raw = toml::from_str::<RawConfig>(
+            r#"
+[source]
+roots = ["src"]
+languages = ["rust"]
+
+[index]
+source = false
+notes = "memory"
+embeddings = true
+
+[obsidian]
+plugin = false
+"#,
+        )
+        .unwrap();
+
+        let config = raw.into_config();
+        assert_eq!(config.source_roots, vec!["src"]);
+        assert!(!config.source_index);
+        assert!(config.embeddings);
     }
 }

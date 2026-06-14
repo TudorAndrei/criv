@@ -33,9 +33,14 @@ pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
 
     let config = Config::load(root)?;
     let docs_path = config.docs_path(root);
-    let source_index =
-        FffSourceIndex::new(root, &config.source_roots, &config.source_exclude, true)?;
-    let mut source_fingerprint = source_index.source_fingerprint()?;
+    let mut source_watch = if config.source_index {
+        let source_index =
+            FffSourceIndex::new(root, &config.source_roots, &config.source_exclude, true)?;
+        let source_fingerprint = source_index.source_fingerprint()?;
+        Some((source_index, source_fingerprint))
+    } else {
+        None
+    };
 
     let (tx, rx) = mpsc::channel::<DebounceEventResult>();
     let mut debouncer = new_debouncer(Duration::from_millis(250), move |event| {
@@ -69,13 +74,15 @@ pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
 
-        match source_index.source_fingerprint() {
-            Ok(next_fingerprint) if next_fingerprint != source_fingerprint => {
-                source_fingerprint = next_fingerprint;
-                source_changed = true;
+        if let Some((source_index, source_fingerprint)) = &mut source_watch {
+            match source_index.source_fingerprint() {
+                Ok(next_fingerprint) if next_fingerprint != *source_fingerprint => {
+                    *source_fingerprint = next_fingerprint;
+                    source_changed = true;
+                }
+                Ok(_) => {}
+                Err(err) => eprintln!("criv watch: source index error: {err}"),
             }
-            Ok(_) => {}
-            Err(err) => eprintln!("criv watch: source index error: {err}"),
         }
 
         if docs_changed || source_changed {

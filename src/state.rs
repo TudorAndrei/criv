@@ -563,6 +563,56 @@ fn stable_hash(value: &str) -> String {
     blake3::hash(value.as_bytes()).to_hex().to_string()
 }
 
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::vault::Vault;
+
+    #[test]
+    fn disabled_source_index_writes_empty_source_state() {
+        let root = unique_temp_dir("criv-disabled-source-state");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("docs/adr")).unwrap();
+        std::fs::write(
+            root.join("criv.toml"),
+            r#"
+[source]
+roots = ["src"]
+
+[index]
+source = false
+"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+        let state = State::build(&root, &vault).unwrap();
+        let json = serde_json::to_value(&state).unwrap();
+
+        assert_eq!(json["source-index"].as_array().unwrap().len(), 0);
+        assert!(
+            json["graph"]["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|node| node["kind"] != "code")
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{}-{unique}", std::process::id()))
+    }
+}
+
 pub(crate) fn note_node_id(id: &str) -> String {
     format!("note:{id}")
 }

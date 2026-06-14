@@ -160,7 +160,6 @@ struct DefaultConfig {
     source: SourceConfig,
     index: IndexConfig,
     enforce: EnforceConfig,
-    obsidian: ObsidianConfig,
 }
 
 impl Default for DefaultConfig {
@@ -173,17 +172,14 @@ impl Default for DefaultConfig {
             source: SourceConfig {
                 roots: vec!["src", "lib"],
                 exclude: vec!["**/target/**", "**/node_modules/**"],
-                languages: Vec::new(),
             },
             index: IndexConfig {
                 source: true,
-                notes: "memory",
                 embeddings: false,
             },
             enforce: EnforceConfig {
                 stages: vec!["commit", "push", "ci"],
             },
-            obsidian: ObsidianConfig { plugin: true },
         }
     }
 }
@@ -198,24 +194,17 @@ struct VaultConfig {
 struct SourceConfig {
     roots: Vec<&'static str>,
     exclude: Vec<&'static str>,
-    languages: Vec<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
 struct IndexConfig {
     source: bool,
-    notes: &'static str,
     embeddings: bool,
 }
 
 #[derive(Debug, Serialize)]
 struct EnforceConfig {
     stages: Vec<&'static str>,
-}
-
-#[derive(Debug, Serialize)]
-struct ObsidianConfig {
-    plugin: bool,
 }
 
 #[derive(Debug, Serialize)]

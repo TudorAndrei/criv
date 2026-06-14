@@ -134,14 +134,27 @@ impl Vault {
             }
         }
 
-        let source_files = collect_source_files(root, &config)?;
-        let source_index = Box::new(FffSourceIndex::new(
-            root,
-            &config.source_roots,
-            &config.source_exclude,
-            false,
-        )?);
-        let source_graph = SourceGraph::build_incremental(root, &source_files, previous_graph)?;
+        let (source_files, source_index, source_graph): (
+            Vec<String>,
+            Box<dyn SourceIndex>,
+            SourceGraph,
+        ) = if config.source_index {
+            let source_files = collect_source_files(root, &config)?;
+            let source_index = Box::new(FffSourceIndex::new(
+                root,
+                &config.source_roots,
+                &config.source_exclude,
+                false,
+            )?);
+            let source_graph = SourceGraph::build_incremental(root, &source_files, previous_graph)?;
+            (source_files, source_index, source_graph)
+        } else {
+            (
+                Vec::new(),
+                Box::new(EmptySourceIndex),
+                SourceGraph::default(),
+            )
+        };
 
         Ok(Self {
             config,
@@ -311,11 +324,9 @@ impl Vault {
     }
 }
 
-#[cfg(test)]
 #[derive(Debug)]
 struct EmptySourceIndex;
 
-#[cfg(test)]
 impl SourceIndex for EmptySourceIndex {
     fn fuzzy_files(
         &self,
@@ -702,6 +713,33 @@ policy:
                 }
             }
         }
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn disabled_source_index_skips_source_collection_and_graph() {
+        let root = unique_temp_dir("criv-disabled-source-index");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("docs/adr")).unwrap();
+        std::fs::write(
+            root.join("criv.toml"),
+            r#"
+[source]
+roots = ["src"]
+
+[index]
+source = false
+"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+
+        assert!(vault.source_files().is_empty());
+        assert!(vault.source_graph().files.is_empty());
+        assert!(vault.source_index().entries().unwrap().is_empty());
 
         let _ = std::fs::remove_dir_all(root);
     }

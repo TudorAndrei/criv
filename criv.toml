@@ -5,15 +5,10 @@ adr = "adr"
 [source]
 roots = ["src", "lib", "scripts", ".github/workflows", ".obsidian/plugins/criv", "crates/criv-wasm", "Cargo.toml", "cog.toml", "hk.pkl", "mise.toml", "README.md"]
 exclude = ["**/target/**", "**/node_modules/**"]
-languages = []
 
 [index]
 source = true
-notes = "memory"
 embeddings = false
 
 [enforce]
 stages = ["commit", "push", "ci"]
-
-[obsidian]
-plugin = true

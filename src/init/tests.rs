@@ -17,8 +17,11 @@ fn init_writes_parseable_structured_templates() {
     )
     .unwrap();
 
-    toml::from_str::<toml::Value>(&std::fs::read_to_string(root.join("criv.toml")).unwrap())
-        .unwrap();
+    let config = std::fs::read_to_string(root.join("criv.toml")).unwrap();
+    toml::from_str::<toml::Value>(&config).unwrap();
+    assert!(!config.contains("languages"));
+    assert!(!config.contains("notes ="));
+    assert!(!config.contains("[obsidian]"));
     serde_json::from_str::<serde_json::Value>(
         &std::fs::read_to_string(root.join(".criv/state.json")).unwrap(),
     )
