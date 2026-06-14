@@ -237,7 +237,6 @@ struct EmptyGraph {
 struct AdrReadmeFrontmatter {
     id: &'static str,
     kind: &'static str,
-    title: &'static str,
     tags: Vec<&'static str>,
 }
 
@@ -246,7 +245,6 @@ impl Default for AdrReadmeFrontmatter {
         Self {
             id: "ADR-README",
             kind: "doc",
-            title: "Architectural Decisions",
             tags: vec!["criv"],
         }
     }
