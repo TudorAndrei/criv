@@ -112,3 +112,17 @@ stages = ["commit", "push", "ci"]
         .success()
         .stdout(predicate::str::is_empty());
 }
+
+#[test]
+fn watch_port_is_rejected() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+
+    criv(root)
+        .args(["watch", "--port", "1234"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--port"));
+}

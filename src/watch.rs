@@ -18,8 +18,6 @@ use crate::{CrivError, Result};
 pub(crate) struct WatchOptions {
     #[arg(long)]
     once: bool,
-    #[arg(long)]
-    port: Option<u16>,
 }
 
 pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
@@ -53,13 +51,7 @@ pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
         .watch(&docs_path, RecursiveMode::Recursive)
         .map_err(|err| CrivError::new(format!("failed to watch docs: {err}")))?;
 
-    if let Some(port) = options.port {
-        println!(
-            "criv watch running; status port {port} is reserved but no endpoint is exposed yet"
-        );
-    } else {
-        println!("criv watch running");
-    }
+    println!("criv watch running");
 
     loop {
         let mut docs_changed = false;
