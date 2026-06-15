@@ -5,7 +5,10 @@ use std::process::Command;
 
 use clap::{Args as ClapArgs, ValueEnum};
 
-use crate::vault::{NoteKind, ResolvedLink, Vault, source_fragment_path};
+use crate::vault::{
+    NoteKind, ResolvedLink, SourceTargetResolution, Vault, source_fragment_name,
+    source_fragment_path,
+};
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -219,9 +222,7 @@ fn target_matches_source(
     resolved_path: &str,
     requested_fragment: Option<&str>,
 ) -> bool {
-    let target = target.split('|').next().unwrap_or(target).trim();
-    let target_path = source_fragment_path(target);
-    let Some((path, _)) = vault.resolve_source_path(target_path) else {
+    let SourceTargetResolution::Resolved { path, .. } = vault.resolve_source_target(target) else {
         return false;
     };
     if path != resolved_path {
@@ -498,9 +499,4 @@ fn print_rows(rows: &[String], format: Format) {
 
 fn json_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-fn source_fragment_name(value: &str) -> Option<&str> {
-    let fragment = value.split('|').next().unwrap_or(value).split_once('#')?.1;
-    (!fragment.is_empty() && !fragment.starts_with('L')).then_some(fragment)
 }

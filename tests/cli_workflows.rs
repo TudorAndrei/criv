@@ -182,6 +182,81 @@ fn generated_plugin_bundle_is_excluded_from_source_graph() {
 }
 
 #[test]
+fn source_fragment_validation_checks_symbols_and_line_links() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("docs/adr")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+    write_criv_config(
+        root,
+        vec!["src"],
+        vec!["**/target/**", "**/node_modules/**"],
+        true,
+    );
+    fs::write(
+        root.join("docs/adr/0999-source-fragments.md"),
+        r#"---
+id: ADR-0999
+kind: decision
+title: Source fragments
+status: accepted
+targets:
+  symbols:
+    - src/lib.rs#missing
+---
+
+# Source fragments
+
+Missing [[src/lib.rs#absent]]
+"#,
+    )
+    .unwrap();
+
+    criv(root)
+        .arg("check")
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("unresolved-target"))
+        .stdout(predicate::str::contains("source symbol"))
+        .stdout(predicate::str::contains("broken-link"))
+        .stdout(predicate::str::contains("src/lib.rs#absent"));
+
+    fs::write(
+        root.join("docs/adr/0999-source-fragments.md"),
+        r#"---
+id: ADR-0999
+kind: decision
+title: Source fragments
+status: accepted
+targets:
+  symbols:
+    - src/lib.rs#run
+    - src/lib.rs#L1
+    - src/lib.rs#L1-L1
+---
+
+# Source fragments
+
+Line [[src/lib.rs#L1]]
+Range [[src/lib.rs#L1-L1]]
+"#,
+    )
+    .unwrap();
+
+    criv(root)
+        .args(["check", "--filter", "unresolved-target"])
+        .assert()
+        .success();
+    criv(root)
+        .args(["check", "--filter", "broken-link"])
+        .assert()
+        .success();
+}
+
+#[test]
 fn watch_port_is_rejected() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

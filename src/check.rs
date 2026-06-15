@@ -10,7 +10,7 @@ use rumdl_lib::rule::{LintWarning, Rule};
 use rumdl_lib::rules::{all_rules, filter_rules};
 
 use crate::util::{is_adr_id, kebab};
-use crate::vault::{Note, NoteKind, ResolvedLink, Vault, source_fragment_path};
+use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -421,14 +421,26 @@ fn validate_decision_note(
 
 fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
     for target in &note.targets_symbols {
-        let path = source_fragment_path(target);
-        if vault.resolve_source_path(path).is_none() {
-            diagnostics.push(error(
-                "unresolved-target",
-                &note.rel_path,
-                None,
-                format!("target symbol `{target}` does not resolve to a source file"),
-            ));
+        match vault.resolve_source_target(target) {
+            SourceTargetResolution::Resolved { .. } => {}
+            SourceTargetResolution::MissingFile => {
+                diagnostics.push(error(
+                    "unresolved-target",
+                    &note.rel_path,
+                    None,
+                    format!("target symbol `{target}` does not resolve to a source file"),
+                ));
+            }
+            SourceTargetResolution::MissingFragment { path } => {
+                diagnostics.push(error(
+                    "unresolved-target",
+                    &note.rel_path,
+                    None,
+                    format!(
+                        "target symbol `{target}` resolves to `{path}` but does not resolve to a source symbol"
+                    ),
+                ));
+            }
         }
     }
 

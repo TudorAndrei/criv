@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::source_graph::{Language, SymbolKind};
 use crate::structural;
-use crate::vault::{NoteKind, ResolvedLink, Vault, source_fragment_path};
+use crate::vault::{NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
 
 pub(crate) const STATE_SCHEMA: &str = "criv.state.v0";
@@ -189,7 +189,9 @@ impl State {
             );
 
             for target in &note.targets_symbols {
-                if let Some((path, _)) = vault.resolve_source_path(source_fragment_path(target)) {
+                if let SourceTargetResolution::Resolved { path, .. } =
+                    vault.resolve_source_target(target)
+                {
                     add_edge(
                         &mut graph,
                         &mut seen_edges,

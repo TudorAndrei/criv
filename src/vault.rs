@@ -94,6 +94,13 @@ pub(crate) enum ResolvedLink {
     Broken,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SourceTargetResolution {
+    Resolved { path: String, ambiguous: bool },
+    MissingFile,
+    MissingFragment { path: String },
+}
+
 impl Vault {
     pub(crate) fn load(root: &Path) -> Result<Self> {
         Self::load_incremental(root, None)
@@ -220,10 +227,13 @@ impl Vault {
 
     pub(crate) fn resolve_link(&self, target: &str) -> ResolvedLink {
         let target = target.split('|').next().unwrap_or(target).trim();
-        let target_without_heading = target.split('#').next().unwrap_or(target);
 
-        if let Some((path, ambiguous)) = self.resolve_source_path(target_without_heading) {
-            return ResolvedLink::Source { path, ambiguous };
+        match self.resolve_source_target(target) {
+            SourceTargetResolution::Resolved { path, ambiguous } => {
+                return ResolvedLink::Source { path, ambiguous };
+            }
+            SourceTargetResolution::MissingFragment { .. } => return ResolvedLink::Broken,
+            SourceTargetResolution::MissingFile => {}
         }
 
         if let Some(pattern_id) = pattern_link_id(target) {
@@ -253,6 +263,26 @@ impl Vault {
 
     pub(crate) fn resolve_source_path(&self, path: &str) -> Option<(String, bool)> {
         self.source_index.resolve_partial_path(path)
+    }
+
+    pub(crate) fn resolve_source_target(&self, target: &str) -> SourceTargetResolution {
+        let target = target.split('|').next().unwrap_or(target).trim();
+        let Some((path, ambiguous)) = self.resolve_source_path(source_fragment_path(target)) else {
+            return SourceTargetResolution::MissingFile;
+        };
+        let Some(fragment) = source_fragment_name(target) else {
+            return SourceTargetResolution::Resolved { path, ambiguous };
+        };
+
+        if self
+            .source_graph
+            .resolve_symbol(&format!("{path}#{fragment}"))
+            .is_some()
+        {
+            SourceTargetResolution::Resolved { path, ambiguous }
+        } else {
+            SourceTargetResolution::MissingFragment { path }
+        }
     }
 
     pub(crate) fn source_glob_has_match(&self, pattern: &str) -> bool {
@@ -533,6 +563,24 @@ fn collect_source_files(root: &Path, config: &Config) -> Result<Vec<String>> {
 
 pub(crate) fn source_fragment_path(value: &str) -> &str {
     value.split('#').next().unwrap_or(value)
+}
+
+pub(crate) fn source_fragment_name(value: &str) -> Option<&str> {
+    let fragment = value.split('|').next().unwrap_or(value).split_once('#')?.1;
+    (!fragment.is_empty() && !is_line_fragment(fragment)).then_some(fragment)
+}
+
+fn is_line_fragment(fragment: &str) -> bool {
+    let parse_line = |value: &str| {
+        value
+            .strip_prefix('L')
+            .and_then(|line| line.parse::<usize>().ok())
+            .is_some_and(|line| line > 0)
+    };
+    match fragment.split_once('-') {
+        Some((start, end)) => parse_line(start) && parse_line(end),
+        None => parse_line(fragment),
+    }
 }
 
 fn note_has_heading(note: &Note, heading: &str) -> bool {
