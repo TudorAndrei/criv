@@ -497,12 +497,7 @@ fn run_native_tools(root: &Path, files: &[String]) -> Result<usize> {
         .collect::<Vec<_>>();
 
     let mut failures = 0;
-    failures += run_optional_tool(
-        root,
-        "ESLint",
-        local_or_path(root, "node_modules/.bin/eslint", "eslint"),
-        &js_ts,
-    )?;
+    failures += run_optional_tool(root, "Oxlint", oxlint_command(root), &js_ts)?;
     failures += run_optional_tool(
         root,
         "Ruff",
@@ -564,6 +559,27 @@ fn local_or_path(root: &Path, local: &str, fallback: &'static str) -> ToolComman
     }
 }
 
+fn oxlint_command(root: &Path) -> ToolCommand {
+    local_or_path_in(
+        root,
+        &[
+            "node_modules/.bin/oxlint",
+            ".obsidian/plugins/criv/node_modules/.bin/oxlint",
+        ],
+        "oxlint",
+    )
+}
+
+fn local_or_path_in(root: &Path, locals: &[&str], fallback: &'static str) -> ToolCommand {
+    locals
+        .iter()
+        .map(|local| root.join(local))
+        .find(|local| local.exists())
+        .map(ToolCommand::Path)
+        .unwrap_or(ToolCommand::Name(fallback))
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
 enum ToolCommand {
     Path(PathBuf),
     Name(&'static str),
@@ -703,5 +719,17 @@ mod tests {
         let violations = adr_immutability_violations("docs", "adr", Some(&entries), |_| true);
 
         assert!(violations.is_empty());
+    }
+
+    #[test]
+    fn oxlint_command_uses_plugin_local_tool_before_path_fallback() {
+        let root = tempfile::TempDir::new().unwrap();
+        let bin = root
+            .path()
+            .join(".obsidian/plugins/criv/node_modules/.bin/oxlint");
+        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
+        std::fs::write(&bin, "").unwrap();
+
+        assert_eq!(oxlint_command(root.path()), ToolCommand::Path(bin));
     }
 }

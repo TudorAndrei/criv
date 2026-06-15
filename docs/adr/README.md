@@ -34,3 +34,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0021-audit-remediation-boundaries|ADR-0021]] - Audit remediation boundaries
 - [[0022-hosted-ci-entry-point|ADR-0022]] - Hosted CI entry point
 - [[0023-do-not-track-generated-plugin-bundles|ADR-0023]] - Do not track generated plugin bundles
+- [[0024-oxlint-only-javascript-typescript-enforcement|ADR-0024]] - Oxlint only JavaScript TypeScript enforcement
