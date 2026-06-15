@@ -101,6 +101,43 @@ fn disabled_source_index_is_observed_through_cli_boundary() {
 }
 
 #[test]
+fn file_search_honors_path_and_language_filters() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("scripts")).unwrap();
+    fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    fs::write(root.join("scripts/main.py"), "def main():\n    pass\n").unwrap();
+    write_criv_config(
+        root,
+        vec!["src", "scripts"],
+        vec!["**/target/**", "**/node_modules/**"],
+        true,
+    );
+
+    criv(root)
+        .args(["search", "--files", "main"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/main.rs"))
+        .stdout(predicate::str::contains("scripts/main.py"));
+    criv(root)
+        .args(["search", "--files", "main", "--paths", "src/**"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/main.rs"))
+        .stdout(predicate::str::contains("scripts/main.py").not());
+    criv(root)
+        .args(["search", "--files", "main", "--lang", "rust"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/main.rs"))
+        .stdout(predicate::str::contains("scripts/main.py").not());
+}
+
+#[test]
 fn generated_plugin_bundle_is_excluded_from_source_graph() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
@@ -142,7 +179,6 @@ fn generated_plugin_bundle_is_excluded_from_source_graph() {
         ))
         .stdout(predicate::str::contains("bundledGeneratedSymbol").not())
         .stdout(predicate::str::contains("generatedWasmHelper").not());
-
 }
 
 #[test]

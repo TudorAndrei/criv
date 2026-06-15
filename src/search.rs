@@ -4,8 +4,11 @@ use clap::{Args as ClapArgs, ValueEnum};
 
 use crate::source_index::SourceGrepMode;
 use crate::structural::{self, PatternSource, StructuralMatch};
+use crate::util::GlobMatcher;
 use crate::vault::Vault;
 use crate::{CrivError, Result};
+
+const FILE_SEARCH_LIMIT: usize = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum Format {
@@ -118,7 +121,7 @@ pub(crate) fn run(root: &Path, options: SearchOptions) -> Result<()> {
     }
     let rows = match options.mode()? {
         Mode::Grep(text) => grep(&vault, &text, options.grep_mode.into(), &paths)?,
-        Mode::Files(query) => files(&vault, &query)?,
+        Mode::Files(query) => files(&vault, &query, &paths)?,
         Mode::Notes(text) => notes(root, &vault, &text, options.semantic)?,
         Mode::Structural(pattern) => structural_rows(structural::find(
             root,
@@ -189,11 +192,26 @@ fn grep(vault: &Vault, text: &str, mode: SourceGrepMode, paths: &[String]) -> Re
         .collect())
 }
 
-fn files(vault: &Vault, query: &str) -> Result<Vec<Row>> {
+fn files(vault: &Vault, query: &str, paths: &[String]) -> Result<Vec<Row>> {
+    let matcher = (!paths.is_empty())
+        .then(|| GlobMatcher::new(paths))
+        .transpose()?;
+    let fuzzy_limit = if matcher.is_some() {
+        vault.source_index().entries()?.len().max(FILE_SEARCH_LIMIT)
+    } else {
+        FILE_SEARCH_LIMIT
+    };
+
     Ok(vault
         .source_index()
-        .fuzzy_files(query, 100)?
+        .fuzzy_files(query, fuzzy_limit)?
         .into_iter()
+        .filter(|hit| {
+            matcher
+                .as_ref()
+                .is_none_or(|matcher| matcher.is_match(&hit.path))
+        })
+        .take(FILE_SEARCH_LIMIT)
         .map(|hit| Row {
             path: hit.path,
             line: None,
