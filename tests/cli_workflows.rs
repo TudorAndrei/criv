@@ -75,25 +75,12 @@ fn disabled_source_index_is_observed_through_cli_boundary() {
     init(root);
     fs::create_dir_all(root.join("src")).unwrap();
     fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
-    fs::write(
-        root.join("criv.toml"),
-        r#"[vault]
-docs = "docs"
-adr = "adr"
-
-[source]
-roots = ["src"]
-exclude = ["**/target/**", "**/node_modules/**"]
-
-[index]
-source = false
-embeddings = false
-
-[enforce]
-stages = ["commit", "push", "ci"]
-"#,
-    )
-    .unwrap();
+    write_criv_config(
+        root,
+        vec!["src"],
+        vec!["**/target/**", "**/node_modules/**"],
+        false,
+    );
 
     criv(root).args(["watch", "--once"]).assert().success();
 
@@ -114,6 +101,51 @@ stages = ["commit", "push", "ci"]
 }
 
 #[test]
+fn generated_plugin_bundle_is_excluded_from_source_graph() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join(".obsidian/plugins/criv/src")).unwrap();
+    fs::create_dir_all(root.join(".obsidian/plugins/criv/pkg")).unwrap();
+    fs::write(
+        root.join(".obsidian/plugins/criv/src/main.ts"),
+        "export function activate(): string {\n  return \"criv\";\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join(".obsidian/plugins/criv/main.js"),
+        "function bundledGeneratedSymbol() { return 'generated'; }\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join(".obsidian/plugins/criv/pkg/criv_wasm.js"),
+        "export function generatedWasmHelper() {}\n",
+    )
+    .unwrap();
+    write_criv_config(
+        root,
+        vec![".obsidian/plugins/criv"],
+        vec![
+            ".obsidian/plugins/criv/main.js",
+            ".obsidian/plugins/criv/pkg/**",
+        ],
+        true,
+    );
+
+    criv(root)
+        .args(["query", "nodes", "--kind", "code", "--without-docs"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            ".obsidian/plugins/criv/src/main.ts#activate",
+        ))
+        .stdout(predicate::str::contains("bundledGeneratedSymbol").not())
+        .stdout(predicate::str::contains("generatedWasmHelper").not());
+
+}
+
+#[test]
 fn watch_port_is_rejected() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
@@ -125,4 +157,24 @@ fn watch_port_is_rejected() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("--port"));
+}
+
+fn write_criv_config(root: &Path, roots: Vec<&str>, exclude: Vec<&str>, source_index: bool) {
+    let config = toml::toml! {
+        [vault]
+        docs = "docs"
+        adr = "adr"
+
+        [source]
+        roots = roots
+        exclude = exclude
+
+        [index]
+        source = source_index
+        embeddings = false
+
+        [enforce]
+        stages = ["commit", "push", "ci"]
+    };
+    fs::write(root.join("criv.toml"), config.to_string()).unwrap();
 }

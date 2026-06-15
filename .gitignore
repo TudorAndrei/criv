@@ -3,6 +3,7 @@
 .obsidian/graph.json
 .obsidian/workspace.json
 .obsidian/plugins/criv/node_modules/
+.obsidian/plugins/criv/main.js
 hk.local.pkl
 .config/hk.local.pkl
 
