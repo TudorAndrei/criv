@@ -595,8 +595,8 @@ fn frontmatter_line(frontmatter: &str, needle: &str) -> usize {
     frontmatter
         .lines()
         .position(|line| line.contains(needle))
-        .map(|index| index + 1)
-        .unwrap_or(1)
+        .map(|index| index + 2)
+        .unwrap_or(2)
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -677,6 +677,7 @@ targets:
         assert_eq!(note.policy_pattern_ids, vec!["no-block-on"]);
         assert_eq!(note.targets_symbols, vec!["src/lib.rs#run"]);
         assert_eq!(note.target_pattern_refs[0].id, "ADR-0007/no-block-on");
+        assert_eq!(note.target_pattern_refs[0].line, 16);
     }
 
     #[test]

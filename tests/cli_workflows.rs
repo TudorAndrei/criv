@@ -257,6 +257,50 @@ Range [[src/lib.rs#L1-L1]]
 }
 
 #[test]
+fn unresolved_pattern_diagnostic_uses_file_line_number() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("docs/adr")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+    write_criv_config(
+        root,
+        vec!["src"],
+        vec!["**/target/**", "**/node_modules/**"],
+        true,
+    );
+    fs::write(
+        root.join("docs/adr/0998-pattern-lines.md"),
+        r#"---
+id: ADR-0998
+kind: decision
+title: Pattern lines
+status: accepted
+targets:
+  patterns:
+    - { ref: missing/pattern }
+---
+
+# Pattern lines
+"#,
+    )
+    .unwrap();
+
+    criv(root)
+        .args(["check", "--filter", "unresolved-pattern"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "docs/adr/0998-pattern-lines.md:8:",
+        ))
+        .stdout(predicate::str::contains(
+            "pattern reference `missing/pattern` does not resolve",
+        ));
+}
+
+#[test]
 fn watch_port_is_rejected() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
