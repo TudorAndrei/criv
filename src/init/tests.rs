@@ -38,6 +38,12 @@ fn init_writes_parseable_structured_templates() {
         )
         .unwrap();
     }
+    let plugin_package: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join(".obsidian/plugins/criv/package.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(plugin_package["devDependencies"]["esbuild"], "0.28.1");
+    assert_eq!(plugin_package["allowScripts"]["esbuild@0.28.1"], true);
     assert!(!root.join(".obsidian/plugins/criv/main.js").exists());
 
     let readme = std::fs::read_to_string(root.join("docs/adr/README.md")).unwrap();

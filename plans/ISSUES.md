@@ -32,6 +32,12 @@ Observed results:
 - `npm audit` reported one high advisory for `esbuild@0.25.5`.
 - `cargo audit` is not installed in this environment.
 
+Resolved since this audit:
+
+- The maintained Obsidian plugin package and generated `criv init` template now
+  pin `esbuild@0.28.1`; the current high-severity plugin npm audit reports 0
+  vulnerabilities.
+
 Not run:
 
 - `mise run plugin-build`, because it rebuilds generated plugin/WASM artifacts.
@@ -46,7 +52,7 @@ Not run:
 | 3 | Make `search --files` honor `--paths` and `--lang` filters | Correctness | `criv search --files main --paths 'src/**'` still returned plugin, scripts, config, and crate files. | S | LOW | HIGH | `src/search.rs:113`, `src/search.rs:192` |
 | 4 | Validate source reference fragments, not just file paths | Correctness / Tests | Docs can target `src/lib.rs#missing_symbol` and pass as long as `src/lib.rs` exists, despite README promising symbol/source target validation. | M | MED | HIGH | `README.md:31`, `src/check.rs:422`, `src/state.rs:191` |
 | 5 | Align `criv enforce` JS/TS tooling with repo plugin tooling | DX / Tooling | `criv enforce --stage ci` tries ESLint, while this repo uses `oxlint` through npm/mise, so native JS/TS enforcement is inert here. | S/M | LOW | HIGH | `src/enforce.rs:487`, `.obsidian/plugins/criv/package.json:12`, `hk.pkl:49` |
-| 6 | Resolve high `esbuild` npm audit advisory | Dependencies / Security | Plugin dev dependency graph has one high advisory on `esbuild@0.25.5`; npm reports the available fix as breaking. | S/M | MED | HIGH | `.obsidian/plugins/criv/package.json:25`, `npm audit --prefix .obsidian/plugins/criv --audit-level=high` |
+| 6 | Resolve high `esbuild` npm audit advisory | Dependencies / Security | Resolved after bumping the maintained plugin package and generated `criv init` template to `esbuild@0.28.1`; current npm audit reports 0 vulnerabilities. | S/M | MED | HIGH | `.obsidian/plugins/criv/package.json:25`, `src/init/templates.rs:333`, `npm audit --prefix .obsidian/plugins/criv --audit-level=high` |
 | 7 | Fix frontmatter diagnostic line offsets | Correctness / DX | Pattern reference diagnostics can point at frontmatter-relative lines instead of file lines, slowing remediation. | S | LOW | MED | `src/vault.rs:546`, `src/check.rs:435` |
 
 ## Recommended Plan Set
@@ -57,7 +63,6 @@ Default plan candidates:
 2. Exclude generated plugin bundle from criv source graph.
 3. Make `search --files` honor path/language filters.
 4. Validate source reference fragments.
-5. Resolve the `esbuild` advisory.
 
 Dependency order:
 

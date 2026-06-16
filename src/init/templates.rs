@@ -330,14 +330,14 @@ fn plugin_package() -> PluginPackage {
         license: "MIT",
         dev_dependencies: BTreeMap::from([
             ("@types/node", "16.18.126"),
-            ("esbuild", "0.25.5"),
+            ("esbuild", "0.28.1"),
             ("oxfmt", "0.49.0"),
             ("oxlint", "1.64.0"),
             ("tslib", "2.4.0"),
             ("typescript", "5.8.3"),
         ]),
         dependencies: BTreeMap::from([("obsidian", "1.12.3")]),
-        allow_scripts: BTreeMap::from([("esbuild@0.25.5", true)]),
+        allow_scripts: BTreeMap::from([("esbuild@0.28.1", true)]),
     }
 }
 
