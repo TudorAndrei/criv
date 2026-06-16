@@ -38,6 +38,7 @@ fn init_writes_parseable_structured_templates() {
         )
         .unwrap();
     }
+    assert!(!root.join(".obsidian/plugins/criv/main.js").exists());
 
     let readme = std::fs::read_to_string(root.join("docs/adr/README.md")).unwrap();
     let frontmatter = readme

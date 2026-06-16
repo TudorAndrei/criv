@@ -110,7 +110,6 @@ pub(crate) fn obsidian_plugin() -> Result<Vec<TemplateFile>> {
             ".obsidian/plugins/criv/manifest.json",
             json_pretty(&plugin_manifest(), "Obsidian manifest.json")?,
         ),
-        TemplateFile::borrowed(".obsidian/plugins/criv/main.js", PLUGIN_MAIN),
         TemplateFile::borrowed(".obsidian/plugins/criv/styles.css", PLUGIN_STYLES),
         TemplateFile::borrowed(".obsidian/plugins/criv/src/core.ts", PLUGIN_TS_CORE),
         TemplateFile::borrowed(".obsidian/plugins/criv/src/main.ts", PLUGIN_TS_MAIN),
@@ -457,7 +456,6 @@ const CLAUDE_SKILLS: &[StaticTemplate] = &[
     },
 ];
 
-const PLUGIN_MAIN: &str = include_str!("../../.obsidian/plugins/criv/main.js");
 const PLUGIN_TS_CORE: &str = include_str!("../../.obsidian/plugins/criv/src/core.ts");
 const PLUGIN_TS_MAIN: &str = include_str!("../../.obsidian/plugins/criv/src/main.ts");
 const PLUGIN_TS_WASM: &str = include_str!("../../.obsidian/plugins/criv/src/wasm.ts");
