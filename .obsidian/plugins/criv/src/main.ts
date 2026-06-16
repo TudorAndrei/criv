@@ -71,7 +71,7 @@ interface SourcePreview {
 }
 
 export default class CrivPlugin extends Plugin {
-  settings: CrivSettings;
+  settings!: CrivSettings;
   private state: CrivState | null = null;
   private stateError: string | null = null;
   private hoverEl: HTMLElement | null = null;

@@ -1,10 +1,11 @@
 {
   "compilerOptions": {
     "baseUrl": "src",
+    "ignoreDeprecations": "6.0",
     "inlineSourceMap": true,
     "inlineSources": true,
     "module": "ESNext",
-    "target": "ES6",
+    "target": "ES2020",
     "allowJs": true,
     "noImplicitAny": true,
     "noImplicitThis": true,
@@ -19,9 +20,7 @@
     "useUnknownInCatchVariables": true,
     "lib": [
       "DOM",
-      "ES5",
-      "ES6",
-      "ES7"
+      "ES2020"
     ]
   },
   "include": [
