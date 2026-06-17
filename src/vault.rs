@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::Result;
+use crate::c4;
 use crate::config::Config;
 use crate::source_graph::SourceGraph;
 use crate::source_index::{FffSourceIndex, SourceIndex};
@@ -58,6 +59,7 @@ pub(crate) struct Note {
     pub(crate) supersedes: Vec<String>,
     pub(crate) superseded_by: Vec<String>,
     pub(crate) wiki_links: Vec<WikiLink>,
+    pub(crate) c4_diagrams: Vec<c4::C4Diagram>,
     pub(crate) frontmatter_error: Option<String>,
 }
 
@@ -413,6 +415,7 @@ fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
             supersedes: Vec::new(),
             superseded_by: Vec::new(),
             wiki_links: Vec::new(),
+            c4_diagrams: Vec::new(),
             frontmatter_error: Some(err),
         },
     };
@@ -428,6 +431,7 @@ fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
         .into_iter()
         .map(|(level, text, line)| Heading { level, text, line })
         .collect();
+    note.c4_diagrams = c4::parse_diagrams(&note.body);
     note.rel_path = rel_path;
     Ok(note)
 }
@@ -518,6 +522,7 @@ fn parse_frontmatter(
         supersedes: raw.supersedes,
         superseded_by: raw.superseded_by,
         wiki_links: Vec::new(),
+        c4_diagrams: Vec::new(),
         frontmatter_error: None,
     })
 }

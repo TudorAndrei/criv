@@ -341,6 +341,7 @@ fn validate_notes(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
         }
 
         validate_targets(vault, note, diagnostics);
+        validate_c4(vault, note, diagnostics);
     }
 
     for (id, notes) in ids {
@@ -486,6 +487,70 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
                 None,
                 format!("governs glob `{}` matches no source files", governs),
             ));
+        }
+    }
+}
+
+fn validate_c4(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
+    for diagram in &note.c4_diagrams {
+        for (alias, line) in diagram.duplicate_aliases() {
+            diagnostics.push(error(
+                "duplicate-c4-alias",
+                &note.rel_path,
+                Some(line),
+                format!("C4 element alias `{alias}` is declared more than once"),
+            ));
+        }
+
+        for (element, line) in diagram.duplicate_sources() {
+            diagnostics.push(error(
+                "duplicate-c4-source",
+                &note.rel_path,
+                Some(line),
+                format!(
+                    "C4 element `{}` has more than one `criv:source` annotation",
+                    element.alias
+                ),
+            ));
+        }
+
+        for relationship in diagram.unresolved_relationships() {
+            diagnostics.push(error(
+                "unresolved-c4-relationship",
+                &note.rel_path,
+                Some(relationship.line),
+                format!(
+                    "C4 relationship `{}` -> `{}` references an unknown element alias",
+                    relationship.from, relationship.to
+                ),
+            ));
+        }
+
+        for element in &diagram.elements {
+            let Some(source) = &element.source else {
+                continue;
+            };
+            match vault.resolve_source_target(source) {
+                SourceTargetResolution::Resolved { .. } => {}
+                SourceTargetResolution::MissingFile => diagnostics.push(error(
+                    "unresolved-c4-target",
+                    &note.rel_path,
+                    Some(element.line),
+                    format!(
+                        "C4 element `{}` source `{source}` does not resolve to a source file",
+                        element.alias
+                    ),
+                )),
+                SourceTargetResolution::MissingFragment { path } => diagnostics.push(error(
+                    "unresolved-c4-target",
+                    &note.rel_path,
+                    Some(element.line),
+                    format!(
+                        "C4 element `{}` source `{source}` resolves to `{path}` but does not resolve to a source symbol",
+                        element.alias
+                    ),
+                )),
+            }
         }
     }
 }
@@ -833,6 +898,112 @@ mod tests {
     }
 
     #[test]
+    fn valid_c4_source_annotation_passes() {
+        let vault = c4_vault(
+            r#"
+```mermaid
+C4Container
+Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
+%% criv:source src/main.rs#run
+```
+"#,
+        );
+
+        let diagnostics = validate(&vault);
+
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diag| diag.code != "unresolved-c4-target")
+        );
+    }
+
+    #[test]
+    fn missing_c4_source_target_is_reported() {
+        let vault = c4_vault(
+            r#"
+```mermaid
+C4Container
+Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
+%% criv:source src/missing.rs
+```
+"#,
+        );
+
+        let diagnostics = validate(&vault);
+
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diag| diag.code == "unresolved-c4-target")
+        );
+    }
+
+    #[test]
+    fn duplicate_c4_source_annotation_is_reported() {
+        let vault = c4_vault(
+            r#"
+```mermaid
+C4Container
+Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
+%% criv:source src/main.rs
+%% criv:source src/lib.rs
+```
+"#,
+        );
+
+        let diagnostics = validate(&vault);
+
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diag| diag.code == "duplicate-c4-source")
+        );
+    }
+
+    #[test]
+    fn duplicate_c4_alias_is_reported() {
+        let vault = c4_vault(
+            r#"
+```mermaid
+C4Container
+Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
+Container(cli, "Other CLI", "Rust", "Duplicates alias")
+```
+"#,
+        );
+
+        let diagnostics = validate(&vault);
+
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diag| diag.code == "duplicate-c4-alias")
+        );
+    }
+
+    #[test]
+    fn unresolved_c4_relationship_is_reported() {
+        let vault = c4_vault(
+            r#"
+```mermaid
+C4Container
+Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
+Rel(cli, plugin, "writes state for")
+```
+"#,
+        );
+
+        let diagnostics = validate(&vault);
+
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diag| diag.code == "unresolved-c4-relationship")
+        );
+    }
+
+    #[test]
     fn rumdl_fixes_markdown_content_in_process() {
         let path = unique_temp_file("criv-rumdl-fix", "README.md");
         let mut contents = "# Title\n\n\nBody\n".to_string();
@@ -857,6 +1028,19 @@ mod tests {
         dir.join(name)
     }
 
+    fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "{prefix}-{}-{unique}-{counter}",
+            std::process::id()
+        ))
+    }
+
     fn empty_decision(id: &str) -> Note {
         Note {
             path: id.into(),
@@ -876,6 +1060,7 @@ mod tests {
             supersedes: Vec::new(),
             superseded_by: Vec::new(),
             wiki_links: Vec::new(),
+            c4_diagrams: Vec::new(),
             frontmatter_error: None,
         }
     }
@@ -897,5 +1082,37 @@ mod tests {
 
     fn test_vault(notes: Vec<Note>) -> Vault {
         Vault::from_parts_for_test(notes)
+    }
+
+    fn c4_vault(diagram: &str) -> Vault {
+        let root = unique_temp_dir("criv-c4-check");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::write(
+            root.join("criv.toml"),
+            r#"
+[source]
+roots = ["src"]
+"#,
+        )
+        .unwrap();
+        fs::write(root.join("src/main.rs"), "fn run() {}\n").unwrap();
+        fs::write(root.join("src/lib.rs"), "fn helper() {}\n").unwrap();
+        fs::write(
+            root.join("docs/c4.md"),
+            format!(
+                r#"---
+id: c4
+kind: doc
+title: C4
+---
+
+# C4
+{diagram}
+"#
+            ),
+        )
+        .unwrap();
+        Vault::load(&root).unwrap()
     }
 }

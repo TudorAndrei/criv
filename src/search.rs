@@ -543,6 +543,7 @@ mod tests {
             supersedes: Vec::new(),
             superseded_by: Vec::new(),
             wiki_links: Vec::new(),
+            c4_diagrams: Vec::new(),
             frontmatter_error: None,
         };
         let body = crate::vault::Note {
@@ -579,6 +580,7 @@ mod tests {
             supersedes: Vec::new(),
             superseded_by: Vec::new(),
             wiki_links: Vec::new(),
+            c4_diagrams: Vec::new(),
             frontmatter_error: None,
         };
         let two = crate::vault::Note {
