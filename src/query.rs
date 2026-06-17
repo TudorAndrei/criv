@@ -5,6 +5,7 @@ use std::process::Command;
 
 use clap::{Args as ClapArgs, ValueEnum};
 
+use crate::source_graph::SymbolKind;
 use crate::vault::{
     NoteKind, ResolvedLink, SourceTargetResolution, Vault, source_fragment_name,
     source_fragment_path,
@@ -72,6 +73,14 @@ pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
         }
         "coverage" => coverage(&vault, options.by.as_deref()),
         "nodes" => nodes(&vault, options.kind.as_deref(), options.without_docs),
+        "c4-elements" => {
+            let id = required_arg(&options, "note-id")?;
+            c4_elements(&vault, id)?
+        }
+        "c4-code" => {
+            let glob = required_arg(&options, "path-glob")?;
+            c4_code(&vault, glob)
+        }
         "diff" => {
             let left = required_arg(&options, "ref-a")?;
             let right = options
@@ -377,6 +386,69 @@ fn nodes(vault: &Vault, kind: Option<&str>, without_docs: bool) -> Vec<String> {
     rows
 }
 
+fn c4_elements(vault: &Vault, id: &str) -> Result<Vec<String>> {
+    let note = vault
+        .resolve_note(id)
+        .ok_or_else(|| CrivError::new(format!("note `{id}` does not resolve")))?;
+    let mut rows = Vec::new();
+    for diagram in &note.c4_diagrams {
+        for element in &diagram.elements {
+            let source = match &element.source {
+                None => "none".to_string(),
+                Some(source) => match vault.resolve_source_target(source) {
+                    SourceTargetResolution::Resolved { path, .. } => path,
+                    SourceTargetResolution::MissingFile
+                    | SourceTargetResolution::MissingFragment { .. } => "unresolved".into(),
+                },
+            };
+            rows.push(format!(
+                "level={} alias={} kind={} source={}",
+                diagram.level.as_str(),
+                element.alias,
+                element.kind,
+                source
+            ));
+        }
+    }
+    Ok(rows)
+}
+
+fn c4_code(vault: &Vault, glob: &str) -> Vec<String> {
+    let in_scope = vault
+        .source_files_matching_glob(glob)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let mut classes = BTreeSet::new();
+    let mut edges = BTreeSet::new();
+
+    for symbol in vault.source_graph().symbols() {
+        if !in_scope.contains(&symbol.id.path) || !is_c4_code_symbol(symbol.kind) {
+            continue;
+        }
+        classes.insert(symbol.name.clone());
+        for call in &symbol.calls {
+            let Some(target) = vault.source_graph().resolve_call(&symbol.id, &call.target) else {
+                continue;
+            };
+            if in_scope.contains(&target.path) {
+                edges.insert(format!("{} --> {}", symbol.name, target.name));
+            }
+        }
+    }
+
+    let mut rows = vec!["classDiagram".into()];
+    rows.extend(classes.into_iter().map(|name| format!("class {name}")));
+    rows.extend(edges);
+    rows
+}
+
+fn is_c4_code_symbol(kind: SymbolKind) -> bool {
+    matches!(
+        kind,
+        SymbolKind::Class | SymbolKind::Function | SymbolKind::Method
+    )
+}
+
 fn diff(root: &Path, left: &str, right: &str) -> Result<Vec<String>> {
     let left = load_snapshot(root, left)?;
     let right = load_snapshot(root, right)?;
@@ -499,4 +571,98 @@ fn print_rows(rows: &[String], format: Format) {
 
 fn json_escape(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn c4_elements_lists_resolution_status() {
+        let temp = TempDir::new().unwrap();
+        write_query_fixture(temp.path());
+        let vault = Vault::load(temp.path()).unwrap();
+
+        let rows = c4_elements(&vault, "c4").unwrap();
+
+        assert_eq!(
+            rows,
+            vec![
+                "level=container alias=cli kind=Container source=src/lib.rs".to_string(),
+                "level=container alias=plugin kind=Container source=unresolved".to_string(),
+                "level=container alias=external kind=System_Ext source=none".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn c4_code_emits_in_scope_class_diagram() {
+        let temp = TempDir::new().unwrap();
+        write_query_fixture(temp.path());
+        let vault = Vault::load(temp.path()).unwrap();
+
+        let rows = c4_code(&vault, "src/**");
+
+        assert!(rows.contains(&"classDiagram".to_string()));
+        assert!(rows.contains(&"class Foo".to_string()));
+        assert!(rows.contains(&"class run".to_string()));
+        assert!(rows.contains(&"class helper".to_string()));
+        assert!(rows.contains(&"run --> helper".to_string()));
+        assert!(!rows.contains(&"class external".to_string()));
+        assert!(!rows.contains(&"run --> external".to_string()));
+    }
+
+    fn write_query_fixture(root: &Path) {
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("other")).unwrap();
+        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::write(
+            root.join("criv.toml"),
+            r#"
+[source]
+roots = ["src", "other"]
+"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/lib.rs"),
+            r#"
+struct Foo;
+
+impl Foo {
+    fn run(&self) {
+        helper();
+        external();
+    }
+}
+
+fn helper() {}
+"#,
+        )
+        .unwrap();
+        fs::write(root.join("other/out.rs"), "fn external() {}\n").unwrap();
+        fs::write(
+            root.join("docs/c4.md"),
+            r#"---
+id: c4
+kind: doc
+title: C4
+---
+
+# C4
+
+```mermaid
+C4Container
+Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
+%% criv:source src/lib.rs#helper
+Container(plugin, "Obsidian Plugin", "TypeScript", "Reads generated state")
+%% criv:source src/missing.rs
+System_Ext(external, "GitHub", "Renders Mermaid")
+Rel(cli, plugin, "writes state for")
+```
+"#,
+        )
+        .unwrap();
+    }
 }

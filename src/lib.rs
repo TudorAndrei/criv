@@ -51,7 +51,7 @@ impl CrivError {
     name = "criv",
     version,
     about = "Local docs-to-code knowledge graph validator and query tool",
-    after_help = "Implemented query names: next-adr-id, targets, references, cites, cited-by, governs, governing, coverage, nodes, callers, callees, attack-surface, diff, orphan-docs."
+    after_help = "Implemented query names: next-adr-id, targets, references, cites, cited-by, governs, governing, coverage, nodes, callers, callees, attack-surface, c4-elements, c4-code, diff, orphan-docs."
 )]
 struct Cli {
     #[arg(long = "usage", hide = true)]

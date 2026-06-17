@@ -85,7 +85,6 @@ impl C4Diagram {
             })
             .collect()
     }
-
 }
 
 pub(crate) fn parse_diagrams(markdown: &str) -> Vec<C4Diagram> {
