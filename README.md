@@ -12,11 +12,13 @@ state that other tools can read.
 - `criv init` creates the vault files, ADR directory, Git hooks, agent runtime
   skills, and Obsidian companion plugin scaffold.
 - `criv check` validates Markdown formatting, note schema, ADR placement,
-  wiki-links, source targets, pattern references, and ADR supersession rules.
+  wiki-links, source targets, Mermaid C4 diagram references, pattern
+  references, and ADR supersession rules.
 - `criv watch --once` writes `.criv/state.json` and content-addressed local
   snapshots for downstream tools.
 - `criv query ...` asks the graph about targets, citations, ADR governance,
-  coverage, callers, callees, attack surface, diffs, and orphaned docs.
+  coverage, callers, callees, attack surface, C4 diagrams, diffs, and orphaned
+  docs.
 - `criv search ...` searches files, text, notes, and structural policy patterns.
 - `criv enforce --stage commit|push|ci` runs stage-aware documentation and policy
   checks.
@@ -127,6 +129,8 @@ criv query coverage
 criv query nodes --kind code --without-docs
 criv query governs ADR-0001
 criv query governing src/main.rs
+criv query c4-elements ADR-0026
+criv query c4-code 'src/**'
 criv query diff latest latest
 ```
 
