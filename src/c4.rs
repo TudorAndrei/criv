@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use crate::util::markdown_fenced_blocks;
 
@@ -86,12 +86,6 @@ impl C4Diagram {
             .collect()
     }
 
-    pub(crate) fn element_by_alias(&self) -> BTreeMap<&str, &C4Element> {
-        self.elements
-            .iter()
-            .map(|element| (element.alias.as_str(), element))
-            .collect()
-    }
 }
 
 pub(crate) fn parse_diagrams(markdown: &str) -> Vec<C4Diagram> {

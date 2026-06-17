@@ -293,6 +293,59 @@ impl State {
                     ResolvedLink::Broken => {}
                 }
             }
+
+            for diagram in &note.c4_diagrams {
+                let mut element_nodes = BTreeMap::new();
+                for element in &diagram.elements {
+                    let element_id = c4_element_node_id(&note_id, diagram.line, &element.alias);
+                    element_nodes
+                        .entry(element.alias.as_str())
+                        .or_insert_with(|| element_id.clone());
+                    add_node(
+                        &mut graph,
+                        &mut seen_nodes,
+                        Node {
+                            id: element_id.clone(),
+                            hash: String::new(),
+                            kind: format!("c4-{}", diagram.level.as_str()),
+                            label: if element.label.is_empty() {
+                                element.alias.clone()
+                            } else {
+                                element.label.clone()
+                            },
+                            path: Some(format!("{}#L{}", note.rel_path, element.line)),
+                        },
+                    );
+                    add_edge(
+                        &mut graph,
+                        &mut seen_edges,
+                        &note_id,
+                        &element_id,
+                        "contains",
+                    );
+                    if let Some(source) = &element.source
+                        && let SourceTargetResolution::Resolved { path, .. } =
+                            vault.resolve_source_target(source)
+                    {
+                        add_edge(
+                            &mut graph,
+                            &mut seen_edges,
+                            &element_id,
+                            &code_node_id(&path),
+                            "references",
+                        );
+                    }
+                }
+
+                for relationship in &diagram.relationships {
+                    if let (Some(from), Some(to)) = (
+                        element_nodes.get(relationship.from.as_str()),
+                        element_nodes.get(relationship.to.as_str()),
+                    ) {
+                        add_edge(&mut graph, &mut seen_edges, from, to, "relates");
+                    }
+                }
+            }
         }
 
         let mut source_index = vault
@@ -606,6 +659,69 @@ source = false
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn c4_diagrams_are_written_to_graph_state() {
+        let root = unique_temp_dir("criv-c4-state");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::fs::write(
+            root.join("criv.toml"),
+            r#"
+[source]
+roots = ["src"]
+"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn run() {}\n").unwrap();
+        std::fs::write(
+            root.join("docs/c4.md"),
+            r#"---
+id: c4
+kind: doc
+title: C4
+---
+
+# C4
+
+```mermaid
+C4Container
+Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
+%% criv:source src/main.rs
+Container(plugin, "Obsidian Plugin", "TypeScript", "Reads generated state")
+Rel(cli, plugin, "writes state for")
+```
+"#,
+        )
+        .unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+        let state = State::build(&root, &vault).unwrap();
+
+        let cli_node = state
+            .graph
+            .nodes
+            .iter()
+            .find(|node| node.kind == "c4-container" && node.label == "criv CLI")
+            .expect("c4 container node");
+        let plugin_node = state
+            .graph
+            .nodes
+            .iter()
+            .find(|node| node.kind == "c4-container" && node.label == "Obsidian Plugin")
+            .expect("second c4 container node");
+        assert!(state.graph.edges.iter().any(|edge| {
+            edge.from == "note:c4" && edge.to == cli_node.id && edge.kind == "contains"
+        }));
+        assert!(state.graph.edges.iter().any(|edge| {
+            edge.from == cli_node.id && edge.to == "code:src/main.rs" && edge.kind == "references"
+        }));
+        assert!(state.graph.edges.iter().any(|edge| {
+            edge.from == cli_node.id && edge.to == plugin_node.id && edge.kind == "relates"
+        }));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -637,6 +753,10 @@ fn symbol_node_id(id: &str) -> String {
 
 fn external_call_node_id(id: &str) -> String {
     format!("external-call:{id}")
+}
+
+fn c4_element_node_id(note_id: &str, diagram_line: usize, alias: &str) -> String {
+    format!("{note_id}:c4:{diagram_line}:{alias}")
 }
 
 fn symbol_kind(kind: SymbolKind) -> &'static str {
