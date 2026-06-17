@@ -1,3 +1,4 @@
+mod c4;
 mod check;
 mod config;
 mod enforce;

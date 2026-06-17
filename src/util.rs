@@ -4,7 +4,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
-use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Parser, Tag, TagEnd};
 
 use crate::{CrivError, Result};
 
@@ -155,6 +155,39 @@ pub(crate) fn find_wiki_links_with_lines(markdown: &str) -> Vec<(usize, String)>
     links
 }
 
+pub(crate) fn markdown_fenced_blocks(markdown: &str) -> Vec<(usize, Option<String>, String)> {
+    let mut blocks = Vec::new();
+    let mut active: Option<(usize, Option<String>, String)> = None;
+
+    for (event, range) in Parser::new(markdown).into_offset_iter() {
+        match event {
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {
+                active = Some((
+                    line_number(markdown, range.start),
+                    Some(info.trim().to_string()).filter(|value| !value.is_empty()),
+                    String::new(),
+                ));
+            }
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Indented)) => {
+                active = Some((line_number(markdown, range.start), None, String::new()));
+            }
+            Event::Text(text) => {
+                if let Some((_, _, contents)) = &mut active {
+                    contents.push_str(&text);
+                }
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                if let Some(block) = active.take() {
+                    blocks.push(block);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    blocks
+}
+
 pub(crate) fn markdown_headings(markdown: &str) -> Vec<(usize, String, usize)> {
     let mut headings = Vec::new();
     let mut active: Option<(usize, usize, String)> = None;
@@ -266,5 +299,17 @@ mod tests {
         assert!(glob_matches("src/**", "src/auth/verify.rs"));
         assert!(glob_matches("src/*.rs", "src/lib.rs"));
         assert!(!glob_matches("src/*.rs", "src/auth/lib.rs"));
+    }
+
+    #[test]
+    fn fenced_blocks_include_line_info_and_contents() {
+        let blocks = markdown_fenced_blocks("intro\n```mermaid\nflowchart TD\n```\n\n    code\n");
+
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].0, 2);
+        assert_eq!(blocks[0].1.as_deref(), Some("mermaid"));
+        assert_eq!(blocks[0].2, "flowchart TD\n");
+        assert_eq!(blocks[1].1, None);
+        assert_eq!(blocks[1].2, "code\n");
     }
 }
