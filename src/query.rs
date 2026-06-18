@@ -442,6 +442,13 @@ fn c4_code(vault: &Vault, glob: &str) -> Vec<String> {
         .source_files_matching_glob(glob)
         .into_iter()
         .collect::<BTreeSet<_>>();
+    if in_scope.is_empty() {
+        return vec![
+            "classDiagram".into(),
+            format!("%% no source files matched `{glob}`"),
+        ];
+    }
+
     let mut classes = BTreeSet::new();
     let mut edges = BTreeSet::new();
 
@@ -646,7 +653,7 @@ mod tests {
         write_query_fixture(temp.path());
         let vault = Vault::load(temp.path()).unwrap();
 
-        let rows = c4_code(&vault, "src/**");
+        let rows = c4_code(&vault, "src/lib.rs");
 
         assert!(rows.contains(&"classDiagram".to_string()));
         assert!(rows.contains(&"class Foo".to_string()));
@@ -655,6 +662,23 @@ mod tests {
         assert!(rows.contains(&"run --> helper".to_string()));
         assert!(!rows.contains(&"class external".to_string()));
         assert!(!rows.contains(&"run --> external".to_string()));
+    }
+
+    #[test]
+    fn c4_code_reports_empty_source_glob_as_valid_mermaid() {
+        let temp = TempDir::new().unwrap();
+        write_query_fixture(temp.path());
+        let vault = Vault::load(temp.path()).unwrap();
+
+        let rows = c4_code(&vault, "src/missing.rs");
+
+        assert_eq!(
+            rows,
+            vec![
+                "classDiagram".to_string(),
+                "%% no source files matched `src/missing.rs`".to_string(),
+            ]
+        );
     }
 
     fn write_query_fixture(root: &Path) {

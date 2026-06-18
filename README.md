@@ -17,8 +17,8 @@ state that other tools can read.
 - `criv watch --once` writes `.criv/state.json` and content-addressed local
   snapshots for downstream tools.
 - `criv query ...` asks the graph about targets, citations, ADR governance,
-  coverage, callers, callees, attack surface, C4 diagrams, diffs, and orphaned
-  docs.
+  coverage, callers, callees, attack surface, C4 elements and relationships,
+  focused C4 Code projections, diffs, and orphaned docs.
 - `criv search ...` searches files, text, notes, and structural policy patterns.
 - `criv enforce --stage commit|push|ci` runs stage-aware documentation and policy
   checks.
@@ -130,9 +130,14 @@ criv query nodes --kind code --without-docs
 criv query governs ADR-0001
 criv query governing src/main.rs
 criv query c4-elements ADR-0026
-criv query c4-code 'src/**'
+criv query c4-relationships ADR-0026
+criv query c4-code src/c4.rs
 criv query diff latest latest
 ```
+
+`c4-code` emits a Mermaid `classDiagram` from the source graph for a focused
+file or component/module glob. Use it for C4 Code-level inspection of a narrow
+implementation area, not as a whole-application architecture diagram.
 
 Search code and notes:
 
