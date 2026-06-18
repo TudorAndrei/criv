@@ -257,6 +257,123 @@ Range [[src/lib.rs#L1-L1]]
 }
 
 #[test]
+fn c4_standard_alignment_cli_smoke_test() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("docs")).unwrap();
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn run() {\n    helper();\n}\n\nfn helper() {}\n",
+    )
+    .unwrap();
+    write_criv_config(
+        root,
+        vec!["src"],
+        vec!["**/target/**", "**/node_modules/**"],
+        true,
+    );
+
+    fs::write(
+        root.join("docs/c4.md"),
+        r#"---
+id: c4
+kind: doc
+title: C4 Smoke
+---
+
+## C4 Smoke
+
+```mermaid
+C4Container
+System_Boundary(system, "criv") {
+    Container(cli, "criv CLI", "Rust", "Runs local validation")
+    Container(plugin, "Obsidian Plugin", "TypeScript", "Reads generated state")
+}
+Rel(cli, plugin, "writes state for")
+```
+"#,
+    )
+    .unwrap();
+
+    criv(root).arg("check").assert().success();
+    criv(root)
+        .args(["query", "c4-elements", "c4"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "alias=cli category=container kind=Container",
+        ))
+        .stdout(predicate::str::contains(
+            "alias=plugin category=container kind=Container",
+        ))
+        .stdout(predicate::str::contains("alias=system").not());
+    criv(root)
+        .args(["query", "c4-relationships", "c4"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("label=writes state for"));
+    criv(root)
+        .args(["query", "c4-code", "src/lib.rs"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("classDiagram"))
+        .stdout(predicate::str::contains("class run"))
+        .stdout(predicate::str::contains("run --> helper"));
+
+    fs::write(
+        root.join("docs/c4.md"),
+        r#"---
+id: c4
+kind: doc
+title: C4 Smoke
+---
+
+## C4 Smoke
+
+```mermaid
+C4Container
+System_Boundary(system, "criv") {
+    Container(cli, "criv CLI", "Rust", "Runs local validation")
+}
+Rel(cli, system, "runs inside")
+```
+"#,
+    )
+    .unwrap();
+    criv(root)
+        .args(["check", "--filter", "unresolved-c4-relationship"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("unresolved-c4-relationship"));
+
+    fs::write(
+        root.join("docs/c4.md"),
+        r#"---
+id: c4
+kind: doc
+title: C4 Smoke
+---
+
+## C4 Smoke
+
+```mermaid
+C4Container
+Component(parser, "C4 Parser", "Rust", "Parses Mermaid C4 blocks")
+```
+"#,
+    )
+    .unwrap();
+    criv(root)
+        .args(["check", "--filter", "invalid-c4-level"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("invalid-c4-level"));
+}
+
+#[test]
 fn unresolved_pattern_diagnostic_uses_file_line_number() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
