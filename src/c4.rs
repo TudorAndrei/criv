@@ -19,15 +19,43 @@ impl C4Level {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum C4ElementCategory {
+    Person,
+    SoftwareSystem,
+    Container,
+    Component,
+}
+
+impl C4ElementCategory {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Person => "person",
+            Self::SoftwareSystem => "software-system",
+            Self::Container => "container",
+            Self::Component => "component",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct C4Element {
     pub(crate) alias: String,
     pub(crate) kind: String,
+    pub(crate) category: C4ElementCategory,
     pub(crate) label: String,
     pub(crate) technology: Option<String>,
     pub(crate) description: Option<String>,
     pub(crate) source: Option<String>,
     pub(crate) duplicate_source_lines: Vec<usize>,
+    pub(crate) line: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct C4Boundary {
+    pub(crate) alias: String,
+    pub(crate) kind: String,
+    pub(crate) label: String,
     pub(crate) line: usize,
 }
 
@@ -43,7 +71,9 @@ pub(crate) struct C4Relationship {
 pub(crate) struct C4Diagram {
     pub(crate) level: C4Level,
     pub(crate) elements: Vec<C4Element>,
+    pub(crate) boundaries: Vec<C4Boundary>,
     pub(crate) relationships: Vec<C4Relationship>,
+    pub(crate) invalid_source_placements: Vec<(usize, String)>,
     pub(crate) line: usize,
 }
 
@@ -111,36 +141,42 @@ fn parse_diagram(start_line: usize, contents: &str) -> Option<C4Diagram> {
     let mut diagram = C4Diagram {
         level,
         elements: Vec::new(),
+        boundaries: Vec::new(),
         relationships: Vec::new(),
+        invalid_source_placements: Vec::new(),
         line: start_line + header_index + 1,
     };
-    let mut last_element: Option<usize> = None;
+    let mut last_construct = LastConstruct::None;
 
     for (index, line) in lines {
         let line_number = start_line + index + 1;
         let trimmed = line.trim();
         if trimmed.is_empty() {
-            last_element = None;
+            last_construct = LastConstruct::None;
             continue;
         }
         if let Some(source) = source_comment(trimmed) {
-            if let Some(element_index) = last_element {
+            if let LastConstruct::Element(element_index) = last_construct {
                 let element = &mut diagram.elements[element_index];
                 if element.source.is_some() {
                     element.duplicate_source_lines.push(line_number);
                 } else {
                     element.source = Some(source);
                 }
+            } else {
+                diagram
+                    .invalid_source_placements
+                    .push((line_number, source));
             }
             continue;
         }
         if trimmed.starts_with("%%") {
-            last_element = None;
+            last_construct = LastConstruct::None;
             continue;
         }
 
         let Some((name, args)) = parse_macro(trimmed) else {
-            last_element = None;
+            last_construct = LastConstruct::None;
             continue;
         };
 
@@ -148,20 +184,35 @@ fn parse_diagram(start_line: usize, contents: &str) -> Option<C4Diagram> {
             if let Some(relationship) = parse_relationship(args, line_number) {
                 diagram.relationships.push(relationship);
             }
-            last_element = None;
-        } else if is_element_macro(&name) {
-            if let Some(element) = parse_element(name, args, line_number) {
-                diagram.elements.push(element);
-                last_element = Some(diagram.elements.len() - 1);
+            last_construct = LastConstruct::Relationship;
+        } else if is_boundary_macro(&name) {
+            if let Some(boundary) = parse_boundary(name, args, line_number) {
+                diagram.boundaries.push(boundary);
+                last_construct = LastConstruct::Boundary;
             } else {
-                last_element = None;
+                last_construct = LastConstruct::None;
+            }
+        } else if let Some(category) = element_category(&name) {
+            if let Some(element) = parse_element(name, category, args, line_number) {
+                diagram.elements.push(element);
+                last_construct = LastConstruct::Element(diagram.elements.len() - 1);
+            } else {
+                last_construct = LastConstruct::None;
             }
         } else {
-            last_element = None;
+            last_construct = LastConstruct::None;
         }
     }
 
     Some(diagram)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LastConstruct {
+    None,
+    Element(usize),
+    Boundary,
+    Relationship,
 }
 
 fn source_comment(line: &str) -> Option<String> {
@@ -250,18 +301,33 @@ fn is_relationship_macro(name: &str) -> bool {
     name == "BiRel" || name.starts_with("Rel")
 }
 
-fn is_element_macro(name: &str) -> bool {
+fn is_boundary_macro(name: &str) -> bool {
     matches!(
         name,
         "Boundary" | "Enterprise_Boundary" | "System_Boundary" | "Container_Boundary"
     ) || name.ends_with("_Boundary")
-        || name.starts_with("Person")
-        || name.starts_with("System")
-        || name.starts_with("Container")
-        || name.starts_with("Component")
 }
 
-fn parse_element(kind: String, args: Vec<String>, line: usize) -> Option<C4Element> {
+fn element_category(name: &str) -> Option<C4ElementCategory> {
+    if name.starts_with("Person") {
+        Some(C4ElementCategory::Person)
+    } else if name.starts_with("System") {
+        Some(C4ElementCategory::SoftwareSystem)
+    } else if name.starts_with("Container") {
+        Some(C4ElementCategory::Container)
+    } else if name.starts_with("Component") {
+        Some(C4ElementCategory::Component)
+    } else {
+        None
+    }
+}
+
+fn parse_element(
+    kind: String,
+    category: C4ElementCategory,
+    args: Vec<String>,
+    line: usize,
+) -> Option<C4Element> {
     let alias = args.first()?.trim().to_string();
     if alias.is_empty() {
         return None;
@@ -269,11 +335,25 @@ fn parse_element(kind: String, args: Vec<String>, line: usize) -> Option<C4Eleme
     Some(C4Element {
         alias,
         kind,
+        category,
         label: args.get(1).cloned().unwrap_or_default(),
         technology: args.get(2).cloned().filter(|value| !value.is_empty()),
         description: args.get(3).cloned().filter(|value| !value.is_empty()),
         source: None,
         duplicate_source_lines: Vec::new(),
+        line,
+    })
+}
+
+fn parse_boundary(kind: String, args: Vec<String>, line: usize) -> Option<C4Boundary> {
+    let alias = args.first()?.trim().to_string();
+    if alias.is_empty() {
+        return None;
+    }
+    Some(C4Boundary {
+        alias,
+        kind,
+        label: args.get(1).cloned().unwrap_or_default(),
         line,
     })
 }
@@ -309,10 +389,13 @@ C4Container
         assert_eq!(diagrams.len(), 1);
         let diagram = &diagrams[0];
         assert_eq!(diagram.level, C4Level::Container);
-        assert_eq!(diagram.elements.len(), 3);
-        assert_eq!(diagram.elements[0].alias, "c1");
-        assert_eq!(diagram.elements[1].kind, "Container");
-        assert_eq!(diagram.elements[1].label, "criv CLI");
+        assert_eq!(diagram.boundaries.len(), 1);
+        assert_eq!(diagram.boundaries[0].alias, "c1");
+        assert_eq!(diagram.boundaries[0].kind, "System_Boundary");
+        assert_eq!(diagram.elements.len(), 2);
+        assert_eq!(diagram.elements[0].kind, "Container");
+        assert_eq!(diagram.elements[0].category, C4ElementCategory::Container);
+        assert_eq!(diagram.elements[0].label, "criv CLI");
         assert_eq!(diagram.relationships.len(), 1);
         assert_eq!(diagram.relationships[0].from, "cli");
         assert_eq!(diagram.relationships[0].to, "plugin");
@@ -350,6 +433,51 @@ Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
 
         assert_eq!(diagram.elements[0].source.as_deref(), Some("src/main.rs"));
         assert_eq!(diagram.duplicate_sources().len(), 1);
+    }
+
+    #[test]
+    fn normalizes_external_person_and_system_variants() {
+        let diagram = parse_diagrams(
+            r#"
+```mermaid
+C4Context
+Person_Ext(user, "Repository maintainer", "Uses the CLI")
+System_Ext(github, "GitHub", "Renders Mermaid diagrams")
+```
+"#,
+        )
+        .remove(0);
+
+        assert_eq!(diagram.elements.len(), 2);
+        assert_eq!(diagram.elements[0].kind, "Person_Ext");
+        assert_eq!(diagram.elements[0].category, C4ElementCategory::Person);
+        assert_eq!(diagram.elements[1].kind, "System_Ext");
+        assert_eq!(
+            diagram.elements[1].category,
+            C4ElementCategory::SoftwareSystem
+        );
+    }
+
+    #[test]
+    fn source_comment_after_boundary_is_invalid_placement() {
+        let diagram = parse_diagrams(
+            r#"
+```mermaid
+C4Container
+System_Boundary(system, "criv") {
+%% criv:source src/main.rs
+}
+```
+"#,
+        )
+        .remove(0);
+
+        assert_eq!(diagram.boundaries.len(), 1);
+        assert!(diagram.elements.is_empty());
+        assert_eq!(
+            diagram.invalid_source_placements,
+            vec![(5, "src/main.rs".into())]
+        );
     }
 
     #[test]
