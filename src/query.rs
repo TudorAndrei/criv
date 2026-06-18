@@ -77,6 +77,10 @@ pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
             let id = required_arg(&options, "note-id")?;
             c4_elements(&vault, id)?
         }
+        "c4-relationships" => {
+            let id = required_arg(&options, "note-id")?;
+            c4_relationships(&vault, id)?
+        }
         "c4-code" => {
             let glob = required_arg(&options, "path-glob")?;
             c4_code(&vault, glob)
@@ -402,11 +406,31 @@ fn c4_elements(vault: &Vault, id: &str) -> Result<Vec<String>> {
                 },
             };
             rows.push(format!(
-                "level={} alias={} kind={} source={}",
+                "level={} alias={} category={} kind={} source={}",
                 diagram.level.as_str(),
                 element.alias,
+                element.category.as_str(),
                 element.kind,
                 source
+            ));
+        }
+    }
+    Ok(rows)
+}
+
+fn c4_relationships(vault: &Vault, id: &str) -> Result<Vec<String>> {
+    let note = vault
+        .resolve_note(id)
+        .ok_or_else(|| CrivError::new(format!("note `{id}` does not resolve")))?;
+    let mut rows = Vec::new();
+    for diagram in &note.c4_diagrams {
+        for relationship in &diagram.relationships {
+            rows.push(format!(
+                "level={} from={} to={} label={}",
+                diagram.level.as_str(),
+                relationship.from,
+                relationship.to,
+                relationship.label.as_deref().unwrap_or("missing")
             ));
         }
     }
@@ -589,9 +613,29 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                "level=container alias=cli kind=Container source=src/lib.rs".to_string(),
-                "level=container alias=plugin kind=Container source=unresolved".to_string(),
-                "level=container alias=external kind=System_Ext source=none".to_string(),
+                "level=container alias=cli category=container kind=Container source=src/lib.rs"
+                    .to_string(),
+                "level=container alias=plugin category=container kind=Container source=unresolved"
+                    .to_string(),
+                "level=container alias=external category=software-system kind=System_Ext source=none"
+                    .to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn c4_relationships_lists_labels() {
+        let temp = TempDir::new().unwrap();
+        write_query_fixture(temp.path());
+        let vault = Vault::load(temp.path()).unwrap();
+
+        let rows = c4_relationships(&vault, "c4").unwrap();
+
+        assert_eq!(
+            rows,
+            vec![
+                "level=container from=cli to=plugin label=writes state for".to_string(),
+                "level=container from=plugin to=external label=missing".to_string(),
             ]
         );
     }
@@ -660,6 +704,7 @@ Container(plugin, "Obsidian Plugin", "TypeScript", "Reads generated state")
 %% criv:source src/missing.rs
 System_Ext(external, "GitHub", "Renders Mermaid")
 Rel(cli, plugin, "writes state for")
+Rel(plugin, external)
 ```
 "#,
         )

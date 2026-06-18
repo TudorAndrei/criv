@@ -307,7 +307,7 @@ impl State {
                         Node {
                             id: element_id.clone(),
                             hash: String::new(),
-                            kind: format!("c4-{}", diagram.level.as_str()),
+                            kind: format!("c4-{}", element.category.as_str()),
                             label: if element.label.is_empty() {
                                 element.alias.clone()
                             } else {
@@ -342,6 +342,35 @@ impl State {
                         element_nodes.get(relationship.from.as_str()),
                         element_nodes.get(relationship.to.as_str()),
                     ) {
+                        let relationship_id = c4_relationship_node_id(
+                            &note_id,
+                            diagram.line,
+                            relationship.line,
+                            &relationship.from,
+                            &relationship.to,
+                        );
+                        add_node(
+                            &mut graph,
+                            &mut seen_nodes,
+                            Node {
+                                id: relationship_id.clone(),
+                                hash: String::new(),
+                                kind: "c4-relationship".into(),
+                                label: relationship.label.clone().unwrap_or_else(|| {
+                                    format!("{} -> {}", relationship.from, relationship.to)
+                                }),
+                                path: Some(format!("{}#L{}", note.rel_path, relationship.line)),
+                            },
+                        );
+                        add_edge(
+                            &mut graph,
+                            &mut seen_edges,
+                            &note_id,
+                            &relationship_id,
+                            "contains",
+                        );
+                        add_edge(&mut graph, &mut seen_edges, &relationship_id, from, "from");
+                        add_edge(&mut graph, &mut seen_edges, &relationship_id, to, "to");
                         add_edge(&mut graph, &mut seen_edges, from, to, "relates");
                     }
                 }
@@ -685,9 +714,12 @@ title: C4
 
 ```mermaid
 C4Container
-Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
-%% criv:source src/main.rs
-Container(plugin, "Obsidian Plugin", "TypeScript", "Reads generated state")
+System_Boundary(system, "criv") {
+    Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
+    %% criv:source src/main.rs
+    Container(plugin, "Obsidian Plugin", "TypeScript", "Reads generated state")
+}
+System_Ext(github, "GitHub", "Hosts remote repositories")
 Rel(cli, plugin, "writes state for")
 ```
 "#,
@@ -709,6 +741,26 @@ Rel(cli, plugin, "writes state for")
             .iter()
             .find(|node| node.kind == "c4-container" && node.label == "Obsidian Plugin")
             .expect("second c4 container node");
+        let github_node = state
+            .graph
+            .nodes
+            .iter()
+            .find(|node| node.kind == "c4-software-system" && node.label == "GitHub")
+            .expect("external software system node");
+        assert!(
+            github_node
+                .path
+                .as_deref()
+                .is_some_and(|path| path.starts_with("docs/c4.md#L"))
+        );
+        assert!(
+            !state.graph.nodes.iter().any(|node| {
+                node.kind.starts_with("c4-")
+                    && node.kind != "c4-relationship"
+                    && node.label == "criv"
+            }),
+            "boundary labels must not be emitted as architecture element nodes"
+        );
         assert!(state.graph.edges.iter().any(|edge| {
             edge.from == "note:c4" && edge.to == cli_node.id && edge.kind == "contains"
         }));
@@ -717,6 +769,21 @@ Rel(cli, plugin, "writes state for")
         }));
         assert!(state.graph.edges.iter().any(|edge| {
             edge.from == cli_node.id && edge.to == plugin_node.id && edge.kind == "relates"
+        }));
+        let relationship_node = state
+            .graph
+            .nodes
+            .iter()
+            .find(|node| node.kind == "c4-relationship" && node.label == "writes state for")
+            .expect("labelled c4 relationship node");
+        assert!(state.graph.edges.iter().any(|edge| {
+            edge.from == "note:c4" && edge.to == relationship_node.id && edge.kind == "contains"
+        }));
+        assert!(state.graph.edges.iter().any(|edge| {
+            edge.from == relationship_node.id && edge.to == cli_node.id && edge.kind == "from"
+        }));
+        assert!(state.graph.edges.iter().any(|edge| {
+            edge.from == relationship_node.id && edge.to == plugin_node.id && edge.kind == "to"
         }));
 
         let _ = std::fs::remove_dir_all(root);
@@ -757,6 +824,16 @@ fn external_call_node_id(id: &str) -> String {
 
 fn c4_element_node_id(note_id: &str, diagram_line: usize, alias: &str) -> String {
     format!("{note_id}:c4:{diagram_line}:{alias}")
+}
+
+fn c4_relationship_node_id(
+    note_id: &str,
+    diagram_line: usize,
+    relationship_line: usize,
+    from: &str,
+    to: &str,
+) -> String {
+    format!("{note_id}:c4:{diagram_line}:rel:{relationship_line}:{from}:{to}")
 }
 
 fn symbol_kind(kind: SymbolKind) -> &'static str {
