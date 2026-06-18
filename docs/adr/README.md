@@ -37,3 +37,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0024-oxlint-only-javascript-typescript-enforcement|ADR-0024]] - Oxlint only JavaScript TypeScript enforcement
 - [[0025-init-ships-plugin-source-not-generated-bundle|ADR-0025]] - Init ships plugin source not generated bundle
 - [[0026-mermaid-c4-diagrams-as-vault-content|ADR-0026]] - Mermaid C4 diagrams as vault content
+- [[0027-c4-diagram-fenced-block-extraction-scope|ADR-0027]] - C4 diagram fenced block extraction scope
