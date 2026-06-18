@@ -337,8 +337,20 @@ fn parse_element(
         kind,
         category,
         label: args.get(1).cloned().unwrap_or_default(),
-        technology: args.get(2).cloned().filter(|value| !value.is_empty()),
-        description: args.get(3).cloned().filter(|value| !value.is_empty()),
+        technology: match category {
+            C4ElementCategory::Person | C4ElementCategory::SoftwareSystem => None,
+            C4ElementCategory::Container | C4ElementCategory::Component => {
+                args.get(2).cloned().filter(|value| !value.is_empty())
+            }
+        },
+        description: match category {
+            C4ElementCategory::Person | C4ElementCategory::SoftwareSystem => {
+                args.get(2).cloned().filter(|value| !value.is_empty())
+            }
+            C4ElementCategory::Container | C4ElementCategory::Component => {
+                args.get(3).cloned().filter(|value| !value.is_empty())
+            }
+        },
         source: None,
         duplicate_source_lines: Vec::new(),
         line,
@@ -456,6 +468,11 @@ System_Ext(github, "GitHub", "Renders Mermaid diagrams")
             diagram.elements[1].category,
             C4ElementCategory::SoftwareSystem
         );
+        assert_eq!(
+            diagram.elements[1].description.as_deref(),
+            Some("Renders Mermaid diagrams")
+        );
+        assert_eq!(diagram.elements[1].technology, None);
     }
 
     #[test]

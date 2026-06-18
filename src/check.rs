@@ -9,6 +9,7 @@ use rumdl_lib::fix_coordinator::FixCoordinator;
 use rumdl_lib::rule::{LintWarning, Rule};
 use rumdl_lib::rules::{all_rules, filter_rules};
 
+use crate::c4::{C4ElementCategory, C4Level};
 use crate::util::{is_adr_id, kebab};
 use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
@@ -493,6 +494,15 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
 
 fn validate_c4(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
     for diagram in &note.c4_diagrams {
+        for (line, source) in &diagram.invalid_source_placements {
+            diagnostics.push(error(
+                "invalid-c4-source-placement",
+                &note.rel_path,
+                Some(*line),
+                format!("`criv:source {source}` must immediately follow a C4 architecture element"),
+            ));
+        }
+
         for (alias, line) in diagram.duplicate_aliases() {
             diagnostics.push(error(
                 "duplicate-c4-alias",
@@ -526,7 +536,73 @@ fn validate_c4(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
             ));
         }
 
+        for relationship in &diagram.relationships {
+            if relationship.label.is_none() {
+                diagnostics.push(warning(
+                    "missing-c4-relationship-label",
+                    &note.rel_path,
+                    Some(relationship.line),
+                    format!(
+                        "C4 relationship `{}` -> `{}` should describe its communication intent",
+                        relationship.from, relationship.to
+                    ),
+                ));
+            }
+        }
+
         for element in &diagram.elements {
+            if !c4_category_allowed_at_level(diagram.level, element.category) {
+                diagnostics.push(error(
+                    "invalid-c4-level",
+                    &note.rel_path,
+                    Some(element.line),
+                    format!(
+                        "C4 {} diagram cannot contain a {} element `{}`",
+                        diagram.level.as_str(),
+                        element.category.as_str(),
+                        element.alias
+                    ),
+                ));
+            }
+
+            if element.label.is_empty() {
+                diagnostics.push(warning(
+                    "missing-c4-label",
+                    &note.rel_path,
+                    Some(element.line),
+                    format!("C4 element `{}` should have a label", element.alias),
+                ));
+            }
+
+            if element.description.is_none() {
+                diagnostics.push(warning(
+                    "missing-c4-description",
+                    &note.rel_path,
+                    Some(element.line),
+                    format!(
+                        "C4 element `{}` should describe its responsibility",
+                        element.alias
+                    ),
+                ));
+            }
+
+            if matches!(
+                element.category,
+                C4ElementCategory::Container | C4ElementCategory::Component
+            ) && element.technology.is_none()
+            {
+                diagnostics.push(warning(
+                    "missing-c4-technology",
+                    &note.rel_path,
+                    Some(element.line),
+                    format!(
+                        "C4 {} element `{}` should include a technology",
+                        element.category.as_str(),
+                        element.alias
+                    ),
+                ));
+            }
+
             let Some(source) = &element.source else {
                 continue;
             };
@@ -552,6 +628,17 @@ fn validate_c4(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
                 )),
             }
         }
+    }
+}
+
+fn c4_category_allowed_at_level(level: C4Level, category: C4ElementCategory) -> bool {
+    match level {
+        C4Level::Context => matches!(
+            category,
+            C4ElementCategory::Person | C4ElementCategory::SoftwareSystem
+        ),
+        C4Level::Container => !matches!(category, C4ElementCategory::Component),
+        C4Level::Component => true,
     }
 }
 
@@ -1001,6 +1088,134 @@ Rel(cli, plugin, "writes state for")
                 .iter()
                 .any(|diag| diag.code == "unresolved-c4-relationship")
         );
+    }
+
+    #[test]
+    fn relationship_to_c4_boundary_is_unresolved() {
+        let vault = c4_vault(
+            r#"
+```mermaid
+C4Container
+System_Boundary(system, "criv") {
+    Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
+}
+Rel(cli, system, "runs inside")
+```
+"#,
+        );
+
+        let diagnostics = validate(&vault);
+
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diag| diag.code == "unresolved-c4-relationship")
+        );
+    }
+
+    #[test]
+    fn invalid_c4_level_is_reported_for_mixed_abstractions() {
+        let context_vault = c4_vault(
+            r#"
+```mermaid
+C4Context
+Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
+```
+"#,
+        );
+        let container_vault = c4_vault(
+            r#"
+```mermaid
+C4Container
+Component(parser, "C4 Parser", "Rust", "Parses Mermaid C4 blocks")
+```
+"#,
+        );
+
+        assert!(
+            validate(&context_vault)
+                .iter()
+                .any(|diag| diag.code == "invalid-c4-level")
+        );
+        assert!(
+            validate(&container_vault)
+                .iter()
+                .any(|diag| diag.code == "invalid-c4-level")
+        );
+    }
+
+    #[test]
+    fn surrounding_context_elements_are_valid_in_lower_level_diagrams() {
+        let vault = c4_vault(
+            r#"
+```mermaid
+C4Component
+Person(user, "Maintainer", "Runs checks")
+System_Ext(github, "GitHub", "Hosts repositories")
+Container(cli, "criv CLI", "Rust", "Runs local validation")
+Component(parser, "C4 Parser", "Rust", "Parses Mermaid C4 blocks")
+```
+"#,
+        );
+
+        let diagnostics = validate(&vault);
+
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diag| diag.code != "invalid-c4-level")
+        );
+    }
+
+    #[test]
+    fn invalid_c4_source_placement_is_reported() {
+        let vault = c4_vault(
+            r#"
+```mermaid
+C4Container
+System_Boundary(system, "criv") {
+%% criv:source src/main.rs
+}
+```
+"#,
+        );
+
+        let diagnostics = validate(&vault);
+
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diag| diag.code == "invalid-c4-source-placement")
+        );
+    }
+
+    #[test]
+    fn missing_c4_metadata_is_reported_as_warnings() {
+        let vault = c4_vault(
+            r#"
+```mermaid
+C4Container
+Container(cli, "")
+Rel(cli, cli)
+```
+"#,
+        );
+
+        let diagnostics = validate(&vault);
+
+        for code in [
+            "missing-c4-label",
+            "missing-c4-description",
+            "missing-c4-technology",
+            "missing-c4-relationship-label",
+        ] {
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|diag| diag.code == code && diag.is_warning()),
+                "missing warning {code}"
+            );
+        }
     }
 
     #[test]
