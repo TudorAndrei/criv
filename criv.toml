@@ -11,7 +11,7 @@ source = true
 embeddings = false
 
 [architecture.code]
-output = "docs/architecture/04-code.md"
+output = "docs/architecture/04-code.c4"
 title = "Code diagram for criv"
 
 [enforce]

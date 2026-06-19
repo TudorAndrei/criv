@@ -21,7 +21,7 @@ fn write_code_architecture_with_config(
     config: &ArchitectureCodeConfig,
 ) -> Result<bool> {
     let path = root.join(&config.output);
-    let content = code_architecture_note(vault, &config.title);
+    let content = code_architecture_content(vault, config);
     if path.exists() && read_to_string(&path)? == content {
         return Ok(false);
     }
@@ -31,6 +31,22 @@ fn write_code_architecture_with_config(
     }
     fs::write(path, content)?;
     Ok(true)
+}
+
+fn code_architecture_content(vault: &Vault, config: &ArchitectureCodeConfig) -> String {
+    if Path::new(&config.output)
+        .extension()
+        .is_some_and(|ext| ext == "c4")
+    {
+        code_architecture_artifact(vault)
+    } else {
+        code_architecture_note(vault, &config.title)
+    }
+}
+
+fn code_architecture_artifact(vault: &Vault) -> String {
+    let diagram = c4_code::for_all_indexed_sources_dot(vault).join("\n");
+    format!("// criv:generated true\n{diagram}\n")
 }
 
 fn code_architecture_note(vault: &Vault, title: &str) -> String {
@@ -93,7 +109,28 @@ mod tests {
         assert!(output.contains("// no indexed source files available"));
     }
 
+    #[test]
+    fn code_architecture_c4_output_writes_direct_dot() {
+        let temp = TempDir::new().unwrap();
+        write_architecture_fixture_with_output(temp.path(), true, "docs/architecture/04-code.c4");
+        let vault = Vault::load(temp.path()).unwrap();
+
+        assert!(write_code_architecture(temp.path(), &vault).unwrap());
+        assert!(!write_code_architecture(temp.path(), &vault).unwrap());
+
+        let output = read_to_string(&temp.path().join("docs/architecture/04-code.c4")).unwrap();
+        assert!(output.starts_with("// criv:generated true\ndigraph criv_code"));
+        assert!(!output.contains("```dot"));
+        assert!(!output.contains("id: architecture-code"));
+        assert!(output.contains("\"src/lib.rs#run\" [label=\"run\\nsrc/lib.rs\"]"));
+        assert!(output.contains("\"src/lib.rs#run\" -> \"src/lib.rs#helper\""));
+    }
+
     fn write_architecture_fixture(root: &Path, source_index: bool) {
+        write_architecture_fixture_with_output(root, source_index, "docs/architecture/04-code.md");
+    }
+
+    fn write_architecture_fixture_with_output(root: &Path, source_index: bool, output: &str) {
         fs::create_dir_all(root.join("src")).unwrap();
         fs::create_dir_all(root.join("docs")).unwrap();
         fs::write(
@@ -107,7 +144,7 @@ roots = ["src"]
 source = {source_index}
 
 [architecture.code]
-output = "docs/architecture/04-code.md"
+output = "{output}"
 title = "Code diagram for criv"
 "#
             ),

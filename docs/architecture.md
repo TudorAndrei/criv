@@ -21,7 +21,7 @@ artifacts use the convention from
 - [[01-system-context|Level 1: System Context]]
 - [[02-containers|Level 2: Containers]]
 - [[03-components|Level 3: Components]]
-- [[04-code|Level 4: Code]]
+- [Level 4: Code](architecture/04-code.c4)
 
 ## Research
 

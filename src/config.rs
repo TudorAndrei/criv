@@ -288,6 +288,27 @@ title = "Code diagram for criv"
     }
 
     #[test]
+    fn parses_architecture_code_c4_output_path() {
+        let raw = toml::from_str::<RawConfig>(
+            r#"
+[architecture.code]
+output = "docs/architecture/04-code.c4"
+title = "Code diagram for criv"
+"#,
+        )
+        .unwrap();
+
+        let config = raw.into_config();
+        assert_eq!(
+            config.architecture_code,
+            Some(ArchitectureCodeConfig {
+                output: "docs/architecture/04-code.c4".into(),
+                title: "Code diagram for criv".into(),
+            })
+        );
+    }
+
+    #[test]
     fn rejects_architecture_code_glob_config() {
         let error = toml::from_str::<RawConfig>(
             r#"
