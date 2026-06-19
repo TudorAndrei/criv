@@ -239,6 +239,31 @@ fn init_bare_git_repo_skips_hooks_without_failing() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+#[test]
+fn init_installs_c4_authoring_skill() {
+    let root = unique_temp_dir("criv-init-c4-authoring-skill");
+    let options = InitOptions {
+        no_obsidian: true,
+        no_skills: false,
+        no_hooks: true,
+        force_hooks: false,
+    };
+
+    run(&root, options).unwrap();
+
+    for path in [
+        ".agents/skills/c4-authoring/SKILL.md",
+        ".claude/skills/c4-authoring/SKILL.md",
+    ] {
+        let skill = std::fs::read_to_string(root.join(path)).unwrap();
+        assert!(skill.contains("name: c4-authoring"));
+        assert!(skill.contains("Standalone `.c4` files are a filetype convention"));
+        assert!(skill.contains("Prefer stable interface-bearing anchors"));
+    }
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
 fn fast_options() -> InitOptions {
     InitOptions {
         no_obsidian: true,

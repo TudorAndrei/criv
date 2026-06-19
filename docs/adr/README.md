@@ -41,3 +41,5 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0028-c4-standard-alignment-for-mermaid-diagrams|ADR-0028]] - C4 standard alignment for Mermaid diagrams
 - [[0029-generated-c4-code-architecture|ADR-0029]] - Generated C4 Code architecture
 - [[0030-dot-for-generated-code-architecture|ADR-0030]] - DOT for generated Code architecture
+- [[0031-text-first-c4-architecture-formats|ADR-0031]] - Text first C4 architecture formats
+- [[0032-c4-files-as-architecture-artifacts|ADR-0032]] - .c4 files as architecture artifacts

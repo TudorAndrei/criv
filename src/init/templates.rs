@@ -431,6 +431,7 @@ const AGENT_SKILL_REFERENCING_CODE: &str =
     include_str!("../../assets/skills/referencing-code/SKILL.md");
 const AGENT_SKILL_CHECKING_DRIFT: &str =
     include_str!("../../assets/skills/checking-drift/SKILL.md");
+const AGENT_SKILL_C4_AUTHORING: &str = include_str!("../../assets/skills/c4-authoring/SKILL.md");
 
 const AGENT_SKILLS: &[StaticTemplate] = &[
     StaticTemplate {
@@ -452,6 +453,10 @@ const AGENT_SKILLS: &[StaticTemplate] = &[
     StaticTemplate {
         path: ".agents/skills/checking-drift/SKILL.md",
         contents: AGENT_SKILL_CHECKING_DRIFT,
+    },
+    StaticTemplate {
+        path: ".agents/skills/c4-authoring/SKILL.md",
+        contents: AGENT_SKILL_C4_AUTHORING,
     },
 ];
 
@@ -475,6 +480,10 @@ const CLAUDE_SKILLS: &[StaticTemplate] = &[
     StaticTemplate {
         path: ".claude/skills/checking-drift/SKILL.md",
         contents: AGENT_SKILL_CHECKING_DRIFT,
+    },
+    StaticTemplate {
+        path: ".claude/skills/c4-authoring/SKILL.md",
+        contents: AGENT_SKILL_C4_AUTHORING,
     },
 ];
 
