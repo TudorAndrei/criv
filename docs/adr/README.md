@@ -39,3 +39,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0026-mermaid-c4-diagrams-as-vault-content|ADR-0026]] - Mermaid C4 diagrams as vault content
 - [[0027-c4-diagram-fenced-block-extraction-scope|ADR-0027]] - C4 diagram fenced block extraction scope
 - [[0028-c4-standard-alignment-for-mermaid-diagrams|ADR-0028]] - C4 standard alignment for Mermaid diagrams
+- [[0029-generated-c4-code-architecture|ADR-0029]] - Generated C4 Code architecture
