@@ -10,5 +10,9 @@ exclude = ["**/target/**", "**/node_modules/**", ".obsidian/plugins/criv/main.js
 source = true
 embeddings = false
 
+[architecture.code]
+output = "docs/architecture/04-code.md"
+title = "Code diagram for criv"
+
 [enforce]
 stages = ["commit", "push", "ci"]

@@ -18,7 +18,6 @@ pub(crate) fn for_glob(vault: &Vault, glob: &str) -> Vec<String> {
     render(vault, &in_scope)
 }
 
-#[allow(dead_code)]
 pub(crate) fn for_all_indexed_sources(vault: &Vault) -> Vec<String> {
     let in_scope = vault
         .source_files()

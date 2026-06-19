@@ -14,6 +14,7 @@ pub(crate) struct Config {
     pub(crate) source_exclude: Vec<String>,
     pub(crate) source_index: bool,
     pub(crate) embeddings: bool,
+    pub(crate) architecture_code: Option<ArchitectureCodeConfig>,
     pub(crate) enforce_stages: Vec<String>,
     pub(crate) import_policies: Vec<ImportPolicy>,
     pub(crate) patterns: BTreeSet<String>,
@@ -25,6 +26,12 @@ pub(crate) struct PatternConfig {
     pub(crate) language: Option<String>,
     pub(crate) pattern: Option<String>,
     pub(crate) rule: Option<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct ArchitectureCodeConfig {
+    pub(crate) output: String,
+    pub(crate) title: String,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -43,6 +50,7 @@ impl Default for Config {
             source_exclude: vec!["**/target/**".into(), "**/node_modules/**".into()],
             source_index: true,
             embeddings: false,
+            architecture_code: None,
             enforce_stages: vec!["commit".into(), "push".into(), "ci".into()],
             import_policies: Vec::new(),
             patterns: BTreeSet::new(),
@@ -83,6 +91,7 @@ struct RawConfig {
     vault: RawVault,
     source: RawSource,
     index: RawIndex,
+    architecture: RawArchitecture,
     enforce: RawEnforce,
     patterns: BTreeMap<String, toml::Value>,
 }
@@ -97,6 +106,7 @@ impl RawConfig {
             source_exclude: self.source.exclude.unwrap_or(defaults.source_exclude),
             source_index: self.index.source.unwrap_or(defaults.source_index),
             embeddings: self.index.embeddings.unwrap_or(defaults.embeddings),
+            architecture_code: self.architecture.code.map(RawArchitectureCode::into_config),
             enforce_stages: self.enforce.stages.unwrap_or(defaults.enforce_stages),
             import_policies: self
                 .enforce
@@ -149,6 +159,30 @@ struct RawSource {
 struct RawIndex {
     source: Option<bool>,
     embeddings: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct RawArchitecture {
+    code: Option<RawArchitectureCode>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawArchitectureCode {
+    output: Option<String>,
+    title: Option<String>,
+}
+
+impl RawArchitectureCode {
+    fn into_config(self) -> ArchitectureCodeConfig {
+        ArchitectureCodeConfig {
+            output: self
+                .output
+                .unwrap_or_else(|| "docs/architecture/04-code.md".into()),
+            title: self.title.unwrap_or_else(|| "Code diagram for criv".into()),
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -230,5 +264,40 @@ plugin = false
         assert_eq!(config.source_roots, vec!["src"]);
         assert!(!config.source_index);
         assert!(config.embeddings);
+    }
+
+    #[test]
+    fn parses_architecture_code_config_without_source_glob() {
+        let raw = toml::from_str::<RawConfig>(
+            r#"
+[architecture.code]
+output = "docs/architecture/04-code.md"
+title = "Code diagram for criv"
+"#,
+        )
+        .unwrap();
+
+        let config = raw.into_config();
+        assert_eq!(
+            config.architecture_code,
+            Some(ArchitectureCodeConfig {
+                output: "docs/architecture/04-code.md".into(),
+                title: "Code diagram for criv".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_architecture_code_glob_config() {
+        let error = toml::from_str::<RawConfig>(
+            r#"
+[architecture.code]
+output = "docs/architecture/04-code.md"
+glob = "src/**"
+"#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("unknown field `glob`"));
     }
 }

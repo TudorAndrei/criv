@@ -6,6 +6,7 @@ use std::time::Duration;
 use clap::Args as ClapArgs;
 use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 
+use crate::architecture;
 use crate::check;
 use crate::config::Config;
 use crate::source_graph::SourceGraph;
@@ -95,7 +96,10 @@ pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
 }
 
 fn rebuild(root: &Path, previous_graph: Option<&SourceGraph>) -> Result<Vault> {
-    let vault = Vault::load_incremental(root, previous_graph)?;
+    let mut vault = Vault::load_incremental(root, previous_graph)?;
+    if architecture::write_code_architecture(root, &vault)? {
+        vault = Vault::load_incremental(root, previous_graph)?;
+    }
     let diagnostics = check::validate(&vault);
     let snapshot = state::write_state(root, &vault)?;
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
@@ -109,7 +113,10 @@ fn rebuild_incremental(
     previous_graph: Option<&SourceGraph>,
     previous_state: Option<&State>,
 ) -> Result<(Vault, State)> {
-    let vault = Vault::load_incremental(root, previous_graph)?;
+    let mut vault = Vault::load_incremental(root, previous_graph)?;
+    if architecture::write_code_architecture(root, &vault)? {
+        vault = Vault::load_incremental(root, previous_graph)?;
+    }
     let diagnostics = check::validate(&vault);
     let changed_files = previous_state
         .map(|_| vault.source_graph().changed_files())
@@ -148,5 +155,54 @@ impl WatchLock {
 impl Drop for WatchLock {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::Path;
+
+    use serde_json::Value;
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[test]
+    fn rebuild_includes_generated_code_architecture_in_same_run_state() {
+        let temp = TempDir::new().unwrap();
+        write_watch_architecture_fixture(temp.path());
+
+        let vault = rebuild(temp.path(), None).unwrap();
+
+        assert!(vault.resolve_note("architecture-code").is_some());
+        let state: Value = serde_json::from_str(
+            &fs::read_to_string(temp.path().join(".criv/state.json")).unwrap(),
+        )
+        .unwrap();
+        let nodes = state["graph"]["nodes"].as_array().unwrap();
+        assert!(
+            nodes
+                .iter()
+                .any(|node| node["id"].as_str() == Some("note:architecture-code"))
+        );
+    }
+
+    fn write_watch_architecture_fixture(root: &Path) {
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::write(
+            root.join("criv.toml"),
+            r#"
+[source]
+roots = ["src"]
+
+[architecture.code]
+output = "docs/architecture/04-code.md"
+title = "Code diagram for criv"
+"#,
+        )
+        .unwrap();
+        fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
     }
 }

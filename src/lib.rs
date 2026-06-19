@@ -1,3 +1,4 @@
+mod architecture;
 mod c4;
 mod c4_code;
 mod check;
