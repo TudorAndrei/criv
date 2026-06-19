@@ -78,3 +78,35 @@ assert.deepEqual(
     "resolved:pattern:match:ADR-0001/no-block-on",
   ],
 );
+
+assert.deepEqual(core.parseC4Artifact("docs/architecture/02-container.c4", `C4Container
+Container(cli, "criv CLI", "Rust", "Runs checks")
+%% criv:source src/lib.rs#run
+`).diagnostics, []);
+
+assert.equal(
+  core.parseC4Artifact("docs/architecture/04-code.c4", `// criv:generated true
+digraph criv_code {
+  cli -> vault;
+}
+`).format,
+  "dot",
+);
+
+const c4Mismatch = core.parseC4Artifact("docs/architecture/01-context.c4", `%% criv:format dot
+C4Container
+Container(cli, "criv CLI", "Rust", "Runs checks")
+`);
+assert.deepEqual(
+  c4Mismatch.diagnostics.map((diagnostic) => diagnostic.code),
+  ["mismatched-c4-format", "mismatched-c4-level"],
+);
+
+const c4BadDirective = core.parseC4Artifact("docs/architecture/diagram.c4", `%% criv:level code
+flowchart TD
+  a --> b
+`);
+assert.deepEqual(
+  c4BadDirective.diagnostics.map((diagnostic) => diagnostic.code),
+  ["missing-c4-level", "unknown-c4-directive", "unknown-c4-format"],
+);

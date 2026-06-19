@@ -4,12 +4,14 @@ import {
   EditorSuggest,
   EditorSuggestContext,
   EditorSuggestTriggerInfo,
+  FileView,
   ItemView,
   MarkdownPostProcessorContext,
   Notice,
   Plugin,
   PluginSettingTab,
   Setting,
+  TFile,
   WorkspaceLeaf,
 } from "obsidian";
 import { RangeSetBuilder } from "@codemirror/state";
@@ -23,6 +25,7 @@ import {
 } from "@codemirror/view";
 import {
   CrivState,
+  C4ArtifactSummary,
   FrontmatterPatternTarget,
   LinkedSource,
   SourceIndexEntry,
@@ -30,6 +33,7 @@ import {
   frontmatterPatternTargets,
   linkedSourcesFromMarkdown,
   looksLikeSourceOrPattern,
+  parseC4Artifact,
   patternTooltip,
   resolvePattern,
   resolveSource,
@@ -50,6 +54,7 @@ const DEFAULT_SETTINGS: CrivSettings = {
 };
 const EXPECTED_SCHEMA = "criv.state.v0";
 const VIEW_TYPE = "criv-source-panel";
+const C4_VIEW_TYPE = "criv-c4-view";
 const PREVIEW_LINE_LIMIT = 80;
 const LINK_TARGET_SELECTOR = [
   "[data-href]",
@@ -101,6 +106,8 @@ export default class CrivPlugin extends Plugin {
     });
     this.registerEditorExtension(crivDriftExtension(this));
     this.registerView(VIEW_TYPE, (leaf) => new CrivSourceView(leaf, this));
+    this.registerView(C4_VIEW_TYPE, (leaf) => new CrivC4View(leaf));
+    this.registerExtensions(["c4"], C4_VIEW_TYPE);
     this.registerMarkdownPostProcessor((el, ctx) => this.decorateLinks(el, ctx));
     this.registerDomEvent(document, "mouseover", (event) => this.handleDocumentMouseOver(event));
     this.registerDomEvent(document, "mouseout", (event) => this.handleDocumentMouseOut(event));
@@ -486,6 +493,101 @@ class CrivSourceView extends ItemView {
       renderPreviewError(card, source.entry.path);
     }
   }
+}
+
+class CrivC4View extends FileView {
+  private source = "";
+
+  constructor(leaf: WorkspaceLeaf) {
+    super(leaf);
+  }
+
+  getViewType(): string {
+    return C4_VIEW_TYPE;
+  }
+
+  getDisplayText(): string {
+    return this.file?.basename ?? "C4";
+  }
+
+  async onOpen(): Promise<void> {
+    await this.render();
+  }
+
+  async onLoadFile(file: TFile): Promise<void> {
+    this.source = await this.app.vault.cachedRead(file);
+    await this.render();
+  }
+
+  async onUnloadFile(_file: TFile): Promise<void> {
+    this.source = "";
+    await this.render();
+  }
+
+  async render(): Promise<void> {
+    const container = this.containerEl.children[1] as HTMLElement;
+    container.empty();
+    container.addClass("criv-c4-view");
+
+    if (!this.file) {
+      container.createEl("p", { cls: "criv-empty", text: "No C4 file selected." });
+      return;
+    }
+
+    const summary = parseC4Artifact(this.file.path, this.source);
+    const header = container.createDiv({ cls: "criv-c4-header" });
+    header.createEl("h3", { text: this.file.basename });
+    const meta = header.createDiv({ cls: "criv-c4-meta" });
+    meta.createSpan({ text: summary.format });
+    meta.createSpan({ text: summary.level });
+    if (summary.generated) {
+      meta.createSpan({ text: "generated" });
+    }
+    if (summary.diagnostics.length > 0) {
+      meta.createSpan({ cls: "criv-warning", text: `${summary.diagnostics.length}` });
+    }
+
+    const body = container.createDiv({ cls: "criv-c4-body" });
+    const projection = body.createDiv({ cls: "criv-c4-projection" });
+    renderC4Projection(projection, summary, this.source);
+
+    const sourcePanel = body.createDiv({ cls: "criv-c4-source" });
+    sourcePanel.createEl("pre", { text: this.source });
+
+    if (summary.diagnostics.length > 0) {
+      const diagnostics = container.createDiv({ cls: "criv-c4-diagnostics" });
+      for (const diagnostic of summary.diagnostics) {
+        const row = diagnostics.createDiv({ cls: "criv-c4-diagnostic" });
+        row.createSpan({ text: diagnostic.line ? `L${diagnostic.line}` : "--" });
+        row.createSpan({ text: diagnostic.code });
+        row.createSpan({ text: diagnostic.message });
+      }
+    }
+  }
+}
+
+interface C4RendererAdapter {
+  render(container: HTMLElement, summary: C4ArtifactSummary, source: string): void;
+}
+
+const sourceProjectionRenderer: C4RendererAdapter = {
+  render(container, summary, source) {
+    container.empty();
+    container.addClass(`criv-c4-projection-${safeCssSegment(summary.format)}`);
+    const preview = container.createEl("pre");
+    preview.createEl("code", {
+      cls: `language-${summary.format === "dot" ? "dot" : "mermaid"}`,
+      text: source,
+    });
+  },
+};
+
+function renderC4Projection(
+  container: HTMLElement,
+  summary: C4ArtifactSummary,
+  source: string,
+): void {
+  sourceProjectionRenderer.render(container, summary, source);
 }
 
 class CrivSourceSuggest extends EditorSuggest<SourceIndexEntry> {
