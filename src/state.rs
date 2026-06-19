@@ -60,6 +60,15 @@ pub(crate) struct SourceIndexEntry {
     frecency: u32,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct C4InterfaceHashRecord {
+    pub(crate) id: String,
+    pub(crate) hash: String,
+    pub(crate) path: String,
+    pub(crate) line: usize,
+    pub(crate) target: String,
+}
+
 impl State {
     pub(crate) fn build(root: &Path, vault: &Vault) -> Result<Self> {
         Self::build_incremental(root, vault, None, &[])
@@ -606,6 +615,28 @@ fn add_c4_diagrams_to_graph(
                     &code_node_id(&path),
                     "references",
                 );
+                if let Some((target, interface_hash)) = interface_anchor_hash(vault, source, &path)
+                {
+                    let interface_id = c4_interface_node_id(&element_id);
+                    add_node(
+                        graph,
+                        seen_nodes,
+                        Node {
+                            id: interface_id.clone(),
+                            hash: String::new(),
+                            kind: "c4-interface".into(),
+                            label: interface_hash,
+                            path: Some(target),
+                        },
+                    );
+                    add_edge(
+                        graph,
+                        seen_edges,
+                        &element_id,
+                        &interface_id,
+                        "tracks-interface",
+                    );
+                }
             }
         }
 
@@ -642,6 +673,80 @@ fn add_c4_diagrams_to_graph(
             }
         }
     }
+}
+
+pub(crate) fn c4_interface_hash_records(vault: &Vault) -> Vec<C4InterfaceHashRecord> {
+    let mut records = Vec::new();
+    for note in &vault.notes {
+        let owner_id = note_node_id(note.display_id());
+        collect_c4_interface_hashes(
+            vault,
+            &owner_id,
+            &note.rel_path,
+            &note.c4_diagrams,
+            &mut records,
+        );
+    }
+    for artifact in &vault.c4_artifacts {
+        let owner_id = c4_artifact_node_id(&artifact.rel_path);
+        collect_c4_interface_hashes(
+            vault,
+            &owner_id,
+            &artifact.rel_path,
+            &artifact.diagrams,
+            &mut records,
+        );
+    }
+    records
+}
+
+fn collect_c4_interface_hashes(
+    vault: &Vault,
+    owner_id: &str,
+    owner_path: &str,
+    diagrams: &[crate::c4::C4Diagram],
+    records: &mut Vec<C4InterfaceHashRecord>,
+) {
+    for diagram in diagrams {
+        for element in &diagram.elements {
+            let Some(source) = &element.source else {
+                continue;
+            };
+            let SourceTargetResolution::Resolved { path, .. } = vault.resolve_source_target(source)
+            else {
+                continue;
+            };
+            let Some((target, interface_hash)) = interface_anchor_hash(vault, source, &path) else {
+                continue;
+            };
+            let element_id = c4_element_node_id(owner_id, diagram.line, &element.alias);
+            records.push(C4InterfaceHashRecord {
+                id: c4_interface_node_id(&element_id),
+                hash: interface_hash,
+                path: owner_path.to_string(),
+                line: element.line,
+                target,
+            });
+        }
+    }
+}
+
+impl State {
+    pub(crate) fn c4_interface_hashes(&self) -> BTreeMap<String, String> {
+        self.graph
+            .nodes
+            .iter()
+            .filter(|node| node.kind == "c4-interface")
+            .map(|node| (node.id.clone(), node.label.clone()))
+            .collect()
+    }
+}
+
+fn interface_anchor_hash(vault: &Vault, source: &str, path: &str) -> Option<(String, String)> {
+    let fragment = crate::vault::source_fragment_name(source)?;
+    let target = format!("{path}#{fragment}");
+    let hash = vault.source_graph().interface_hash(&target)?;
+    Some((target, hash))
 }
 
 fn add_node(graph: &mut Graph, seen: &mut BTreeSet<String>, node: Node) {
@@ -856,7 +961,7 @@ roots = ["src"]
             r#"
 C4Container
 Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
-%% criv:source src/main.rs
+%% criv:source src/main.rs#run
 Container(plugin, "Obsidian Plugin", "TypeScript", "Reads generated state")
 Rel(cli, plugin, "writes state for")
 "#,
@@ -908,6 +1013,21 @@ Rel(cli, plugin, "writes state for")
         assert!(state.graph.edges.iter().any(|edge| {
             edge.from == cli_node.id && edge.to == "code:src/main.rs" && edge.kind == "references"
         }));
+        let interface_node = state
+            .graph
+            .nodes
+            .iter()
+            .find(|node| {
+                node.kind == "c4-interface"
+                    && node.path.as_deref() == Some("src/main.rs#run")
+                    && !node.label.is_empty()
+            })
+            .expect("c4 interface hash node");
+        assert!(state.graph.edges.iter().any(|edge| {
+            edge.from == cli_node.id
+                && edge.to == interface_node.id
+                && edge.kind == "tracks-interface"
+        }));
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -955,6 +1075,10 @@ fn c4_diagram_node_id(owner_id: &str, diagram_line: usize) -> String {
 
 fn c4_element_node_id(owner_id: &str, diagram_line: usize, alias: &str) -> String {
     format!("{owner_id}:c4:{diagram_line}:{alias}")
+}
+
+fn c4_interface_node_id(element_id: &str) -> String {
+    format!("{element_id}:interface")
 }
 
 fn c4_relationship_node_id(

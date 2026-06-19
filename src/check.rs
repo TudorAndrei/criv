@@ -11,6 +11,7 @@ use rumdl_lib::rules::{all_rules, filter_rules};
 
 use crate::c4::{C4ElementCategory, C4Level};
 use crate::c4_artifact::C4ArtifactFormat;
+use crate::state::{self, State};
 use crate::util::{is_adr_id, kebab};
 use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
@@ -59,7 +60,11 @@ impl Diagnostic {
 pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
     let mut diagnostics = validate_markdown_format(root, options.fix)?;
     let vault = Vault::load(root)?;
-    diagnostics.extend(validate(&vault));
+    let previous_interface_hashes = previous_c4_interface_hashes(root)?;
+    diagnostics.extend(validate_with_previous_c4_interfaces(
+        &vault,
+        previous_interface_hashes.as_ref(),
+    ));
     diagnostics.extend(
         policy_violations(root, &vault)?
             .into_iter()
@@ -284,16 +289,55 @@ fn policy_violations(root: &Path, vault: &Vault) -> Result<Vec<PolicyViolation>>
 }
 
 pub(crate) fn validate(vault: &Vault) -> Vec<Diagnostic> {
+    validate_with_previous_c4_interfaces(vault, None)
+}
+
+pub(crate) fn validate_with_previous_state(
+    vault: &Vault,
+    previous: Option<&State>,
+) -> Vec<Diagnostic> {
+    let previous_hashes = previous.map(State::c4_interface_hashes);
+    validate_with_previous_c4_interfaces(vault, previous_hashes.as_ref())
+}
+
+fn validate_with_previous_c4_interfaces(
+    vault: &Vault,
+    previous_interface_hashes: Option<&BTreeMap<String, String>>,
+) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     validate_notes(vault, &mut diagnostics);
     validate_pattern_collisions(vault, &mut diagnostics);
     validate_links(vault, &mut diagnostics);
     validate_supersession(vault, &mut diagnostics);
     validate_c4_artifacts(vault, &mut diagnostics);
+    validate_c4_interface_drift(vault, previous_interface_hashes, &mut diagnostics);
     diagnostics.sort_by(|a, b| {
         (&a.path, a.line.unwrap_or(0), a.code).cmp(&(&b.path, b.line.unwrap_or(0), b.code))
     });
     diagnostics
+}
+
+fn previous_c4_interface_hashes(root: &Path) -> Result<Option<BTreeMap<String, String>>> {
+    let path = root.join(".criv/state.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let value: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path)?)
+        .map_err(|err| CrivError::new(format!("failed to parse .criv/state.json: {err}")))?;
+    let hashes = value
+        .pointer("/graph/nodes")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|node| node.get("kind").and_then(serde_json::Value::as_str) == Some("c4-interface"))
+        .filter_map(|node| {
+            Some((
+                node.get("id")?.as_str()?.to_string(),
+                node.get("label")?.as_str()?.to_string(),
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+    Ok(Some(hashes))
 }
 
 fn validate_notes(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
@@ -536,6 +580,32 @@ fn validate_c4_artifacts(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
         }
 
         validate_c4_diagrams(vault, &artifact.rel_path, &artifact.diagrams, diagnostics);
+    }
+}
+
+fn validate_c4_interface_drift(
+    vault: &Vault,
+    previous_interface_hashes: Option<&BTreeMap<String, String>>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(previous_interface_hashes) = previous_interface_hashes else {
+        return;
+    };
+    for record in state::c4_interface_hash_records(vault) {
+        let Some(previous_hash) = previous_interface_hashes.get(&record.id) else {
+            continue;
+        };
+        if previous_hash != &record.hash {
+            diagnostics.push(warning(
+                "c4-interface-drift",
+                &record.path,
+                Some(record.line),
+                format!(
+                    "C4 source `{}` interface changed since the previous state; review the diagram",
+                    record.target
+                ),
+            ));
+        }
     }
 }
 
@@ -1392,6 +1462,71 @@ digraph criv_code
     }
 
     #[test]
+    fn c4_interface_drift_ignores_body_only_changes() {
+        let root = c4_interface_drift_fixture(
+            r#"
+pub fn run(input: String) -> usize {
+  input.len()
+}
+"#,
+        );
+        let previous_vault = Vault::load(&root).unwrap();
+        let previous_state = State::build(&root, &previous_vault).unwrap();
+        fs::write(
+            root.join("src/lib.rs"),
+            r#"
+pub fn run(input: String) -> usize {
+  println!("{}", input);
+  42
+}
+"#,
+        )
+        .unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+        let diagnostics = validate_with_previous_state(&vault, Some(&previous_state));
+
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diag| diag.code != "c4-interface-drift")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn c4_interface_drift_warns_on_signature_changes() {
+        let root = c4_interface_drift_fixture(
+            r#"
+pub fn run(input: String) -> usize {
+  input.len()
+}
+"#,
+        );
+        let previous_vault = Vault::load(&root).unwrap();
+        let previous_state = State::build(&root, &previous_vault).unwrap();
+        fs::write(
+            root.join("src/lib.rs"),
+            r#"
+pub fn run(input: String, fallback: usize) -> usize {
+  fallback
+}
+"#,
+        )
+        .unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+        let diagnostics = validate_with_previous_state(&vault, Some(&previous_state));
+
+        assert!(diagnostics.iter().any(|diag| {
+            diag.code == "c4-interface-drift"
+                && diag.path == "docs/architecture/02-container.c4"
+                && diag.is_warning()
+        }));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn rumdl_fixes_markdown_content_in_process() {
         let path = unique_temp_file("criv-rumdl-fix", "README.md");
         let mut contents = "# Title\n\n\nBody\n".to_string();
@@ -1520,5 +1655,30 @@ roots = ["src"]
         fs::write(root.join("src/lib.rs"), "fn helper() {}\n").unwrap();
         fs::write(root.join(path), contents).unwrap();
         Vault::load(&root).unwrap()
+    }
+
+    fn c4_interface_drift_fixture(source: &str) -> std::path::PathBuf {
+        let root = unique_temp_dir("criv-c4-interface-drift");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("docs/architecture")).unwrap();
+        fs::write(
+            root.join("criv.toml"),
+            r#"
+[source]
+roots = ["src"]
+"#,
+        )
+        .unwrap();
+        fs::write(root.join("src/lib.rs"), source).unwrap();
+        fs::write(
+            root.join("docs/architecture/02-container.c4"),
+            r#"
+C4Container
+Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
+%% criv:source src/lib.rs#run
+"#,
+        )
+        .unwrap();
+        root
     }
 }

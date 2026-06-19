@@ -100,7 +100,7 @@ fn rebuild(root: &Path, previous_graph: Option<&SourceGraph>) -> Result<Vault> {
     if architecture::write_code_architecture(root, &vault)? {
         vault = Vault::load_incremental(root, previous_graph)?;
     }
-    let diagnostics = check::validate(&vault);
+    let diagnostics = check::validate_with_previous_state(&vault, None);
     let snapshot = state::write_state(root, &vault)?;
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();
@@ -117,7 +117,7 @@ fn rebuild_incremental(
     if architecture::write_code_architecture(root, &vault)? {
         vault = Vault::load_incremental(root, previous_graph)?;
     }
-    let diagnostics = check::validate(&vault);
+    let diagnostics = check::validate_with_previous_state(&vault, previous_state);
     let changed_files = previous_state
         .map(|_| vault.source_graph().changed_files())
         .unwrap_or(&[]);

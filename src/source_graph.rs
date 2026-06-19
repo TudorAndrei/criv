@@ -37,6 +37,7 @@ pub(crate) struct Symbol {
     pub(crate) kind: SymbolKind,
     pub(crate) parent: Option<String>,
     pub(crate) exported: bool,
+    pub(crate) interface_signature: Option<InterfaceSignature>,
     pub(crate) range: SymbolRange,
     pub(crate) calls: Vec<Call>,
 }
@@ -72,6 +73,16 @@ pub(crate) enum SymbolKind {
     Class,
 }
 
+impl SymbolKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Function => "function",
+            Self::Method => "method",
+            Self::Class => "class",
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum Language {
     Rust,
@@ -81,6 +92,118 @@ pub(crate) enum Language {
     Go,
     #[default]
     Unknown,
+}
+
+impl Language {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Rust => "rust",
+            Self::TypeScript => "typescript",
+            Self::JavaScript => "javascript",
+            Self::Python => "python",
+            Self::Go => "go",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct InterfaceSignature {
+    pub(crate) language: Language,
+    pub(crate) symbol_kind: SymbolKind,
+    pub(crate) qualified_name: String,
+    pub(crate) visibility: Option<String>,
+    pub(crate) inputs: Vec<String>,
+    pub(crate) output: Option<String>,
+    pub(crate) fields: Vec<FieldSignature>,
+    pub(crate) variants: Vec<VariantSignature>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub(crate) struct FieldSignature {
+    pub(crate) name: String,
+    pub(crate) ty: Option<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub(crate) struct VariantSignature {
+    pub(crate) name: String,
+    pub(crate) fields: Vec<FieldSignature>,
+}
+
+impl InterfaceSignature {
+    pub(crate) fn hash(&self) -> String {
+        blake3::hash(self.stable_text().as_bytes())
+            .to_hex()
+            .to_string()
+    }
+
+    fn from_source(
+        language: Language,
+        symbol_kind: SymbolKind,
+        name: &str,
+        parent: Option<&str>,
+        exported: bool,
+        source: &str,
+    ) -> Self {
+        let qualified_name = parent
+            .map(|parent| format!("{parent}.{name}"))
+            .unwrap_or_else(|| name.to_string());
+        let visibility = exported.then(|| visibility_text(language, source));
+        let (inputs, output) = match symbol_kind {
+            SymbolKind::Function | SymbolKind::Method => function_signature(language, source),
+            SymbolKind::Class => (Vec::new(), None),
+        };
+        let (fields, variants) = match symbol_kind {
+            SymbolKind::Class => aggregate_signature(language, source),
+            SymbolKind::Function | SymbolKind::Method => (Vec::new(), Vec::new()),
+        };
+
+        Self {
+            language,
+            symbol_kind,
+            qualified_name,
+            visibility,
+            inputs,
+            output,
+            fields,
+            variants,
+        }
+    }
+
+    fn stable_text(&self) -> String {
+        let mut fields = self.fields.clone();
+        fields.sort();
+        let mut variants = self.variants.clone();
+        variants.sort();
+        let field_text = fields
+            .iter()
+            .map(|field| format!("{}:{}", field.name, field.ty.as_deref().unwrap_or("")))
+            .collect::<Vec<_>>()
+            .join(",");
+        let variant_text = variants
+            .iter()
+            .map(|variant| {
+                let fields = variant
+                    .fields
+                    .iter()
+                    .map(|field| format!("{}:{}", field.name, field.ty.as_deref().unwrap_or("")))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("{}({fields})", variant.name)
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "language={}\nkind={}\nname={}\nvisibility={}\ninputs={}\noutput={}\nfields={field_text}\nvariants={variant_text}\n",
+            self.language.as_str(),
+            self.symbol_kind.as_str(),
+            self.qualified_name,
+            self.visibility.as_deref().unwrap_or(""),
+            self.inputs.join(","),
+            self.output.as_deref().unwrap_or(""),
+        )
+    }
 }
 
 impl SourceGraph {
@@ -228,6 +351,13 @@ impl SourceGraph {
             .and_then(|file| file.symbols.iter().find(|symbol| symbol.name == target))
             .map(|symbol| symbol.id.clone())
             .or_else(|| self.resolve_symbol(target))
+    }
+
+    pub(crate) fn interface_hash(&self, query: &str) -> Option<String> {
+        let symbol_id = self.resolve_symbol(query)?;
+        self.symbol(&symbol_id)
+            .and_then(|symbol| symbol.interface_signature.as_ref())
+            .map(InterfaceSignature::hash)
     }
 
     fn symbol(&self, id: &SymbolId) -> Option<&Symbol> {
@@ -407,6 +537,16 @@ fn tree_sitter_symbol(
         _ => return None,
     };
 
+    let source = node_text(node, contents).unwrap_or_default();
+    let interface_signature = Some(InterfaceSignature::from_source(
+        language,
+        kind,
+        &name,
+        parent,
+        tree_sitter_exported(node, contents, language),
+        &source,
+    ));
+
     Some(Symbol {
         id: SymbolId {
             path: path.into(),
@@ -416,6 +556,7 @@ fn tree_sitter_symbol(
         kind,
         parent: parent.map(str::to_string),
         exported: tree_sitter_exported(node, contents, language),
+        interface_signature,
         range: SymbolRange {
             start_line: node.start_position().row + 1,
             end_line: node.end_position().row + 1,
@@ -501,6 +642,201 @@ fn tree_sitter_exported(node: Node<'_>, contents: &str, language: Language) -> b
         }
         Language::Unknown => false,
     }
+}
+
+fn visibility_text(language: Language, source: &str) -> String {
+    let trimmed = source.trim_start();
+    match language {
+        Language::Rust if trimmed.starts_with("pub(") => trimmed
+            .split_whitespace()
+            .next()
+            .unwrap_or("pub")
+            .trim_end_matches('{')
+            .to_string(),
+        Language::Rust => "pub".into(),
+        Language::TypeScript | Language::JavaScript => "export".into(),
+        Language::Python | Language::Go | Language::Unknown => "public".into(),
+    }
+}
+
+fn function_signature(language: Language, source: &str) -> (Vec<String>, Option<String>) {
+    match language {
+        Language::Rust => rust_function_signature(source),
+        Language::TypeScript | Language::JavaScript => typescript_function_signature(source),
+        _ => generic_function_signature(source),
+    }
+}
+
+fn rust_function_signature(source: &str) -> (Vec<String>, Option<String>) {
+    let header = source
+        .split_once('{')
+        .map(|(head, _)| head)
+        .unwrap_or(source)
+        .trim();
+    let inputs = paren_contents(header)
+        .map(split_signature_list)
+        .unwrap_or_default();
+    let output = header
+        .rsplit_once(')')
+        .map(|(_, tail)| tail.trim())
+        .and_then(|tail| tail.strip_prefix("->"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(normalize_signature_text);
+    (inputs, output)
+}
+
+fn typescript_function_signature(source: &str) -> (Vec<String>, Option<String>) {
+    let header = source
+        .split_once("=>")
+        .map(|(head, _)| head)
+        .or_else(|| source.split_once('{').map(|(head, _)| head))
+        .unwrap_or(source)
+        .trim();
+    let inputs = paren_contents(header)
+        .map(split_signature_list)
+        .unwrap_or_default();
+    let output = header
+        .rsplit_once(')')
+        .map(|(_, tail)| tail.trim())
+        .and_then(|tail| tail.strip_prefix(':'))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(normalize_signature_text);
+    (inputs, output)
+}
+
+fn generic_function_signature(source: &str) -> (Vec<String>, Option<String>) {
+    let header = source
+        .split_once('{')
+        .map(|(head, _)| head)
+        .unwrap_or(source)
+        .trim();
+    let inputs = paren_contents(header)
+        .map(split_signature_list)
+        .unwrap_or_default();
+    (inputs, None)
+}
+
+fn aggregate_signature(
+    language: Language,
+    source: &str,
+) -> (Vec<FieldSignature>, Vec<VariantSignature>) {
+    match language {
+        Language::Rust if source.trim_start().starts_with("enum ") || source.contains(" enum ") => {
+            (Vec::new(), rust_enum_variants(source))
+        }
+        Language::Rust => (rust_fields(source), Vec::new()),
+        Language::TypeScript | Language::JavaScript => (typescript_members(source), Vec::new()),
+        _ => (Vec::new(), Vec::new()),
+    }
+}
+
+fn rust_fields(source: &str) -> Vec<FieldSignature> {
+    brace_contents(source)
+        .map(|body| {
+            body.lines()
+                .filter_map(|line| {
+                    let line = line
+                        .trim()
+                        .trim_start_matches("pub ")
+                        .trim_end_matches(',')
+                        .trim();
+                    let (name, ty) = line.split_once(':')?;
+                    Some(FieldSignature {
+                        name: name.trim().to_string(),
+                        ty: Some(normalize_signature_text(ty)),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn rust_enum_variants(source: &str) -> Vec<VariantSignature> {
+    brace_contents(source)
+        .map(|body| {
+            body.lines()
+                .filter_map(|line| {
+                    let line = line.trim().trim_end_matches(',').trim();
+                    if line.is_empty() || line.starts_with("//") {
+                        return None;
+                    }
+                    let name = line
+                        .split(['(', '{', '='])
+                        .next()
+                        .unwrap_or(line)
+                        .trim()
+                        .to_string();
+                    (!name.is_empty()).then_some(VariantSignature {
+                        name,
+                        fields: Vec::new(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn typescript_members(source: &str) -> Vec<FieldSignature> {
+    brace_contents(source)
+        .map(|body| {
+            body.lines()
+                .filter_map(|line| {
+                    let line = line
+                        .trim()
+                        .trim_start_matches("public ")
+                        .trim_start_matches("readonly ")
+                        .trim_end_matches(';')
+                        .trim_end_matches(',')
+                        .trim();
+                    if line.is_empty() || line.starts_with("//") || line.starts_with("constructor")
+                    {
+                        return None;
+                    }
+                    if let Some((name, _)) = line.split_once('(') {
+                        let output = line
+                            .rsplit_once(')')
+                            .and_then(|(_, tail)| tail.trim().strip_prefix(':'))
+                            .map(normalize_signature_text);
+                        return Some(FieldSignature {
+                            name: name.trim().to_string(),
+                            ty: output,
+                        });
+                    }
+                    let (name, ty) = line.split_once(':')?;
+                    Some(FieldSignature {
+                        name: name.trim().trim_end_matches('?').to_string(),
+                        ty: Some(normalize_signature_text(ty)),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn paren_contents(source: &str) -> Option<&str> {
+    let start = source.find('(')?;
+    let end = source.rfind(')')?;
+    (end > start).then_some(&source[start + 1..end])
+}
+
+fn brace_contents(source: &str) -> Option<&str> {
+    let start = source.find('{')?;
+    let end = source.rfind('}')?;
+    (end > start).then_some(&source[start + 1..end])
+}
+
+fn split_signature_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(normalize_signature_text)
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn normalize_signature_text(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn field_text(node: Node<'_>, contents: &str, field: &str) -> Option<String> {
@@ -608,6 +944,14 @@ fn parse_source_file_fallback(path: &str, contents: &str) -> SourceFile {
             };
             file.symbols.push(Symbol {
                 id,
+                interface_signature: Some(InterfaceSignature::from_source(
+                    language,
+                    kind,
+                    &name,
+                    parent.as_deref(),
+                    is_exported_symbol(trimmed, language),
+                    trimmed,
+                )),
                 name,
                 kind,
                 parent,
@@ -933,6 +1277,122 @@ fn helper() {}
     }
 
     #[test]
+    fn rust_interface_hash_ignores_function_body_changes() {
+        let before = parse_source_file(
+            "src/lib.rs",
+            r#"
+pub fn run(input: String) -> usize {
+  input.len()
+}
+"#,
+        );
+        let after = parse_source_file(
+            "src/lib.rs",
+            r#"
+pub fn run(input: String) -> usize {
+  println!("{}", input);
+  42
+}
+"#,
+        );
+
+        assert_eq!(
+            before.symbols[0]
+                .interface_signature
+                .as_ref()
+                .unwrap()
+                .hash(),
+            after.symbols[0]
+                .interface_signature
+                .as_ref()
+                .unwrap()
+                .hash()
+        );
+    }
+
+    #[test]
+    fn rust_interface_hash_changes_when_function_signature_changes() {
+        let before = parse_source_file("src/lib.rs", "pub fn run(input: String) -> usize { 1 }\n");
+        let after = parse_source_file(
+            "src/lib.rs",
+            "pub fn run(input: String, verbose: bool) -> usize { 1 }\n",
+        );
+
+        assert_ne!(
+            before.symbols[0]
+                .interface_signature
+                .as_ref()
+                .unwrap()
+                .hash(),
+            after.symbols[0]
+                .interface_signature
+                .as_ref()
+                .unwrap()
+                .hash()
+        );
+    }
+
+    #[test]
+    fn rust_interface_hash_tracks_struct_fields_and_enum_variants() {
+        let before = parse_source_file(
+            "src/lib.rs",
+            r#"
+pub struct Config {
+  pub root: String,
+}
+pub enum Mode {
+  Check,
+  Watch,
+}
+"#,
+        );
+        let after = parse_source_file(
+            "src/lib.rs",
+            r#"
+pub struct Config {
+  pub root: String,
+  pub verbose: bool,
+}
+pub enum Mode {
+  Check,
+  Watch,
+  Serve,
+}
+"#,
+        );
+
+        let before_config = before
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "Config")
+            .unwrap();
+        let after_config = after
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "Config")
+            .unwrap();
+        let before_mode = before
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "Mode")
+            .unwrap();
+        let after_mode = after
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "Mode")
+            .unwrap();
+
+        assert_ne!(
+            before_config.interface_signature.as_ref().unwrap().hash(),
+            after_config.interface_signature.as_ref().unwrap().hash()
+        );
+        assert_ne!(
+            before_mode.interface_signature.as_ref().unwrap().hash(),
+            after_mode.interface_signature.as_ref().unwrap().hash()
+        );
+    }
+
+    #[test]
     fn marks_rust_impl_functions_as_methods() {
         let file = parse_source_file(
             "src/lib.rs",
@@ -1070,6 +1530,76 @@ const helper = () => api();
             && symbol.kind == SymbolKind::Method
             && symbol.parent.as_deref() == Some("Service")));
         assert!(file.symbols.iter().any(|symbol| symbol.name == "helper"));
+    }
+
+    #[test]
+    fn typescript_interface_hash_tracks_function_and_class_shapes() {
+        let before = parse_source_file(
+            "src/app.ts",
+            r#"
+export function run(input: string): number {
+  return input.length;
+}
+export class Service {
+  run(input: string): number {
+    return input.length;
+  }
+}
+"#,
+        );
+        let body_only = parse_source_file(
+            "src/app.ts",
+            r#"
+export function run(input: string): number {
+  console.log(input);
+  return 1;
+}
+export class Service {
+  run(input: string): number {
+    console.log(input);
+    return 1;
+  }
+}
+"#,
+        );
+        let changed = parse_source_file(
+            "src/app.ts",
+            r#"
+export function run(input: string, fallback: number): number {
+  return fallback;
+}
+export class Service {
+  run(input: string): string {
+    return input;
+  }
+}
+"#,
+        );
+
+        let before_run = before
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "run" && symbol.kind == SymbolKind::Function)
+            .unwrap();
+        let body_run = body_only
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "run" && symbol.kind == SymbolKind::Function)
+            .unwrap();
+        let changed_run = changed
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "run" && symbol.kind == SymbolKind::Function)
+            .unwrap();
+
+        assert_eq!(
+            before_run.interface_signature.as_ref().unwrap().hash(),
+            body_run.interface_signature.as_ref().unwrap().hash()
+        );
+        assert_ne!(
+            before_run.interface_signature.as_ref().unwrap().hash(),
+            changed_run.interface_signature.as_ref().unwrap().hash()
+        );
     }
 
     #[test]
