@@ -1,0 +1,7 @@
+C4Context
+title System Context - criv vault workflow
+Person(author, "Architecture author", "Writes text-first C4 artifacts")
+System(criv, "criv", "Validates architecture notes and source anchors")
+System_Ext(obsidian, "Obsidian", "Displays local vault notes")
+Rel(author, criv, "runs checks with")
+Rel(criv, obsidian, "publishes state for")

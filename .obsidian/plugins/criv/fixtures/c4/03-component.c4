@@ -1,0 +1,9 @@
+C4Component
+title Component - C4 artifact validation
+Container_Boundary(cli, "criv CLI") {
+  %% criv:source src/c4_artifact.rs#parse
+  Component(c4_artifacts, "C4 Artifact Parser", "Rust", "Infers format and level from .c4 files")
+  %% criv:source src/check.rs
+  Component(checks, "C4 Checks", "Rust", "Reports invalid directives, references, and drift")
+}
+Rel(c4_artifacts, checks, "feeds normalized diagrams to")

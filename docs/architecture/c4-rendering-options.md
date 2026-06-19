@@ -68,6 +68,23 @@ reviewable text artifact that criv can verify.
 | Mermaid renderer | Markdown/editor preview | Familiar rendering path for existing Mermaid C4 blocks. | Rendering is optional; criv validates the Mermaid text, not the rendered image. |
 | Merman | Browserless Mermaid renderer candidate | Rust implementation that may fit Obsidian/WASM packaging better than a browser automation renderer. | Renderer only. criv must not treat Merman render success as semantic validation or require it for normal CLI checks. |
 
+## Merman Spike Result
+
+Merman is a Rust crate family, not the npm package named `merman`. The crate
+exposes a renderer API such as `HeadlessRenderer::render_svg_sync`, and it
+targets Mermaid 11.15.0 parity, so it remains a good future candidate for a
+Rust/WASM rendering path.
+
+For the current Obsidian viewer, use bundled Mermaid.js instead. The Obsidian
+plugin is already a TypeScript bundle, while adopting Merman would require a
+new Rust/WASM packaging step for diagram rendering in addition to the existing
+`criv-wasm` helper. That may still be worthwhile later, but it should not block
+the text-first `.c4` workflow.
+
+This decision does not change validation: `criv check` parses and verifies the
+text source and does not depend on Mermaid.js, Merman, Node, Chromium, Java,
+Graphviz, or a renderer.
+
 ## Recommendation
 
 Keep Mermaid plus DOT as the default architecture for now.
@@ -162,6 +179,21 @@ Use WASM for shared model logic, not for replacing CLI validation.
   the editor extension bundle.
 - Generated architecture files should be deterministic enough that `criv check`
   can detect drift without launching an editor, browser, or renderer.
+
+## Authoring Workflow
+
+Use `.c4` artifacts as implementation inputs, not screenshots.
+
+1. Generate or edit the Mermaid C4 or DOT text directly. For authored diagrams,
+   use filename-derived levels such as `01-context.c4`, `02-container.c4`, and
+   `03-component.c4`. For generated Code architecture, use `04-code.c4`.
+2. Add `criv:source` comments only when an element maps to implementation.
+   Prefer stable interface-bearing symbols so body-only refactors do not force
+   architecture churn.
+3. Run `criv watch --once` to refresh generated architecture and state.
+4. Run `criv check` before relying on the diagram for implementation work.
+5. Open the `.c4` file in Obsidian for the rendered projection. The visual view
+   is for review ergonomics; the text and `criv check` remain authoritative.
 
 ## Sources
 

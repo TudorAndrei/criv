@@ -349,6 +349,23 @@
   white-space: pre;
 }
 
+.criv-c4-projection-mermaid {
+  padding: 10px;
+}
+
+.criv-c4-projection-mermaid svg {
+  display: block;
+  height: auto;
+  max-width: 100%;
+}
+
+.criv-c4-render-error {
+  border-top: 1px solid var(--background-modifier-border);
+  color: var(--text-error);
+  font-size: 12px;
+  padding: 8px 10px;
+}
+
 .criv-c4-diagnostics {
   border: 1px solid var(--background-modifier-border);
   border-radius: 6px;

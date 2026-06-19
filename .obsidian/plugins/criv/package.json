@@ -29,6 +29,7 @@
     "typescript": "6.0.3"
   },
   "dependencies": {
+    "mermaid": "^11.15.0",
     "obsidian": "1.13.1"
   },
   "allowScripts": {

@@ -1,0 +1,8 @@
+C4Container
+title Container - criv architecture tooling
+System_Boundary(system, "criv") {
+  %% criv:source src/lib.rs
+  Container(cli, "criv CLI", "Rust", "Generates and validates vault state")
+  Container(obsidian_plugin, "Obsidian Plugin", "TypeScript/WASM", "Displays source-aware architecture views")
+}
+Rel(cli, obsidian_plugin, "writes state consumed by")

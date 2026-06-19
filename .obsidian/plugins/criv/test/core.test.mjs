@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -79,34 +79,60 @@ assert.deepEqual(
   ],
 );
 
-assert.deepEqual(core.parseC4Artifact("docs/architecture/02-container.c4", `C4Container
+assert.deepEqual(
+  core.parseC4Artifact(
+    "docs/architecture/02-container.c4",
+    `C4Container
 Container(cli, "criv CLI", "Rust", "Runs checks")
 %% criv:source src/lib.rs#run
-`).diagnostics, []);
+`,
+  ).diagnostics,
+  [],
+);
 
 assert.equal(
-  core.parseC4Artifact("docs/architecture/04-code.c4", `// criv:generated true
+  core.parseC4Artifact(
+    "docs/architecture/04-code.c4",
+    `// criv:generated true
 digraph criv_code {
   cli -> vault;
 }
-`).format,
+`,
+  ).format,
   "dot",
 );
 
-const c4Mismatch = core.parseC4Artifact("docs/architecture/01-context.c4", `%% criv:format dot
+const c4Mismatch = core.parseC4Artifact(
+  "docs/architecture/01-context.c4",
+  `%% criv:format dot
 C4Container
 Container(cli, "criv CLI", "Rust", "Runs checks")
-`);
+`,
+);
 assert.deepEqual(
   c4Mismatch.diagnostics.map((diagnostic) => diagnostic.code),
   ["mismatched-c4-format", "mismatched-c4-level"],
 );
 
-const c4BadDirective = core.parseC4Artifact("docs/architecture/diagram.c4", `%% criv:level code
+const c4BadDirective = core.parseC4Artifact(
+  "docs/architecture/diagram.c4",
+  `%% criv:level code
 flowchart TD
   a --> b
-`);
+`,
+);
 assert.deepEqual(
   c4BadDirective.diagnostics.map((diagnostic) => diagnostic.code),
   ["missing-c4-level", "unknown-c4-directive", "unknown-c4-format"],
 );
+
+const c4FixtureDir = resolve(pluginRoot, "fixtures/c4");
+for (const fixtureName of readdirSync(c4FixtureDir).filter((name) => name.endsWith(".c4"))) {
+  const fixturePath = resolve(c4FixtureDir, fixtureName);
+  const summary = core.parseC4Artifact(
+    `docs/architecture/${fixtureName}`,
+    readFileSync(fixturePath, "utf8"),
+  );
+  assert.deepEqual(summary.diagnostics, [], `diagnostics for ${fixtureName}`);
+  assert.equal(summary.format, "mermaid", `format for ${fixtureName}`);
+}

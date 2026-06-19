@@ -14,6 +14,7 @@ import {
   TFile,
   WorkspaceLeaf,
 } from "obsidian";
+import mermaid from "mermaid";
 import { RangeSetBuilder } from "@codemirror/state";
 import {
   Decoration,
@@ -56,6 +57,7 @@ const EXPECTED_SCHEMA = "criv.state.v0";
 const VIEW_TYPE = "criv-source-panel";
 const C4_VIEW_TYPE = "criv-c4-view";
 const PREVIEW_LINE_LIMIT = 80;
+let c4RenderSequence = 0;
 const LINK_TARGET_SELECTOR = [
   "[data-href]",
   "a.internal-link",
@@ -549,7 +551,7 @@ class CrivC4View extends FileView {
 
     const body = container.createDiv({ cls: "criv-c4-body" });
     const projection = body.createDiv({ cls: "criv-c4-projection" });
-    renderC4Projection(projection, summary, this.source);
+    await renderC4Projection(projection, summary, this.source);
 
     const sourcePanel = body.createDiv({ cls: "criv-c4-source" });
     sourcePanel.createEl("pre", { text: this.source });
@@ -567,11 +569,11 @@ class CrivC4View extends FileView {
 }
 
 interface C4RendererAdapter {
-  render(container: HTMLElement, summary: C4ArtifactSummary, source: string): void;
+  render(container: HTMLElement, summary: C4ArtifactSummary, source: string): Promise<void>;
 }
 
 const sourceProjectionRenderer: C4RendererAdapter = {
-  render(container, summary, source) {
+  async render(container, summary, source) {
     container.empty();
     container.addClass(`criv-c4-projection-${safeCssSegment(summary.format)}`);
     const preview = container.createEl("pre");
@@ -582,12 +584,39 @@ const sourceProjectionRenderer: C4RendererAdapter = {
   },
 };
 
-function renderC4Projection(
+const mermaidRenderer: C4RendererAdapter = {
+  async render(container, summary, source) {
+    container.empty();
+    container.addClass("criv-c4-projection-mermaid");
+    const renderId = `criv-c4-${safeCssSegment(summary.level)}-${++c4RenderSequence}`;
+    mermaid.initialize({
+      securityLevel: "strict",
+      startOnLoad: false,
+      theme: "base",
+    });
+    try {
+      const result = await mermaid.render(renderId, source);
+      container.innerHTML = result.svg;
+    } catch (error) {
+      await sourceProjectionRenderer.render(container, summary, source);
+      container.createDiv({
+        cls: "criv-c4-render-error",
+        text: `Could not render Mermaid preview: ${errorMessage(error)}`,
+      });
+    }
+  },
+};
+
+async function renderC4Projection(
   container: HTMLElement,
   summary: C4ArtifactSummary,
   source: string,
-): void {
-  sourceProjectionRenderer.render(container, summary, source);
+): Promise<void> {
+  if (summary.format === "mermaid") {
+    await mermaidRenderer.render(container, summary, source);
+    return;
+  }
+  await sourceProjectionRenderer.render(container, summary, source);
 }
 
 class CrivSourceSuggest extends EditorSuggest<SourceIndexEntry> {
