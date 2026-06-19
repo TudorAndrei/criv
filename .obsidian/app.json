@@ -1,1 +1,9 @@
-{}
+{
+  "userIgnoreFilters": [
+    ".criv/",
+    ".git/",
+    "target/",
+    ".obsidian/plugins/criv/node_modules/",
+    ".obsidian/plugins/criv/pkg/"
+  ]
+}

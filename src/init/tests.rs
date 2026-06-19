@@ -28,6 +28,7 @@ fn init_writes_parseable_structured_templates() {
     .unwrap();
 
     for path in [
+        ".obsidian/app.json",
         ".obsidian/plugins/criv/manifest.json",
         ".obsidian/plugins/criv/package.json",
         ".obsidian/plugins/criv/tsconfig.json",
@@ -38,6 +39,25 @@ fn init_writes_parseable_structured_templates() {
         )
         .unwrap();
     }
+    let obsidian_app: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join(".obsidian/app.json")).unwrap())
+            .unwrap();
+    let ignore_filters = obsidian_app["userIgnoreFilters"].as_array().unwrap();
+    for ignored in [
+        ".criv/",
+        ".git/",
+        "target/",
+        ".obsidian/plugins/criv/node_modules/",
+        ".obsidian/plugins/criv/pkg/",
+    ] {
+        assert!(
+            ignore_filters
+                .iter()
+                .any(|value| value.as_str() == Some(ignored)),
+            "missing Obsidian ignore filter {ignored}"
+        );
+    }
+
     let plugin_package: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(root.join(".obsidian/plugins/criv/package.json")).unwrap(),
     )

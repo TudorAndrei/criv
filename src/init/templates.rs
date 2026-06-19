@@ -107,6 +107,10 @@ fi
 pub(crate) fn obsidian_plugin() -> Result<Vec<TemplateFile>> {
     Ok(vec![
         TemplateFile::generated(
+            ".obsidian/app.json",
+            json_pretty(&obsidian_app_config(), "Obsidian app.json")?,
+        ),
+        TemplateFile::generated(
             ".obsidian/plugins/criv/manifest.json",
             json_pretty(&plugin_manifest(), "Obsidian manifest.json")?,
         ),
@@ -151,6 +155,24 @@ fn json_pretty(value: &impl Serialize, label: &str) -> Result<String> {
         .map_err(|err| CrivError::new(format!("failed to serialize {label}: {err}")))?;
     json.push('\n');
     Ok(json)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ObsidianAppConfig {
+    user_ignore_filters: Vec<&'static str>,
+}
+
+fn obsidian_app_config() -> ObsidianAppConfig {
+    ObsidianAppConfig {
+        user_ignore_filters: vec![
+            ".criv/",
+            ".git/",
+            "target/",
+            ".obsidian/plugins/criv/node_modules/",
+            ".obsidian/plugins/criv/pkg/",
+        ],
+    }
 }
 
 #[derive(Debug, Serialize)]
