@@ -5,7 +5,7 @@ use std::process::Command;
 
 use clap::{Args as ClapArgs, ValueEnum};
 
-use crate::source_graph::SymbolKind;
+use crate::c4_code;
 use crate::vault::{
     NoteKind, ResolvedLink, SourceTargetResolution, Vault, source_fragment_name,
     source_fragment_path,
@@ -83,7 +83,7 @@ pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
         }
         "c4-code" => {
             let glob = required_arg(&options, "path-glob")?;
-            c4_code(&vault, glob)
+            c4_code::for_glob(&vault, glob)
         }
         "diff" => {
             let left = required_arg(&options, "ref-a")?;
@@ -437,49 +437,6 @@ fn c4_relationships(vault: &Vault, id: &str) -> Result<Vec<String>> {
     Ok(rows)
 }
 
-fn c4_code(vault: &Vault, glob: &str) -> Vec<String> {
-    let in_scope = vault
-        .source_files_matching_glob(glob)
-        .into_iter()
-        .collect::<BTreeSet<_>>();
-    if in_scope.is_empty() {
-        return vec![
-            "classDiagram".into(),
-            format!("%% no source files matched `{glob}`"),
-        ];
-    }
-
-    let mut classes = BTreeSet::new();
-    let mut edges = BTreeSet::new();
-
-    for symbol in vault.source_graph().symbols() {
-        if !in_scope.contains(&symbol.id.path) || !is_c4_code_symbol(symbol.kind) {
-            continue;
-        }
-        classes.insert(symbol.name.clone());
-        for call in &symbol.calls {
-            let Some(target) = vault.source_graph().resolve_call(&symbol.id, &call.target) else {
-                continue;
-            };
-            if in_scope.contains(&target.path) {
-                edges.insert(format!("{} --> {}", symbol.name, target.name));
-            }
-        }
-    }
-
-    let mut rows = vec!["classDiagram".into()];
-    rows.extend(classes.into_iter().map(|name| format!("class {name}")));
-    rows.extend(edges);
-    rows
-}
-
-fn is_c4_code_symbol(kind: SymbolKind) -> bool {
-    matches!(
-        kind,
-        SymbolKind::Class | SymbolKind::Function | SymbolKind::Method
-    )
-}
-
 fn diff(root: &Path, left: &str, right: &str) -> Result<Vec<String>> {
     let left = load_snapshot(root, left)?;
     let right = load_snapshot(root, right)?;
@@ -643,40 +600,6 @@ mod tests {
             vec![
                 "level=container from=cli to=plugin label=writes state for".to_string(),
                 "level=container from=plugin to=external label=missing".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn c4_code_emits_in_scope_class_diagram() {
-        let temp = TempDir::new().unwrap();
-        write_query_fixture(temp.path());
-        let vault = Vault::load(temp.path()).unwrap();
-
-        let rows = c4_code(&vault, "src/lib.rs");
-
-        assert!(rows.contains(&"classDiagram".to_string()));
-        assert!(rows.contains(&"class Foo".to_string()));
-        assert!(rows.contains(&"class run".to_string()));
-        assert!(rows.contains(&"class helper".to_string()));
-        assert!(rows.contains(&"run --> helper".to_string()));
-        assert!(!rows.contains(&"class external".to_string()));
-        assert!(!rows.contains(&"run --> external".to_string()));
-    }
-
-    #[test]
-    fn c4_code_reports_empty_source_glob_as_valid_mermaid() {
-        let temp = TempDir::new().unwrap();
-        write_query_fixture(temp.path());
-        let vault = Vault::load(temp.path()).unwrap();
-
-        let rows = c4_code(&vault, "src/missing.rs");
-
-        assert_eq!(
-            rows,
-            vec![
-                "classDiagram".to_string(),
-                "%% no source files matched `src/missing.rs`".to_string(),
             ]
         );
     }
