@@ -501,7 +501,14 @@ class CrivSourceView extends ItemView {
 
 class CrivC4View extends FileView {
   private source = "";
+  private draftSource = "";
   private sourcePath: string | null = null;
+  private mode: "preview" | "source" = "preview";
+  private scale = 1;
+  private panX = 0;
+  private panY = 0;
+  private transformInitialized = false;
+  private dirtyBadgeEl: HTMLElement | null = null;
 
   constructor(leaf: WorkspaceLeaf) {
     super(leaf);
@@ -521,14 +528,18 @@ class CrivC4View extends FileView {
 
   async onLoadFile(file: TFile): Promise<void> {
     this.source = await this.app.vault.cachedRead(file);
+    this.draftSource = this.source;
     this.sourcePath = file.path;
+    this.resetTransformState();
     await this.render();
   }
 
   async onUnloadFile(file: TFile): Promise<void> {
     if (this.sourcePath === file.path) {
       this.source = "";
+      this.draftSource = "";
       this.sourcePath = null;
+      this.resetTransformState();
     }
     await this.render();
   }
@@ -537,13 +548,15 @@ class CrivC4View extends FileView {
     const container = this.containerEl.children[1] as HTMLElement;
     container.empty();
     container.addClass("criv-c4-view");
+    this.dirtyBadgeEl = null;
 
     if (!this.file) {
       container.createEl("p", { cls: "criv-empty", text: "No C4 file selected." });
       return;
     }
 
-    const source = await this.sourceForCurrentFile();
+    await this.sourceForCurrentFile();
+    const source = this.currentSource();
     const summary = parseC4Artifact(this.file.path, source);
     const header = container.createDiv({ cls: "criv-c4-header" });
     header.createEl("h3", { text: this.file.basename });
@@ -553,16 +566,20 @@ class CrivC4View extends FileView {
     if (summary.generated) {
       meta.createSpan({ text: "generated" });
     }
+    this.dirtyBadgeEl = meta.createSpan({ cls: "criv-warning criv-c4-dirty", text: "unsaved" });
+    this.updateDirtyBadge();
     if (summary.diagnostics.length > 0) {
       meta.createSpan({ cls: "criv-warning", text: `${summary.diagnostics.length}` });
     }
+    const toolbar = header.createDiv({ cls: "criv-c4-toolbar" });
+    this.renderToolbar(toolbar);
 
     const body = container.createDiv({ cls: "criv-c4-body" });
-    const projection = body.createDiv({ cls: "criv-c4-projection" });
-    await renderC4Projection(projection, summary, source);
-
-    const sourcePanel = body.createDiv({ cls: "criv-c4-source" });
-    sourcePanel.createEl("pre", { text: source });
+    if (this.mode === "source") {
+      this.renderSourceEditor(body);
+    } else {
+      await this.renderPreview(body, summary, source);
+    }
 
     if (summary.diagnostics.length > 0) {
       const diagnostics = container.createDiv({ cls: "criv-c4-diagnostics" });
@@ -581,9 +598,204 @@ class CrivC4View extends FileView {
     }
     if (this.sourcePath !== this.file.path) {
       this.source = await this.app.vault.cachedRead(this.file);
+      this.draftSource = this.source;
       this.sourcePath = this.file.path;
+      this.resetTransformState();
     }
     return this.source;
+  }
+
+  private currentSource(): string {
+    return this.sourceDirty() ? this.draftSource : this.source;
+  }
+
+  private sourceDirty(): boolean {
+    return this.draftSource !== this.source;
+  }
+
+  private renderToolbar(toolbar: HTMLElement): void {
+    this.toolbarButton(toolbar, "Preview", "Preview diagram", this.mode === "preview", () => {
+      this.mode = "preview";
+      void this.render();
+    });
+    this.toolbarButton(toolbar, "Source", "Edit source", this.mode === "source", () => {
+      this.mode = "source";
+      void this.render();
+    });
+    if (this.mode !== "preview") {
+      return;
+    }
+    this.toolbarButton(toolbar, "+", "Zoom in", false, () => this.zoomBy(1.2));
+    this.toolbarButton(toolbar, "-", "Zoom out", false, () => this.zoomBy(1 / 1.2));
+    this.toolbarButton(toolbar, "Fit", "Fit diagram", false, () => this.fitPreview());
+    this.toolbarButton(toolbar, "Reset", "Reset view", false, () => {
+      this.scale = 1;
+      this.panX = 0;
+      this.panY = 0;
+      this.transformInitialized = true;
+      this.applyPreviewTransform();
+    });
+  }
+
+  private toolbarButton(
+    toolbar: HTMLElement,
+    text: string,
+    tooltip: string,
+    active: boolean,
+    onClick: () => void,
+  ): void {
+    const button = toolbar.createEl("button", { text, attr: { "aria-label": tooltip } });
+    button.setAttribute("title", tooltip);
+    if (active) {
+      button.addClass("is-active");
+    }
+    button.onclick = onClick;
+  }
+
+  private async renderPreview(
+    body: HTMLElement,
+    summary: C4ArtifactSummary,
+    source: string,
+  ): Promise<void> {
+    const viewport = body.createDiv({ cls: "criv-c4-preview" });
+    const surface = viewport.createDiv({ cls: "criv-c4-preview-surface" });
+    await renderC4Projection(surface, summary, source);
+    this.bindPreviewInput(viewport);
+    this.applyPreviewTransform();
+    if (!this.transformInitialized) {
+      requestAnimationFrame(() => this.fitPreview());
+    }
+  }
+
+  private renderSourceEditor(body: HTMLElement): void {
+    const sourcePanel = body.createDiv({ cls: "criv-c4-source" });
+    const editor = sourcePanel.createEl("textarea", { cls: "criv-c4-editor" });
+    editor.value = this.draftSource;
+    editor.spellcheck = false;
+    editor.oninput = () => {
+      this.draftSource = editor.value;
+      this.updateDirtyBadge();
+    };
+    editor.onkeydown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        void this.saveSource(editor.value);
+      }
+    };
+    editor.focus();
+  }
+
+  private async saveSource(value: string): Promise<void> {
+    if (!this.file) {
+      return;
+    }
+    this.draftSource = value;
+    await this.app.vault.modify(this.file, value);
+    this.source = value;
+    this.sourcePath = this.file.path;
+    this.transformInitialized = false;
+    await this.render();
+  }
+
+  private bindPreviewInput(viewport: HTMLElement): void {
+    viewport.onwheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const rect = viewport.getBoundingClientRect();
+      const factor = event.deltaY < 0 ? 1.1 : 1 / 1.1;
+      this.zoomAt(factor, event.clientX - rect.left, event.clientY - rect.top);
+    };
+
+    viewport.onpointerdown = (event: PointerEvent) => {
+      if (event.button !== 0) {
+        return;
+      }
+      event.preventDefault();
+      viewport.setPointerCapture(event.pointerId);
+      const startX = event.clientX;
+      const startY = event.clientY;
+      const initialX = this.panX;
+      const initialY = this.panY;
+
+      viewport.onpointermove = (moveEvent: PointerEvent) => {
+        this.panX = initialX + moveEvent.clientX - startX;
+        this.panY = initialY + moveEvent.clientY - startY;
+        this.transformInitialized = true;
+        this.applyPreviewTransform();
+      };
+      const stopPan = () => {
+        viewport.onpointermove = null;
+        viewport.onpointerup = null;
+        viewport.onpointercancel = null;
+      };
+      viewport.onpointerup = stopPan;
+      viewport.onpointercancel = stopPan;
+    };
+  }
+
+  private zoomBy(factor: number): void {
+    const viewport = this.containerEl.querySelector(".criv-c4-preview") as HTMLElement | null;
+    if (!viewport) {
+      return;
+    }
+    this.zoomAt(factor, viewport.clientWidth / 2, viewport.clientHeight / 2);
+  }
+
+  private zoomAt(factor: number, originX: number, originY: number): void {
+    const nextScale = clamp(this.scale * factor, 0.05, 8);
+    const ratio = nextScale / this.scale;
+    this.panX = originX - (originX - this.panX) * ratio;
+    this.panY = originY - (originY - this.panY) * ratio;
+    this.scale = nextScale;
+    this.transformInitialized = true;
+    this.applyPreviewTransform();
+  }
+
+  private fitPreview(): void {
+    const viewport = this.containerEl.querySelector(".criv-c4-preview") as HTMLElement | null;
+    const surface = this.containerEl.querySelector(
+      ".criv-c4-preview-surface",
+    ) as HTMLElement | null;
+    const svg = surface?.querySelector("svg") as SVGSVGElement | null;
+    if (!viewport || !surface || !svg) {
+      return;
+    }
+    const size = svgSize(svg);
+    if (!size) {
+      return;
+    }
+    const padding = 32;
+    const availableWidth = Math.max(1, viewport.clientWidth - padding * 2);
+    const availableHeight = Math.max(1, viewport.clientHeight - padding * 2);
+    this.scale = clamp(
+      Math.min(availableWidth / size.width, availableHeight / size.height),
+      0.05,
+      2,
+    );
+    this.panX = (viewport.clientWidth - size.width * this.scale) / 2;
+    this.panY = (viewport.clientHeight - size.height * this.scale) / 2;
+    this.transformInitialized = true;
+    this.applyPreviewTransform();
+  }
+
+  private applyPreviewTransform(): void {
+    const surface = this.containerEl.querySelector(
+      ".criv-c4-preview-surface",
+    ) as HTMLElement | null;
+    if (!surface) {
+      return;
+    }
+    surface.style.transform = `translate(${this.panX}px, ${this.panY}px) scale(${this.scale})`;
+  }
+
+  private resetTransformState(): void {
+    this.scale = 1;
+    this.panX = 0;
+    this.panY = 0;
+    this.transformInitialized = false;
+  }
+
+  private updateDirtyBadge(): void {
+    this.dirtyBadgeEl?.toggleClass("is-hidden", !this.sourceDirty());
   }
 }
 
@@ -1045,6 +1257,36 @@ function literalSet(language: string): Set<string> {
 
 function safeCssSegment(value: string): string {
   return /^[a-z0-9_-]+$/i.test(value) ? value : "text";
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function svgSize(svg: SVGSVGElement): { width: number; height: number } | null {
+  const viewBox = svg.viewBox.baseVal;
+  if (viewBox.width > 0 && viewBox.height > 0) {
+    return { width: viewBox.width, height: viewBox.height };
+  }
+  const width = parseSvgLength(svg.getAttribute("width"));
+  const height = parseSvgLength(svg.getAttribute("height"));
+  if (width && height) {
+    return { width, height };
+  }
+  const rect = svg.getBoundingClientRect();
+  if (rect.width > 0 && rect.height > 0) {
+    return { width: rect.width, height: rect.height };
+  }
+  return null;
+}
+
+function parseSvgLength(value: string | null): number | null {
+  const match = value?.match(/^([\d.]+)/);
+  if (!match) {
+    return null;
+  }
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 function errorMessage(error: unknown): string {

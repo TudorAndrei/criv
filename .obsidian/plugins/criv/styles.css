@@ -300,6 +300,11 @@
   padding-bottom: 8px;
 }
 
+.criv-c4-header > h3 {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .criv-c4-header h3 {
   font-size: 13px;
   font-weight: 650;
@@ -322,25 +327,103 @@
   padding: 1px 7px;
 }
 
+.criv-c4-meta .criv-warning {
+  color: var(--text-error);
+}
+
+.criv-c4-dirty.is-hidden {
+  display: none;
+}
+
+.criv-c4-toolbar {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.criv-c4-toolbar button {
+  align-items: center;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  color: var(--text-normal);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 12px;
+  height: 28px;
+  justify-content: center;
+  line-height: 1;
+  min-width: 28px;
+  padding: 0 8px;
+}
+
+.criv-c4-toolbar button:hover,
+.criv-c4-toolbar button.is-active {
+  background: var(--background-modifier-hover);
+  color: var(--text-accent);
+}
+
 .criv-c4-body {
-  display: grid;
+  display: block;
   flex: 1 1 auto;
-  gap: 10px;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   min-height: 0;
 }
 
-.criv-c4-projection,
+.criv-c4-preview,
 .criv-c4-source {
   background: var(--background-primary-alt);
   border: 1px solid var(--background-modifier-border);
   border-radius: 6px;
+  height: 100%;
   min-height: 0;
-  overflow: auto;
 }
 
-.criv-c4-projection pre,
-.criv-c4-source pre {
+.criv-c4-preview {
+  cursor: grab;
+  overflow: auto;
+  position: relative;
+  touch-action: none;
+  user-select: none;
+}
+
+.criv-c4-preview:active {
+  cursor: grabbing;
+}
+
+.criv-c4-preview-surface {
+  left: 0;
+  min-height: max-content;
+  min-width: max-content;
+  position: absolute;
+  top: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.criv-c4-source {
+  display: flex;
+  overflow: hidden;
+}
+
+.criv-c4-editor {
+  background: transparent;
+  border: 0;
+  color: var(--text-normal);
+  flex: 1 1 auto;
+  font-family: var(--font-monospace);
+  font-size: 12px;
+  line-height: 1.45;
+  outline: 0;
+  padding: 10px;
+  resize: none;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.criv-c4-preview-surface pre {
   font-size: 11px;
   line-height: 1.45;
   margin: 0;
@@ -355,15 +438,14 @@
 
 .criv-c4-projection-dot,
 .criv-c4-projection-mermaid {
-  display: grid;
-  place-items: start center;
+  display: block;
 }
 
 .criv-c4-projection-dot svg,
 .criv-c4-projection-mermaid svg {
   display: block;
   height: auto;
-  max-width: 100%;
+  max-width: none;
 }
 
 .criv-c4-render-warning {
@@ -406,7 +488,13 @@
 }
 
 @media (max-width: 760px) {
-  .criv-c4-body {
-    grid-template-columns: minmax(0, 1fr);
+  .criv-c4-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .criv-c4-meta,
+  .criv-c4-toolbar {
+    justify-content: flex-start;
   }
 }
