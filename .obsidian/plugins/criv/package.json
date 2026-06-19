@@ -29,6 +29,7 @@
     "typescript": "6.0.3"
   },
   "dependencies": {
+    "@viz-js/viz": "^3.28.0",
     "mermaid": "^11.15.0",
     "obsidian": "1.13.1"
   },

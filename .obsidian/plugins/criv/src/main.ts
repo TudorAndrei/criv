@@ -15,6 +15,7 @@ import {
   WorkspaceLeaf,
 } from "obsidian";
 import mermaid from "mermaid";
+import { instance as vizInstance, type Viz } from "@viz-js/viz";
 import { RangeSetBuilder } from "@codemirror/state";
 import {
   Decoration,
@@ -58,6 +59,7 @@ const VIEW_TYPE = "criv-source-panel";
 const C4_VIEW_TYPE = "criv-c4-view";
 const PREVIEW_LINE_LIMIT = 80;
 let c4RenderSequence = 0;
+let c4DotRenderer: Promise<Viz> | null = null;
 const LINK_TARGET_SELECTOR = [
   "[data-href]",
   "a.internal-link",
@@ -499,6 +501,7 @@ class CrivSourceView extends ItemView {
 
 class CrivC4View extends FileView {
   private source = "";
+  private sourcePath: string | null = null;
 
   constructor(leaf: WorkspaceLeaf) {
     super(leaf);
@@ -518,11 +521,15 @@ class CrivC4View extends FileView {
 
   async onLoadFile(file: TFile): Promise<void> {
     this.source = await this.app.vault.cachedRead(file);
+    this.sourcePath = file.path;
     await this.render();
   }
 
-  async onUnloadFile(_file: TFile): Promise<void> {
-    this.source = "";
+  async onUnloadFile(file: TFile): Promise<void> {
+    if (this.sourcePath === file.path) {
+      this.source = "";
+      this.sourcePath = null;
+    }
     await this.render();
   }
 
@@ -536,7 +543,8 @@ class CrivC4View extends FileView {
       return;
     }
 
-    const summary = parseC4Artifact(this.file.path, this.source);
+    const source = await this.sourceForCurrentFile();
+    const summary = parseC4Artifact(this.file.path, source);
     const header = container.createDiv({ cls: "criv-c4-header" });
     header.createEl("h3", { text: this.file.basename });
     const meta = header.createDiv({ cls: "criv-c4-meta" });
@@ -551,10 +559,10 @@ class CrivC4View extends FileView {
 
     const body = container.createDiv({ cls: "criv-c4-body" });
     const projection = body.createDiv({ cls: "criv-c4-projection" });
-    await renderC4Projection(projection, summary, this.source);
+    await renderC4Projection(projection, summary, source);
 
     const sourcePanel = body.createDiv({ cls: "criv-c4-source" });
-    sourcePanel.createEl("pre", { text: this.source });
+    sourcePanel.createEl("pre", { text: source });
 
     if (summary.diagnostics.length > 0) {
       const diagnostics = container.createDiv({ cls: "criv-c4-diagnostics" });
@@ -565,6 +573,17 @@ class CrivC4View extends FileView {
         row.createSpan({ text: diagnostic.message });
       }
     }
+  }
+
+  private async sourceForCurrentFile(): Promise<string> {
+    if (!this.file) {
+      return "";
+    }
+    if (this.sourcePath !== this.file.path) {
+      this.source = await this.app.vault.cachedRead(this.file);
+      this.sourcePath = this.file.path;
+    }
+    return this.source;
   }
 }
 
@@ -607,6 +626,28 @@ const mermaidRenderer: C4RendererAdapter = {
   },
 };
 
+const dotRenderer: C4RendererAdapter = {
+  async render(container, summary, source) {
+    container.empty();
+    container.addClass("criv-c4-projection-dot");
+    try {
+      const viz = await c4DotRendererInstance();
+      const result = viz.render(source, { engine: "dot", format: "svg" });
+      if (result.status === "failure") {
+        throw new Error(renderErrorsMessage(result.errors));
+      }
+      container.innerHTML = result.output;
+      renderWarnings(container, result.errors);
+    } catch (error) {
+      await sourceProjectionRenderer.render(container, summary, source);
+      container.createDiv({
+        cls: "criv-c4-render-error",
+        text: `Could not render DOT preview: ${errorMessage(error)}`,
+      });
+    }
+  },
+};
+
 async function renderC4Projection(
   container: HTMLElement,
   summary: C4ArtifactSummary,
@@ -616,7 +657,34 @@ async function renderC4Projection(
     await mermaidRenderer.render(container, summary, source);
     return;
   }
+  if (summary.format === "dot") {
+    await dotRenderer.render(container, summary, source);
+    return;
+  }
   await sourceProjectionRenderer.render(container, summary, source);
+}
+
+function c4DotRendererInstance(): Promise<Viz> {
+  c4DotRenderer ??= vizInstance();
+  return c4DotRenderer;
+}
+
+function renderWarnings(
+  container: HTMLElement,
+  errors: { level?: string; message: string }[],
+): void {
+  const warnings = errors.filter((error) => error.level === "warning");
+  if (warnings.length === 0) {
+    return;
+  }
+  const warningList = container.createDiv({ cls: "criv-c4-render-warning" });
+  for (const warning of warnings) {
+    warningList.createDiv({ text: warning.message });
+  }
+}
+
+function renderErrorsMessage(errors: { level?: string; message: string }[]): string {
+  return errors.map((error) => error.message).join("; ") || "Graphviz render failed";
 }
 
 class CrivSourceSuggest extends EditorSuggest<SourceIndexEntry> {
