@@ -10,6 +10,7 @@ use rumdl_lib::rule::{LintWarning, Rule};
 use rumdl_lib::rules::{all_rules, filter_rules};
 
 use crate::c4::{C4ElementCategory, C4Level};
+use crate::c4_artifact::C4ArtifactFormat;
 use crate::util::{is_adr_id, kebab};
 use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
@@ -288,6 +289,7 @@ pub(crate) fn validate(vault: &Vault) -> Vec<Diagnostic> {
     validate_pattern_collisions(vault, &mut diagnostics);
     validate_links(vault, &mut diagnostics);
     validate_supersession(vault, &mut diagnostics);
+    validate_c4_artifacts(vault, &mut diagnostics);
     diagnostics.sort_by(|a, b| {
         (&a.path, a.line.unwrap_or(0), a.code).cmp(&(&b.path, b.line.unwrap_or(0), b.code))
     });
@@ -342,7 +344,7 @@ fn validate_notes(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
         }
 
         validate_targets(vault, note, diagnostics);
-        validate_c4(vault, note, diagnostics);
+        validate_c4_diagrams(vault, &note.rel_path, &note.c4_diagrams, diagnostics);
     }
 
     for (id, notes) in ids {
@@ -492,12 +494,71 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
     }
 }
 
-fn validate_c4(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
-    for diagram in &note.c4_diagrams {
+fn validate_c4_artifacts(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
+    for artifact in &vault.c4_artifacts {
+        for artifact_diagnostic in &artifact.diagnostics {
+            diagnostics.push(error(
+                artifact_diagnostic.code,
+                &artifact.rel_path,
+                artifact_diagnostic.line,
+                artifact_diagnostic.message.clone(),
+            ));
+        }
+        for directive in artifact
+            .directives
+            .iter()
+            .filter(|directive| directive.key == "generated")
+        {
+            if let Some(value) = directive.value.as_deref()
+                && !matches!(value, "true" | "false")
+            {
+                diagnostics.push(error(
+                    "invalid-c4-generated",
+                    &artifact.rel_path,
+                    Some(directive.line),
+                    "criv:generated must be `true` or `false` when a value is provided",
+                ));
+            }
+        }
+
+        if artifact.format == Some(C4ArtifactFormat::Dot) {
+            if artifact.level.is_some_and(|level| level.as_str() != "code") {
+                diagnostics.push(error(
+                    "invalid-c4-level",
+                    &artifact.rel_path,
+                    None,
+                    "DOT .c4 artifacts currently support only filename-derived Code level",
+                ));
+            }
+            if let Err(message) = validate_dot_shape(&artifact.path) {
+                diagnostics.push(error("invalid-c4-dot", &artifact.rel_path, None, message));
+            }
+        }
+
+        validate_c4_diagrams(vault, &artifact.rel_path, &artifact.diagrams, diagnostics);
+    }
+}
+
+fn validate_dot_shape(path: &Path) -> std::result::Result<(), String> {
+    let contents = std::fs::read_to_string(path)
+        .map_err(|err| format!("failed to read DOT .c4 artifact: {err}"))?;
+    if !contents.contains('{') || !contents.contains('}') {
+        return Err("DOT .c4 artifact must contain a graph body enclosed in braces".into());
+    }
+    Ok(())
+}
+
+fn validate_c4_diagrams(
+    vault: &Vault,
+    path: &str,
+    diagrams: &[crate::c4::C4Diagram],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for diagram in diagrams {
         for (line, source) in &diagram.invalid_source_placements {
             diagnostics.push(error(
                 "invalid-c4-source-placement",
-                &note.rel_path,
+                path,
                 Some(*line),
                 format!("`criv:source {source}` must immediately follow a C4 architecture element"),
             ));
@@ -506,7 +567,7 @@ fn validate_c4(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
         for (alias, line) in diagram.duplicate_aliases() {
             diagnostics.push(error(
                 "duplicate-c4-alias",
-                &note.rel_path,
+                path,
                 Some(line),
                 format!("C4 element alias `{alias}` is declared more than once"),
             ));
@@ -515,7 +576,7 @@ fn validate_c4(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
         for (element, line) in diagram.duplicate_sources() {
             diagnostics.push(error(
                 "duplicate-c4-source",
-                &note.rel_path,
+                path,
                 Some(line),
                 format!(
                     "C4 element `{}` has more than one `criv:source` annotation",
@@ -527,7 +588,7 @@ fn validate_c4(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
         for relationship in diagram.unresolved_relationships() {
             diagnostics.push(error(
                 "unresolved-c4-relationship",
-                &note.rel_path,
+                path,
                 Some(relationship.line),
                 format!(
                     "C4 relationship `{}` -> `{}` references an unknown element alias",
@@ -540,7 +601,7 @@ fn validate_c4(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
             if relationship.label.is_none() {
                 diagnostics.push(warning(
                     "missing-c4-relationship-label",
-                    &note.rel_path,
+                    path,
                     Some(relationship.line),
                     format!(
                         "C4 relationship `{}` -> `{}` should describe its communication intent",
@@ -554,7 +615,7 @@ fn validate_c4(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
             if !c4_category_allowed_at_level(diagram.level, element.category) {
                 diagnostics.push(error(
                     "invalid-c4-level",
-                    &note.rel_path,
+                    path,
                     Some(element.line),
                     format!(
                         "C4 {} diagram cannot contain a {} element `{}`",
@@ -568,7 +629,7 @@ fn validate_c4(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
             if element.label.is_empty() {
                 diagnostics.push(warning(
                     "missing-c4-label",
-                    &note.rel_path,
+                    path,
                     Some(element.line),
                     format!("C4 element `{}` should have a label", element.alias),
                 ));
@@ -577,7 +638,7 @@ fn validate_c4(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
             if element.description.is_none() {
                 diagnostics.push(warning(
                     "missing-c4-description",
-                    &note.rel_path,
+                    path,
                     Some(element.line),
                     format!(
                         "C4 element `{}` should describe its responsibility",
@@ -593,7 +654,7 @@ fn validate_c4(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
             {
                 diagnostics.push(warning(
                     "missing-c4-technology",
-                    &note.rel_path,
+                    path,
                     Some(element.line),
                     format!(
                         "C4 {} element `{}` should include a technology",
@@ -610,20 +671,21 @@ fn validate_c4(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
                 SourceTargetResolution::Resolved { .. } => {}
                 SourceTargetResolution::MissingFile => diagnostics.push(error(
                     "unresolved-c4-target",
-                    &note.rel_path,
+                    path,
                     Some(element.line),
                     format!(
                         "C4 element `{}` source `{source}` does not resolve to a source file",
                         element.alias
                     ),
                 )),
-                SourceTargetResolution::MissingFragment { path } => diagnostics.push(error(
+                SourceTargetResolution::MissingFragment { path: resolved_path } => diagnostics.push(error(
                     "unresolved-c4-target",
-                    &note.rel_path,
+                    path,
                     Some(element.line),
                     format!(
                         "C4 element `{}` source `{source}` resolves to `{path}` but does not resolve to a source symbol",
-                        element.alias
+                        element.alias,
+                        path = resolved_path
                     ),
                 )),
             }
@@ -1219,6 +1281,117 @@ Rel(cli, cli)
     }
 
     #[test]
+    fn c4_artifact_mermaid_validation_reuses_c4_rules() {
+        let vault = c4_artifact_vault(
+            "docs/architecture/02-container.c4",
+            r#"
+C4Container
+Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
+Container(cli, "Other CLI", "Rust", "Duplicates alias")
+Rel(cli, plugin, "writes state for")
+"#,
+        );
+
+        let diagnostics = validate(&vault);
+
+        for code in ["duplicate-c4-alias", "unresolved-c4-relationship"] {
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|diag| diag.code == code
+                        && diag.path == "docs/architecture/02-container.c4"),
+                "missing diagnostic {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn c4_artifact_source_annotations_are_validated_as_c4_sources() {
+        let vault = c4_artifact_vault(
+            "docs/architecture/02-container.c4",
+            r#"
+C4Container
+Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
+%% criv:source src/main.rs#run
+"#,
+        );
+
+        let diagnostics = validate(&vault);
+
+        assert!(diagnostics.iter().all(|diag| {
+            diag.code != "unknown-c4-directive" && diag.code != "unresolved-c4-target"
+        }));
+    }
+
+    #[test]
+    fn c4_artifact_directive_and_level_errors_are_reported() {
+        let vault = c4_artifact_vault(
+            "docs/architecture/02-container.c4",
+            r#"
+%% criv:unknown yes
+%% criv:format dot
+%% criv:generated maybe
+C4Context
+Person(user, "Maintainer", "Runs checks")
+"#,
+        );
+
+        let diagnostics = validate(&vault);
+
+        for code in [
+            "unknown-c4-directive",
+            "mismatched-c4-format",
+            "invalid-c4-generated",
+            "mismatched-c4-level",
+        ] {
+            assert!(
+                diagnostics.iter().any(|diag| diag.code == code),
+                "missing diagnostic {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn c4_artifact_dot_code_file_validates_structurally() {
+        let vault = c4_artifact_vault(
+            "docs/architecture/04-code.c4",
+            r#"
+// criv:generated true
+digraph criv_code {
+  "src/main.rs#run" -> "src/lib.rs#helper";
+}
+"#,
+        );
+
+        let diagnostics = validate(&vault);
+
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diag| diag.path != "docs/architecture/04-code.c4")
+        );
+    }
+
+    #[test]
+    fn c4_artifact_dot_requires_code_level_and_graph_body() {
+        let vault = c4_artifact_vault(
+            "docs/architecture/01-context.c4",
+            r#"
+digraph criv_code
+"#,
+        );
+
+        let diagnostics = validate(&vault);
+
+        for code in ["invalid-c4-level", "invalid-c4-dot"] {
+            assert!(
+                diagnostics.iter().any(|diag| diag.code == code),
+                "missing diagnostic {code}"
+            );
+        }
+    }
+
+    #[test]
     fn rumdl_fixes_markdown_content_in_process() {
         let path = unique_temp_file("criv-rumdl-fix", "README.md");
         let mut contents = "# Title\n\n\nBody\n".to_string();
@@ -1328,6 +1501,24 @@ title: C4
             ),
         )
         .unwrap();
+        Vault::load(&root).unwrap()
+    }
+
+    fn c4_artifact_vault(path: &str, contents: &str) -> Vault {
+        let root = unique_temp_dir("criv-c4-artifact-check");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("docs/architecture")).unwrap();
+        fs::write(
+            root.join("criv.toml"),
+            r#"
+[source]
+roots = ["src"]
+"#,
+        )
+        .unwrap();
+        fs::write(root.join("src/main.rs"), "fn run() {}\n").unwrap();
+        fs::write(root.join("src/lib.rs"), "fn helper() {}\n").unwrap();
+        fs::write(root.join(path), contents).unwrap();
         Vault::load(&root).unwrap()
     }
 }

@@ -1,5 +1,6 @@
 mod architecture;
 mod c4;
+mod c4_artifact;
 mod c4_code;
 mod check;
 mod config;

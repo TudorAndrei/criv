@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::Result;
-use crate::c4;
 use crate::config::Config;
 use crate::source_graph::SourceGraph;
 use crate::source_index::{FffSourceIndex, SourceIndex};
@@ -12,6 +11,7 @@ use crate::util::{
     GlobMatcher, find_wiki_links_with_lines, glob_matches, is_text_file, kebab,
     markdown_headings as parse_markdown_headings, read_to_string, strip_prefix, walk_files,
 };
+use crate::{c4, c4_artifact};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NoteKind {
@@ -79,6 +79,7 @@ impl Note {
 pub(crate) struct Vault {
     pub(crate) config: Config,
     pub(crate) notes: Vec<Note>,
+    pub(crate) c4_artifacts: Vec<c4_artifact::C4Artifact>,
     note_ids: BTreeMap<String, usize>,
     filenames: BTreeMap<String, usize>,
     titles: BTreeMap<String, usize>,
@@ -117,6 +118,10 @@ impl Vault {
         let notes = walk_files(&docs_path, Some("md"))?
             .into_iter()
             .map(|path| parse_note(root, &docs_path, &path))
+            .collect::<Result<Vec<_>>>()?;
+        let c4_artifacts = walk_files(&docs_path, Some("c4"))?
+            .into_iter()
+            .map(|path| c4_artifact::parse_file(root, &docs_path, &path))
             .collect::<Result<Vec<_>>>()?;
 
         let mut note_ids = BTreeMap::new();
@@ -168,6 +173,7 @@ impl Vault {
         Ok(Self {
             config,
             notes,
+            c4_artifacts,
             note_ids,
             filenames,
             titles,
@@ -345,6 +351,7 @@ impl Vault {
         Self {
             config: Config::default(),
             notes,
+            c4_artifacts: Vec::new(),
             note_ids,
             filenames,
             titles,

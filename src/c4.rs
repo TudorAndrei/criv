@@ -121,15 +121,15 @@ pub(crate) fn parse_diagrams(markdown: &str) -> Vec<C4Diagram> {
     markdown_fenced_blocks(markdown)
         .into_iter()
         .filter(|(_, info, _)| info.as_deref() == Some("mermaid"))
-        .filter_map(|(start_line, _, contents)| parse_diagram(start_line, &contents))
+        .filter_map(|(start_line, _, contents)| parse_mermaid_diagram(start_line, &contents))
         .collect()
 }
 
-fn parse_diagram(start_line: usize, contents: &str) -> Option<C4Diagram> {
+pub(crate) fn parse_mermaid_diagram(start_line: usize, contents: &str) -> Option<C4Diagram> {
     let mut lines = contents.lines().enumerate();
     let (header_index, header) = lines.find_map(|(index, line)| {
         let trimmed = line.trim();
-        (!trimmed.is_empty()).then_some((index, trimmed))
+        (!trimmed.is_empty() && !trimmed.starts_with("%%")).then_some((index, trimmed))
     })?;
     let level = match header {
         "C4Context" => C4Level::Context,

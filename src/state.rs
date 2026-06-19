@@ -294,87 +294,39 @@ impl State {
                 }
             }
 
-            for diagram in &note.c4_diagrams {
-                let mut element_nodes = BTreeMap::new();
-                for element in &diagram.elements {
-                    let element_id = c4_element_node_id(&note_id, diagram.line, &element.alias);
-                    element_nodes
-                        .entry(element.alias.as_str())
-                        .or_insert_with(|| element_id.clone());
-                    add_node(
-                        &mut graph,
-                        &mut seen_nodes,
-                        Node {
-                            id: element_id.clone(),
-                            hash: String::new(),
-                            kind: format!("c4-{}", element.category.as_str()),
-                            label: if element.label.is_empty() {
-                                element.alias.clone()
-                            } else {
-                                element.label.clone()
-                            },
-                            path: Some(format!("{}#L{}", note.rel_path, element.line)),
-                        },
-                    );
-                    add_edge(
-                        &mut graph,
-                        &mut seen_edges,
-                        &note_id,
-                        &element_id,
-                        "contains",
-                    );
-                    if let Some(source) = &element.source
-                        && let SourceTargetResolution::Resolved { path, .. } =
-                            vault.resolve_source_target(source)
-                    {
-                        add_edge(
-                            &mut graph,
-                            &mut seen_edges,
-                            &element_id,
-                            &code_node_id(&path),
-                            "references",
-                        );
-                    }
-                }
+            add_c4_diagrams_to_graph(
+                &mut graph,
+                &mut seen_nodes,
+                &mut seen_edges,
+                vault,
+                &note_id,
+                &note.rel_path,
+                &note.c4_diagrams,
+            );
+        }
 
-                for relationship in &diagram.relationships {
-                    if let (Some(from), Some(to)) = (
-                        element_nodes.get(relationship.from.as_str()),
-                        element_nodes.get(relationship.to.as_str()),
-                    ) {
-                        let relationship_id = c4_relationship_node_id(
-                            &note_id,
-                            diagram.line,
-                            relationship.line,
-                            &relationship.from,
-                            &relationship.to,
-                        );
-                        add_node(
-                            &mut graph,
-                            &mut seen_nodes,
-                            Node {
-                                id: relationship_id.clone(),
-                                hash: String::new(),
-                                kind: "c4-relationship".into(),
-                                label: relationship.label.clone().unwrap_or_else(|| {
-                                    format!("{} -> {}", relationship.from, relationship.to)
-                                }),
-                                path: Some(format!("{}#L{}", note.rel_path, relationship.line)),
-                            },
-                        );
-                        add_edge(
-                            &mut graph,
-                            &mut seen_edges,
-                            &note_id,
-                            &relationship_id,
-                            "contains",
-                        );
-                        add_edge(&mut graph, &mut seen_edges, &relationship_id, from, "from");
-                        add_edge(&mut graph, &mut seen_edges, &relationship_id, to, "to");
-                        add_edge(&mut graph, &mut seen_edges, from, to, "relates");
-                    }
-                }
-            }
+        for artifact in &vault.c4_artifacts {
+            let artifact_id = c4_artifact_node_id(&artifact.rel_path);
+            add_node(
+                &mut graph,
+                &mut seen_nodes,
+                Node {
+                    id: artifact_id.clone(),
+                    hash: String::new(),
+                    kind: "c4-artifact".into(),
+                    label: artifact.rel_path.clone(),
+                    path: Some(artifact.rel_path.clone()),
+                },
+            );
+            add_c4_diagrams_to_graph(
+                &mut graph,
+                &mut seen_nodes,
+                &mut seen_edges,
+                vault,
+                &artifact_id,
+                &artifact.rel_path,
+                &artifact.diagrams,
+            );
         }
 
         let mut source_index = vault
@@ -596,6 +548,102 @@ fn configured_pattern_paths(paths: &[String], language: Option<&str>) -> Option<
     (!paths.is_empty()).then_some(paths)
 }
 
+fn add_c4_diagrams_to_graph(
+    graph: &mut Graph,
+    seen_nodes: &mut BTreeSet<String>,
+    seen_edges: &mut BTreeSet<String>,
+    vault: &Vault,
+    owner_id: &str,
+    owner_path: &str,
+    diagrams: &[crate::c4::C4Diagram],
+) {
+    for diagram in diagrams {
+        let diagram_id = c4_diagram_node_id(owner_id, diagram.line);
+        add_node(
+            graph,
+            seen_nodes,
+            Node {
+                id: diagram_id.clone(),
+                hash: String::new(),
+                kind: "c4-diagram".into(),
+                label: format!("{} diagram", diagram.level.as_str()),
+                path: Some(format!("{owner_path}#L{}", diagram.line)),
+            },
+        );
+        add_edge(graph, seen_edges, owner_id, &diagram_id, "contains");
+
+        let mut element_nodes = BTreeMap::new();
+        for element in &diagram.elements {
+            let element_id = c4_element_node_id(owner_id, diagram.line, &element.alias);
+            element_nodes
+                .entry(element.alias.as_str())
+                .or_insert_with(|| element_id.clone());
+            add_node(
+                graph,
+                seen_nodes,
+                Node {
+                    id: element_id.clone(),
+                    hash: String::new(),
+                    kind: format!("c4-{}", element.category.as_str()),
+                    label: if element.label.is_empty() {
+                        element.alias.clone()
+                    } else {
+                        element.label.clone()
+                    },
+                    path: Some(format!("{owner_path}#L{}", element.line)),
+                },
+            );
+            add_edge(graph, seen_edges, owner_id, &element_id, "contains");
+            add_edge(graph, seen_edges, &diagram_id, &element_id, "contains");
+            if let Some(source) = &element.source
+                && let SourceTargetResolution::Resolved { path, .. } =
+                    vault.resolve_source_target(source)
+            {
+                add_edge(
+                    graph,
+                    seen_edges,
+                    &element_id,
+                    &code_node_id(&path),
+                    "references",
+                );
+            }
+        }
+
+        for relationship in &diagram.relationships {
+            if let (Some(from), Some(to)) = (
+                element_nodes.get(relationship.from.as_str()),
+                element_nodes.get(relationship.to.as_str()),
+            ) {
+                let relationship_id = c4_relationship_node_id(
+                    owner_id,
+                    diagram.line,
+                    relationship.line,
+                    &relationship.from,
+                    &relationship.to,
+                );
+                add_node(
+                    graph,
+                    seen_nodes,
+                    Node {
+                        id: relationship_id.clone(),
+                        hash: String::new(),
+                        kind: "c4-relationship".into(),
+                        label: relationship.label.clone().unwrap_or_else(|| {
+                            format!("{} -> {}", relationship.from, relationship.to)
+                        }),
+                        path: Some(format!("{owner_path}#L{}", relationship.line)),
+                    },
+                );
+                add_edge(graph, seen_edges, owner_id, &relationship_id, "contains");
+                add_edge(graph, seen_edges, &diagram_id, &relationship_id, "contains");
+                add_edge(graph, seen_edges, &relationship_id, from, "from");
+                add_edge(graph, seen_edges, &relationship_id, to, "to");
+                add_edge(graph, seen_edges, from, to, "relates");
+            }
+        }
+    }
+}
+
 fn add_node(graph: &mut Graph, seen: &mut BTreeSet<String>, node: Node) {
     let mut node = node;
     node.hash = node_hash(&node);
@@ -789,6 +837,81 @@ Rel(cli, plugin, "writes state for")
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn c4_artifacts_are_written_to_graph_state() {
+        let root = unique_temp_dir("criv-c4-artifact-state");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("docs/architecture")).unwrap();
+        std::fs::write(
+            root.join("criv.toml"),
+            r#"
+[source]
+roots = ["src"]
+"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn run() {}\n").unwrap();
+        std::fs::write(
+            root.join("docs/architecture/02-container.c4"),
+            r#"
+C4Container
+Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
+%% criv:source src/main.rs
+Container(plugin, "Obsidian Plugin", "TypeScript", "Reads generated state")
+Rel(cli, plugin, "writes state for")
+"#,
+        )
+        .unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+        let state = State::build(&root, &vault).unwrap();
+
+        let artifact_node = state
+            .graph
+            .nodes
+            .iter()
+            .find(|node| {
+                node.kind == "c4-artifact"
+                    && node.path.as_deref() == Some("docs/architecture/02-container.c4")
+            })
+            .expect("c4 artifact node");
+        let diagram_node = state
+            .graph
+            .nodes
+            .iter()
+            .find(|node| node.kind == "c4-diagram" && node.label == "container diagram")
+            .expect("c4 diagram node");
+        let cli_node = state
+            .graph
+            .nodes
+            .iter()
+            .find(|node| node.kind == "c4-container" && node.label == "criv CLI")
+            .expect("c4 container node");
+        let relationship_node = state
+            .graph
+            .nodes
+            .iter()
+            .find(|node| node.kind == "c4-relationship" && node.label == "writes state for")
+            .expect("c4 relationship node");
+
+        assert!(state.graph.edges.iter().any(|edge| {
+            edge.from == artifact_node.id && edge.to == diagram_node.id && edge.kind == "contains"
+        }));
+        assert!(state.graph.edges.iter().any(|edge| {
+            edge.from == diagram_node.id && edge.to == cli_node.id && edge.kind == "contains"
+        }));
+        assert!(state.graph.edges.iter().any(|edge| {
+            edge.from == diagram_node.id
+                && edge.to == relationship_node.id
+                && edge.kind == "contains"
+        }));
+        assert!(state.graph.edges.iter().any(|edge| {
+            edge.from == cli_node.id && edge.to == "code:src/main.rs" && edge.kind == "references"
+        }));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -822,18 +945,26 @@ fn external_call_node_id(id: &str) -> String {
     format!("external-call:{id}")
 }
 
-fn c4_element_node_id(note_id: &str, diagram_line: usize, alias: &str) -> String {
-    format!("{note_id}:c4:{diagram_line}:{alias}")
+fn c4_artifact_node_id(path: &str) -> String {
+    format!("c4-artifact:{path}")
+}
+
+fn c4_diagram_node_id(owner_id: &str, diagram_line: usize) -> String {
+    format!("{owner_id}:c4:{diagram_line}")
+}
+
+fn c4_element_node_id(owner_id: &str, diagram_line: usize, alias: &str) -> String {
+    format!("{owner_id}:c4:{diagram_line}:{alias}")
 }
 
 fn c4_relationship_node_id(
-    note_id: &str,
+    owner_id: &str,
     diagram_line: usize,
     relationship_line: usize,
     from: &str,
     to: &str,
 ) -> String {
-    format!("{note_id}:c4:{diagram_line}:rel:{relationship_line}:{from}:{to}")
+    format!("{owner_id}:c4:{diagram_line}:rel:{relationship_line}:{from}:{to}")
 }
 
 fn symbol_kind(kind: SymbolKind) -> &'static str {
