@@ -472,6 +472,26 @@ fn watch_port_is_rejected() {
         .stderr(predicate::str::contains("--port"));
 }
 
+#[test]
+fn long_running_watch_takes_lock_before_startup_rebuild() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+    let state_path = root.join(".criv/state.json");
+    fs::write(&state_path, "sentinel\n").unwrap();
+    fs::write(root.join(".criv/watch.lock"), "held\n").unwrap();
+
+    criv(root)
+        .arg("watch")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("watch.lock"));
+    assert_eq!(fs::read_to_string(state_path).unwrap(), "sentinel\n");
+}
+
 fn write_criv_config(root: &Path, roots: Vec<&str>, exclude: Vec<&str>, source_index: bool) {
     let config = toml::toml! {
         [vault]

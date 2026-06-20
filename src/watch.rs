@@ -22,13 +22,14 @@ pub(crate) struct WatchOptions {
 }
 
 pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
-    let mut vault = rebuild(root, None)?;
     if options.once {
+        rebuild(root, None)?;
         return Ok(());
     }
+    let _lock = WatchLock::acquire(root)?;
+    let mut vault = rebuild(root, None)?;
     let mut source_graph = vault.source_graph().clone();
     let mut state = State::build(root, &vault)?;
-    let _lock = WatchLock::acquire(root)?;
 
     let config = Config::load(root)?;
     let docs_path = config.docs_path(root);

@@ -1,7 +1,9 @@
 use std::fs;
-use std::io::Read;
+use std::fs::OpenOptions;
+use std::io::{Read, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Parser, Tag, TagEnd};
@@ -15,7 +17,9 @@ pub(crate) fn read_to_string(path: &Path) -> Result<String> {
 pub(crate) fn is_text_file(path: &Path) -> Result<bool> {
     let mut file = fs::File::open(path)?;
     let mut buffer = Vec::with_capacity(8192);
-    file.by_ref().take(8192).read_to_end(&mut buffer)?;
+    Read::by_ref(&mut file)
+        .take(8192)
+        .read_to_end(&mut buffer)?;
     Ok(content_inspector::inspect(&buffer).is_text())
 }
 
@@ -47,6 +51,57 @@ pub(crate) fn append_line_if_missing(path: &Path, line: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub(crate) fn write_atomic(path: &Path, contents: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| CrivError::new(format!("cannot write atomic file at {}", path.display())))?
+        .to_string_lossy();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+
+    for attempt in 0..100 {
+        let temp_path = parent.join(format!(
+            ".{file_name}.{}.{}.tmp",
+            std::process::id(),
+            nonce + attempt
+        ));
+        let mut file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+        {
+            Ok(file) => file,
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err.into()),
+        };
+
+        let write_result = file
+            .write_all(contents.as_bytes())
+            .and_then(|_| file.sync_all());
+        if let Err(err) = write_result {
+            let _ = fs::remove_file(&temp_path);
+            return Err(err.into());
+        }
+        if let Err(err) = fs::rename(&temp_path, path) {
+            let _ = fs::remove_file(&temp_path);
+            return Err(err.into());
+        }
+        return Ok(());
+    }
+
+    Err(CrivError::new(format!(
+        "failed to create temporary file for {}",
+        path.display()
+    )))
 }
 
 pub(crate) fn walk_files(root: &Path, extension: Option<&str>) -> Result<Vec<PathBuf>> {
@@ -311,5 +366,30 @@ mod tests {
         assert_eq!(blocks[0].2, "flowchart TD\n");
         assert_eq!(blocks[1].1, None);
         assert_eq!(blocks[1].2, "code\n");
+    }
+
+    #[test]
+    fn atomic_write_replaces_existing_file_contents() {
+        let root = std::env::temp_dir().join(format!(
+            "criv-atomic-write-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("state.json");
+        write_atomic(&path, "{\"old\":true}\n").unwrap();
+        write_atomic(&path, "{\"new\":true}\n").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"new\":true}\n");
+        let leftovers = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(leftovers, vec!["state.json".to_string()]);
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

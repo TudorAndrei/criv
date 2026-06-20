@@ -6,6 +6,7 @@ use serde::Serialize;
 
 use crate::source_graph::{Language, SymbolKind};
 use crate::structural;
+use crate::util::write_atomic;
 use crate::vault::{NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
 
@@ -386,7 +387,7 @@ impl State {
             fs::create_dir_all(parent)?;
         }
         let contents = self.to_json()?;
-        fs::write(path, format!("{contents}\n"))?;
+        write_atomic(&path, &format!("{contents}\n"))?;
         Ok(())
     }
 
@@ -398,9 +399,9 @@ impl State {
         fs::create_dir_all(&snapshots)?;
         let path = snapshots.join(format!("{hash}.json"));
         if !path.exists() {
-            fs::write(path, format!("{}\n", self.to_json()?))?;
+            write_atomic(&path, &format!("{}\n", self.to_json()?))?;
         }
-        fs::write(criv_dir.join("latest"), format!("{hash}\n"))?;
+        write_atomic(&criv_dir.join("latest"), &format!("{hash}\n"))?;
         Ok(hash)
     }
 }
@@ -906,6 +907,41 @@ source = false
                 .iter()
                 .all(|node| node["kind"] != "code")
         );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn state_and_snapshot_writes_are_parseable() {
+        let root = unique_temp_dir("criv-state-atomic-writes");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("criv.toml"),
+            r#"
+[source]
+roots = ["src"]
+"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+        let snapshot = write_state(&root, &vault).unwrap();
+
+        let state_path = root.join(".criv/state.json");
+        let state: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(state_path).unwrap()).unwrap();
+        assert_eq!(state["schema"], STATE_SCHEMA);
+
+        let latest = std::fs::read_to_string(root.join(".criv/latest")).unwrap();
+        assert_eq!(latest.trim(), snapshot);
+
+        let snapshot_path = root
+            .join(".criv/snapshots")
+            .join(format!("{snapshot}.json"));
+        let snapshot_state: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(snapshot_path).unwrap()).unwrap();
+        assert_eq!(snapshot_state["schema"], STATE_SCHEMA);
 
         let _ = std::fs::remove_dir_all(root);
     }
