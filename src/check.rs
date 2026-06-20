@@ -8,6 +8,7 @@ use rumdl_lib::config::Config as RumdlConfig;
 use rumdl_lib::fix_coordinator::FixCoordinator;
 use rumdl_lib::rule::{LintWarning, Rule};
 use rumdl_lib::rules::{all_rules, filter_rules};
+use serde::Serialize;
 
 use crate::c4::{C4ElementCategory, C4Level};
 use crate::c4_artifact::C4ArtifactFormat;
@@ -32,13 +33,14 @@ pub(crate) struct CheckOptions {
     fix: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub(crate) enum Severity {
     Error,
     Warning,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct Diagnostic {
     severity: Severity,
     code: &'static str,
@@ -91,7 +93,7 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
 
     match options.format {
         Format::Text => print_text(&diagnostics),
-        Format::Json => print_json(&diagnostics),
+        Format::Json => print_json(&diagnostics)?,
     }
 
     if diagnostics.iter().any(Diagnostic::is_error) {
@@ -978,33 +980,11 @@ fn print_text(diagnostics: &[Diagnostic]) {
     }
 }
 
-fn print_json(diagnostics: &[Diagnostic]) {
-    println!("[");
-    for (index, diag) in diagnostics.iter().enumerate() {
-        let comma = if index + 1 == diagnostics.len() {
-            ""
-        } else {
-            ","
-        };
-        let severity = match diag.severity {
-            Severity::Error => "error",
-            Severity::Warning => "warning",
-        };
-        let line = diag
-            .line
-            .map(|line| line.to_string())
-            .unwrap_or_else(|| "null".into());
-        println!(
-            "  {{\"severity\":\"{}\",\"code\":\"{}\",\"path\":\"{}\",\"line\":{},\"message\":\"{}\"}}{}",
-            severity,
-            diag.code,
-            json_escape(&diag.path),
-            line,
-            json_escape(&diag.message),
-            comma
-        );
-    }
-    println!("]");
+fn print_json(diagnostics: &[Diagnostic]) -> Result<()> {
+    let json = serde_json::to_string_pretty(diagnostics)
+        .map_err(|err| CrivError::new(format!("failed to serialize check diagnostics: {err}")))?;
+    println!("{json}");
+    Ok(())
 }
 
 fn error(
@@ -1035,13 +1015,6 @@ fn warning(
         line,
         message: message.into(),
     }
-}
-
-fn json_escape(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
 }
 
 #[cfg(test)]

@@ -179,6 +179,112 @@ fn file_search_honors_path_and_language_filters() {
 }
 
 #[test]
+fn query_json_output_is_valid_for_special_characters() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    let special_file = "quoted\"\tline\nbreak.rs";
+    fs::write(root.join("src").join(special_file), "pub fn run() {}\n").unwrap();
+    write_criv_config(
+        root,
+        vec!["src"],
+        vec!["**/target/**", "**/node_modules/**"],
+        true,
+    );
+
+    let assert = criv(root)
+        .args(["query", "nodes", "--kind", "code", "--format", "json"])
+        .assert()
+        .success();
+    let rows: Vec<String> = serde_json::from_slice(&assert.get_output().stdout).unwrap();
+    assert!(rows.iter().any(|row| {
+        row == &format!("src/{special_file}#run")
+            && row.contains('"')
+            && row.contains('\t')
+            && row.contains('\n')
+    }));
+}
+
+#[test]
+fn search_json_output_is_valid_for_special_characters() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn run() { let text = \"quoted\tvalue\"; }\n",
+    )
+    .unwrap();
+    write_criv_config(
+        root,
+        vec!["src"],
+        vec!["**/target/**", "**/node_modules/**"],
+        true,
+    );
+
+    let assert = criv(root)
+        .args(["search", "--grep", "quoted", "--format", "json"])
+        .assert()
+        .success();
+    let rows: Vec<serde_json::Value> = serde_json::from_slice(&assert.get_output().stdout).unwrap();
+    let row = rows
+        .iter()
+        .find(|row| row["path"] == "src/lib.rs")
+        .expect("grep row");
+    assert_eq!(row["line"], 1);
+    assert_eq!(
+        row["text"],
+        "pub fn run() { let text = \"quoted\tvalue\"; }"
+    );
+}
+
+#[test]
+fn check_json_output_is_valid_for_special_characters() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::write(
+        root.join("docs/broken.md"),
+        r#"---
+id: broken
+kind: doc
+title: Broken
+---
+
+# Broken
+
+Missing [[missing"	target
+file.rs]]
+"#,
+    )
+    .unwrap();
+
+    let assert = criv(root)
+        .args(["check", "--format", "json", "--filter", "broken-link"])
+        .assert()
+        .failure();
+    let diagnostics: Vec<serde_json::Value> =
+        serde_json::from_slice(&assert.get_output().stdout).unwrap();
+    let diagnostic = diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "broken-link")
+        .expect("broken-link diagnostic");
+    assert_eq!(diagnostic["severity"], "error");
+    assert_eq!(diagnostic["path"], "docs/broken.md");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("\"	target\n")
+    );
+}
+
+#[test]
 fn generated_plugin_bundle_is_excluded_from_source_graph() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

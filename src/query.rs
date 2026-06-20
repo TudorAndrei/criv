@@ -101,8 +101,7 @@ pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
         }
     };
 
-    print_rows(&rows, options.format);
-    Ok(())
+    print_rows(&rows, options.format)
 }
 
 fn required_arg<'a>(options: &'a QueryOptions, name: &str) -> Result<&'a str> {
@@ -539,26 +538,21 @@ fn json_edge_set(value: &serde_json::Value) -> BTreeSet<String> {
         .collect()
 }
 
-fn print_rows(rows: &[String], format: Format) {
+fn print_rows(rows: &[String], format: Format) -> Result<()> {
     match format {
         Format::Text => {
             for row in rows {
                 println!("{row}");
             }
+            Ok(())
         }
         Format::Json => {
-            println!("[");
-            for (index, row) in rows.iter().enumerate() {
-                let comma = if index + 1 == rows.len() { "" } else { "," };
-                println!("  \"{}\"{}", json_escape(row), comma);
-            }
-            println!("]");
+            let json = serde_json::to_string_pretty(rows)
+                .map_err(|err| CrivError::new(format!("failed to serialize query rows: {err}")))?;
+            println!("{json}");
+            Ok(())
         }
     }
-}
-
-fn json_escape(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use clap::{Args as ClapArgs, ValueEnum};
+use serde::Serialize;
 
 use crate::source_index::SourceGrepMode;
 use crate::structural::{self, PatternSource, StructuralMatch};
@@ -104,7 +105,7 @@ impl SearchOptions {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub(crate) struct Row {
     pub(crate) path: String,
     pub(crate) line: Option<usize>,
@@ -134,8 +135,7 @@ pub(crate) fn run(root: &Path, options: SearchOptions) -> Result<()> {
         Mode::PatternId(pattern_id) => search_pattern_id(root, &vault, &pattern_id, &paths)?,
     };
 
-    print_rows(&rows, options.format);
-    Ok(())
+    print_rows(&rows, options.format)
 }
 
 fn search_pattern_id(
@@ -478,7 +478,7 @@ fn capture_summary(captures: &std::collections::BTreeMap<String, String>) -> Str
         .join(", ")
 }
 
-fn print_rows(rows: &[Row], format: Format) {
+fn print_rows(rows: &[Row], format: Format) -> Result<()> {
     match format {
         Format::Text => {
             for row in rows {
@@ -490,33 +490,15 @@ fn print_rows(rows: &[Row], format: Format) {
                     println!("{}: {}", row.path, row.text);
                 }
             }
+            Ok(())
         }
         Format::Json => {
-            println!("[");
-            for (index, row) in rows.iter().enumerate() {
-                let comma = if index + 1 == rows.len() { "" } else { "," };
-                let line = row
-                    .line
-                    .map(|line| line.to_string())
-                    .unwrap_or_else(|| "null".into());
-                println!(
-                    "  {{\"path\":\"{}\",\"line\":{},\"text\":\"{}\"}}{}",
-                    json_escape(&row.path),
-                    line,
-                    json_escape(&row.text),
-                    comma
-                );
-            }
-            println!("]");
+            let json = serde_json::to_string_pretty(rows)
+                .map_err(|err| CrivError::new(format!("failed to serialize search rows: {err}")))?;
+            println!("{json}");
+            Ok(())
         }
     }
-}
-
-fn json_escape(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
 }
 
 #[cfg(test)]
