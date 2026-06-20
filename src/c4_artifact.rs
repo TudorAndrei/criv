@@ -116,9 +116,8 @@ pub(crate) fn parse_contents(
                     diagnostics.push(C4ArtifactDiagnostic {
                         code: "invalid-c4-format",
                         line: Some(line),
-                        message: format!(
-                            "criv:format must be one of: mermaid, mermaid-c4, dot, graphviz"
-                        ),
+                        message: "criv:format must be one of: mermaid, mermaid-c4, dot, graphviz"
+                            .to_string(),
                     });
                     directives.push(C4Directive { key, value, line });
                 }

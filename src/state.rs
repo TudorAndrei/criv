@@ -800,6 +800,75 @@ fn stable_hash(value: &str) -> String {
     blake3::hash(value.as_bytes()).to_hex().to_string()
 }
 
+pub(crate) fn note_node_id(id: &str) -> String {
+    format!("note:{id}")
+}
+
+pub(crate) fn code_node_id(path: &str) -> String {
+    format!("code:{path}")
+}
+
+fn pattern_node_id(id: &str) -> String {
+    format!("pattern:{id}")
+}
+
+fn import_node_id(path: &str, module: &str) -> String {
+    format!("import:{path}:{module}")
+}
+
+fn symbol_node_id(id: &str) -> String {
+    format!("symbol:{id}")
+}
+
+fn external_call_node_id(id: &str) -> String {
+    format!("external-call:{id}")
+}
+
+fn c4_artifact_node_id(path: &str) -> String {
+    format!("c4-artifact:{path}")
+}
+
+fn c4_diagram_node_id(owner_id: &str, diagram_line: usize) -> String {
+    format!("{owner_id}:c4:{diagram_line}")
+}
+
+fn c4_element_node_id(owner_id: &str, diagram_line: usize, alias: &str) -> String {
+    format!("{owner_id}:c4:{diagram_line}:{alias}")
+}
+
+fn c4_interface_node_id(element_id: &str) -> String {
+    format!("{element_id}:interface")
+}
+
+fn c4_relationship_node_id(
+    owner_id: &str,
+    diagram_line: usize,
+    relationship_line: usize,
+    from: &str,
+    to: &str,
+) -> String {
+    format!("{owner_id}:c4:{diagram_line}:rel:{relationship_line}:{from}:{to}")
+}
+
+fn symbol_kind(kind: SymbolKind) -> &'static str {
+    match kind {
+        SymbolKind::Function => "function",
+        SymbolKind::Method => "method",
+        SymbolKind::Class => "class",
+    }
+}
+
+fn language_name(language: Language) -> &'static str {
+    match language {
+        Language::Rust => "rust",
+        Language::TypeScript => "typescript",
+        Language::JavaScript => "javascript",
+        Language::Python => "python",
+        Language::Go => "go",
+        Language::Unknown => "unknown",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -1038,74 +1107,5 @@ Rel(cli, plugin, "writes state for")
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("{prefix}-{}-{unique}", std::process::id()))
-    }
-}
-
-pub(crate) fn note_node_id(id: &str) -> String {
-    format!("note:{id}")
-}
-
-pub(crate) fn code_node_id(path: &str) -> String {
-    format!("code:{path}")
-}
-
-fn pattern_node_id(id: &str) -> String {
-    format!("pattern:{id}")
-}
-
-fn import_node_id(path: &str, module: &str) -> String {
-    format!("import:{path}:{module}")
-}
-
-fn symbol_node_id(id: &str) -> String {
-    format!("symbol:{id}")
-}
-
-fn external_call_node_id(id: &str) -> String {
-    format!("external-call:{id}")
-}
-
-fn c4_artifact_node_id(path: &str) -> String {
-    format!("c4-artifact:{path}")
-}
-
-fn c4_diagram_node_id(owner_id: &str, diagram_line: usize) -> String {
-    format!("{owner_id}:c4:{diagram_line}")
-}
-
-fn c4_element_node_id(owner_id: &str, diagram_line: usize, alias: &str) -> String {
-    format!("{owner_id}:c4:{diagram_line}:{alias}")
-}
-
-fn c4_interface_node_id(element_id: &str) -> String {
-    format!("{element_id}:interface")
-}
-
-fn c4_relationship_node_id(
-    owner_id: &str,
-    diagram_line: usize,
-    relationship_line: usize,
-    from: &str,
-    to: &str,
-) -> String {
-    format!("{owner_id}:c4:{diagram_line}:rel:{relationship_line}:{from}:{to}")
-}
-
-fn symbol_kind(kind: SymbolKind) -> &'static str {
-    match kind {
-        SymbolKind::Function => "function",
-        SymbolKind::Method => "method",
-        SymbolKind::Class => "class",
-    }
-}
-
-fn language_name(language: Language) -> &'static str {
-    match language {
-        Language::Rust => "rust",
-        Language::TypeScript => "typescript",
-        Language::JavaScript => "javascript",
-        Language::Python => "python",
-        Language::Go => "go",
-        Language::Unknown => "unknown",
     }
 }
