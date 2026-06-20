@@ -40,6 +40,7 @@ import {
   patternTooltip,
   resolvePattern,
   resolveSource,
+  sanitizeDotSvg,
   sourceEntries,
   sourceSuggestions,
   sourceTooltip,
@@ -920,7 +921,7 @@ const dotRenderer: C4RendererAdapter = {
       if (result.status === "failure") {
         throw new Error(renderErrorsMessage(result.errors));
       }
-      container.innerHTML = result.output;
+      container.innerHTML = sanitizeDotSvg(result.output);
       renderWarnings(container, result.errors);
     } catch (error) {
       await sourceProjectionRenderer.render(container, summary, source);

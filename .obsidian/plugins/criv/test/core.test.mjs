@@ -20,6 +20,7 @@ await esbuild.build({
 });
 
 const core = await import(pathToFileURL(outFile).href);
+const { instance: vizInstance } = await import("@viz-js/viz");
 const fixture = JSON.parse(
   readFileSync(resolve(pluginRoot, "fixtures/link-resolution.json"), "utf8"),
 );
@@ -78,6 +79,39 @@ assert.deepEqual(
     "resolved:pattern:match:ADR-0001/no-block-on",
   ],
 );
+
+const sanitizedSyntheticSvg = core.sanitizeDotSvg(
+  `<?xml version="1.0"?>
+<!DOCTYPE svg>
+<svg onload="alert(1)">
+  <script>alert(1)</script>
+  <foreignObject><div onclick="alert(1)">unsafe</div></foreignObject>
+  <a xlink:href="javascript:alert(1)" href="https://example.com" target="_blank">
+    <text onclick='alert(1)'>safe label</text>
+  </a>
+</svg>`,
+);
+assert.equal(sanitizedSyntheticSvg.includes("safe label"), true);
+assert.equal(/<\s*script\b/i.test(sanitizedSyntheticSvg), false);
+assert.equal(/<\s*foreignObject\b/i.test(sanitizedSyntheticSvg), false);
+assert.equal(/\s+on[a-z0-9_-]+\s*=/i.test(sanitizedSyntheticSvg), false);
+assert.equal(/\s+(?:href|xlink:href|target)\s*=/i.test(sanitizedSyntheticSvg), false);
+assert.equal(/<!DOCTYPE/i.test(sanitizedSyntheticSvg), false);
+
+const viz = await vizInstance();
+const vizResult = viz.render(
+  `digraph {
+  a [label="onload=alert(1)", URL="javascript:alert(1)", tooltip="tooltip text"];
+}`,
+  { engine: "dot", format: "svg" },
+);
+assert.equal(vizResult.status, "success");
+assert.equal(vizResult.output.includes("javascript:alert(1)"), true);
+const sanitizedVizSvg = core.sanitizeDotSvg(vizResult.output);
+assert.equal(sanitizedVizSvg.includes("javascript:alert(1)"), false);
+assert.equal(/\s+(?:href|xlink:href|target)\s*=/i.test(sanitizedVizSvg), false);
+assert.equal(sanitizedVizSvg.includes("tooltip text"), true);
+assert.equal(sanitizedVizSvg.includes("onload=alert(1)"), true);
 
 assert.deepEqual(
   core.parseC4Artifact(

@@ -163,6 +163,19 @@ export function patternTooltip(state: CrivState, id: string): string {
   return `${id}: ${count} match${count === 1 ? "" : "es"}`;
 }
 
+export function sanitizeDotSvg(svg: string): string {
+  return svg
+    .replace(/<\?xml[\s\S]*?\?>/gi, "")
+    .replace(/<!DOCTYPE[\s\S]*?>/gi, "")
+    .replace(
+      /<\s*(script|foreignObject|iframe|object|embed|image|use)\b[\s\S]*?<\s*\/\s*\1\s*>/gi,
+      "",
+    )
+    .replace(/<\s*(script|foreignObject|iframe|object|embed|image|use)\b[^>]*\/?>/gi, "")
+    .replace(/\s+on[a-z0-9_-]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")
+    .replace(/\s+(?:href|xlink:href|target)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+}
+
 export function frontmatterPatternTargets(
   frontmatter: Record<string, unknown> | undefined,
   state: CrivState,
