@@ -1,4 +1,5 @@
 import {
+  Command,
   Editor,
   EditorPosition,
   EditorSuggest,
@@ -79,6 +80,10 @@ interface SourcePreview {
   truncated: boolean;
 }
 
+interface ObsidianCommandRegistry {
+  commands?: Record<string, Command>;
+}
+
 export default class CrivPlugin extends Plugin {
   settings!: CrivSettings;
   private state: CrivState | null = null;
@@ -108,6 +113,7 @@ export default class CrivPlugin extends Plugin {
         await this.refreshSourcePanel();
       },
     });
+    this.patchNativeSaveCommand();
     this.registerEditorExtension(crivDriftExtension(this));
     this.registerView(VIEW_TYPE, (leaf) => new CrivSourceView(leaf, this));
     this.registerView(C4_VIEW_TYPE, (leaf) => new CrivC4View(leaf));
@@ -388,6 +394,31 @@ export default class CrivPlugin extends Plugin {
   async saveSettings() {
     await this.saveData(this.settings);
   }
+
+  private patchNativeSaveCommand(): void {
+    const saveCommand = obsidianCommands(this.app)?.commands?.["editor:save-file"];
+    if (!saveCommand) {
+      return;
+    }
+    const originalCheckCallback = saveCommand.checkCallback;
+    saveCommand.checkCallback = (checking: boolean) => {
+      const c4View = this.app.workspace.getActiveViewOfType(CrivC4View);
+      if (c4View?.canSaveSourceFromShortcut()) {
+        if (!checking) {
+          void c4View.saveSourceFromShortcut();
+        }
+        return true;
+      }
+      return originalCheckCallback?.(checking);
+    };
+    this.register(() => {
+      saveCommand.checkCallback = originalCheckCallback;
+    });
+  }
+}
+
+function obsidianCommands(app: CrivPlugin["app"]): ObsidianCommandRegistry | null {
+  return (app as unknown as { commands?: ObsidianCommandRegistry }).commands ?? null;
 }
 
 class CrivSourceView extends ItemView {
@@ -509,9 +540,12 @@ class CrivC4View extends FileView {
   private panY = 0;
   private transformInitialized = false;
   private dirtyBadgeEl: HTMLElement | null = null;
+  private sourceEditorEl: HTMLTextAreaElement | null = null;
+  private sourceSaveHandlerRegistered = false;
 
   constructor(leaf: WorkspaceLeaf) {
     super(leaf);
+    this.registerSourceSaveHandler();
   }
 
   getViewType(): string {
@@ -523,6 +557,7 @@ class CrivC4View extends FileView {
   }
 
   async onOpen(): Promise<void> {
+    this.registerSourceSaveHandler();
     await this.render();
   }
 
@@ -530,6 +565,8 @@ class CrivC4View extends FileView {
     this.source = await this.app.vault.cachedRead(file);
     this.draftSource = this.source;
     this.sourcePath = file.path;
+    this.mode = "preview";
+    this.sourceEditorEl = null;
     this.resetTransformState();
     await this.render();
   }
@@ -539,16 +576,19 @@ class CrivC4View extends FileView {
       this.source = "";
       this.draftSource = "";
       this.sourcePath = null;
+      this.sourceEditorEl = null;
       this.resetTransformState();
     }
     await this.render();
   }
 
   async render(): Promise<void> {
+    this.registerSourceSaveHandler();
     const container = this.containerEl.children[1] as HTMLElement;
     container.empty();
     container.addClass("criv-c4-view");
     this.dirtyBadgeEl = null;
+    this.sourceEditorEl = null;
 
     if (!this.file) {
       container.createEl("p", { cls: "criv-empty", text: "No C4 file selected." });
@@ -600,6 +640,8 @@ class CrivC4View extends FileView {
       this.source = await this.app.vault.cachedRead(this.file);
       this.draftSource = this.source;
       this.sourcePath = this.file.path;
+      this.mode = "preview";
+      this.sourceEditorEl = null;
       this.resetTransformState();
     }
     return this.source;
@@ -611,6 +653,17 @@ class CrivC4View extends FileView {
 
   private sourceDirty(): boolean {
     return this.draftSource !== this.source;
+  }
+
+  canSaveSourceFromShortcut(): boolean {
+    return this.mode === "source" && this.sourceEditorEl !== null;
+  }
+
+  async saveSourceFromShortcut(): Promise<void> {
+    if (!this.sourceEditorEl) {
+      return;
+    }
+    await this.saveSource(this.sourceEditorEl.value);
   }
 
   private renderToolbar(toolbar: HTMLElement): void {
@@ -670,18 +723,21 @@ class CrivC4View extends FileView {
   private renderSourceEditor(body: HTMLElement): void {
     const sourcePanel = body.createDiv({ cls: "criv-c4-source" });
     const editor = sourcePanel.createEl("textarea", { cls: "criv-c4-editor" });
+    this.sourceEditorEl = editor;
     editor.value = this.draftSource;
     editor.spellcheck = false;
     editor.oninput = () => {
       this.draftSource = editor.value;
       this.updateDirtyBadge();
     };
-    editor.onkeydown = (event: KeyboardEvent) => {
+    const saveOnModS = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
         event.preventDefault();
+        event.stopPropagation();
         void this.saveSource(editor.value);
       }
     };
+    editor.addEventListener("keydown", saveOnModS, { capture: true });
     editor.focus();
   }
 
@@ -796,6 +852,20 @@ class CrivC4View extends FileView {
 
   private updateDirtyBadge(): void {
     this.dirtyBadgeEl?.toggleClass("is-hidden", !this.sourceDirty());
+  }
+
+  private registerSourceSaveHandler(): void {
+    if (this.sourceSaveHandlerRegistered || !this.scope) {
+      return;
+    }
+    this.scope.register(["Mod"], "s", () => {
+      if (this.mode !== "source" || !this.sourceEditorEl) {
+        return;
+      }
+      void this.saveSource(this.sourceEditorEl.value);
+      return false;
+    });
+    this.sourceSaveHandlerRegistered = true;
   }
 }
 
