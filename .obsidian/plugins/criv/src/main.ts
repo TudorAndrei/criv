@@ -680,7 +680,7 @@ class CrivC4View extends FileView {
     }
     this.toolbarButton(toolbar, "+", "Zoom in", false, () => this.zoomBy(1.2));
     this.toolbarButton(toolbar, "-", "Zoom out", false, () => this.zoomBy(1 / 1.2));
-    this.toolbarButton(toolbar, "Fit", "Fit diagram", false, () => this.fitPreview());
+    this.toolbarButton(toolbar, "Fit", "Fit diagram", false, () => this.fitPreview("contain"));
     this.toolbarButton(toolbar, "Reset", "Reset view", false, () => {
       this.scale = 1;
       this.panX = 0;
@@ -716,7 +716,7 @@ class CrivC4View extends FileView {
     this.bindPreviewInput(viewport);
     this.applyPreviewTransform();
     if (!this.transformInitialized) {
-      requestAnimationFrame(() => this.fitPreview());
+      requestAnimationFrame(() => this.fitPreview("width"));
     }
   }
 
@@ -806,7 +806,7 @@ class CrivC4View extends FileView {
     this.applyPreviewTransform();
   }
 
-  private fitPreview(): void {
+  private fitPreview(mode: "contain" | "width"): void {
     const viewport = this.containerEl.querySelector(".criv-c4-preview") as HTMLElement | null;
     const surface = this.containerEl.querySelector(
       ".criv-c4-preview-surface",
@@ -822,13 +822,11 @@ class CrivC4View extends FileView {
     const padding = 32;
     const availableWidth = Math.max(1, viewport.clientWidth - padding * 2);
     const availableHeight = Math.max(1, viewport.clientHeight - padding * 2);
-    this.scale = clamp(
-      Math.min(availableWidth / size.width, availableHeight / size.height),
-      0.05,
-      2,
-    );
+    const widthScale = availableWidth / size.width;
+    const containScale = Math.min(widthScale, availableHeight / size.height);
+    this.scale = mode === "width" ? clamp(widthScale, 0.2, 1.25) : clamp(containScale, 0.05, 2);
     this.panX = (viewport.clientWidth - size.width * this.scale) / 2;
-    this.panY = (viewport.clientHeight - size.height * this.scale) / 2;
+    this.panY = mode === "width" ? padding : (viewport.clientHeight - size.height * this.scale) / 2;
     this.transformInitialized = true;
     this.applyPreviewTransform();
   }
