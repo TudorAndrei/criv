@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -69,7 +69,7 @@ impl Config {
         let contents = read_to_string(&path)?;
         let raw: RawConfig = toml::from_str(&contents)
             .map_err(|err| CrivError::new(format!("failed to parse criv.toml: {err}")))?;
-        Ok(raw.into_config())
+        raw.into_config()
     }
 
     pub(crate) fn docs_path(&self, root: &Path) -> PathBuf {
@@ -97,16 +97,26 @@ struct RawConfig {
 }
 
 impl RawConfig {
-    fn into_config(self) -> Config {
+    fn into_config(self) -> Result<Config> {
         let defaults = Config::default();
-        Config {
-            docs_dir: self.vault.docs.unwrap_or(defaults.docs_dir),
-            adr_dir: self.vault.adr.unwrap_or(defaults.adr_dir),
-            source_roots: self.source.roots.unwrap_or(defaults.source_roots),
+        Ok(Config {
+            docs_dir: vault_path("vault.docs", &self.vault.docs.unwrap_or(defaults.docs_dir))?,
+            adr_dir: vault_path("vault.adr", &self.vault.adr.unwrap_or(defaults.adr_dir))?,
+            source_roots: self
+                .source
+                .roots
+                .unwrap_or(defaults.source_roots)
+                .into_iter()
+                .map(|root| vault_path("source.roots", &root))
+                .collect::<Result<Vec<_>>>()?,
             source_exclude: self.source.exclude.unwrap_or(defaults.source_exclude),
             source_index: self.index.source.unwrap_or(defaults.source_index),
             embeddings: self.index.embeddings.unwrap_or(defaults.embeddings),
-            architecture_code: self.architecture.code.map(RawArchitectureCode::into_config),
+            architecture_code: self
+                .architecture
+                .code
+                .map(RawArchitectureCode::into_config)
+                .transpose()?,
             enforce_stages: self.enforce.stages.unwrap_or(defaults.enforce_stages),
             import_policies: self
                 .enforce
@@ -120,8 +130,45 @@ impl RawConfig {
                 .into_iter()
                 .map(|(id, value)| (id, PatternConfig::from_toml(value)))
                 .collect(),
+        })
+    }
+}
+
+fn vault_path(field: &str, value: &str) -> Result<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(CrivError::new(format!("{field} must not be empty")));
+    }
+
+    let path = Path::new(value);
+    if path.is_absolute() {
+        return Err(CrivError::new(format!(
+            "{field} must be relative to the criv vault root"
+        )));
+    }
+
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => parts.push(part.to_string_lossy().to_string()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                return Err(CrivError::new(format!(
+                    "{field} must not contain parent-directory segments"
+                )));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(CrivError::new(format!(
+                    "{field} must be relative to the criv vault root"
+                )));
+            }
         }
     }
+
+    if parts.is_empty() {
+        return Ok(".".into());
+    }
+    Ok(parts.join("/"))
 }
 
 impl PatternConfig {
@@ -175,13 +222,16 @@ struct RawArchitectureCode {
 }
 
 impl RawArchitectureCode {
-    fn into_config(self) -> ArchitectureCodeConfig {
-        ArchitectureCodeConfig {
-            output: self
-                .output
-                .unwrap_or_else(|| "docs/architecture/04-code.md".into()),
+    fn into_config(self) -> Result<ArchitectureCodeConfig> {
+        Ok(ArchitectureCodeConfig {
+            output: vault_path(
+                "architecture.code.output",
+                &self
+                    .output
+                    .unwrap_or_else(|| "docs/architecture/04-code.md".into()),
+            )?,
             title: self.title.unwrap_or_else(|| "Code diagram for criv".into()),
-        }
+        })
     }
 }
 
@@ -233,7 +283,7 @@ deny = ["crate::db"]
         )
         .unwrap();
 
-        let config = raw.into_config();
+        let config = raw.into_config().unwrap();
         assert_eq!(config.enforce_stages, vec!["ci"]);
         assert_eq!(config.import_policies.len(), 1);
         assert_eq!(config.import_policies[0].id, "no-db-from-ui");
@@ -260,7 +310,7 @@ plugin = false
         )
         .unwrap();
 
-        let config = raw.into_config();
+        let config = raw.into_config().unwrap();
         assert_eq!(config.source_roots, vec!["src"]);
         assert!(!config.source_index);
         assert!(config.embeddings);
@@ -277,7 +327,7 @@ title = "Code diagram for criv"
         )
         .unwrap();
 
-        let config = raw.into_config();
+        let config = raw.into_config().unwrap();
         assert_eq!(
             config.architecture_code,
             Some(ArchitectureCodeConfig {
@@ -298,7 +348,7 @@ title = "Code diagram for criv"
         )
         .unwrap();
 
-        let config = raw.into_config();
+        let config = raw.into_config().unwrap();
         assert_eq!(
             config.architecture_code,
             Some(ArchitectureCodeConfig {
@@ -320,5 +370,80 @@ glob = "src/**"
         .unwrap_err();
 
         assert!(error.to_string().contains("unknown field `glob`"));
+    }
+
+    #[test]
+    fn normalizes_relative_vault_paths() {
+        let raw = toml::from_str::<RawConfig>(
+            r#"
+[vault]
+docs = "./docs"
+adr = "./adr"
+
+[source]
+roots = ["./src", ".github/workflows", "Cargo.toml"]
+
+[architecture.code]
+output = "./docs/architecture/04-code.c4"
+"#,
+        )
+        .unwrap();
+
+        let config = raw.into_config().unwrap();
+        assert_eq!(config.docs_dir, "docs");
+        assert_eq!(config.adr_dir, "adr");
+        assert_eq!(
+            config.source_roots,
+            vec!["src", ".github/workflows", "Cargo.toml"]
+        );
+        assert_eq!(
+            config.architecture_code.unwrap().output,
+            "docs/architecture/04-code.c4"
+        );
+    }
+
+    #[test]
+    fn rejects_absolute_vault_paths() {
+        let raw = toml::from_str::<RawConfig>(
+            r#"
+[vault]
+docs = "/tmp/docs"
+"#,
+        )
+        .unwrap();
+
+        let error = raw.into_config().unwrap_err();
+        assert!(error.to_string().contains("vault.docs"));
+        assert!(error.to_string().contains("relative"));
+    }
+
+    #[test]
+    fn rejects_parent_traversal_in_vault_paths() {
+        let raw = toml::from_str::<RawConfig>(
+            r#"
+[source]
+roots = ["src", "../outside"]
+"#,
+        )
+        .unwrap();
+
+        let error = raw.into_config().unwrap_err();
+        assert!(error.to_string().contains("source.roots"));
+        assert!(error.to_string().contains("parent-directory"));
+    }
+
+    #[test]
+    fn rejects_empty_vault_paths() {
+        let raw = toml::from_str::<RawConfig>(
+            r#"
+[architecture.code]
+output = "  "
+"#,
+        )
+        .unwrap();
+
+        let error = raw.into_config().unwrap_err();
+        assert!(error.to_string().contains("architecture.code.output"));
+        assert!(error.to_string().contains("must not be empty"));
     }
 }
