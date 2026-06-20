@@ -558,6 +558,7 @@ dependencies = [
  "notify-debouncer-mini",
  "predicates",
  "pulldown-cmark",
+ "regex",
  "rumdl",
  "serde",
  "serde_json",
