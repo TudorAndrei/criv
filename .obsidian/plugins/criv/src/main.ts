@@ -713,6 +713,7 @@ class CrivC4View extends FileView {
     const viewport = body.createDiv({ cls: "criv-c4-preview" });
     const surface = viewport.createDiv({ cls: "criv-c4-preview-surface" });
     await renderC4Projection(surface, summary, source);
+    normalizePreviewSvg(surface);
     this.bindPreviewInput(viewport);
     this.applyPreviewTransform();
     if (!this.transformInitialized) {
@@ -824,8 +825,11 @@ class CrivC4View extends FileView {
     const availableHeight = Math.max(1, viewport.clientHeight - padding * 2);
     const widthScale = availableWidth / size.width;
     const containScale = Math.min(widthScale, availableHeight / size.height);
-    this.scale = mode === "width" ? clamp(widthScale, 0.2, 1.25) : clamp(containScale, 0.05, 2);
-    this.panX = (viewport.clientWidth - size.width * this.scale) / 2;
+    this.scale = mode === "width" ? clamp(widthScale, 0.35, 1.25) : clamp(containScale, 0.05, 2);
+    this.panX =
+      mode === "width" && size.width * this.scale > availableWidth
+        ? padding
+        : (viewport.clientWidth - size.width * this.scale) / 2;
     this.panY = mode === "width" ? padding : (viewport.clientHeight - size.height * this.scale) / 2;
     this.transformInitialized = true;
     this.applyPreviewTransform();
@@ -1355,6 +1359,23 @@ function parseSvgLength(value: string | null): number | null {
   }
   const parsed = Number(match[1]);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function normalizePreviewSvg(surface: HTMLElement): void {
+  const svg = surface.querySelector("svg") as SVGSVGElement | null;
+  if (!svg) {
+    return;
+  }
+  const size = svgSize(svg);
+  if (!size) {
+    return;
+  }
+  surface.style.width = `${size.width}px`;
+  surface.style.height = `${size.height}px`;
+  svg.style.width = `${size.width}px`;
+  svg.style.height = `${size.height}px`;
+  svg.removeAttribute("width");
+  svg.removeAttribute("height");
 }
 
 function errorMessage(error: unknown): string {

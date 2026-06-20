@@ -76,6 +76,7 @@ digraph criv_code {
   ".obsidian/plugins/criv/src/main.ts#linkedSourcesForActiveFile" [label="linkedSourcesForActiveFile\n.obsidian/plugins/criv/src/main.ts"];
   ".obsidian/plugins/criv/src/main.ts#literalSet" [label="literalSet\n.obsidian/plugins/criv/src/main.ts"];
   ".obsidian/plugins/criv/src/main.ts#loadState" [label="loadState\n.obsidian/plugins/criv/src/main.ts"];
+  ".obsidian/plugins/criv/src/main.ts#normalizePreviewSvg" [label="normalizePreviewSvg\n.obsidian/plugins/criv/src/main.ts"];
   ".obsidian/plugins/criv/src/main.ts#obsidianCommands" [label="obsidianCommands\n.obsidian/plugins/criv/src/main.ts"];
   ".obsidian/plugins/criv/src/main.ts#onLoadFile" [label="onLoadFile\n.obsidian/plugins/criv/src/main.ts"];
   ".obsidian/plugins/criv/src/main.ts#onOpen" [label="onOpen\n.obsidian/plugins/criv/src/main.ts"];
@@ -792,6 +793,7 @@ digraph criv_code {
   ".obsidian/plugins/criv/src/main.ts#CrivC4View" -> ".obsidian/plugins/criv/src/main.ts#clamp";
   ".obsidian/plugins/criv/src/main.ts#CrivC4View" -> ".obsidian/plugins/criv/src/main.ts#currentSource";
   ".obsidian/plugins/criv/src/main.ts#CrivC4View" -> ".obsidian/plugins/criv/src/main.ts#fitPreview";
+  ".obsidian/plugins/criv/src/main.ts#CrivC4View" -> ".obsidian/plugins/criv/src/main.ts#normalizePreviewSvg";
   ".obsidian/plugins/criv/src/main.ts#CrivC4View" -> ".obsidian/plugins/criv/src/main.ts#registerSourceSaveHandler";
   ".obsidian/plugins/criv/src/main.ts#CrivC4View" -> ".obsidian/plugins/criv/src/main.ts#render";
   ".obsidian/plugins/criv/src/main.ts#CrivC4View" -> ".obsidian/plugins/criv/src/main.ts#renderC4Projection";
@@ -903,6 +905,7 @@ digraph criv_code {
   ".obsidian/plugins/criv/src/main.ts#linkTargets" -> "src/search.rs#from";
   ".obsidian/plugins/criv/src/main.ts#linkedSourcesForActiveFile" -> ".obsidian/plugins/criv/src/core.ts#linkedSourcesFromMarkdown";
   ".obsidian/plugins/criv/src/main.ts#loadState" -> ".obsidian/plugins/criv/src/main.ts#errorMessage";
+  ".obsidian/plugins/criv/src/main.ts#normalizePreviewSvg" -> ".obsidian/plugins/criv/src/main.ts#svgSize";
   ".obsidian/plugins/criv/src/main.ts#onLoadFile" -> ".obsidian/plugins/criv/src/main.ts#render";
   ".obsidian/plugins/criv/src/main.ts#onLoadFile" -> ".obsidian/plugins/criv/src/main.ts#resetTransformState";
   ".obsidian/plugins/criv/src/main.ts#onOpen" -> ".obsidian/plugins/criv/src/main.ts#registerSourceSaveHandler";
@@ -965,6 +968,7 @@ digraph criv_code {
   ".obsidian/plugins/criv/src/main.ts#renderPreview" -> ".obsidian/plugins/criv/src/main.ts#bindPreviewInput";
   ".obsidian/plugins/criv/src/main.ts#renderPreview" -> ".obsidian/plugins/criv/src/main.ts#fitPreview";
   ".obsidian/plugins/criv/src/main.ts#renderPreview" -> ".obsidian/plugins/criv/src/main.ts#lineNumbers";
+  ".obsidian/plugins/criv/src/main.ts#renderPreview" -> ".obsidian/plugins/criv/src/main.ts#normalizePreviewSvg";
   ".obsidian/plugins/criv/src/main.ts#renderPreview" -> ".obsidian/plugins/criv/src/main.ts#renderC4Projection";
   ".obsidian/plugins/criv/src/main.ts#renderPreview" -> ".obsidian/plugins/criv/src/main.ts#renderHighlightedCode";
   ".obsidian/plugins/criv/src/main.ts#renderSourceEditor" -> ".obsidian/plugins/criv/src/main.ts#saveSource";
