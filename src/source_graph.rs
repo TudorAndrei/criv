@@ -52,11 +52,12 @@ pub(crate) struct SymbolRange {
 pub(crate) struct SymbolId {
     pub(crate) path: String,
     pub(crate) name: String,
+    pub(crate) selector: String,
 }
 
 impl SymbolId {
     pub(crate) fn display(&self) -> String {
-        format!("{}#{}", self.path, self.name)
+        format!("{}#{}", self.path, self.selector)
     }
 }
 
@@ -234,6 +235,11 @@ impl SourceGraph {
                     .entry(symbol.name.clone())
                     .or_default()
                     .push(symbol.id.clone());
+                graph
+                    .symbol_index
+                    .entry(symbol.id.selector.clone())
+                    .or_default()
+                    .push(symbol.id.clone());
             }
             graph
                 .file_fingerprints
@@ -253,17 +259,21 @@ impl SourceGraph {
     }
 
     pub(crate) fn resolve_symbol(&self, query: &str) -> Option<SymbolId> {
-        let (path, name) = query.split_once('#').unwrap_or(("", query));
+        let (path, selector) = query.split_once('#').unwrap_or(("", query));
         if !path.is_empty() {
             return self
                 .files
                 .get(path)
-                .and_then(|file| file.symbols.iter().find(|symbol| symbol.name == name))
+                .and_then(|file| {
+                    file.symbols
+                        .iter()
+                        .find(|symbol| symbol.id.selector == selector || symbol.name == selector)
+                })
                 .map(|symbol| symbol.id.clone());
         }
 
         self.symbol_index
-            .get(name)
+            .get(selector)
             .and_then(|matches| matches.first().cloned())
     }
 
@@ -360,6 +370,10 @@ impl SourceGraph {
             .map(InterfaceSignature::hash)
     }
 
+    pub(crate) fn canonical_symbol_target(&self, query: &str) -> Option<String> {
+        self.resolve_symbol(query).map(|symbol| symbol.display())
+    }
+
     fn symbol(&self, id: &SymbolId) -> Option<&Symbol> {
         self.files
             .get(&id.path)
@@ -381,6 +395,15 @@ fn source_file_fingerprint(path: &Path) -> Result<String> {
 fn parse_source_file(path: &str, contents: &str) -> SourceFile {
     parse_tree_sitter_file(path, contents)
         .unwrap_or_else(|| parse_source_file_fallback(path, contents))
+}
+
+fn symbol_selector(kind: SymbolKind, parent: Option<&str>, name: &str) -> String {
+    match (kind, parent) {
+        (SymbolKind::Function, _) => format!("fn:{name}"),
+        (SymbolKind::Method, Some(parent)) => format!("type:{parent}/member:{name}"),
+        (SymbolKind::Method, None) => format!("member:{name}"),
+        (SymbolKind::Class, _) => format!("type:{name}"),
+    }
 }
 
 fn parse_tree_sitter_file(path: &str, contents: &str) -> Option<SourceFile> {
@@ -538,6 +561,7 @@ fn tree_sitter_symbol(
     };
 
     let source = node_text(node, contents).unwrap_or_default();
+    let selector = symbol_selector(kind, parent, &name);
     let interface_signature = Some(InterfaceSignature::from_source(
         language,
         kind,
@@ -551,6 +575,7 @@ fn tree_sitter_symbol(
         id: SymbolId {
             path: path.into(),
             name: name.clone(),
+            selector,
         },
         name,
         kind,
@@ -941,6 +966,7 @@ fn parse_source_file_fallback(path: &str, contents: &str) -> SourceFile {
             let id = SymbolId {
                 path: path.into(),
                 name: name.clone(),
+                selector: symbol_selector(kind, parent.as_deref(), &name),
             };
             file.symbols.push(Symbol {
                 id,
@@ -1468,13 +1494,18 @@ fn helper() {}
                 .entry(symbol.name.clone())
                 .or_default()
                 .push(symbol.id.clone());
+            graph
+                .symbol_index
+                .entry(symbol.id.selector.clone())
+                .or_default()
+                .push(symbol.id.clone());
         }
         graph.files.insert(file.path.clone(), file);
 
         let rows = graph.attack_surface();
-        assert!(rows.contains(&"src/lib.rs#api".to_string()));
-        assert!(rows.contains(&"src/lib.rs#caller".to_string()));
-        assert!(!rows.contains(&"src/lib.rs#helper".to_string()));
+        assert!(rows.contains(&"src/lib.rs#fn:api".to_string()));
+        assert!(rows.contains(&"src/lib.rs#fn:caller".to_string()));
+        assert!(!rows.contains(&"src/lib.rs#fn:helper".to_string()));
     }
 
     #[test]
@@ -1497,13 +1528,70 @@ fn target() {}
                     .entry(symbol.name.clone())
                     .or_default()
                     .push(symbol.id.clone());
+                graph
+                    .symbol_index
+                    .entry(symbol.id.selector.clone())
+                    .or_default()
+                    .push(symbol.id.clone());
             }
             graph.files.insert(file.path.clone(), file);
         }
 
         assert_eq!(
             graph.callees("src/local.rs#caller"),
-            vec!["src/local.rs#target"]
+            vec!["src/local.rs#fn:target"]
+        );
+    }
+
+    #[test]
+    fn semantic_selectors_disambiguate_same_file_methods() {
+        let file = parse_source_file(
+            "src/views.ts",
+            r#"
+class A {
+  render() {}
+}
+class B {
+  render() {}
+}
+"#,
+        );
+
+        let selectors = file
+            .symbols
+            .iter()
+            .map(|symbol| symbol.id.display())
+            .collect::<Vec<_>>();
+
+        assert!(selectors.contains(&"src/views.ts#type:A/member:render".to_string()));
+        assert!(selectors.contains(&"src/views.ts#type:B/member:render".to_string()));
+    }
+
+    #[test]
+    fn legacy_symbol_names_still_resolve() {
+        let file = parse_source_file("src/lib.rs", "fn run() {}\n");
+        let mut graph = SourceGraph::default();
+        for symbol in &file.symbols {
+            graph
+                .symbol_index
+                .entry(symbol.name.clone())
+                .or_default()
+                .push(symbol.id.clone());
+            graph
+                .symbol_index
+                .entry(symbol.id.selector.clone())
+                .or_default()
+                .push(symbol.id.clone());
+        }
+        graph.files.insert(file.path.clone(), file);
+
+        assert_eq!(
+            graph.resolve_symbol("src/lib.rs#run").unwrap().display(),
+            "src/lib.rs#fn:run"
+        );
+        assert_eq!(
+            graph.resolve_symbol("src/lib.rs#fn:run").unwrap().display(),
+            "src/lib.rs#fn:run"
         );
     }
 

@@ -1066,7 +1066,7 @@ roots = ["src"]
             r#"
 C4Container
 Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
-%% criv:source src/main.rs#run
+%% criv:source src/main.rs#fn:run
 Container(plugin, "Obsidian Plugin", "TypeScript", "Reads generated state")
 Rel(cli, plugin, "writes state for")
 "#,
@@ -1124,7 +1124,7 @@ Rel(cli, plugin, "writes state for")
             .iter()
             .find(|node| {
                 node.kind == "c4-interface"
-                    && node.path.as_deref() == Some("src/main.rs#run")
+                    && node.path.as_deref() == Some("src/main.rs#fn:run")
                     && !node.label.is_empty()
             })
             .expect("c4 interface hash node");

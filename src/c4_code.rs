@@ -181,9 +181,11 @@ mod tests {
         let rows = for_all_indexed_sources_dot(&vault);
 
         assert!(rows.contains(
-            &"  \"other/out.rs#external\" [label=\"external\\nother/out.rs\"];".to_string()
+            &"  \"other/out.rs#fn:external\" [label=\"external\\nother/out.rs\"];".to_string()
         ));
-        assert!(rows.contains(&"  \"src/lib.rs#run\" -> \"other/out.rs#external\";".to_string()));
+        assert!(rows.contains(
+            &"  \"src/lib.rs#type:Foo/member:run\" -> \"other/out.rs#fn:external\";".to_string()
+        ));
     }
 
     #[test]
@@ -194,15 +196,15 @@ mod tests {
 
         let rows = for_all_indexed_sources_dot(&vault);
 
-        assert!(rows.contains(&"  \"src/a.rs#run\" [label=\"run\\nsrc/a.rs\"];".to_string()));
-        assert!(rows.contains(&"  \"src/b.rs#run\" [label=\"run\\nsrc/b.rs\"];".to_string()));
+        assert!(rows.contains(&"  \"src/a.rs#fn:run\" [label=\"run\\nsrc/a.rs\"];".to_string()));
+        assert!(rows.contains(&"  \"src/b.rs#fn:run\" [label=\"run\\nsrc/b.rs\"];".to_string()));
     }
 
     #[test]
     fn dot_strings_are_escaped() {
         assert_eq!(
-            dot_string("src/lib.rs#run \"quoted\"\\next"),
-            "\"src/lib.rs#run \\\"quoted\\\"\\\\next\""
+            dot_string("src/lib.rs#fn:run \"quoted\"\\next"),
+            "\"src/lib.rs#fn:run \\\"quoted\\\"\\\\next\""
         );
     }
 

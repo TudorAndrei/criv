@@ -50,7 +50,7 @@ fn init_check_watch_query_search_and_enforce_workflow() {
         .args(["query", "nodes", "--kind", "code", "--without-docs"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("src/lib.rs#run"));
+        .stdout(predicate::str::contains("src/lib.rs#fn:run"));
     criv(root)
         .args(["search", "--files", "lib"])
         .assert()
@@ -67,7 +67,6 @@ fn init_check_watch_query_search_and_enforce_workflow() {
         .success();
 }
 
-#[test]
 fn disabled_source_index_is_observed_through_cli_boundary() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
@@ -200,7 +199,7 @@ fn query_json_output_is_valid_for_special_characters() {
         .success();
     let rows: Vec<String> = serde_json::from_slice(&assert.get_output().stdout).unwrap();
     assert!(rows.iter().any(|row| {
-        row == &format!("src/{special_file}#run")
+        row == &format!("src/{special_file}#fn:run")
             && row.contains('"')
             && row.contains('\t')
             && row.contains('\n')
@@ -322,7 +321,7 @@ fn generated_plugin_bundle_is_excluded_from_source_graph() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            ".obsidian/plugins/criv/src/main.ts#activate",
+            ".obsidian/plugins/criv/src/main.ts#fn:activate",
         ))
         .stdout(predicate::str::contains("bundledGeneratedSymbol").not())
         .stdout(predicate::str::contains("generatedWasmHelper").not());

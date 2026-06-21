@@ -14,7 +14,10 @@ use crate::c4::{C4ElementCategory, C4Level};
 use crate::c4_artifact::C4ArtifactFormat;
 use crate::state::{self, State};
 use crate::util::{is_adr_id, kebab};
-use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
+use crate::vault::{
+    Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault, is_typed_source_target,
+    source_target_body,
+};
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -472,7 +475,16 @@ fn validate_decision_note(
 fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
     for target in &note.targets_symbols {
         match vault.resolve_source_target(target) {
-            SourceTargetResolution::Resolved { .. } => {}
+            SourceTargetResolution::Resolved { .. } => {
+                warn_legacy_source_target(
+                    vault,
+                    diagnostics,
+                    &note.rel_path,
+                    None,
+                    target,
+                    "target symbol",
+                );
+            }
             SourceTargetResolution::MissingFile => {
                 diagnostics.push(error(
                     "unresolved-target",
@@ -740,7 +752,14 @@ fn validate_c4_diagrams(
                 continue;
             };
             match vault.resolve_source_target(source) {
-                SourceTargetResolution::Resolved { .. } => {}
+                SourceTargetResolution::Resolved { .. } => warn_legacy_source_target(
+                    vault,
+                    diagnostics,
+                    path,
+                    Some(element.line),
+                    source,
+                    "C4 source",
+                ),
                 SourceTargetResolution::MissingFile => diagnostics.push(error(
                     "unresolved-c4-target",
                     path,
@@ -830,6 +849,23 @@ fn validate_links(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
                     format!("wiki-link `[[{}]]` does not resolve", link.raw),
                 )),
                 ResolvedLink::Source { path, ambiguous } => {
+                    let suggestion = vault
+                        .canonical_source_target(&link.target)
+                        .map(|target| {
+                            format!(
+                                "; use AST-aware source selector `{target}` for code references"
+                            )
+                        })
+                        .unwrap_or_default();
+                    diagnostics.push(warning(
+                        "source-wikilink",
+                        &note.rel_path,
+                        Some(link.line),
+                        format!(
+                            "wiki-link `[[{}]]` targets source `{path}`; Wikilinks are reserved for document references{suggestion}",
+                            link.raw
+                        ),
+                    ));
                     if ambiguous {
                         diagnostics.push(warning(
                             "ambiguous-source-link",
@@ -862,6 +898,30 @@ fn validate_links(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
                 }
             }
         }
+    }
+}
+
+fn warn_legacy_source_target(
+    vault: &Vault,
+    diagnostics: &mut Vec<Diagnostic>,
+    path: &str,
+    line: Option<usize>,
+    target: &str,
+    label: &str,
+) {
+    let Some(canonical) = vault.canonical_source_target(target) else {
+        return;
+    };
+    let normalized = source_target_body(target);
+    if is_typed_source_target(target) || normalized != canonical {
+        diagnostics.push(warning(
+            "legacy-source-target",
+            path,
+            line,
+            format!(
+                "{label} `{target}` is a legacy source target; use AST-aware source selector `{canonical}`"
+            ),
+        ));
     }
 }
 
@@ -1090,13 +1150,110 @@ mod tests {
     }
 
     #[test]
+    fn source_wikilinks_are_reported_as_document_portability_issues() {
+        let vault = source_note_vault("[[src/main.rs#fn:run]]", &[]);
+
+        let diagnostics = validate(&vault);
+
+        assert!(diagnostics.iter().any(|diag| {
+            diag.code == "source-wikilink"
+                && diag
+                    .message
+                    .contains("AST-aware source selector `src/main.rs#fn:run`")
+        }));
+        assert!(diagnostics.iter().all(|diag| diag.code != "broken-link"));
+    }
+
+    #[test]
+    fn adr_0033_source_wikilinks_remain_compatible_but_warn() {
+        let vault = source_note_vault("[[source:src/main.rs#run]]", &[]);
+
+        let diagnostics = validate(&vault);
+
+        assert!(diagnostics.iter().any(|diag| {
+            diag.code == "source-wikilink"
+                && diag
+                    .message
+                    .contains("AST-aware source selector `src/main.rs#fn:run`")
+        }));
+        assert!(diagnostics.iter().all(|diag| diag.code != "broken-link"));
+    }
+
+    #[test]
+    fn legacy_target_symbols_suggest_ast_aware_selectors() {
+        let vault = source_note_vault("", &["src/main.rs#run"]);
+
+        let diagnostics = validate(&vault);
+
+        assert!(diagnostics.iter().any(|diag| {
+            diag.code == "legacy-source-target"
+                && diag
+                    .message
+                    .contains("AST-aware source selector `src/main.rs#fn:run`")
+        }));
+    }
+
+    #[test]
+    fn canonical_ast_aware_target_symbols_do_not_warn() {
+        let vault = source_note_vault("", &["src/main.rs#fn:run"]);
+
+        let diagnostics = validate(&vault);
+
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diag| diag.code != "legacy-source-target")
+        );
+    }
+
+    #[test]
+    fn ast_aware_governs_selectors_resolve() {
+        let root = unique_temp_dir("criv-governs-selector-check");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("docs/adr")).unwrap();
+        fs::write(
+            root.join("criv.toml"),
+            r#"
+[source]
+roots = ["src"]
+"#,
+        )
+        .unwrap();
+        fs::write(root.join("src/main.rs"), "fn run() {}\n").unwrap();
+        fs::write(
+            root.join("docs/adr/0999-governs-selector.md"),
+            r#"---
+id: ADR-0999
+kind: decision
+title: Governs Selector
+status: accepted
+governs:
+  - src/main.rs#fn:run
+---
+
+# Governs Selector
+"#,
+        )
+        .unwrap();
+        let vault = Vault::load(&root).unwrap();
+
+        let diagnostics = validate(&vault);
+
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diag| diag.code != "unresolved-governs")
+        );
+    }
+
+    #[test]
     fn valid_c4_source_annotation_passes() {
         let vault = c4_vault(
             r#"
 ```mermaid
 C4Container
 Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
-%% criv:source src/main.rs#run
+%% criv:source src/main.rs#fn:run
 ```
 "#,
         );
@@ -1355,7 +1512,7 @@ Rel(cli, plugin, "writes state for")
             r#"
 C4Container
 Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
-%% criv:source src/main.rs#run
+%% criv:source src/main.rs#fn:run
 "#,
         );
 
@@ -1401,7 +1558,7 @@ Person(user, "Maintainer", "Runs checks")
             r#"
 // criv:generated true
 digraph criv_code {
-  "src/main.rs#run" -> "src/lib.rs#helper";
+  "src/main.rs#fn:run" -> "src/lib.rs#fn:helper";
 }
 "#,
         );
@@ -1612,6 +1769,50 @@ title: C4
         Vault::load(&root).unwrap()
     }
 
+    fn source_note_vault(body: &str, target_symbols: &[&str]) -> Vault {
+        let root = unique_temp_dir("criv-source-link-check");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::write(
+            root.join("criv.toml"),
+            r#"
+[source]
+roots = ["src"]
+"#,
+        )
+        .unwrap();
+        fs::write(root.join("src/main.rs"), "fn run() {}\n").unwrap();
+        let targets = if target_symbols.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "targets:\n  symbols:\n{}\n",
+                target_symbols
+                    .iter()
+                    .map(|target| format!("    - {target}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
+        };
+        fs::write(
+            root.join("docs/note.md"),
+            format!(
+                r#"---
+id: source-note
+kind: doc
+title: Source Note
+{targets}---
+
+# Source Note
+
+{body}
+"#
+            ),
+        )
+        .unwrap();
+        Vault::load(&root).unwrap()
+    }
+
     fn c4_artifact_vault(path: &str, contents: &str) -> Vault {
         let root = unique_temp_dir("criv-c4-artifact-check");
         fs::create_dir_all(root.join("src")).unwrap();
@@ -1648,7 +1849,7 @@ roots = ["src"]
             r#"
 C4Container
 Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
-%% criv:source src/lib.rs#run
+%% criv:source src/lib.rs#fn:run
 "#,
         )
         .unwrap();

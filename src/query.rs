@@ -640,7 +640,7 @@ title: C4
 ```mermaid
 C4Container
 Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
-%% criv:source src/lib.rs#helper
+%% criv:source src/lib.rs#fn:helper
 Container(plugin, "Obsidian Plugin", "TypeScript", "Reads generated state")
 %% criv:source src/missing.rs
 System_Ext(external, "GitHub", "Renders Mermaid")

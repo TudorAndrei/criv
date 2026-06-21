@@ -25,11 +25,11 @@ Container_Boundary(plugin_boundary, "Obsidian companion plugin") {
     Component(plugin_runtime, "Plugin runtime", "TypeScript and Obsidian API", "Registers commands, source panels, hover previews, editor suggestions, and the .c4 file view")
     %% criv:source .obsidian/plugins/criv/src/main.ts
     Component(c4_view, ".c4 file view", "TypeScript", "Shows source text, parsed metadata, diagnostics, and a rendered projection for standalone C4 artifacts")
-    %% criv:source .obsidian/plugins/criv/src/main.ts#CrivC4View
+    %% criv:source .obsidian/plugins/criv/src/main.ts#type:CrivC4View
     Component(c4_view_helpers, "C4 view helpers", "TypeScript", "Infers .c4 format and level for the editor view and reports lightweight diagnostics")
-    %% criv:source .obsidian/plugins/criv/src/core.ts#parseC4Artifact
+    %% criv:source .obsidian/plugins/criv/src/core.ts#fn:parseC4Artifact
     Component(mermaid_renderer, "Mermaid projection renderer", "TypeScript and Mermaid.js", "Renders Mermaid-backed .c4 files inside Obsidian while leaving text as the source of truth")
-    %% criv:source .obsidian/plugins/criv/src/main.ts#renderC4Projection
+    %% criv:source .obsidian/plugins/criv/src/main.ts#fn:renderC4Projection
     Component(wasm_helper, "criv-wasm helper", "Rust compiled to WebAssembly", "Summarizes generated criv state for plugin status and compatibility checks")
     %% criv:source crates/criv-wasm/src/lib.rs
 }

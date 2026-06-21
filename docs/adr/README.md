@@ -43,3 +43,5 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0030-dot-for-generated-code-architecture|ADR-0030]] - DOT for generated Code architecture
 - [[0031-text-first-c4-architecture-formats|ADR-0031]] - Text first C4 architecture formats
 - [[0032-c4-files-as-architecture-artifacts|ADR-0032]] - .c4 files as architecture artifacts
+- [[0033-typed-wikilink-source-references|ADR-0033]] - Typed Wikilink source references
+- [[0034-ast-aware-source-selectors|ADR-0034]] - AST-aware source selectors

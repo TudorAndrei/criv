@@ -91,9 +91,9 @@ mod tests {
         let output = read_to_string(&temp.path().join("docs/architecture/04-code.md")).unwrap();
         assert!(output.contains("id: architecture-code"));
         assert!(output.contains("```dot"));
-        assert!(output.contains("\"src/lib.rs#run\" [label=\"run\\nsrc/lib.rs\"]"));
-        assert!(output.contains("\"src/lib.rs#helper\" [label=\"helper\\nsrc/lib.rs\"]"));
-        assert!(output.contains("\"src/lib.rs#run\" -> \"src/lib.rs#helper\""));
+        assert!(output.contains("\"src/lib.rs#fn:run\" [label=\"run\\nsrc/lib.rs\"]"));
+        assert!(output.contains("\"src/lib.rs#fn:helper\" [label=\"helper\\nsrc/lib.rs\"]"));
+        assert!(output.contains("\"src/lib.rs#fn:run\" -> \"src/lib.rs#fn:helper\""));
     }
 
     #[test]
@@ -122,8 +122,8 @@ mod tests {
         assert!(output.starts_with("// criv:generated true\ndigraph criv_code"));
         assert!(!output.contains("```dot"));
         assert!(!output.contains("id: architecture-code"));
-        assert!(output.contains("\"src/lib.rs#run\" [label=\"run\\nsrc/lib.rs\"]"));
-        assert!(output.contains("\"src/lib.rs#run\" -> \"src/lib.rs#helper\""));
+        assert!(output.contains("\"src/lib.rs#fn:run\" [label=\"run\\nsrc/lib.rs\"]"));
+        assert!(output.contains("\"src/lib.rs#fn:run\" -> \"src/lib.rs#fn:helper\""));
     }
 
     fn write_architecture_fixture(root: &Path, source_index: bool) {

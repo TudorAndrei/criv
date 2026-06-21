@@ -274,7 +274,7 @@ impl Vault {
     }
 
     pub(crate) fn resolve_source_target(&self, target: &str) -> SourceTargetResolution {
-        let target = target.split('|').next().unwrap_or(target).trim();
+        let target = source_target_body(target);
         let Some((path, ambiguous)) = self.resolve_source_path(source_fragment_path(target)) else {
             return SourceTargetResolution::MissingFile;
         };
@@ -293,18 +293,41 @@ impl Vault {
         }
     }
 
+    pub(crate) fn canonical_source_target(&self, target: &str) -> Option<String> {
+        let target = source_target_body(target);
+        let (path, _) = self.resolve_source_path(source_fragment_path(target))?;
+        let Some(fragment) = source_fragment_name(target) else {
+            return Some(path);
+        };
+        self.source_graph
+            .canonical_symbol_target(&format!("{path}#{fragment}"))
+    }
+
     pub(crate) fn source_glob_has_match(&self, pattern: &str) -> bool {
         self.source_files
             .iter()
             .any(|source_file| glob_matches(pattern, source_file))
+            || matches!(
+                self.resolve_source_target(pattern),
+                SourceTargetResolution::Resolved { .. }
+            )
     }
 
     pub(crate) fn source_files_matching_glob(&self, pattern: &str) -> Vec<String> {
-        self.source_files
+        let matches = self
+            .source_files
             .iter()
             .filter(|source_file| glob_matches(pattern, source_file))
             .cloned()
-            .collect()
+            .collect::<Vec<_>>();
+        if !matches.is_empty() {
+            return matches;
+        }
+        match self.resolve_source_target(pattern) {
+            SourceTargetResolution::Resolved { path, .. } => vec![path],
+            SourceTargetResolution::MissingFile
+            | SourceTargetResolution::MissingFragment { .. } => Vec::new(),
+        }
     }
 
     pub(crate) fn source_files(&self) -> &[String] {
@@ -574,12 +597,33 @@ fn collect_source_files(root: &Path, config: &Config) -> Result<Vec<String>> {
 }
 
 pub(crate) fn source_fragment_path(value: &str) -> &str {
+    let value = source_target_body(value);
     value.split('#').next().unwrap_or(value)
 }
 
 pub(crate) fn source_fragment_name(value: &str) -> Option<&str> {
-    let fragment = value.split('|').next().unwrap_or(value).split_once('#')?.1;
+    let value = source_target_body(value);
+    let fragment = value.split_once('#')?.1;
     (!fragment.is_empty() && !is_line_fragment(fragment)).then_some(fragment)
+}
+
+pub(crate) fn source_target_body(value: &str) -> &str {
+    value
+        .split('|')
+        .next()
+        .unwrap_or(value)
+        .trim()
+        .strip_prefix("source:")
+        .unwrap_or_else(|| value.split('|').next().unwrap_or(value).trim())
+}
+
+pub(crate) fn is_typed_source_target(value: &str) -> bool {
+    value
+        .split('|')
+        .next()
+        .unwrap_or(value)
+        .trim()
+        .starts_with("source:")
 }
 
 fn is_line_fragment(fragment: &str) -> bool {
