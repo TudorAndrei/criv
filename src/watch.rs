@@ -22,11 +22,11 @@ pub(crate) struct WatchOptions {
 }
 
 pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
+    let _lock = WatchLock::acquire(root)?;
     if options.once {
         rebuild(root, None)?;
         return Ok(());
     }
-    let _lock = WatchLock::acquire(root)?;
     let mut vault = rebuild(root, None)?;
     let mut source_graph = vault.source_graph().clone();
     let mut state = State::build(root, &vault)?;
@@ -144,6 +144,12 @@ impl WatchLock {
             .create_new(true)
             .open(&path)
             .map_err(|err| {
+                if err.kind() == std::io::ErrorKind::AlreadyExists {
+                    return CrivError::new(format!(
+                        "failed to acquire watch lock at {}: an active watcher already owns state refresh; do not start another watch or run `criv watch --once` while it is active",
+                        path.display()
+                    ));
+                }
                 CrivError::new(format!(
                     "failed to acquire watch lock at {}: {err}",
                     path.display()

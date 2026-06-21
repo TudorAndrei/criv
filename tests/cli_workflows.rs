@@ -67,6 +67,34 @@ fn init_check_watch_query_search_and_enforce_workflow() {
         .success();
 }
 
+#[test]
+fn watch_once_does_not_rebuild_while_watch_lock_is_held() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+
+    criv(root).args(["watch", "--once"]).assert().success();
+    let state_before = fs::read_to_string(root.join(".criv/state.json")).unwrap();
+    fs::write(root.join(".criv/watch.lock"), "active").unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn changed() {}\n").unwrap();
+
+    criv(root)
+        .args(["watch", "--once"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "active watcher already owns state refresh",
+        ))
+        .stderr(predicate::str::contains("watch --once"));
+
+    let state_after = fs::read_to_string(root.join(".criv/state.json")).unwrap();
+    assert_eq!(state_after, state_before);
+}
+
+#[test]
 fn disabled_source_index_is_observed_through_cli_boundary() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
