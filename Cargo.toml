@@ -26,18 +26,18 @@ embeddings = ["dep:fastembed"]
 ast-grep-config = "0.43.0"
 ast-grep-core = "0.43.0"
 ast-grep-language = { version = "0.43.0", default-features = false, features = [
-    "tree-sitter-go",
-    "tree-sitter-javascript",
-    "tree-sitter-python",
-    "tree-sitter-rust",
-    "tree-sitter-typescript",
+  "tree-sitter-go",
+  "tree-sitter-javascript",
+  "tree-sitter-python",
+  "tree-sitter-rust",
+  "tree-sitter-typescript",
 ] }
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
 content_inspector = "0.2"
 fastembed = { version = "5", optional = true, default-features = false, features = [
-    "hf-hub-rustls-tls",
-    "ort-download-binaries-rustls-tls",
+  "hf-hub-rustls-tls",
+  "ort-download-binaries-rustls-tls",
 ] }
 fff-search = "0.9.5-nightly.ec57eb0"
 globset = "0.4"

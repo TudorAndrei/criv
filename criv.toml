@@ -3,8 +3,27 @@ docs = "docs"
 adr = "adr"
 
 [source]
-roots = ["src", "lib", "scripts", ".github/workflows", ".obsidian/plugins/criv", "crates/criv-wasm", ".gitignore", "Cargo.toml", "cog.toml", "criv.toml", "hk.pkl", "mise.toml", "README.md"]
-exclude = ["**/target/**", "**/node_modules/**", ".obsidian/plugins/criv/main.js", ".obsidian/plugins/criv/pkg/**"]
+roots = [
+  "src",
+  "lib",
+  "scripts",
+  ".github/workflows",
+  ".obsidian/plugins/criv",
+  "crates/criv-wasm",
+  ".gitignore",
+  "Cargo.toml",
+  "cog.toml",
+  "criv.toml",
+  "hk.pkl",
+  "mise.toml",
+  "README.md",
+]
+exclude = [
+  "**/target/**",
+  "**/node_modules/**",
+  ".obsidian/plugins/criv/main.js",
+  ".obsidian/plugins/criv/pkg/**",
+]
 
 [index]
 source = true

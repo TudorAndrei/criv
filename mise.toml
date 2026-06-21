@@ -9,9 +9,11 @@ actionlint = "1.7.12"
 cocogitto = "7.0.0"
 "cargo:cargo-release" = "1.1.2"
 "cargo:cargo-audit" = "latest"
+taplo = "latest"
 
 [env]
 HK_MISE = "1"
+HK_JOBS = "{{ num_cpus() }}"
 HK_PKL_BACKEND = "pklr"
 
 [hooks]

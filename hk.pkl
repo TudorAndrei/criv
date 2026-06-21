@@ -29,6 +29,10 @@ local cargo_test = new Step {
   check = "cargo test --workspace"
 }
 
+local toml_fmt = (Builtins.taplo_format) {
+  glob = List("**/*.toml", ".cargo/**/*.toml")
+}
+
 local plugin_files = List(
   ".obsidian/plugins/criv/package.json",
   ".obsidian/plugins/criv/package-lock.json",
@@ -94,6 +98,7 @@ hooks {
     stash = "git"
     steps {
       ["cargo-fmt"] = cargo_fmt
+      ["toml-fmt"] = toml_fmt
       ["actionlint"] = actionlint
       ["zizmor"] = zizmor
       ["criv-check"] = staged_docs
@@ -112,6 +117,7 @@ hooks {
   ["check"] {
     steps {
       ["cargo-fmt"] = cargo_fmt
+      ["toml-fmt"] = toml_fmt
       ["cargo-clippy"] = cargo_clippy
       ["actionlint"] = actionlint
       ["zizmor"] = zizmor
@@ -129,6 +135,7 @@ hooks {
     fix = true
     steps {
       ["cargo-fmt"] = cargo_fmt
+      ["toml-fmt"] = toml_fmt
       ["criv-check"] = staged_docs
     }
   }
