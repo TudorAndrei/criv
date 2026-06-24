@@ -31,6 +31,7 @@
     "workspaceContains:criv.toml",
     "onLanguage:markdown",
     "onLanguage:criv-c4",
+    "onView:criv.stateView",
     "onCommand:criv.refreshStateView",
     "onCommand:criv.openStateJson",
     "onCommand:criv.openSourceTarget"
@@ -56,6 +57,23 @@
         "title": "criv: Open Source Target"
       }
     ],
+    "views": {
+      "explorer": [
+        {
+          "id": "criv.stateView",
+          "name": "criv State"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "criv.refreshStateView",
+          "when": "view == criv.stateView",
+          "group": "navigation"
+        }
+      ]
+    },
     "languages": [
       {
         "id": "criv-c4",
@@ -75,10 +93,13 @@
     "build:wasm": "mise exec rust@1.95.0 -- wasm-pack build ../../crates/criv-wasm --target nodejs --out-dir ../../extensions/vscode-criv/pkg",
     "check-types": "tsc --noEmit",
     "compile": "npm run check-types && node esbuild.config.mjs",
+    "compile:integration-tests": "esbuild test/integration/runner.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist-test/integration/runner.js",
+    "compile:unit-tests": "esbuild test/unit/*.test.ts --bundle --platform=node --format=cjs --target=node18 --outdir=dist-test/unit",
     "format": "oxfmt --write src test esbuild.config.mjs",
     "format:check": "oxfmt --check src test esbuild.config.mjs",
     "lint": "oxlint src test esbuild.config.mjs",
-    "test": "npm run compile && node --test test/**/*.test.js",
+    "test": "npm run compile && npm run compile:unit-tests && node --test dist-test/unit/*.test.js",
+    "test:integration": "npm run compile && npm run compile:integration-tests && node test/run-integration.mjs",
     "watch": "node esbuild.config.mjs --watch"
   },
   "devDependencies": {

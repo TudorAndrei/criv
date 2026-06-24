@@ -1,40 +1,156 @@
 import * as vscode from "vscode";
 
+import { parseSourceTarget } from "./sourceTarget";
+import { WorkspaceStateStore, type WorkspaceStateStatus } from "./stateStore";
+import { CrivStateTreeProvider } from "./tree";
+
 const COMMAND_REFRESH_STATE_VIEW = "criv.refreshStateView";
 const COMMAND_OPEN_STATE_JSON = "criv.openStateJson";
 const COMMAND_OPEN_SOURCE_TARGET = "criv.openSourceTarget";
 
-export function activate(context: vscode.ExtensionContext): void {
+export const CRIV_COMMANDS = [
+  COMMAND_REFRESH_STATE_VIEW,
+  COMMAND_OPEN_STATE_JSON,
+  COMMAND_OPEN_SOURCE_TARGET,
+] as const;
+
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  const store = new WorkspaceStateStore();
+  const treeProvider = new CrivStateTreeProvider();
+  const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  statusBar.command = COMMAND_REFRESH_STATE_VIEW;
+
+  const updateSurfaces = (status: WorkspaceStateStatus) => {
+    updateStatusBar(statusBar, status);
+    treeProvider.update(status);
+  };
+
+  context.subscriptions.push(store, treeProvider, statusBar);
+  context.subscriptions.push(store.onDidChangeStatus(updateSurfaces));
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider("criv.stateView", treeProvider),
+  );
+
   context.subscriptions.push(
     vscode.commands.registerCommand(COMMAND_REFRESH_STATE_VIEW, async () => {
-      await vscode.window.showInformationMessage("criv state view refresh is not implemented yet.");
+      await store.refresh();
     }),
-    vscode.commands.registerCommand(COMMAND_OPEN_STATE_JSON, openStateJson),
+    vscode.commands.registerCommand(COMMAND_OPEN_STATE_JSON, async () => {
+      await openStateJson(store);
+    }),
     vscode.commands.registerCommand(COMMAND_OPEN_SOURCE_TARGET, async (target?: unknown) => {
-      await vscode.window.showInformationMessage(
-        `criv source navigation is not implemented yet${typeof target === "string" ? `: ${target}` : ""}.`,
-      );
+      await openSourceTarget(store, target);
     }),
   );
+
+  updateSurfaces(store.status);
+  statusBar.show();
+  await store.refresh();
 }
 
 export function deactivate(): void {
   // VS Code disposes subscriptions registered on the extension context.
 }
 
-async function openStateJson(): Promise<void> {
-  const root = vscode.workspace.workspaceFolders?.[0]?.uri;
-  if (!root) {
-    await vscode.window.showWarningMessage("Open a workspace before opening criv state.");
+async function openStateJson(store: WorkspaceStateStore): Promise<void> {
+  const status = await ensureLoadedState(store);
+  if (
+    status.kind !== "ready" &&
+    status.kind !== "missing-state" &&
+    status.kind !== "invalid-state"
+  ) {
+    await vscode.window.showWarningMessage(messageForStatus(status));
     return;
   }
 
-  const stateUri = vscode.Uri.joinPath(root, ".criv", "state.json");
   try {
-    const document = await vscode.workspace.openTextDocument(stateUri);
+    const document = await vscode.workspace.openTextDocument(status.stateUri);
     await vscode.window.showTextDocument(document, { preview: false });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await vscode.window.showWarningMessage(`Could not open .criv/state.json: ${message}`);
+  }
+}
+
+async function openSourceTarget(store: WorkspaceStateStore, target: unknown): Promise<void> {
+  if (typeof target !== "string" || !target.trim()) {
+    await vscode.window.showWarningMessage("Choose a criv source target to open.");
+    return;
+  }
+
+  const status = await ensureLoadedState(store);
+  if (status.kind !== "ready") {
+    await vscode.window.showWarningMessage(messageForStatus(status));
+    return;
+  }
+
+  const node = await store.lookupNode(target);
+  const parsed = parseSourceTarget(node?.source_target ?? node?.path ?? target);
+  if (!parsed) {
+    await vscode.window.showWarningMessage(`Could not resolve criv source target: ${target}`);
+    return;
+  }
+
+  const uri = vscode.Uri.joinPath(status.root, ...parsed.path.split("/"));
+  try {
+    const document = await vscode.workspace.openTextDocument(uri);
+    const options: vscode.TextDocumentShowOptions = { preview: false };
+    if (parsed.line !== undefined) {
+      const endLine = parsed.endLine ?? parsed.line;
+      options.selection = new vscode.Range(parsed.line, 0, endLine, Number.MAX_SAFE_INTEGER);
+    }
+    await vscode.window.showTextDocument(document, options);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await vscode.window.showWarningMessage(`Could not open ${parsed.path}: ${message}`);
+  }
+}
+
+async function ensureLoadedState(store: WorkspaceStateStore): Promise<WorkspaceStateStatus> {
+  if (store.status.kind === "loading") {
+    return store.refresh();
+  }
+  return store.status;
+}
+
+function messageForStatus(status: WorkspaceStateStatus): string {
+  switch (status.kind) {
+    case "ready":
+      return "criv state is loaded.";
+    case "loading":
+      return "criv state is still loading.";
+    case "missing-workspace":
+    case "missing-state":
+    case "invalid-state":
+      return status.message;
+  }
+}
+
+function updateStatusBar(statusBar: vscode.StatusBarItem, status: WorkspaceStateStatus): void {
+  switch (status.kind) {
+    case "ready":
+      statusBar.text = `$(graph) criv ${status.snapshot.summary.source_count} sources`;
+      statusBar.tooltip = new vscode.MarkdownString(
+        [
+          `Schema: ${status.snapshot.summary.schema}`,
+          `Nodes: ${status.snapshot.summary.node_count}`,
+          `Edges: ${status.snapshot.summary.edge_count}`,
+          `.c4 artifacts: ${status.snapshot.c4Artifacts.length}`,
+        ].join("\n\n"),
+      );
+      statusBar.show();
+      return;
+    case "loading":
+      statusBar.text = "$(sync~spin) criv";
+      statusBar.tooltip = "Loading criv state";
+      statusBar.show();
+      return;
+    case "missing-workspace":
+    case "missing-state":
+    case "invalid-state":
+      statusBar.text = "$(warning) criv";
+      statusBar.tooltip = status.message;
+      statusBar.show();
+      return;
   }
 }

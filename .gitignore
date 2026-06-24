@@ -5,8 +5,10 @@
 .obsidian/plugins/criv/node_modules/
 .obsidian/plugins/criv/main.js
 extensions/vscode-criv/dist/
+extensions/vscode-criv/dist-test/
 extensions/vscode-criv/node_modules/
 extensions/vscode-criv/pkg/
+extensions/vscode-criv/.vscode-test/
 extensions/vscode-criv/*.vsix
 hk.local.pkl
 .config/hk.local.pkl
