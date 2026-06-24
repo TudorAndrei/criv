@@ -2,6 +2,7 @@ C4Component
 title Component diagram for criv architecture and validation workflow
 Person(maintainer, "Repository maintainer", "Runs criv and reviews text-first architecture artifacts")
 System_Ext(obsidian, "Obsidian", "Hosts the criv companion plugin")
+System_Ext(vscode, "VS Code-compatible editor", "Hosts the criv companion extension in VS Code, Cursor, or another compatible editor")
 ContainerDb(vault, "Repository vault", "Markdown, .c4, TOML, source files, and JSON state", "Stores docs, ADRs, source, standalone C4 artifacts, and generated criv state")
 Container_Boundary(cli_boundary, "criv CLI") {
     Component(cli_dispatch, "CLI dispatch", "Rust and clap", "Parses commands and routes init, check, query, search, watch, and enforce workflows")
@@ -33,6 +34,14 @@ Container_Boundary(plugin_boundary, "Obsidian companion plugin") {
     Component(wasm_helper, "criv-wasm helper", "Rust compiled to WebAssembly", "Summarizes generated criv state for plugin status and compatibility checks")
     %% criv:source crates/criv-wasm/src/lib.rs
 }
+Container_Boundary(vscode_extension_boundary, "VS Code-compatible companion extension") {
+    Component(vscode_runtime, "Extension runtime", "TypeScript and VS Code API", "Registers commands, status, tree views, diagnostics, source navigation, and .c4 preview entrypoints")
+    %% criv:source extensions/vscode-criv/src/extension.ts
+    Component(vscode_c4_view, ".c4 preview webview", "TypeScript, Mermaid.js, and Viz.js", "Renders Mermaid and DOT .c4 projections while keeping text artifacts authoritative")
+    %% criv:source extensions/vscode-criv/src/extension.ts
+    Component(vscode_wasm_helper, "criv-wasm adapter", "Rust compiled to WebAssembly", "Shares editor-independent state summary and selector helper logic")
+    %% criv:source crates/criv-wasm/src/lib.rs
+}
 Rel(maintainer, cli_dispatch, "runs local commands through")
 Rel(cli_dispatch, vault_loader, "loads repository state with")
 Rel(vault_loader, c4_parser, "parses standalone .c4 artifacts with")
@@ -50,3 +59,7 @@ Rel(c4_view, c4_view_helpers, "parses metadata through")
 Rel(c4_view, mermaid_renderer, "renders Mermaid projections through")
 Rel(plugin_runtime, wasm_helper, "summarizes generated state through")
 Rel(plugin_runtime, vault, "reads .c4 files, state, and source previews from")
+Rel(vscode, vscode_runtime, "loads")
+Rel(vscode_runtime, vscode_c4_view, "opens .c4 preview with")
+Rel(vscode_runtime, vscode_wasm_helper, "summarizes generated state through")
+Rel(vscode_runtime, vault, "reads .c4 files, state, and source previews from")

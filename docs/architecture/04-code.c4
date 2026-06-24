@@ -157,6 +157,10 @@ digraph criv_code {
   "crates/criv-wasm/src/lib.rs#type:Node" [label="Node\ncrates/criv-wasm/src/lib.rs"];
   "crates/criv-wasm/src/lib.rs#type:SourceIndexEntry" [label="SourceIndexEntry\ncrates/criv-wasm/src/lib.rs"];
   "crates/criv-wasm/src/lib.rs#type:StateSummary" [label="StateSummary\ncrates/criv-wasm/src/lib.rs"];
+  "extensions/vscode-criv/esbuild.config.mjs#fn:context" [label="context\nextensions/vscode-criv/esbuild.config.mjs"];
+  "extensions/vscode-criv/src/extension.ts#fn:activate" [label="activate\nextensions/vscode-criv/src/extension.ts"];
+  "extensions/vscode-criv/src/extension.ts#fn:deactivate" [label="deactivate\nextensions/vscode-criv/src/extension.ts"];
+  "extensions/vscode-criv/src/extension.ts#fn:openStateJson" [label="openStateJson\nextensions/vscode-criv/src/extension.ts"];
   "src/architecture.rs#fn:code_architecture_artifact" [label="code_architecture_artifact\nsrc/architecture.rs"];
   "src/architecture.rs#fn:code_architecture_c4_output_writes_direct_dot" [label="code_architecture_c4_output_writes_direct_dot\nsrc/architecture.rs"];
   "src/architecture.rs#fn:code_architecture_content" [label="code_architecture_content\nsrc/architecture.rs"];
@@ -1056,6 +1060,7 @@ digraph criv_code {
   ".obsidian/plugins/criv/src/wasm.ts#fn:summarizeState" -> ".obsidian/plugins/criv/src/wasm.ts#member:summarize_state";
   "crates/criv-wasm/src/lib.rs#fn:deduplicates_source_paths_for_summary" -> "crates/criv-wasm/src/lib.rs#fn:unique_source_paths";
   "crates/criv-wasm/src/lib.rs#fn:summarize_state" -> "crates/criv-wasm/src/lib.rs#fn:unique_source_paths";
+  "extensions/vscode-criv/esbuild.config.mjs#fn:context" -> "extensions/vscode-criv/esbuild.config.mjs#fn:context";
   "src/architecture.rs#fn:code_architecture_c4_output_writes_direct_dot" -> "src/architecture.rs#fn:write_architecture_fixture_with_output";
   "src/architecture.rs#fn:code_architecture_c4_output_writes_direct_dot" -> "src/util.rs#fn:read_to_string";
   "src/architecture.rs#fn:code_architecture_c4_output_writes_direct_dot" -> "src/vault.rs#type:Vault";

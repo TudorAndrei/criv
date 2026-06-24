@@ -45,3 +45,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0032-c4-files-as-architecture-artifacts|ADR-0032]] - .c4 files as architecture artifacts
 - [[0033-typed-wikilink-source-references|ADR-0033]] - Typed Wikilink source references
 - [[0034-ast-aware-source-selectors|ADR-0034]] - AST-aware source selectors
+- [[0035-vscode-compatible-companion-extension|ADR-0035]] - VS Code-compatible companion extension

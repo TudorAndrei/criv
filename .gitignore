@@ -4,6 +4,10 @@
 .obsidian/workspace.json
 .obsidian/plugins/criv/node_modules/
 .obsidian/plugins/criv/main.js
+extensions/vscode-criv/dist/
+extensions/vscode-criv/node_modules/
+extensions/vscode-criv/pkg/
+extensions/vscode-criv/*.vsix
 hk.local.pkl
 .config/hk.local.pkl
 

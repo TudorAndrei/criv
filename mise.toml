@@ -54,6 +54,22 @@ run = "npm --prefix .obsidian/plugins/criv run format:check"
 description = "Run Obsidian plugin tests"
 run = "npm --prefix .obsidian/plugins/criv test"
 
+[tasks.vscode-build]
+description = "Build the VS Code-compatible companion extension"
+run = "npm --prefix extensions/vscode-criv run build"
+
+[tasks.vscode-lint]
+description = "Lint the VS Code-compatible companion extension source"
+run = "npm --prefix extensions/vscode-criv run lint"
+
+[tasks.vscode-format-check]
+description = "Check VS Code-compatible companion extension formatting"
+run = "npm --prefix extensions/vscode-criv run format:check"
+
+[tasks.vscode-test]
+description = "Run VS Code-compatible companion extension tests"
+run = "npm --prefix extensions/vscode-criv test"
+
 [tasks.pre-commit]
 description = "Run the hk pre-commit hook"
 run = "hk run pre-commit"

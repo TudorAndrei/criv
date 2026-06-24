@@ -1,0 +1,97 @@
+{
+  "name": "vscode-criv",
+  "displayName": "criv",
+  "version": "0.1.0",
+  "publisher": "criv",
+  "description": "VS Code-compatible companion extension for criv repository state.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TudorAndrei/criv"
+  },
+  "main": "./dist/extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
+  "keywords": [
+    "criv",
+    "documentation",
+    "architecture",
+    "c4",
+    "cursor"
+  ],
+  "activationEvents": [
+    "workspaceContains:criv.toml",
+    "onLanguage:markdown",
+    "onLanguage:criv-c4",
+    "onCommand:criv.refreshStateView",
+    "onCommand:criv.openStateJson",
+    "onCommand:criv.openSourceTarget"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "The extension can inspect workspace files, but criv command execution requires workspace trust."
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "criv.refreshStateView",
+        "title": "criv: Refresh State View"
+      },
+      {
+        "command": "criv.openStateJson",
+        "title": "criv: Open State JSON"
+      },
+      {
+        "command": "criv.openSourceTarget",
+        "title": "criv: Open Source Target"
+      }
+    ],
+    "languages": [
+      {
+        "id": "criv-c4",
+        "aliases": [
+          "criv C4",
+          "C4"
+        ],
+        "extensions": [
+          ".c4"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "npm run check-types && node esbuild.config.mjs --production",
+    "check-types": "tsc --noEmit",
+    "compile": "npm run check-types && node esbuild.config.mjs",
+    "format": "oxfmt --write src test esbuild.config.mjs",
+    "format:check": "oxfmt --check src test esbuild.config.mjs",
+    "lint": "oxlint src test esbuild.config.mjs",
+    "test": "npm run compile && node --test test/**/*.test.js",
+    "watch": "node esbuild.config.mjs --watch"
+  },
+  "devDependencies": {
+    "@types/node": "25.9.3",
+    "@types/vscode": "1.85.0",
+    "@vscode/test-electron": "3.0.0",
+    "esbuild": "0.28.1",
+    "oxfmt": "0.55.0",
+    "oxlint": "1.70.0",
+    "typescript": "6.0.3"
+  },
+  "dependencies": {},
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "fsevents@2.3.3": true
+  }
+}
