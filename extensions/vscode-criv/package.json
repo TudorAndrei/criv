@@ -72,6 +72,7 @@
   },
   "scripts": {
     "build": "npm run check-types && node esbuild.config.mjs --production",
+    "build:wasm": "mise exec rust@1.95.0 -- wasm-pack build ../../crates/criv-wasm --target nodejs --out-dir ../../extensions/vscode-criv/pkg",
     "check-types": "tsc --noEmit",
     "compile": "npm run check-types && node esbuild.config.mjs",
     "format": "oxfmt --write src test esbuild.config.mjs",
