@@ -5,7 +5,7 @@ export interface ParsedSourceTarget {
   endLine?: number;
 }
 
-const SOURCE_ID_PREFIXES = ["code:", "symbol:", "note:"];
+const SOURCE_ID_PREFIXES = ["code:", "symbol:", "note:", "source:"];
 
 export function parseSourceTarget(target: string): ParsedSourceTarget | undefined {
   const normalized = normalizeSourceTarget(target.trim());

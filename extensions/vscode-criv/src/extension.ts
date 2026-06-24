@@ -1,18 +1,17 @@
 import * as vscode from "vscode";
 
+import {
+  COMMAND_OPEN_SOURCE_TARGET,
+  COMMAND_OPEN_STATE_JSON,
+  COMMAND_REFRESH_STATE_VIEW,
+  CRIV_COMMANDS,
+} from "./commands";
+import { registerSourceLanguageFeatures } from "./languageFeatures";
 import { parseSourceTarget } from "./sourceTarget";
 import { WorkspaceStateStore, type WorkspaceStateStatus } from "./stateStore";
 import { CrivStateTreeProvider } from "./tree";
 
-const COMMAND_REFRESH_STATE_VIEW = "criv.refreshStateView";
-const COMMAND_OPEN_STATE_JSON = "criv.openStateJson";
-const COMMAND_OPEN_SOURCE_TARGET = "criv.openSourceTarget";
-
-export const CRIV_COMMANDS = [
-  COMMAND_REFRESH_STATE_VIEW,
-  COMMAND_OPEN_STATE_JSON,
-  COMMAND_OPEN_SOURCE_TARGET,
-] as const;
+export { CRIV_COMMANDS };
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const store = new WorkspaceStateStore();
@@ -30,6 +29,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider("criv.stateView", treeProvider),
   );
+  registerSourceLanguageFeatures(context, store);
 
   context.subscriptions.push(
     vscode.commands.registerCommand(COMMAND_REFRESH_STATE_VIEW, async () => {

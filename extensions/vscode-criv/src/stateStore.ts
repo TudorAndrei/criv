@@ -1,7 +1,13 @@
 import * as vscode from "vscode";
 
 import { buildStateSnapshot, parseStateEnvelope, type CrivStateSnapshot } from "./stateModel";
-import { graphNodes, lookupGraphNode, sourceEntries, summarizeState } from "./wasm";
+import {
+  graphNodes,
+  lookupGraphNode,
+  sourceEntries,
+  suggestSourceSelectors,
+  summarizeState,
+} from "./wasm";
 
 export type WorkspaceStateStatus =
   | { kind: "loading" }
@@ -86,6 +92,14 @@ export class WorkspaceStateStore implements vscode.Disposable {
       return undefined;
     }
     return lookupGraphNode(status.snapshot.raw, target);
+  }
+
+  async suggestSelectors(query: string, limit: number) {
+    const status = this.statusValue;
+    if (status.kind !== "ready") {
+      return [];
+    }
+    return suggestSourceSelectors(status.snapshot.raw, query, limit);
   }
 
   dispose(): void {
