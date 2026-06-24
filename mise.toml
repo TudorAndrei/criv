@@ -13,7 +13,6 @@ taplo = "latest"
 
 [env]
 HK_MISE = "1"
-HK_JOBS = "{{ num_cpus() }}"
 HK_PKL_BACKEND = "pklr"
 
 [hooks]
