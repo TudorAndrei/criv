@@ -5,6 +5,10 @@
   "publisher": "criv",
   "description": "VS Code-compatible companion extension for criv repository state.",
   "license": "MIT",
+  "homepage": "https://github.com/TudorAndrei/criv#readme",
+  "bugs": {
+    "url": "https://github.com/TudorAndrei/criv/issues"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/TudorAndrei/criv"
@@ -135,17 +139,21 @@
     "compile": "npm run check-types && node esbuild.config.mjs",
     "compile:integration-tests": "esbuild test/integration/runner.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist-test/integration/runner.js",
     "compile:unit-tests": "esbuild test/unit/*.test.ts --bundle --platform=node --format=cjs --target=node18 --outdir=dist-test/unit",
-    "format": "oxfmt --write src test esbuild.config.mjs",
-    "format:check": "oxfmt --check src test esbuild.config.mjs",
-    "lint": "oxlint src test esbuild.config.mjs",
+    "copy:webview-assets": "node scripts/copy-webview-assets.mjs",
+    "format": "oxfmt --write src test scripts esbuild.config.mjs",
+    "format:check": "oxfmt --check src test scripts esbuild.config.mjs",
+    "lint": "oxlint src test scripts esbuild.config.mjs",
+    "package": "vsce package --out vscode-criv.vsix",
     "test": "npm run compile && npm run compile:unit-tests && node --test dist-test/unit/*.test.js",
     "test:integration": "npm run compile && npm run compile:integration-tests && node test/run-integration.mjs",
+    "vscode:prepublish": "npm run build && npm run build:wasm && npm run copy:webview-assets",
     "watch": "node esbuild.config.mjs --watch"
   },
   "devDependencies": {
     "@types/node": "25.9.3",
     "@types/vscode": "1.85.0",
     "@vscode/test-electron": "3.0.0",
+    "@vscode/vsce": "^3.9.2",
     "esbuild": "0.28.1",
     "oxfmt": "0.55.0",
     "oxlint": "1.70.0",

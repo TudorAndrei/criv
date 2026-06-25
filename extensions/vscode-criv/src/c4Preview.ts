@@ -23,16 +23,7 @@ export class C4PreviewManager implements vscode.Disposable {
         vscode.ViewColumn.Beside,
         {
           enableScripts: true,
-          localResourceRoots: [
-            vscode.Uri.joinPath(this.context.extensionUri, "node_modules", "mermaid", "dist"),
-            vscode.Uri.joinPath(
-              this.context.extensionUri,
-              "node_modules",
-              "@viz-js",
-              "viz",
-              "dist",
-            ),
-          ],
+          localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, "media")],
         },
       );
     this.panel = panel;
@@ -53,27 +44,10 @@ export class C4PreviewManager implements vscode.Disposable {
       cspSource: panel.webview.cspSource,
       nonce,
       mermaidUri: panel.webview
-        .asWebviewUri(
-          vscode.Uri.joinPath(
-            this.context.extensionUri,
-            "node_modules",
-            "mermaid",
-            "dist",
-            "mermaid.min.js",
-          ),
-        )
+        .asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "mermaid.min.js"))
         .toString(),
       vizUri: panel.webview
-        .asWebviewUri(
-          vscode.Uri.joinPath(
-            this.context.extensionUri,
-            "node_modules",
-            "@viz-js",
-            "viz",
-            "dist",
-            "viz-global.js",
-          ),
-        )
+        .asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, "media", "viz-global.js"))
         .toString(),
       payload: {
         format: summary.format,

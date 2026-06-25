@@ -79,6 +79,7 @@ npm --prefix extensions/vscode-criv run test
 npm --prefix extensions/vscode-criv run test:integration
 npm --prefix extensions/vscode-criv run lint
 npm --prefix extensions/vscode-criv run format:check
+npm --prefix extensions/vscode-criv run package
 ```
 
 The extension renders `.c4` previews locally: Mermaid C4 artifacts use Mermaid
@@ -86,6 +87,14 @@ The extension renders `.c4` previews locally: Mermaid C4 artifacts use Mermaid
 extension resources rather than CDN scripts. Run `criv watch --once` after
 changing extension source so generated architecture state and
 `docs/architecture/04-code.c4` stay current.
+
+`npm --prefix extensions/vscode-criv run package` and `mise run
+vscode-package` build a local `vscode-criv.vsix` without publishing. The
+extension metadata is kept compatible with both VS Code Marketplace and Open
+VSX publication, but MVP verification does not require a marketplace token or
+an Open VSX publish step. Install the VSIX explicitly with an editor CLI such
+as `code --install-extension` or `cursor --install-extension` when doing
+desktop smoke tests.
 
 Use `hk validate` after editing `hk.pkl`. Prefer hk built-ins when one exists;
 the commit message hook uses `Builtins.check_conventional_commit` instead of a

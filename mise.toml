@@ -66,6 +66,10 @@ run = "npm --prefix extensions/vscode-criv run lint"
 description = "Check VS Code-compatible companion extension formatting"
 run = "npm --prefix extensions/vscode-criv run format:check"
 
+[tasks.vscode-package]
+description = "Package the VS Code-compatible companion extension as a local VSIX"
+run = "npm --prefix extensions/vscode-criv run package"
+
 [tasks.vscode-test]
 description = "Run VS Code-compatible companion extension tests"
 run = "npm --prefix extensions/vscode-criv test"

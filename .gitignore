@@ -6,6 +6,7 @@
 .obsidian/plugins/criv/main.js
 extensions/vscode-criv/dist/
 extensions/vscode-criv/dist-test/
+extensions/vscode-criv/media/
 extensions/vscode-criv/node_modules/
 extensions/vscode-criv/pkg/
 extensions/vscode-criv/.vscode-test/
