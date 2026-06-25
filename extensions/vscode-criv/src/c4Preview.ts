@@ -9,7 +9,10 @@ export class C4PreviewManager implements vscode.Disposable {
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
-  async open(document = vscode.window.activeTextEditor?.document): Promise<void> {
+  async open(
+    document = vscode.window.activeTextEditor?.document,
+    options: { preserveFocus?: boolean } = {},
+  ): Promise<void> {
     if (!document || document.languageId !== "criv-c4") {
       await vscode.window.showWarningMessage("Open a .c4 file before previewing it.");
       return;
@@ -20,7 +23,7 @@ export class C4PreviewManager implements vscode.Disposable {
       vscode.window.createWebviewPanel(
         "criv.c4Preview",
         "criv C4 Preview",
-        vscode.ViewColumn.Beside,
+        { viewColumn: vscode.ViewColumn.Beside, preserveFocus: options.preserveFocus ?? false },
         {
           enableScripts: true,
           localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, "media")],
@@ -55,7 +58,7 @@ export class C4PreviewManager implements vscode.Disposable {
         sources: c4SourceTargets(document.getText()),
       },
     });
-    panel.reveal(vscode.ViewColumn.Beside);
+    panel.reveal(vscode.ViewColumn.Beside, options.preserveFocus ?? false);
   }
 
   dispose(): void {

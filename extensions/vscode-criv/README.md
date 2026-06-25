@@ -12,7 +12,8 @@ for VS Code API-compatible desktop editors, including VS Code and Cursor.
 - Runs trusted workspace commands for `criv watch --once`, `criv check
   --format json`, and selected read-only `criv query` flows.
 - Renders standalone `.c4` files in a read-only preview using Mermaid 11 for
-  Mermaid C4 and `@viz-js/viz` for DOT Code artifacts.
+  Mermaid C4 and `@viz-js/viz` for DOT Code artifacts. The preview opens beside
+  `.c4` editors by default and is also available from the editor title button.
 
 The Rust CLI remains authoritative for graph generation and validation. The
 extension consumes generated criv state and uses the packaged WASM helper for

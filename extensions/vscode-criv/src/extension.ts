@@ -71,6 +71,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand(COMMAND_PREVIEW_C4, async () => {
       await c4Preview.open();
     }),
+    vscode.window.onDidChangeActiveTextEditor(async (editor) => {
+      await maybePreviewC4OnOpen(c4Preview, editor?.document);
+    }),
     vscode.workspace.onDidSaveTextDocument(async (document) => {
       await maybeRunCheckOnSave(store, checkDiagnostics, document);
     }),
@@ -79,6 +82,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   updateSurfaces(store.status);
   statusBar.show();
   await store.refresh();
+  await maybePreviewC4OnOpen(c4Preview, vscode.window.activeTextEditor?.document);
 }
 
 async function runWatchOnce(store: WorkspaceStateStore): Promise<void> {
@@ -169,6 +173,21 @@ async function maybeRunCheckOnSave(
     return;
   }
   await runCheck(store, checkDiagnostics);
+}
+
+async function maybePreviewC4OnOpen(
+  c4Preview: C4PreviewManager,
+  document: vscode.TextDocument | undefined,
+): Promise<void> {
+  if (
+    !crivConfiguration().previewC4OnOpen ||
+    !document ||
+    document.languageId !== "criv-c4" ||
+    document.uri.scheme !== "file"
+  ) {
+    return;
+  }
+  await c4Preview.open(document, { preserveFocus: true });
 }
 
 async function runCrivWithProgress(

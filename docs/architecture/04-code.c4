@@ -224,6 +224,7 @@ digraph criv_code {
   "extensions/vscode-criv/src/extension.ts#fn:deactivate" [label="deactivate\nextensions/vscode-criv/src/extension.ts"];
   "extensions/vscode-criv/src/extension.ts#fn:ensureLoadedState" [label="ensureLoadedState\nextensions/vscode-criv/src/extension.ts"];
   "extensions/vscode-criv/src/extension.ts#fn:isCheckOnSaveDocument" [label="isCheckOnSaveDocument\nextensions/vscode-criv/src/extension.ts"];
+  "extensions/vscode-criv/src/extension.ts#fn:maybePreviewC4OnOpen" [label="maybePreviewC4OnOpen\nextensions/vscode-criv/src/extension.ts"];
   "extensions/vscode-criv/src/extension.ts#fn:maybeRunCheckOnSave" [label="maybeRunCheckOnSave\nextensions/vscode-criv/src/extension.ts"];
   "extensions/vscode-criv/src/extension.ts#fn:messageForStatus" [label="messageForStatus\nextensions/vscode-criv/src/extension.ts"];
   "extensions/vscode-criv/src/extension.ts#fn:openSourceTarget" [label="openSourceTarget\nextensions/vscode-criv/src/extension.ts"];
@@ -1314,6 +1315,7 @@ digraph criv_code {
   "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:setFromJson" -> "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:clear";
   "extensions/vscode-criv/src/extension.ts#fn:activate" -> ".obsidian/plugins/criv/src/main.ts#type:CrivEditorDriftPlugin/member:update";
   "extensions/vscode-criv/src/extension.ts#fn:activate" -> "extensions/vscode-criv/src/c4Preview.ts#type:C4PreviewManager/member:open";
+  "extensions/vscode-criv/src/extension.ts#fn:activate" -> "extensions/vscode-criv/src/extension.ts#fn:maybePreviewC4OnOpen";
   "extensions/vscode-criv/src/extension.ts#fn:activate" -> "extensions/vscode-criv/src/extension.ts#fn:maybeRunCheckOnSave";
   "extensions/vscode-criv/src/extension.ts#fn:activate" -> "extensions/vscode-criv/src/extension.ts#fn:openSourceTarget";
   "extensions/vscode-criv/src/extension.ts#fn:activate" -> "extensions/vscode-criv/src/extension.ts#fn:openStateJson";
@@ -1325,6 +1327,8 @@ digraph criv_code {
   "extensions/vscode-criv/src/extension.ts#fn:activate" -> "extensions/vscode-criv/src/languageFeatures.ts#fn:registerSourceLanguageFeatures";
   "extensions/vscode-criv/src/extension.ts#fn:activate" -> "extensions/vscode-criv/src/stateStore.ts#type:WorkspaceStateStore/member:refresh";
   "extensions/vscode-criv/src/extension.ts#fn:ensureLoadedState" -> "extensions/vscode-criv/src/stateStore.ts#type:WorkspaceStateStore/member:refresh";
+  "extensions/vscode-criv/src/extension.ts#fn:maybePreviewC4OnOpen" -> "extensions/vscode-criv/src/c4Preview.ts#type:C4PreviewManager/member:open";
+  "extensions/vscode-criv/src/extension.ts#fn:maybePreviewC4OnOpen" -> "extensions/vscode-criv/src/config.ts#fn:crivConfiguration";
   "extensions/vscode-criv/src/extension.ts#fn:maybeRunCheckOnSave" -> "extensions/vscode-criv/src/config.ts#fn:crivConfiguration";
   "extensions/vscode-criv/src/extension.ts#fn:maybeRunCheckOnSave" -> "extensions/vscode-criv/src/extension.ts#fn:isCheckOnSaveDocument";
   "extensions/vscode-criv/src/extension.ts#fn:maybeRunCheckOnSave" -> "extensions/vscode-criv/src/extension.ts#fn:runCheck";

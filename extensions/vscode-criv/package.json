@@ -78,7 +78,8 @@
       },
       {
         "command": "criv.previewC4",
-        "title": "criv: Preview C4 Artifact"
+        "title": "criv: Preview C4 Artifact",
+        "icon": "$(open-preview)"
       }
     ],
     "views": {
@@ -90,6 +91,13 @@
       ]
     },
     "menus": {
+      "editor/title": [
+        {
+          "command": "criv.previewC4",
+          "when": "resourceLangId == criv-c4",
+          "group": "navigation"
+        }
+      ],
       "view/title": [
         {
           "command": "criv.refreshStateView",
@@ -128,6 +136,11 @@
           "type": "boolean",
           "default": false,
           "description": "Run criv check when Markdown or .c4 files are saved in a trusted workspace."
+        },
+        "criv.previewC4OnOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically open the C4 preview beside a .c4 text editor when the file becomes active."
         }
       }
     }
