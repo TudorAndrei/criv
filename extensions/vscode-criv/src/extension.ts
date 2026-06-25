@@ -1,11 +1,17 @@
 import * as vscode from "vscode";
 
+import { CrivCheckDiagnostics } from "./checkDiagnostics";
 import {
   COMMAND_OPEN_SOURCE_TARGET,
   COMMAND_OPEN_STATE_JSON,
   COMMAND_REFRESH_STATE_VIEW,
+  COMMAND_QUERY_UNDOCUMENTED_CODE,
+  COMMAND_RUN_CHECK,
+  COMMAND_RUN_WATCH_ONCE,
   CRIV_COMMANDS,
 } from "./commands";
+import { runProcess, type CommandResult } from "./commandRunner";
+import { crivConfiguration } from "./config";
 import { registerSourceLanguageFeatures } from "./languageFeatures";
 import { parseSourceTarget } from "./sourceTarget";
 import { WorkspaceStateStore, type WorkspaceStateStatus } from "./stateStore";
@@ -16,6 +22,7 @@ export { CRIV_COMMANDS };
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const store = new WorkspaceStateStore();
   const treeProvider = new CrivStateTreeProvider();
+  const checkDiagnostics = new CrivCheckDiagnostics();
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBar.command = COMMAND_REFRESH_STATE_VIEW;
 
@@ -24,7 +31,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     treeProvider.update(status);
   };
 
-  context.subscriptions.push(store, treeProvider, statusBar);
+  context.subscriptions.push(store, treeProvider, checkDiagnostics, statusBar);
   context.subscriptions.push(store.onDidChangeStatus(updateSurfaces));
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider("criv.stateView", treeProvider),
@@ -41,11 +48,164 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand(COMMAND_OPEN_SOURCE_TARGET, async (target?: unknown) => {
       await openSourceTarget(store, target);
     }),
+    vscode.commands.registerCommand(COMMAND_RUN_WATCH_ONCE, async () => {
+      await runWatchOnce(store);
+    }),
+    vscode.commands.registerCommand(COMMAND_RUN_CHECK, async () => {
+      await runCheck(store, checkDiagnostics);
+    }),
+    vscode.commands.registerCommand(COMMAND_QUERY_UNDOCUMENTED_CODE, async () => {
+      await runUndocumentedCodeQuery(store);
+    }),
+    vscode.workspace.onDidSaveTextDocument(async (document) => {
+      await maybeRunCheckOnSave(store, checkDiagnostics, document);
+    }),
   );
 
   updateSurfaces(store.status);
   statusBar.show();
   await store.refresh();
+}
+
+async function runWatchOnce(store: WorkspaceStateStore): Promise<void> {
+  const root = await trustedCrivRoot(store);
+  if (!root) {
+    return;
+  }
+
+  const result = await runCrivWithProgress(root, ["watch", "--once"], "criv watch --once");
+  if (!result || result.cancelled) {
+    return;
+  }
+
+  if (result.code === 0) {
+    if (crivConfiguration().automaticRefresh) {
+      await store.refresh();
+    }
+    await vscode.window.showInformationMessage("criv watch --once completed.");
+  } else {
+    await vscode.window.showWarningMessage(commandFailureMessage("criv watch --once", result));
+  }
+}
+
+async function runCheck(
+  store: WorkspaceStateStore,
+  checkDiagnostics: CrivCheckDiagnostics,
+): Promise<void> {
+  const root = await trustedCrivRoot(store);
+  if (!root) {
+    return;
+  }
+
+  const result = await runCrivWithProgress(root, ["check", "--format", "json"], "criv check");
+  if (!result || result.cancelled) {
+    return;
+  }
+
+  try {
+    checkDiagnostics.setFromJson(root, result.stdout);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await vscode.window.showWarningMessage(`Could not parse criv check diagnostics: ${message}`);
+    return;
+  }
+
+  if (result.code === 0) {
+    await vscode.window.showInformationMessage("criv check completed.");
+  } else {
+    await vscode.window.showWarningMessage("criv check completed with diagnostics.");
+  }
+}
+
+async function runUndocumentedCodeQuery(store: WorkspaceStateStore): Promise<void> {
+  const root = await trustedCrivRoot(store);
+  if (!root) {
+    return;
+  }
+
+  const result = await runCrivWithProgress(
+    root,
+    ["query", "nodes", "--kind", "code", "--without-docs", "--format", "json"],
+    "criv query undocumented code",
+  );
+  if (!result || result.cancelled) {
+    return;
+  }
+
+  if (result.code !== 0) {
+    await vscode.window.showWarningMessage(
+      commandFailureMessage("criv query undocumented code", result),
+    );
+    return;
+  }
+
+  const document = await vscode.workspace.openTextDocument({
+    content: result.stdout.trim() ? result.stdout : "[]\n",
+    language: "json",
+  });
+  await vscode.window.showTextDocument(document, { preview: false });
+}
+
+async function maybeRunCheckOnSave(
+  store: WorkspaceStateStore,
+  checkDiagnostics: CrivCheckDiagnostics,
+  document: vscode.TextDocument,
+): Promise<void> {
+  if (!crivConfiguration().checkOnSave || !isCheckOnSaveDocument(document)) {
+    return;
+  }
+  await runCheck(store, checkDiagnostics);
+}
+
+async function runCrivWithProgress(
+  root: vscode.Uri,
+  args: readonly string[],
+  title: string,
+): Promise<CommandResult | undefined> {
+  const config = crivConfiguration();
+  return vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, cancellable: true, title },
+    async (_progress, token) => {
+      const controller = new AbortController();
+      const cancel = () => controller.abort();
+      token.onCancellationRequested(cancel);
+      try {
+        return await runProcess(config.binaryPath, args, {
+          cwd: root.fsPath,
+          signal: controller.signal,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await vscode.window.showWarningMessage(`${title} failed: ${message}`);
+        return undefined;
+      }
+    },
+  );
+}
+
+async function trustedCrivRoot(store: WorkspaceStateStore): Promise<vscode.Uri | undefined> {
+  if (!vscode.workspace.isTrusted) {
+    await vscode.window.showWarningMessage(
+      "Trust this workspace before running local criv commands.",
+    );
+    return undefined;
+  }
+
+  const status = await ensureLoadedState(store);
+  if (status.kind !== "ready") {
+    await vscode.window.showWarningMessage(messageForStatus(status));
+    return undefined;
+  }
+  return status.root;
+}
+
+function commandFailureMessage(command: string, result: CommandResult): string {
+  const detail = result.stderr.trim() || result.stdout.trim() || `exit code ${result.code}`;
+  return `${command} failed: ${detail}`;
+}
+
+function isCheckOnSaveDocument(document: vscode.TextDocument): boolean {
+  return document.languageId === "markdown" || document.languageId === "criv-c4";
 }
 
 export function deactivate(): void {

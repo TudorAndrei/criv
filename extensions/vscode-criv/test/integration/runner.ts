@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 
 import * as vscode from "vscode";
 
-const EXPECTED_COMMANDS = ["criv.refreshStateView", "criv.openStateJson", "criv.openSourceTarget"];
+const EXPECTED_COMMANDS = [
+  "criv.refreshStateView",
+  "criv.openStateJson",
+  "criv.openSourceTarget",
+  "criv.runWatchOnce",
+  "criv.runCheck",
+  "criv.queryUndocumentedCode",
+];
 
 export async function run(): Promise<void> {
   const extension = vscode.extensions.getExtension("criv.vscode-criv");

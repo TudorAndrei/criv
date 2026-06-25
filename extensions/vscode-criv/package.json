@@ -34,7 +34,10 @@
     "onView:criv.stateView",
     "onCommand:criv.refreshStateView",
     "onCommand:criv.openStateJson",
-    "onCommand:criv.openSourceTarget"
+    "onCommand:criv.openSourceTarget",
+    "onCommand:criv.runWatchOnce",
+    "onCommand:criv.runCheck",
+    "onCommand:criv.queryUndocumentedCode"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
@@ -55,6 +58,18 @@
       {
         "command": "criv.openSourceTarget",
         "title": "criv: Open Source Target"
+      },
+      {
+        "command": "criv.runWatchOnce",
+        "title": "criv: Run Watch Once"
+      },
+      {
+        "command": "criv.runCheck",
+        "title": "criv: Run Check"
+      },
+      {
+        "command": "criv.queryUndocumentedCode",
+        "title": "criv: Query Undocumented Code"
       }
     ],
     "views": {
@@ -86,7 +101,27 @@
         ],
         "configuration": "./language-configuration.json"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "criv",
+      "properties": {
+        "criv.binaryPath": {
+          "type": "string",
+          "default": "criv",
+          "description": "Path to the criv executable used for workspace commands."
+        },
+        "criv.automaticRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "Refresh the loaded criv state after extension-triggered watch commands."
+        },
+        "criv.checkOnSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "Run criv check when Markdown or .c4 files are saved in a trusted workspace."
+        }
+      }
+    }
   },
   "scripts": {
     "build": "npm run check-types && node esbuild.config.mjs --production",
