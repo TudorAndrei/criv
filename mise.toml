@@ -1,6 +1,6 @@
 [tools]
 rust = "1.95.0"
-node = "26.3.0"
+node = "24"
 hk = "1.45.0"
 actionlint = "1.7.12"
 "aqua:zizmorcore/zizmor" = "1.24.1"
@@ -73,6 +73,10 @@ run = "npm --prefix extensions/vscode-criv run package"
 [tasks.vscode-test]
 description = "Run VS Code-compatible companion extension tests"
 run = "npm --prefix extensions/vscode-criv test"
+
+[tasks.vscode-json-diagnostics]
+description = "Run VS Code JSON diagnostics for extension manifest/config files"
+run = "npm --prefix extensions/vscode-criv run test:integration"
 
 [tasks.pre-commit]
 description = "Run the hk pre-commit hook"

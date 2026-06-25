@@ -332,7 +332,11 @@ digraph criv_code {
   "extensions/vscode-criv/src/wasm.ts#member:source_entries" [label="source_entries\nextensions/vscode-criv/src/wasm.ts"];
   "extensions/vscode-criv/src/wasm.ts#member:suggest_source_selectors" [label="suggest_source_selectors\nextensions/vscode-criv/src/wasm.ts"];
   "extensions/vscode-criv/src/wasm.ts#member:summarize_state" [label="summarize_state\nextensions/vscode-criv/src/wasm.ts"];
+  "extensions/vscode-criv/test/integration/runner.ts#fn:assertNoJsonDiagnostics" [label="assertNoJsonDiagnostics\nextensions/vscode-criv/test/integration/runner.ts"];
+  "extensions/vscode-criv/test/integration/runner.ts#fn:delay" [label="delay\nextensions/vscode-criv/test/integration/runner.ts"];
+  "extensions/vscode-criv/test/integration/runner.ts#fn:relevantDiagnostics" [label="relevantDiagnostics\nextensions/vscode-criv/test/integration/runner.ts"];
   "extensions/vscode-criv/test/integration/runner.ts#fn:run" [label="run\nextensions/vscode-criv/test/integration/runner.ts"];
+  "extensions/vscode-criv/test/integration/runner.ts#fn:waitForDiagnostics" [label="waitForDiagnostics\nextensions/vscode-criv/test/integration/runner.ts"];
   "src/architecture.rs#fn:code_architecture_artifact" [label="code_architecture_artifact\nsrc/architecture.rs"];
   "src/architecture.rs#fn:code_architecture_c4_output_writes_direct_dot" [label="code_architecture_c4_output_writes_direct_dot\nsrc/architecture.rs"];
   "src/architecture.rs#fn:code_architecture_content" [label="code_architecture_content\nsrc/architecture.rs"];
@@ -1491,7 +1495,10 @@ digraph criv_code {
   "extensions/vscode-criv/src/wasm.ts#fn:summarizeState" -> "extensions/vscode-criv/src/wasm.ts#fn:fallbackSummary";
   "extensions/vscode-criv/src/wasm.ts#fn:summarizeState" -> "extensions/vscode-criv/src/wasm.ts#fn:loadWasm";
   "extensions/vscode-criv/src/wasm.ts#fn:summarizeState" -> "extensions/vscode-criv/src/wasm.ts#member:summarize_state";
+  "extensions/vscode-criv/test/integration/runner.ts#fn:assertNoJsonDiagnostics" -> "extensions/vscode-criv/test/integration/runner.ts#fn:waitForDiagnostics";
   "extensions/vscode-criv/test/integration/runner.ts#fn:run" -> "extensions/vscode-criv/src/extension.ts#fn:activate";
+  "extensions/vscode-criv/test/integration/runner.ts#fn:run" -> "extensions/vscode-criv/test/integration/runner.ts#fn:assertNoJsonDiagnostics";
+  "extensions/vscode-criv/test/integration/runner.ts#fn:waitForDiagnostics" -> "extensions/vscode-criv/test/integration/runner.ts#fn:delay";
   "src/architecture.rs#fn:code_architecture_c4_output_writes_direct_dot" -> "src/architecture.rs#fn:write_architecture_fixture_with_output";
   "src/architecture.rs#fn:code_architecture_c4_output_writes_direct_dot" -> "src/util.rs#fn:read_to_string";
   "src/architecture.rs#fn:code_architecture_c4_output_writes_direct_dot" -> "src/vault.rs#type:Vault";

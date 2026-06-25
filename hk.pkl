@@ -65,6 +65,35 @@ local plugin_build = new Step {
   check = "mise run plugin-build"
 }
 
+local vscode_files = List(
+  "extensions/vscode-criv/package.json",
+  "extensions/vscode-criv/package-lock.json",
+  "extensions/vscode-criv/tsconfig.json",
+  "extensions/vscode-criv/**/*.ts",
+  "extensions/vscode-criv/**/*.mjs",
+  "extensions/vscode-criv/**/*.json",
+  "extensions/vscode-criv/test/**/*.ts",
+  "extensions/vscode-criv/scripts/**/*.mjs",
+  "crates/criv-wasm/**",
+  "mise.toml",
+)
+
+local vscode_lint = new Step {
+  glob = vscode_files
+  check = "mise run vscode-lint"
+}
+
+local vscode_json_diagnostics = new Step {
+  glob = List(
+    "extensions/vscode-criv/package.json",
+    "extensions/vscode-criv/language-configuration.json",
+    "extensions/vscode-criv/test/integration/runner.ts",
+    "extensions/vscode-criv/test/run-integration.mjs",
+    "mise.toml",
+  )
+  check = "mise run vscode-json-diagnostics"
+}
+
 local enforce_ci = new Step {
   check = "cargo run --quiet -- enforce --stage ci"
 }
@@ -101,6 +130,8 @@ hooks {
       ["toml-fmt"] = toml_fmt
       ["actionlint"] = actionlint
       ["zizmor"] = zizmor
+      ["vscode-lint"] = vscode_lint
+      ["vscode-json-diagnostics"] = vscode_json_diagnostics
       ["criv-check"] = staged_docs
       ["criv-enforce"] = enforce_commit
     }
@@ -126,6 +157,8 @@ hooks {
       ["plugin-lint"] = plugin_lint
       ["plugin-test"] = plugin_test
       ["plugin-build"] = plugin_build
+      ["vscode-lint"] = vscode_lint
+      ["vscode-json-diagnostics"] = vscode_json_diagnostics
       ["criv-check"] = staged_docs
       ["criv-enforce-ci"] = enforce_ci
     }

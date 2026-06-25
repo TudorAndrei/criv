@@ -33,8 +33,7 @@
   ],
   "activationEvents": [
     "workspaceContains:criv.toml",
-    "onLanguage:markdown",
-    "onLanguage:criv-c4"
+    "onLanguage:markdown"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
@@ -78,7 +77,8 @@
       "explorer": [
         {
           "id": "criv.stateView",
-          "name": "criv State"
+          "name": "criv State",
+          "icon": "assets/criv.svg"
         }
       ]
     },
