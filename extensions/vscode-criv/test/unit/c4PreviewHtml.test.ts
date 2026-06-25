@@ -13,7 +13,8 @@ test("builds webview HTML with strict CSP and local script resources", () => {
   });
 
   assert.match(html, /default-src 'none'/);
-  assert.match(html, /script-src 'nonce-abc123'/);
+  assert.match(html, /script-src 'nonce-abc123' 'wasm-unsafe-eval'/);
+  assert.doesNotMatch(html, /'unsafe-eval'/);
   assert.match(html, /src="vscode-resource:\/mermaid\.min\.js"/);
   assert.match(html, /src="vscode-resource:\/viz-global\.js"/);
 });

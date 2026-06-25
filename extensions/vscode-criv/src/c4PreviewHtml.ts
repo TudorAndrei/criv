@@ -20,7 +20,7 @@ export function buildC4PreviewHtml(options: C4PreviewHtmlOptions): string {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${options.cspSource} data:; style-src ${options.cspSource} 'unsafe-inline'; script-src 'nonce-${options.nonce}';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${options.cspSource} data:; style-src ${options.cspSource} 'unsafe-inline'; script-src 'nonce-${options.nonce}' 'wasm-unsafe-eval';">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>criv C4 Preview</title>
 <style>
