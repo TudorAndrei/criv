@@ -19,7 +19,7 @@ implementation of criv's graph logic.
 
 ## Decision
 
-Ship an Obsidian sample-plugin-style scaffold from [[src/init.rs]]. The plugin
+Ship an Obsidian sample-plugin-style scaffold from `src/init.rs`. The plugin
 reads `.criv/state.json`, validates schema version, renders state-derived source
 and pattern context, and delegates small shared helper logic to the WASM crate.
 

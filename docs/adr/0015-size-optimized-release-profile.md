@@ -24,7 +24,7 @@ a single codegen unit, and aborting rather than unwinding on panic.
 
 ## Decision
 
-Use a workspace release profile in [[Cargo.toml]] that strips symbols, sets
+Use a workspace release profile in `Cargo.toml` that strips symbols, sets
 `opt-level = "z"`, enables LTO, uses one codegen unit, and sets
 `panic = "abort"`.
 

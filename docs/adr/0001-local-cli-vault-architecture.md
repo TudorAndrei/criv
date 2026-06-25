@@ -26,7 +26,7 @@ keeping hosted services, telemetry, and runtime APIs out of scope.
 Keep criv as a Rust CLI whose commands are the public interface. A criv vault is
 rooted by `criv.toml`, `docs/`, `docs/adr/`, and local `.criv/` state. The CLI
 owns initialization, validation, query, search, watch, and enforcement behavior
-through [[src/lib.rs]], [[src/main.rs]], [[src/init.rs]], and [[src/config.rs]].
+through `src/lib.rs`, `src/main.rs`, `src/init.rs`, and `src/config.rs`.
 
 Obsidian integration is a consumer of local state, not an alternate backend or
 service API. Agents interact with criv by reading skill files, editing docs and

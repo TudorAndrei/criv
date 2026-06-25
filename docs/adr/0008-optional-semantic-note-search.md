@@ -20,9 +20,9 @@ the runtime opt-in.
 
 ## Decision
 
-Keep lexical note search as the default path in [[src/search.rs]]. Add semantic
+Keep lexical note search as the default path in `src/search.rs`. Add semantic
 note search behind both a Cargo feature and the `index.embeddings = true`
-configuration flag parsed by [[src/config.rs]].
+configuration flag parsed by `src/config.rs`.
 
 When a user asks for semantic search without the feature or runtime flag, return
 a clear error instead of silently falling back to lexical ranking.

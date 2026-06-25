@@ -16,7 +16,7 @@ governs:
 
 [[0001-local-cli-vault-architecture|ADR-0001]] makes the Rust CLI the public interface for humans, agents, hooks,
 and downstream tooling. [[0003-adopt-proven-foundation-crates|ADR-0003]] already chose Clap as the command parser in
-[[src/lib.rs]], so criv has one authoritative command tree for help text,
+`src/lib.rs`, so criv has one authoritative command tree for help text,
 subcommands, flags, and parser behavior.
 
 Users still need shell completions, generated command reference material, and
@@ -30,9 +30,9 @@ existing Clap `Command`.
 
 ## Decision
 
-Add `usage-lib` as a runtime dependency in [[Cargo.toml]], with the resolved
+Add `usage-lib` as a runtime dependency in `Cargo.toml`, with the resolved
 dependency graph recorded in `Cargo.lock`. Derive a Usage spec from the existing
-Clap command tree in [[src/lib.rs]].
+Clap command tree in `src/lib.rs`.
 
 Use that derived spec for the hidden top-level `criv --usage` KDL export and for
 runtime help rendering. `criv --help`, `criv help`, `criv help <command>`, and
@@ -53,7 +53,7 @@ criv --usage | usage generate markdown --file - --out-file docs/cli.md
 criv --usage | usage generate manpage --file - --out-file criv.1
 ```
 
-Document the spec export in [[README.md]] without showing it in normal help
+Document the spec export in `README.md` without showing it in normal help
 output.
 
 ## Consequences
@@ -67,5 +67,5 @@ CLI public surface, renders the interactive help path, and avoids
 hand-maintained generated documentation.
 
 Changes to CLI command structure should keep the generated spec test in
-[[src/lib.rs]] passing, and any generated command-reference docs should be
+`src/lib.rs` passing, and any generated command-reference docs should be
 treated as build artifacts unless a later ADR decides to check them in.

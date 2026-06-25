@@ -20,7 +20,7 @@ that criv itself create those files in the appropriate spaces.
 
 ## Decision
 
-Extend `criv init` in [[src/init.rs]] so the tool idempotently creates runtime
+Extend `criv init` in `src/init.rs` so the tool idempotently creates runtime
 skill directories and `SKILL.md` files under both `.agents/skills` and
 `.claude/skills`, in addition to the normal vault documentation under `docs/`.
 

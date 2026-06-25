@@ -21,11 +21,11 @@ needed stable hashes and git-ref resolution.
 
 ## Decision
 
-Make [[src/state.rs]] own `.criv/state.json`, content-addressed local snapshots,
+Make `src/state.rs` own `.criv/state.json`, content-addressed local snapshots,
 node hashes, edge hashes, and graph root hashes. `criv watch --once` and watch
 rebuilds write the latest state and snapshot pointer.
 
-Make [[src/query.rs]] resolve `query diff <a> <b>` against local snapshots first
+Make `src/query.rs` resolve `query diff <a> <b>` against local snapshots first
 and then git refs when a snapshot hash is not found.
 
 ## Consequences

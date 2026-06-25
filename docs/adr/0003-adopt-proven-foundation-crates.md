@@ -31,8 +31,8 @@ classification, `mime_guess` for extension MIME hints, `serde_norway` for YAML
 frontmatter, `blake3` for stable hashes, and `notify-debouncer-mini` for
 watcher debouncing.
 
-The relevant implementation surfaces are [[src/lib.rs]], [[src/config.rs]],
-[[src/util.rs]], [[src/vault.rs]], [[src/state.rs]], and [[src/watch.rs]].
+The relevant implementation surfaces are `src/lib.rs`, `src/config.rs`,
+`src/util.rs`, `src/vault.rs`, `src/state.rs`, and `src/watch.rs`.
 
 ## Consequences
 

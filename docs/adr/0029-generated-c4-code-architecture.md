@@ -36,7 +36,7 @@ content-addressed snapshots. That behavior needs to be explicit and opt-in.
 ## Decision
 
 Add opt-in generated C4 Level 4 architecture through `[architecture.code]` in
-[[criv.toml]]. The configuration accepts only the generated note path and title:
+`criv.toml`. The configuration accepts only the generated note path and title:
 
 ```toml
 [architecture.code]
@@ -54,7 +54,7 @@ a generated-content notice, and a Mermaid `classDiagram` block. Mermaid C4 has
 no Code-level syntax, so criv continues to use `classDiagram` for Level 4 Code
 views.
 
-Extract the existing C4 Code diagram logic from [[src/query.rs]] into a shared
+Extract the existing C4 Code diagram logic from `src/query.rs` into a shared
 generator. `criv query c4-code <path-glob>` must keep its current scoped query
 behavior, including valid Mermaid no-match output. The architecture writer uses
 the same generator through an all-indexed-source entry point so query output and

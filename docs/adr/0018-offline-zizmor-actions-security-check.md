@@ -19,7 +19,7 @@ governs:
 
 [[0013-mise-managed-hk-hook-toolchain|ADR-0013]] established mise-managed hk checks and already runs actionlint for
 workflow syntax and GitHub Actions semantics. criv's release workflow in
-[[.github/workflows/release.yml]] builds and publishes release assets, requests
+`.github/workflows/release.yml` builds and publishes release assets, requests
 attestation and contents write permissions in the publish job, and depends on
 third-party GitHub Actions.
 
@@ -30,8 +30,8 @@ permissions, credential handling hazards, and template-injection patterns.
 
 ## Decision
 
-Pin zizmor through [[mise.toml]] with the `aqua:zizmorcore/zizmor` backend and
-run it from [[hk.pkl]] as part of both `pre-commit` and the full `check` hook.
+Pin zizmor through `mise.toml` with the `aqua:zizmorcore/zizmor` backend and
+run it from `hk.pkl` as part of both `pre-commit` and the full `check` hook.
 
 The hook command is:
 
@@ -50,7 +50,7 @@ currently has a tag-triggered release workflow but no general pull-request CI
 workflow, so duplicating local hook policy in a new hosted workflow would widen
 CI behavior before the broader CI entry point has been decided.
 
-Existing `uses:` references in [[.github/workflows/release.yml]] must be pinned
+Existing `uses:` references in `.github/workflows/release.yml` must be pinned
 to full commit SHAs with version comments. This satisfies the default zizmor
 `unpinned-uses` policy while preserving a readable upgrade trail for action
 versions.

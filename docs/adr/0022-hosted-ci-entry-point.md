@@ -14,14 +14,14 @@ governs:
 
 ## Context
 
-[[0013-mise-managed-hk-hook-toolchain|ADR-0013]] established [[mise.toml]] as
-the project tool installer and task front door, with [[hk.pkl]] owning the
+[[0013-mise-managed-hk-hook-toolchain|ADR-0013]] established `mise.toml` as
+the project tool installer and task front door, with `hk.pkl` owning the
 local hook and full `check` behavior.
 
 [[0018-offline-zizmor-actions-security-check|ADR-0018]] added offline zizmor to
 local checks and explicitly deferred a separate hosted GitHub Actions workflow
 until criv had decided its broader CI entry point. At that time the repository
-only had the tag-triggered [[.github/workflows/release.yml]] workflow, so adding
+only had the tag-triggered `.github/workflows/release.yml` workflow, so adding
 a hosted check for one tool would have duplicated part of local hook policy
 without defining the full hosted validation boundary.
 
@@ -43,11 +43,11 @@ mise run check
 ```
 
 This keeps hosted CI aligned with local validation. The `check` task remains
-owned by [[hk.pkl]] and continues to include Cargo formatting, clippy, workspace
+owned by `hk.pkl` and continues to include Cargo formatting, clippy, workspace
 tests, workflow validation, offline zizmor, Obsidian plugin checks, `criv
 check`, and CI-stage enforcement.
 
-Use the same workflow security posture as [[.github/workflows/release.yml]]:
+Use the same workflow security posture as `.github/workflows/release.yml`:
 minimal default permissions, pinned third-party actions, and checkout with
 `persist-credentials: false`.
 
@@ -65,7 +65,7 @@ The hosted workflow may be slower than a hand-picked set of commands, but the
 single entry point avoids drift between `hk.pkl`, documentation, local hooks,
 and CI.
 
-Changes to [[hk.pkl]] and [[mise.toml]] now affect both local checks and hosted
+Changes to `hk.pkl` and `mise.toml` now affect both local checks and hosted
 CI. Reviewers should treat changes to those files as validation-boundary
 changes and verify them with `hk validate` and the hosted workflow.
 

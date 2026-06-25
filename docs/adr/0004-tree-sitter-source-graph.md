@@ -22,9 +22,9 @@ Python, and Go.
 
 ## Decision
 
-Make [[src/source_graph.rs]] the source graph boundary and back it with
+Make `src/source_graph.rs` the source graph boundary and back it with
 tree-sitter grammars for the supported languages. Keep the public graph shape
-stable for [[src/query.rs]] and [[src/state.rs]], while improving extraction of
+stable for `src/query.rs` and `src/state.rs`, while improving extraction of
 files, imports, symbols, ranges, containment, exported/public symbols, and call
 edges.
 

@@ -14,7 +14,7 @@ governs:
 
 ## Context
 
-criv already enforces conventional commit messages through [[hk.pkl]] and uses a
+criv already enforces conventional commit messages through `hk.pkl` and uses a
 tag-triggered binary workflow in [[0014-tag-triggered-release-binary-workflow|ADR-0014]]. The release process in
 [[releasing]] still required choosing `major`, `minor`, or `patch` manually with
 `cargo-release`, even though the commit history contains enough structured
@@ -34,12 +34,12 @@ The Rust ecosystem has several relevant tools:
 Use Cocogitto as the SemVer calculator and keep `cargo-release` as the Cargo
 workspace version updater.
 
-The Cocogitto configuration in [[cog.toml]] uses `v` as the root release tag
+The Cocogitto configuration in `cog.toml` uses `v` as the root release tag
 prefix, reads commits from the latest SemVer tag, ignores merge commits, and
 allows automatic bumps only from `main`.
 
-The release command is [[scripts/release-auto.sh]], exposed through
-[[mise.toml]] as `mise run release-auto`. The script asks Cocogitto for the next
+The release command is `scripts/release-auto.sh`, exposed through
+`mise.toml` as `mise run release-auto`. The script asks Cocogitto for the next
 version with `cog bump --dry-run --auto`, strips any tag prefix, validates the
 result as SemVer, updates all Cargo workspace package versions with
 `cargo release version`, runs the documented pre-release checks, commits the
@@ -63,5 +63,5 @@ root plus WASM tag naming scheme. Crates.io publishing remains manual so it can
 be decided separately from downloadable CLI binary releases.
 
 The release path now depends on Cocogitto and cargo-release being installed.
-Both are pinned through [[mise.toml]], so `mise install` remains the setup entry
+Both are pinned through `mise.toml`, so `mise install` remains the setup entry
 point.

@@ -23,14 +23,14 @@ state after each change.
 
 ## Decision
 
-Wrap `fff-search` behind [[src/source_index.rs]] and use it for fuzzy file
+Wrap `fff-search` behind `src/source_index.rs` and use it for fuzzy file
 search, grep, source file enumeration, and partial-path resolution. Let fff own
-source-tree watching where possible, while [[src/watch.rs]] continues to watch
+source-tree watching where possible, while `src/watch.rs` continues to watch
 docs and coordinates rebuilds.
 
 Carry previous graph and pattern-match state through watch rebuilds. Reuse
 unchanged parsed source files and preserve unchanged pattern match results in
-[[src/source_graph.rs]] and [[src/state.rs]].
+`src/source_graph.rs` and `src/state.rs`.
 
 ## Consequences
 

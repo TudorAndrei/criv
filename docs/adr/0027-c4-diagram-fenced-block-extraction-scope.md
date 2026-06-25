@@ -23,7 +23,7 @@ governs:
 [[0026-mermaid-c4-diagrams-as-vault-content|ADR-0026]] recorded Mermaid C4
 diagrams as validated vault content and governed the parser, vault, check,
 state, query, and CLI help modules. The implementation also added
-`markdown_fenced_blocks` in [[src/util.rs]] so C4 parsing can reuse the same
+`markdown_fenced_blocks` in `src/util.rs` so C4 parsing can reuse the same
 Markdown parsing conventions as wiki-links and headings.
 
 Because accepted ADRs are append-only under
@@ -35,10 +35,10 @@ scope should be corrected with a follow-up ADR rather than editing ADR-0026.
 Supersede ADR-0026 only to clarify the governed implementation scope.
 
 Mermaid C4 diagram support includes the Markdown fenced-block extraction helper
-in [[src/util.rs]], the C4 subset parser in [[src/c4.rs]], note attachment in
-[[src/vault.rs]], validation in [[src/check.rs]], graph state in
-[[src/state.rs]], query output in [[src/query.rs]], and CLI help registration in
-[[src/lib.rs]].
+in `src/util.rs`, the C4 subset parser in `src/c4.rs`, note attachment in
+`src/vault.rs`, validation in `src/check.rs`, graph state in
+`src/state.rs`, query output in `src/query.rs`, and CLI help registration in
+`src/lib.rs`.
 
 The product decision remains unchanged: C4 diagrams live as Mermaid fenced
 blocks in docs and ADRs; `%% criv:source` is the single source-anchor annotation;

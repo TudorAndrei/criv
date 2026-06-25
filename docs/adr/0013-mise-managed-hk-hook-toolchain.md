@@ -19,9 +19,9 @@ developers still need a repeatable local entry point for those checks. Running
 the Rust commands directly leaves tool installation and hook wiring to each
 machine, which makes drift more likely.
 
-The current hook configuration lives in [[hk.pkl]], while [[mise.toml]] pins the
+The current hook configuration lives in `hk.pkl`, while `mise.toml` pins the
 hk version and installs the Git hooks through `hk install --mise`. The README
-documents the user-facing setup in [[README.md]].
+documents the user-facing setup in `README.md`.
 
 ## Decision
 

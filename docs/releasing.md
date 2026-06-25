@@ -47,7 +47,7 @@ For a tag-only release:
 mise run release-auto
 ```
 
-`release-auto` is implemented by [[scripts/release-auto.sh]]. It requires a
+`release-auto` is implemented by `scripts/release-auto.sh`. It requires a
 clean `main` branch, asks Cocogitto for the next version with
 `cog bump --dry-run --auto`, updates workspace Cargo versions, runs the
 pre-release checks above, commits the version bump, creates `vX.Y.Z` and
@@ -98,7 +98,7 @@ Release assets should include `SHA256SUMS.txt`, GitHub build provenance
 attestations, and `criv --version` as the installer smoke test for future aqua
 and mise registry entries. This decision is captured in [[0014-tag-triggered-release-binary-workflow|ADR-0014]].
 
-Release binaries use the workspace release profile in [[Cargo.toml]]: symbols
+Release binaries use the workspace release profile in `Cargo.toml`: symbols
 are stripped, size optimization is enabled, LTO runs at link time, codegen uses
 one unit, and release panics abort. This keeps downloadable artifacts smaller
 without requiring nightly Rust or post-build binary packing. The profile

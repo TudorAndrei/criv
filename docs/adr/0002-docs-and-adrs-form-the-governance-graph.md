@@ -28,8 +28,8 @@ directory. `kind: decision` notes must use stable ADR IDs, live under the ADR
 directory, declare governed source scopes with `governs:`, and can participate
 in supersession chains.
 
-The parser and validator in [[src/vault.rs]] and [[src/check.rs]] define this
-contract. Queries in [[src/query.rs]] and graph serialization in [[src/state.rs]]
+The parser and validator in `src/vault.rs` and `src/check.rs` define this
+contract. Queries in `src/query.rs` and graph serialization in `src/state.rs`
 then expose references, citations, governance, coverage, and orphaned docs.
 
 ## Consequences

@@ -25,8 +25,8 @@ before `ast-grep-core` was integrated.
 
 Use `ast-grep-core` for direct structural search, configured pattern search, ADR
 policy search, state match storage, `criv check` failures, and `criv enforce`
-failures. [[src/structural.rs]] owns compilation and source scanning; callers in
-[[src/search.rs]], [[src/check.rs]], [[src/enforce.rs]], and [[src/state.rs]]
+failures. `src/structural.rs` owns compilation and source scanning; callers in
+`src/search.rs`, `src/check.rs`, `src/enforce.rs`, and `src/state.rs`
 consume the resulting matches.
 
 Accepted ADRs with policy patterns are active enforcement rules over their

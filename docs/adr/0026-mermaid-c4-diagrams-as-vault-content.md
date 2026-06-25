@@ -33,8 +33,8 @@ today.
 ## Decision
 
 Treat Mermaid `C4Context`, `C4Container`, and `C4Component` fenced code blocks
-inside note bodies as vault content parsed by [[src/c4.rs]] and attached to
-notes by [[src/vault.rs]].
+inside note bodies as vault content parsed by `src/c4.rs` and attached to
+notes by `src/vault.rs`.
 
 Diagram elements may carry one source anchor through a Mermaid comment placed
 immediately after the element declaration:
@@ -46,9 +46,9 @@ Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
 ```
 
 The annotation keyword is `criv:source` because it resolves only through
-`Vault::resolve_source_target` in [[src/vault.rs]] and v1 permits exactly one
+`Vault::resolve_source_target` in `src/vault.rs` and v1 permits exactly one
 source target per element. Multiple source annotations for one element are an
-error reported by [[src/check.rs]] as `duplicate-c4-source`. Elements without a
+error reported by `src/check.rs` as `duplicate-c4-source`. Elements without a
 source annotation remain valid and simply do not produce source-reference graph
 edges.
 
@@ -63,12 +63,12 @@ criv does not render Mermaid, enforce C4 nesting semantics, or maintain a full
 Mermaid grammar. GitHub and Obsidian remain the rendering path.
 
 The C4 Code level is generated, not hand-authored. `criv query c4-code <glob>`
-in [[src/query.rs]] emits a pasteable Mermaid `classDiagram` from the source
-graph in [[src/source_graph.rs]], including in-scope symbols and in-scope call
+in `src/query.rs` emits a pasteable Mermaid `classDiagram` from the source
+graph in `src/source_graph.rs`, including in-scope symbols and in-scope call
 edges. `criv query c4-elements <note-id>` lists parsed diagram elements and
 source resolution status.
 
-Generated state remains additive: [[src/state.rs]] writes `c4-context`,
+Generated state remains additive: src/state.rs writes `c4-context`,
 `c4-container`, and `c4-component` nodes, `contains` edges from notes to
 elements, `references` edges from annotated elements to resolved code nodes, and
 `relates` edges for Mermaid relationships. `STATE_SCHEMA` is unchanged.

@@ -11,8 +11,8 @@ targets:
 
 # Tooling and Git Hooks
 
-The repository uses [[mise.toml]] to install the project hook runner and
-[[hk.pkl]] to define the hook behavior. The decision record is [[0013-mise-managed-hk-hook-toolchain|ADR-0013]].
+The repository uses `mise.toml` to install the project hook runner and
+`hk.pkl` to define the hook behavior. The decision record is [[0013-mise-managed-hk-hook-toolchain|ADR-0013]].
 
 Run the initial setup with:
 
@@ -52,7 +52,7 @@ mise run release-plan
 mise run release-auto
 ```
 
-`mise run perf` runs [[scripts/measure-performance.sh]] against the current
+`mise run perf` runs `scripts/measure-performance.sh` against the current
 vault by default. Pass another vault root to measure larger repositories:
 
 ```sh

@@ -25,7 +25,7 @@ instead of changing [[0010-criv-init-installs-agent-runtime-skills|ADR-0010]].
 
 Move runtime skill template content into source assets under
 `assets/skills/**/SKILL.md` and embed those markdown files into the criv binary
-with `include_str!` in [[src/init.rs]].
+with `include_str!` in `src/init.rs`.
 
 `criv init` continues to install the embedded skill templates into
 `.agents/skills` and `.claude/skills`, but it no longer creates duplicate skill
