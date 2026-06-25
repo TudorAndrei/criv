@@ -35,14 +35,7 @@
     "workspaceContains:criv.toml",
     "onLanguage:markdown",
     "onLanguage:criv-c4",
-    "onView:criv.stateView",
-    "onCommand:criv.refreshStateView",
-    "onCommand:criv.openStateJson",
-    "onCommand:criv.openSourceTarget",
-    "onCommand:criv.runWatchOnce",
-    "onCommand:criv.runCheck",
-    "onCommand:criv.queryUndocumentedCode",
-    "onCommand:criv.previewC4"
+    "onView:criv.stateView"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
