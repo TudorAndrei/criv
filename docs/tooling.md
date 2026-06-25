@@ -48,6 +48,7 @@ mise run vscode-build
 mise run vscode-test
 mise run vscode-lint
 mise run vscode-format-check
+mise run vscode-json-diagnostics
 mise run release-plan
 mise run release-auto
 ```
@@ -81,6 +82,11 @@ npm --prefix extensions/vscode-criv run lint
 npm --prefix extensions/vscode-criv run format:check
 npm --prefix extensions/vscode-criv run package
 ```
+
+`mise run vscode-json-diagnostics` launches the VS Code extension integration
+test host and fails on JSON diagnostics for extension manifest and language
+configuration files. This keeps hook validation aligned with the warnings shown
+in VS Code's Problems panel.
 
 The extension renders `.c4` previews locally: Mermaid C4 artifacts use Mermaid
 11, DOT Code artifacts use `@viz-js/viz`, and the preview webview uses packaged

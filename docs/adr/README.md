@@ -47,3 +47,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0034-ast-aware-source-selectors|ADR-0034]] - AST-aware source selectors
 - [[0035-vscode-compatible-companion-extension|ADR-0035]] - VS Code-compatible companion extension
 - [[0036-vscode-extension-test-stack|ADR-0036]] - VS Code extension test stack
+- [[0037-vscode-json-diagnostics-in-hooks|ADR-0037]] - VS Code JSON diagnostics in hooks
