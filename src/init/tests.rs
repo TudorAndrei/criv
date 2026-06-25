@@ -10,6 +10,7 @@ fn init_writes_parseable_structured_templates() {
         &root,
         InitOptions {
             no_obsidian: false,
+            no_vscode: false,
             no_skills: true,
             no_hooks: false,
             force_hooks: false,
@@ -73,6 +74,82 @@ fn init_writes_parseable_structured_templates() {
         .map(|(frontmatter, _body)| frontmatter)
         .unwrap();
     serde_norway::from_str::<BTreeMap<String, serde_norway::Value>>(frontmatter).unwrap();
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn init_creates_vscode_extension_recommendation_by_default() {
+    let root = unique_temp_dir("criv-init-vscode-recommendation");
+
+    run(&root, fast_options()).unwrap();
+
+    let recommendations = vscode_recommendations(&root);
+    assert_eq!(recommendations, vec!["criv.vscode-criv"]);
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn init_preserves_existing_vscode_extension_recommendations() {
+    let root = unique_temp_dir("criv-init-vscode-preserve");
+    std::fs::create_dir_all(root.join(".vscode")).unwrap();
+    std::fs::write(
+        root.join(".vscode/extensions.json"),
+        r#"{
+  "recommendations": ["rust-lang.rust-analyzer"],
+  "unwantedRecommendations": ["example.unwanted"]
+}
+"#,
+    )
+    .unwrap();
+
+    run(&root, fast_options()).unwrap();
+
+    let value = vscode_extensions_json(&root);
+    assert_eq!(
+        value["recommendations"].as_array().unwrap(),
+        &vec![
+            serde_json::Value::String("rust-lang.rust-analyzer".to_string()),
+            serde_json::Value::String("criv.vscode-criv".to_string()),
+        ]
+    );
+    assert_eq!(
+        value["unwantedRecommendations"].as_array().unwrap(),
+        &vec![serde_json::Value::String("example.unwanted".to_string())]
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn init_avoids_duplicate_vscode_extension_recommendations() {
+    let root = unique_temp_dir("criv-init-vscode-duplicates");
+    std::fs::create_dir_all(root.join(".vscode")).unwrap();
+    std::fs::write(
+        root.join(".vscode/extensions.json"),
+        r#"{"recommendations":["criv.vscode-criv"]}"#,
+    )
+    .unwrap();
+
+    run(&root, fast_options()).unwrap();
+    run(&root, fast_options()).unwrap();
+
+    let recommendations = vscode_recommendations(&root);
+    assert_eq!(recommendations, vec!["criv.vscode-criv"]);
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn init_no_vscode_skips_extension_recommendation() {
+    let root = unique_temp_dir("criv-init-vscode-disabled");
+    let mut options = fast_options();
+    options.no_vscode = true;
+
+    run(&root, options).unwrap();
+
+    assert!(!root.join(".vscode/extensions.json").exists());
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -244,6 +321,7 @@ fn init_installs_c4_authoring_skill() {
     let root = unique_temp_dir("criv-init-c4-authoring-skill");
     let options = InitOptions {
         no_obsidian: true,
+        no_vscode: true,
         no_skills: false,
         no_hooks: true,
         force_hooks: false,
@@ -267,6 +345,7 @@ fn init_installs_c4_authoring_skill() {
 fn fast_options() -> InitOptions {
     InitOptions {
         no_obsidian: true,
+        no_vscode: false,
         no_skills: true,
         no_hooks: false,
         force_hooks: false,
@@ -283,6 +362,20 @@ fn assert_executable(path: PathBuf) {
 
 #[cfg(not(unix))]
 fn assert_executable(_path: PathBuf) {}
+
+fn vscode_recommendations(root: &std::path::Path) -> Vec<String> {
+    vscode_extensions_json(root)["recommendations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap().to_string())
+        .collect()
+}
+
+fn vscode_extensions_json(root: &std::path::Path) -> serde_json::Value {
+    serde_json::from_str(&std::fs::read_to_string(root.join(".vscode/extensions.json")).unwrap())
+        .unwrap()
+}
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let unique = std::time::SystemTime::now()

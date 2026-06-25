@@ -85,6 +85,7 @@ docs/
   adr/
 .criv/
 .githooks/
+.vscode/extensions.json
 .obsidian/plugins/criv/
 ```
 
@@ -95,12 +96,19 @@ When run inside a non-bare Git repository, `criv init` also creates
 workflows. They use `criv` from `PATH`, falling back to `./target/debug/criv`
 in development checkouts when that binary exists.
 
-Use `--no-skills`, `--no-obsidian`, or `--no-hooks` if you do not want those
-generated templates or hooks:
+`criv init` recommends the VS Code-compatible companion extension through
+`.vscode/extensions.json` using the stable extension ID `criv.vscode-criv`. It
+does not install the extension into VS Code, Cursor, or any other editor by
+default. A future explicit install path can shell out to a selected editor CLI
+such as `code` or `cursor` with a published extension ID or local `.vsix`.
+
+Use `--no-skills`, `--no-obsidian`, `--no-vscode`, or `--no-hooks` if you do
+not want those generated templates, editor recommendations, or hooks:
 
 ```sh
 criv init --no-skills
 criv init --no-obsidian
+criv init --no-vscode
 criv init --no-hooks
 ```
 
