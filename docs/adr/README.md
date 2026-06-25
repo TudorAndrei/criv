@@ -46,3 +46,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0033-typed-wikilink-source-references|ADR-0033]] - Typed Wikilink source references
 - [[0034-ast-aware-source-selectors|ADR-0034]] - AST-aware source selectors
 - [[0035-vscode-compatible-companion-extension|ADR-0035]] - VS Code-compatible companion extension
+- [[0036-vscode-extension-test-stack|ADR-0036]] - VS Code extension test stack

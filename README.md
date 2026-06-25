@@ -194,6 +194,26 @@ state to read.
 The plugin intentionally stays a consumer of local state. Source editing,
 validation, policy enforcement, and graph generation remain owned by the CLI.
 
+## VS Code-Compatible Extension
+
+The companion extension under `extensions/vscode-criv/` targets VS Code and
+VS Code-derived editors such as Cursor. It reads `.criv/state.json`, shows a
+native state tree and status summary, opens AST-aware source selectors, surfaces
+`criv check --format json` diagnostics, and previews standalone `.c4` artifacts.
+
+For local development:
+
+```sh
+npm --prefix extensions/vscode-criv install
+npm --prefix extensions/vscode-criv run build
+npm --prefix extensions/vscode-criv run test
+npm --prefix extensions/vscode-criv run test:integration
+```
+
+The `.c4` preview command renders Mermaid C4 artifacts with Mermaid 11 and DOT
+code artifacts with `@viz-js/viz` inside a webview. The text `.c4` file remains
+the source of truth; the preview is only a projection.
+
 ## Releases
 
 Release steps are documented in [docs/releasing.md](docs/releasing.md).

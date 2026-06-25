@@ -37,7 +37,8 @@
     "onCommand:criv.openSourceTarget",
     "onCommand:criv.runWatchOnce",
     "onCommand:criv.runCheck",
-    "onCommand:criv.queryUndocumentedCode"
+    "onCommand:criv.queryUndocumentedCode",
+    "onCommand:criv.previewC4"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
@@ -70,6 +71,10 @@
       {
         "command": "criv.queryUndocumentedCode",
         "title": "criv: Query Undocumented Code"
+      },
+      {
+        "command": "criv.previewC4",
+        "title": "criv: Preview C4 Artifact"
       }
     ],
     "views": {
@@ -146,7 +151,10 @@
     "oxlint": "1.70.0",
     "typescript": "6.0.3"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@viz-js/viz": "^3.28.0",
+    "mermaid": "^11.15.0"
+  },
   "allowScripts": {
     "esbuild@0.28.1": true,
     "fsevents@2.3.3": true

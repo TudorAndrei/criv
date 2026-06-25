@@ -9,6 +9,7 @@ const EXPECTED_COMMANDS = [
   "criv.runWatchOnce",
   "criv.runCheck",
   "criv.queryUndocumentedCode",
+  "criv.previewC4",
 ];
 
 export async function run(): Promise<void> {

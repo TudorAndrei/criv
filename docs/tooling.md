@@ -44,6 +44,10 @@ mise run check
 mise run fix
 mise run perf
 mise run plugin-build
+mise run vscode-build
+mise run vscode-test
+mise run vscode-lint
+mise run vscode-format-check
 mise run release-plan
 mise run release-auto
 ```
@@ -65,6 +69,23 @@ helper from the repository root. It wraps `.obsidian/plugins/criv`'s
 `npm run build` script in `mise x rust@1.95.0`, so `wasm-pack` uses the
 mise-managed Rust and Cargo toolchain instead of whichever Rust appears first in
 the shell environment.
+
+The VS Code-compatible extension lives in `extensions/vscode-criv`. Its local
+tasks are exposed through mise and npm:
+
+```sh
+npm --prefix extensions/vscode-criv run build
+npm --prefix extensions/vscode-criv run test
+npm --prefix extensions/vscode-criv run test:integration
+npm --prefix extensions/vscode-criv run lint
+npm --prefix extensions/vscode-criv run format:check
+```
+
+The extension renders `.c4` previews locally: Mermaid C4 artifacts use Mermaid
+11, DOT Code artifacts use `@viz-js/viz`, and the preview webview uses packaged
+extension resources rather than CDN scripts. Run `criv watch --once` after
+changing extension source so generated architecture state and
+`docs/architecture/04-code.c4` stay current.
 
 Use `hk validate` after editing `hk.pkl`. Prefer hk built-ins when one exists;
 the commit message hook uses `Builtins.check_conventional_commit` instead of a

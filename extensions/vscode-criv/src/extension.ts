@@ -1,9 +1,11 @@
 import * as vscode from "vscode";
 
+import { C4ArtifactDiagnostics, C4PreviewManager } from "./c4Preview";
 import { CrivCheckDiagnostics } from "./checkDiagnostics";
 import {
   COMMAND_OPEN_SOURCE_TARGET,
   COMMAND_OPEN_STATE_JSON,
+  COMMAND_PREVIEW_C4,
   COMMAND_REFRESH_STATE_VIEW,
   COMMAND_QUERY_UNDOCUMENTED_CODE,
   COMMAND_RUN_CHECK,
@@ -23,6 +25,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const store = new WorkspaceStateStore();
   const treeProvider = new CrivStateTreeProvider();
   const checkDiagnostics = new CrivCheckDiagnostics();
+  const c4Diagnostics = new C4ArtifactDiagnostics();
+  const c4Preview = new C4PreviewManager(context);
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBar.command = COMMAND_REFRESH_STATE_VIEW;
 
@@ -31,7 +35,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     treeProvider.update(status);
   };
 
-  context.subscriptions.push(store, treeProvider, checkDiagnostics, statusBar);
+  context.subscriptions.push(
+    store,
+    treeProvider,
+    checkDiagnostics,
+    c4Diagnostics,
+    c4Preview,
+    statusBar,
+  );
   context.subscriptions.push(store.onDidChangeStatus(updateSurfaces));
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider("criv.stateView", treeProvider),
@@ -56,6 +67,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.commands.registerCommand(COMMAND_QUERY_UNDOCUMENTED_CODE, async () => {
       await runUndocumentedCodeQuery(store);
+    }),
+    vscode.commands.registerCommand(COMMAND_PREVIEW_C4, async () => {
+      await c4Preview.open();
     }),
     vscode.workspace.onDidSaveTextDocument(async (document) => {
       await maybeRunCheckOnSave(store, checkDiagnostics, document);
