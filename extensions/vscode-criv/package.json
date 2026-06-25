@@ -34,8 +34,7 @@
   "activationEvents": [
     "workspaceContains:criv.toml",
     "onLanguage:markdown",
-    "onLanguage:criv-c4",
-    "onView:criv.stateView"
+    "onLanguage:criv-c4"
   ],
   "capabilities": {
     "untrustedWorkspaces": {
