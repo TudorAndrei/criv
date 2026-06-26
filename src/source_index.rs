@@ -186,11 +186,8 @@ impl FffSourceIndex {
         query: &str,
         mode: SourceGrepMode,
         paths: &[String],
+        matcher: Option<&Regex>,
     ) -> Vec<GrepHit> {
-        let matcher = match mode {
-            SourceGrepMode::Regex => Regex::new(query).ok(),
-            SourceGrepMode::Plain | SourceGrepMode::Fuzzy => None,
-        };
         let plain_query = query.to_lowercase();
         let mut rows = Vec::new();
         for path in self
@@ -204,9 +201,7 @@ impl FffSourceIndex {
             for (index, line) in contents.lines().enumerate() {
                 let matched = match mode {
                     SourceGrepMode::Plain => line.to_lowercase().contains(&plain_query),
-                    SourceGrepMode::Regex => matcher
-                        .as_ref()
-                        .is_some_and(|matcher| matcher.is_match(line)),
+                    SourceGrepMode::Regex => matcher.is_some_and(|matcher| matcher.is_match(line)),
                     SourceGrepMode::Fuzzy => fuzzy_score(line, query).is_some(),
                 };
                 if matched {
@@ -326,7 +321,8 @@ impl SourceIndex for FffSourceIndex {
     }
 
     fn grep(&self, query: &str, mode: SourceGrepMode, paths: &[String]) -> Result<Vec<GrepHit>> {
-        let mut rows = self.grep_explicit_files(query, mode, paths);
+        let regex_matcher = regex_matcher(query, mode)?;
+        let mut rows = self.grep_explicit_files(query, mode, paths, regex_matcher.as_ref());
         for scoped in &self.pickers {
             rows.extend(self.with_picker(scoped, |picker| {
                 let grep_query = match mode {
@@ -474,6 +470,15 @@ fn path_allowed(path: &str, patterns: &[String]) -> bool {
     patterns.is_empty() || patterns.iter().any(|pattern| glob_matches(pattern, path))
 }
 
+fn regex_matcher(query: &str, mode: SourceGrepMode) -> Result<Option<Regex>> {
+    match mode {
+        SourceGrepMode::Regex => Regex::new(query)
+            .map(Some)
+            .map_err(|err| CrivError::new(format!("invalid regex grep query `{query}`: {err}"))),
+        SourceGrepMode::Plain | SourceGrepMode::Fuzzy => Ok(None),
+    }
+}
+
 fn normalize_source_roots(source_roots: &[String]) -> Vec<String> {
     source_roots
         .iter()
@@ -571,6 +576,17 @@ mod tests {
                 .iter()
                 .any(|hit| hit.path == "Cargo.toml" && hit.line == 1)
         );
+        assert!(
+            index
+                .grep("pkg", SourceGrepMode::Fuzzy, &["Cargo.toml".into()])
+                .unwrap()
+                .iter()
+                .any(|hit| hit.path == "Cargo.toml" && hit.line == 1)
+        );
+        let error = index
+            .grep("[", SourceGrepMode::Regex, &[])
+            .expect_err("invalid regex should fail");
+        assert!(error.to_string().contains("invalid regex grep query"));
     }
 
     #[test]

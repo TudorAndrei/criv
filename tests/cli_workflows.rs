@@ -274,6 +274,28 @@ fn search_json_output_is_valid_for_special_characters() {
 }
 
 #[test]
+fn regex_grep_reports_invalid_queries() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+    write_criv_config(
+        root,
+        vec!["src"],
+        vec!["**/target/**", "**/node_modules/**"],
+        true,
+    );
+
+    criv(root)
+        .args(["search", "--grep", "[", "--grep-mode", "regex"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid regex grep query"));
+}
+
+#[test]
 fn check_json_output_is_valid_for_special_characters() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
