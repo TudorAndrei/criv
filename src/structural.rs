@@ -134,31 +134,44 @@ pub(crate) fn find_policy_pattern_entry(
     policy: &PolicyPattern,
     paths: &[String],
 ) -> Result<Vec<StructuralMatch>> {
-    match policy_source(policy) {
-        Some((source, language)) => {
-            if validate_source(source, language).is_err() {
-                return Ok(Vec::new());
-            }
-            find(root, vault, source, paths, Some(language))
-        }
-        None => Ok(Vec::new()),
-    }
+    let (source, language) = policy_source(policy)?;
+    validate_source(source, language)?;
+    find(root, vault, source, paths, Some(language))
 }
 
-fn policy_source(policy: &PolicyPattern) -> Option<(PatternSource<'_>, &str)> {
+pub(crate) fn policy_pattern_entry_is_valid(policy: &PolicyPattern) -> bool {
+    let Ok((source, language)) = policy_source(policy) else {
+        return false;
+    };
+    validate_source(source, language).is_ok()
+}
+
+fn policy_source(policy: &PolicyPattern) -> Result<(PatternSource<'_>, &str)> {
     if !policy.has_inline_definition() {
-        return None;
+        return Err(CrivError::new(
+            "policy pattern must declare language and pattern or rule",
+        ));
     }
-    let language = policy
+    let Some(language) = policy
         .language
         .as_deref()
         .map(str::trim)
-        .filter(|language| !language.is_empty())?;
+        .filter(|language| !language.is_empty())
+    else {
+        return Err(CrivError::new(
+            "inline policy pattern must declare a language",
+        ));
+    };
 
     match (policy.pattern.as_deref(), policy.rule.as_deref()) {
-        (Some(_), Some(_)) | (None, None) => None,
-        (Some(pattern), None) => Some((PatternSource::Pattern(pattern), language)),
-        (None, Some(rule)) => Some((PatternSource::Rule(rule), language)),
+        (Some(_), Some(_)) => Err(CrivError::new(
+            "inline policy pattern must declare either pattern or rule, not both",
+        )),
+        (None, None) => Err(CrivError::new(
+            "inline policy pattern must declare pattern or rule",
+        )),
+        (Some(pattern), None) => Ok((PatternSource::Pattern(pattern), language)),
+        (None, Some(rule)) => Ok((PatternSource::Rule(rule), language)),
     }
 }
 

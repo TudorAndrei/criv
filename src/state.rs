@@ -500,13 +500,7 @@ fn state_pattern_matches(
                 Vec::new()
             }
         } else {
-            structural::find(
-                root,
-                vault,
-                structural::PatternSource::Pattern(local_id),
-                &scoped_paths,
-                None,
-            )?
+            Vec::new()
         }
     } else if vault.config.pattern_defs.contains_key(pattern_id) {
         let pattern = &vault.config.pattern_defs[pattern_id];
@@ -949,6 +943,73 @@ roots = ["src"]
         let snapshot_state: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(snapshot_path).unwrap()).unwrap();
         assert_eq!(snapshot_state["schema"], STATE_SCHEMA);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn slash_qualified_state_patterns_require_registered_sources() {
+        let root = unique_temp_dir("criv-state-slash-patterns");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("docs/adr")).unwrap();
+        std::fs::write(
+            root.join("criv.toml"),
+            r#"
+[source]
+roots = ["src"]
+
+[patterns."tool/no-println"]
+language = "rust"
+pattern = "println!($$$ARGS)"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/lib.rs"),
+            "pub fn run() {\n    println!(\"blocked\");\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("docs/adr/0001-inline-policy.md"),
+            r#"---
+id: ADR-0001
+kind: decision
+title: Inline policy
+status: accepted
+governs:
+  - src/lib.rs
+policy:
+  patterns:
+    - id: no-println
+      language: rust
+      pattern: "println!($$$ARGS)"
+---
+
+# Inline policy
+"#,
+        )
+        .unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+
+        assert_eq!(
+            state_pattern_matches(&root, &vault, "missing/println!($$$ARGS)", &[])
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            state_pattern_matches(&root, &vault, "tool/no-println", &[])
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            state_pattern_matches(&root, &vault, "ADR-0001/no-println", &[])
+                .unwrap()
+                .len(),
+            1
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }

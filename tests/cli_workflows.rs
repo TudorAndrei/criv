@@ -691,6 +691,46 @@ policy:
 }
 
 #[test]
+fn search_rule_reports_invalid_inline_policy_definitions() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("docs/adr")).unwrap();
+    write_criv_config(
+        root,
+        vec!["src"],
+        vec!["**/target/**", "**/node_modules/**"],
+        false,
+    );
+    fs::write(
+        root.join("docs/adr/0994-invalid-search-policy.md"),
+        r#"---
+id: ADR-0994
+kind: decision
+title: Invalid search policy
+status: accepted
+date: 2026-06-26
+policy:
+  patterns:
+    - id: invalid-rule
+      language: rust
+      rule: "not: [valid"
+---
+
+# Invalid search policy
+"#,
+    )
+    .unwrap();
+
+    criv(root)
+        .args(["search", "--rule", "ADR-0994"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("failed to parse ast-grep rule"));
+}
+
+#[test]
 fn inline_policy_patterns_are_enforced_without_generation() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

@@ -136,6 +136,9 @@ fn policy_violations(
         };
         let scopes = policy_scope_files(vault, &vault.effective_governs(note));
         for pattern in &note.policy_patterns {
+            if !crate::structural::policy_pattern_entry_is_valid(pattern) {
+                continue;
+            }
             let Some(local_id) = pattern
                 .id
                 .as_deref()
