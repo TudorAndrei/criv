@@ -10,6 +10,7 @@ mod query;
 mod search;
 mod source_graph;
 mod source_index;
+mod source_paths;
 mod state;
 mod structural;
 mod util;

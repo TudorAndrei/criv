@@ -7,7 +7,8 @@ use ast_grep_core::{Doc, Matcher, NodeMatch, Pattern};
 use ast_grep_language::{Language, LanguageExt, SupportLang};
 
 use crate::config::PatternConfig;
-use crate::util::{glob_matches, read_to_string};
+use crate::source_paths::read_source_to_string;
+use crate::util::glob_matches;
 use crate::vault::Vault;
 use crate::{CrivError, Result};
 
@@ -69,8 +70,7 @@ pub(crate) fn find(
         };
         compiled_any_language = true;
 
-        let path = root.join(source_file);
-        let contents = read_to_string(&path)?;
+        let contents = read_source_to_string(root, source_file)?;
         match matcher {
             CompiledMatcher::Pattern(pattern) => {
                 rows.extend(scan_source(source_file, language, &contents, &pattern));

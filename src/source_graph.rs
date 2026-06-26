@@ -1,12 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
 use tree_sitter::{Node, Parser};
 
 use crate::Result;
-use crate::util::read_to_string;
+use crate::source_paths::{read_source_to_string, source_metadata};
 
 #[derive(Debug, Default, Clone)]
 pub(crate) struct SourceGraph {
@@ -215,8 +214,7 @@ impl SourceGraph {
     ) -> Result<Self> {
         let mut graph = Self::default();
         for source_file in source_files {
-            let path = root.join(source_file);
-            let fingerprint = source_file_fingerprint(&path)?;
+            let fingerprint = source_file_fingerprint(root, source_file)?;
             let reused = previous
                 .filter(|previous| {
                     previous.file_fingerprints.get(source_file) == Some(&fingerprint)
@@ -226,7 +224,7 @@ impl SourceGraph {
                 parsed
             } else {
                 graph.changed_files.push(source_file.clone());
-                let contents = read_to_string(&path)?;
+                let contents = read_source_to_string(root, source_file)?;
                 parse_source_file(source_file, &contents)
             };
             for symbol in &parsed.symbols {
@@ -381,8 +379,8 @@ impl SourceGraph {
     }
 }
 
-fn source_file_fingerprint(path: &Path) -> Result<String> {
-    let metadata = fs::metadata(path)?;
+fn source_file_fingerprint(root: &Path, path: &str) -> Result<String> {
+    let metadata = source_metadata(root, path)?;
     let modified = metadata
         .modified()
         .ok()
@@ -1276,6 +1274,27 @@ impl Language {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[cfg(unix)]
+    #[test]
+    fn incremental_build_rejects_source_file_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("vault");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("secret.rs"), "pub fn secret() {}\n").unwrap();
+        symlink(outside.join("secret.rs"), root.join("src/secret.rs")).unwrap();
+
+        let error = SourceGraph::build_incremental(&root, &["src/secret.rs".into()], None)
+            .expect_err("source graph should reject source file symlink escape");
+
+        assert!(error.to_string().contains("outside the criv vault root"));
+    }
 
     #[test]
     fn extracts_rust_symbols_and_calls() {

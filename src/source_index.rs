@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -10,6 +9,9 @@ use fff_search::{
 };
 use regex::Regex;
 
+use crate::source_paths::{
+    SourceRootKind, canonical_source_path, read_source_to_string, source_metadata, source_root_kind,
+};
 use crate::util::{GlobMatcher, glob_matches};
 use crate::{CrivError, Result};
 
@@ -75,7 +77,7 @@ impl FffSourceIndex {
     ) -> Result<Self> {
         let source_roots = normalize_source_roots(source_roots);
         let source_excludes = GlobMatcher::new(source_exclude)?;
-        let scan_plan = SourceScanPlan::new(root, &source_roots);
+        let scan_plan = SourceScanPlan::new(root, &source_roots)?;
         let mut pickers = Vec::new();
         for scan_root in scan_plan.directories {
             let picker = SharedFilePicker::default();
@@ -127,7 +129,11 @@ impl FffSourceIndex {
     }
 
     fn indexed_path(&self, path: String) -> Option<String> {
-        self.source_path_allowed(&path).then_some(path)
+        if self.source_path_allowed(&path) && canonical_source_path(&self.root, &path).is_ok() {
+            Some(path)
+        } else {
+            None
+        }
     }
 
     fn source_path_allowed(&self, path: &str) -> bool {
@@ -148,7 +154,7 @@ impl FffSourceIndex {
                     .filter(|file| !file.is_binary() && !file.is_deleted())
                     .filter_map(|file| {
                         let path = prefixed_path(&scoped.prefix, file.relative_path(picker));
-                        self.source_path_allowed(&path).then_some(path)
+                        self.indexed_path(path)
                     })
                     .collect::<Vec<_>>()
             })?);
@@ -156,8 +162,7 @@ impl FffSourceIndex {
         files.extend(
             self.explicit_files
                 .iter()
-                .filter(|path| self.source_path_allowed(path))
-                .cloned(),
+                .filter_map(|path| self.indexed_path(path.clone())),
         );
         Ok(files.into_iter().collect())
     }
@@ -165,7 +170,7 @@ impl FffSourceIndex {
     fn explicit_file_hits(&self, query: &str) -> Vec<FileHit> {
         self.explicit_files
             .iter()
-            .filter(|path| self.source_path_allowed(path))
+            .filter(|path| self.indexed_path((*path).clone()).is_some())
             .filter_map(|path| {
                 fuzzy_score(path, query).map(|score| FileHit {
                     path: path.clone(),
@@ -193,7 +198,7 @@ impl FffSourceIndex {
             .iter()
             .filter(|path| self.source_path_allowed(path) && path_allowed(path, paths))
         {
-            let Ok(contents) = fs::read_to_string(self.root.join(path)) else {
+            let Ok(contents) = read_source_to_string(&self.root, path) else {
                 continue;
             };
             for (index, line) in contents.lines().enumerate() {
@@ -237,24 +242,27 @@ struct ScanRoot {
 }
 
 impl SourceScanPlan {
-    fn new(root: &Path, source_roots: &[String]) -> Self {
+    fn new(root: &Path, source_roots: &[String]) -> Result<Self> {
         let mut directories = BTreeSet::new();
         let mut files = BTreeSet::new();
         for source_root in source_roots {
-            let path = root.join(source_root);
-            if path.is_file() {
-                files.insert(source_root.clone());
-            } else if path.is_dir() {
-                directories.insert(source_root.clone());
+            match source_root_kind(root, source_root)? {
+                Some(SourceRootKind::File) => {
+                    files.insert(source_root.clone());
+                }
+                Some(SourceRootKind::Directory) => {
+                    directories.insert(source_root.clone());
+                }
+                None => {}
             }
         }
-        Self {
+        Ok(Self {
             directories: directories
                 .into_iter()
                 .map(|path| ScanRoot { path })
                 .collect(),
             files: files.into_iter().collect(),
-        }
+        })
     }
 }
 
@@ -346,7 +354,7 @@ impl SourceIndex for FffSourceIndex {
                         continue;
                     };
                     let path = prefixed_path(&scoped.prefix, file.relative_path(picker));
-                    if !self.source_path_allowed(&path) || !path_allowed(&path, paths) {
+                    if self.indexed_path(path.clone()).is_none() || !path_allowed(&path, paths) {
                         continue;
                     }
                     scoped_rows.push(GrepHit {
@@ -411,8 +419,10 @@ impl SourceIndex for FffSourceIndex {
                     .iter()
                     .filter_map(|file| {
                         let path = prefixed_path(&scoped.prefix, file.relative_path(picker));
-                        (!file.is_binary() && !file.is_deleted() && self.source_path_allowed(&path))
-                            .then_some((path, file.total_frecency_score().max(0) as u32))
+                        (!file.is_binary()
+                            && !file.is_deleted()
+                            && self.indexed_path(path.clone()).is_some())
+                        .then_some((path, file.total_frecency_score().max(0) as u32))
                     })
                     .collect::<BTreeMap<_, _>>()
             })?);
@@ -439,7 +449,8 @@ impl SourceIndex for FffSourceIndex {
                     .filter(|file| !file.is_binary() && !file.is_deleted())
                     .filter_map(|file| {
                         let path = prefixed_path(&scoped.prefix, file.relative_path(picker));
-                        self.source_path_allowed(&path)
+                        self.indexed_path(path.clone())
+                            .is_some()
                             .then_some(format!("{path}\0{}\0{}", file.size, file.modified))
                     })
                     .collect::<Vec<_>>()
@@ -448,7 +459,7 @@ impl SourceIndex for FffSourceIndex {
         rows.extend(
             self.explicit_files
                 .iter()
-                .filter(|path| self.source_path_allowed(path))
+                .filter(|path| self.indexed_path((*path).clone()).is_some())
                 .filter_map(|path| explicit_file_fingerprint(&self.root, path).ok()),
         );
         rows.sort();
@@ -495,7 +506,7 @@ fn fuzzy_score(value: &str, query: &str) -> Option<i32> {
 }
 
 fn explicit_file_fingerprint(root: &Path, path: &str) -> Result<String> {
-    let metadata = fs::metadata(root.join(path))?;
+    let metadata = source_metadata(root, path)?;
     let modified = metadata
         .modified()
         .ok()
@@ -508,6 +519,7 @@ fn explicit_file_fingerprint(root: &Path, path: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::TempDir;
 
     #[test]
@@ -559,5 +571,40 @@ mod tests {
                 .iter()
                 .any(|hit| hit.path == "Cargo.toml" && hit.line == 1)
         );
+    }
+
+    #[test]
+    fn source_index_rejects_parent_traversing_source_roots() {
+        let temp = TempDir::new().unwrap();
+        let error = FffSourceIndex::new(temp.path(), &["../outside".into()], &[], false)
+            .expect_err("parent source root should fail");
+
+        assert!(error.to_string().contains("parent-directory"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_index_rejects_symlinked_source_roots_and_files() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("vault");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("secret.rs"), "pub fn secret() {}\n").unwrap();
+        symlink(&outside, root.join("src")).unwrap();
+
+        let error = FffSourceIndex::new(&root, &["src".into()], &[], false)
+            .expect_err("symlinked source root should fail");
+        assert!(error.to_string().contains("must not be a symlink"));
+
+        fs::remove_file(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        symlink(outside.join("secret.rs"), root.join("src/secret.rs")).unwrap();
+
+        let error = FffSourceIndex::new(&root, &["src/secret.rs".into()], &[], false)
+            .expect_err("symlinked source file root should fail");
+        assert!(error.to_string().contains("must not be a symlink"));
     }
 }
