@@ -23,9 +23,9 @@ default = []
 embeddings = ["dep:fastembed"]
 
 [dependencies]
-ast-grep-config = "0.43.0"
-ast-grep-core = "0.43.0"
-ast-grep-language = { version = "0.43.0", default-features = false, features = [
+ast-grep-config = "0.44.0"
+ast-grep-core = "0.44.0"
+ast-grep-language = { version = "0.44.0", default-features = false, features = [
   "tree-sitter-go",
   "tree-sitter-javascript",
   "tree-sitter-python",
@@ -39,7 +39,7 @@ fastembed = { version = "5", optional = true, default-features = false, features
   "hf-hub-rustls-tls",
   "ort-download-binaries-rustls-tls",
 ] }
-fff-search = "0.9.5-nightly.ec57eb0"
+fff-search = "0.9.6"
 globset = "0.4"
 git2 = { version = "0.21", default-features = false }
 ignore = "0.4"
@@ -48,7 +48,7 @@ notify = "8"
 notify-debouncer-mini = "0.7"
 pulldown-cmark = "0.13"
 regex = "1"
-rumdl_lib = { package = "rumdl", version = "0.2.17", default-features = false }
+rumdl_lib = { package = "rumdl", version = "0.2.23", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_norway = "0.9"
@@ -60,7 +60,7 @@ tree-sitter-javascript = "0.25"
 tree-sitter-python = "0.25"
 tree-sitter-rust = "0.24"
 tree-sitter-typescript = "0.23"
-usage = { package = "usage-lib", version = "3.5.0", features = ["clap"] }
+usage = { package = "usage-lib", version = "3.5.3", features = ["clap"] }
 
 [dev-dependencies]
 assert_cmd = "2"

@@ -18,7 +18,7 @@
     "workspace"
   ],
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.125.0"
   },
   "categories": [
     "Other",
@@ -141,7 +141,7 @@
   },
   "scripts": {
     "build": "npm run check-types && node esbuild.config.mjs --production",
-    "build:wasm": "mise exec rust@1.95.0 -- wasm-pack build ../../crates/criv-wasm --target nodejs --out-dir ../../extensions/vscode-criv/pkg",
+    "build:wasm": "mise exec cargo:wasm-pack@0.15.0 rust@1.95.0 -- wasm-pack build ../../crates/criv-wasm --target nodejs --out-dir ../../extensions/vscode-criv/pkg",
     "check-types": "tsc --noEmit",
     "compile": "npm run check-types && node esbuild.config.mjs",
     "compile:integration-tests": "esbuild test/integration/runner.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist-test/integration/runner.js",
@@ -157,18 +157,18 @@
     "watch": "node esbuild.config.mjs --watch"
   },
   "devDependencies": {
-    "@types/node": "25.9.3",
-    "@types/vscode": "1.85.0",
+    "@types/node": "26.0.1",
+    "@types/vscode": "1.125.0",
     "@vscode/test-electron": "3.0.0",
     "@vscode/vsce": "^3.9.2",
     "esbuild": "0.28.1",
-    "oxfmt": "0.55.0",
-    "oxlint": "1.70.0",
+    "oxfmt": "0.56.0",
+    "oxlint": "1.71.0",
     "typescript": "6.0.3"
   },
   "dependencies": {
     "@viz-js/viz": "^3.28.0",
-    "mermaid": "^11.15.0"
+    "mermaid": "^11.16.0"
   },
   "allowScripts": {
     "esbuild@0.28.1": true,
