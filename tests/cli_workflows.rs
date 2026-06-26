@@ -592,6 +592,114 @@ targets:
 }
 
 #[test]
+fn selector_scoped_policy_patterns_are_enforced() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("docs/adr")).unwrap();
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn run() {\n    println!(\"blocked\");\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("criv.toml"),
+        r#"[vault]
+docs = "docs"
+adr = "adr"
+
+[source]
+roots = ["src"]
+exclude = ["**/target/**", "**/node_modules/**"]
+
+[index]
+source = true
+embeddings = false
+
+[enforce]
+stages = ["commit", "push", "ci"]
+
+[patterns."ADR-0997/no-println"]
+language = "rust"
+pattern = "println!($$$ARGS)"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("docs/adr/0997-selector-policy.md"),
+        r#"---
+id: ADR-0997
+kind: decision
+title: Selector policy
+status: accepted
+governs:
+  - src/lib.rs#fn:run
+policy:
+  patterns:
+    - id: no-println
+---
+
+# Selector policy
+"#,
+    )
+    .unwrap();
+
+    criv(root)
+        .args(["check", "--filter", "policy-violation"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR-0997 policy"))
+        .stdout(predicate::str::contains("println!"));
+}
+
+#[test]
+fn import_policy_denies_grouped_and_aliased_rust_imports() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("src/lib.rs"),
+        "use crate::{infra::db};\nuse crate::infra as infra;\npub fn run() {}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("criv.toml"),
+        r#"[vault]
+docs = "docs"
+adr = "adr"
+
+[source]
+roots = ["src"]
+exclude = ["**/target/**", "**/node_modules/**"]
+
+[index]
+source = true
+embeddings = false
+
+[enforce]
+stages = ["commit", "push", "ci"]
+
+[[enforce.imports]]
+id = "no-infra"
+scope = ["src/**"]
+deny = ["crate::infra"]
+"#,
+    )
+    .unwrap();
+
+    criv(root)
+        .args(["enforce", "--stage", "ci"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("import policy `no-infra`"))
+        .stdout(predicate::str::contains("crate::infra"));
+}
+
+#[test]
 fn watch_port_is_rejected() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

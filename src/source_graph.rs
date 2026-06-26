@@ -443,7 +443,7 @@ fn collect_tree_sitter_nodes(
     parent: Option<String>,
     file: &mut SourceFile,
 ) {
-    if let Some(import) = tree_sitter_import(node, contents, language) {
+    for import in tree_sitter_imports(node, contents, language) {
         file.imports.push(Import {
             module: import,
             line: node.start_position().row + 1,
@@ -476,29 +476,31 @@ fn collect_tree_sitter_nodes(
     }
 }
 
-fn tree_sitter_import(node: Node<'_>, contents: &str, language: Language) -> Option<String> {
+fn tree_sitter_imports(node: Node<'_>, contents: &str, language: Language) -> Vec<String> {
     match (language, node.kind()) {
-        (Language::Rust, "use_declaration") => node_text(node, contents).map(|text| {
-            text.trim()
-                .trim_start_matches("use ")
-                .trim_start_matches("pub use ")
-                .trim_end_matches(';')
-                .trim()
-                .to_string()
-        }),
+        (Language::Rust, "use_declaration") => node_text(node, contents)
+            .map(|text| parse_rust_imports(&text))
+            .unwrap_or_default(),
         (Language::TypeScript | Language::JavaScript, "import_statement") => {
             descendant_of_kind(node, "string")
                 .and_then(|child| node_text(child, contents))
                 .map(|text| clean_js_module(&text))
+                .into_iter()
+                .collect()
         }
         (Language::Python, "import_statement" | "import_from_statement") => {
-            node_text(node, contents).and_then(|text| parse_import(text.trim(), language))
+            node_text(node, contents)
+                .and_then(|text| parse_import(text.trim(), language))
+                .into_iter()
+                .collect()
         }
         (Language::Go, "import_spec") => descendant_of_kind(node, "interpreted_string_literal")
             .or_else(|| descendant_of_kind(node, "raw_string_literal"))
             .and_then(|child| node_text(child, contents))
-            .map(|text| text.trim_matches('"').trim_matches('`').to_string()),
-        _ => None,
+            .map(|text| text.trim_matches('"').trim_matches('`').to_string())
+            .into_iter()
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -919,7 +921,7 @@ fn parse_source_file_fallback(path: &str, contents: &str) -> SourceFile {
             continue;
         }
 
-        if let Some(import) = parse_import(trimmed, language) {
+        for import in parse_imports(trimmed, language) {
             file.imports.push(Import {
                 module: import,
                 line: line_no,
@@ -1042,20 +1044,28 @@ fn parse_source_file_fallback(path: &str, contents: &str) -> SourceFile {
 }
 
 fn parse_import(line: &str, language: Language) -> Option<String> {
+    parse_imports(line, language).into_iter().next()
+}
+
+fn parse_imports(line: &str, language: Language) -> Vec<String> {
     match language {
         Language::Rust => line
             .strip_prefix("use ")
             .or_else(|| line.strip_prefix("pub use "))
-            .map(|value| value.trim_end_matches(';').trim().to_string())
+            .map(parse_rust_import_body)
             .or_else(|| {
                 line.strip_prefix("mod ")
-                    .map(|value| value.trim_end_matches(';').trim().to_string())
-            }),
+                    .map(|value| vec![value.trim_end_matches(';').trim().to_string()])
+            })
+            .unwrap_or_default(),
         Language::TypeScript | Language::JavaScript => {
             if let Some((_, module)) = line.split_once(" from ") {
-                Some(clean_js_module(module))
+                vec![clean_js_module(module)]
             } else {
-                line.strip_prefix("import ").map(clean_js_module)
+                line.strip_prefix("import ")
+                    .map(clean_js_module)
+                    .into_iter()
+                    .collect()
             }
         }
         Language::Python => line
@@ -1065,16 +1075,121 @@ fn parse_import(line: &str, language: Language) -> Option<String> {
                 line.strip_prefix("from ")
                     .and_then(|value| value.split_once(" import "))
                     .map(|(module, _)| module.to_string())
-            }),
-        Language::Go => line.strip_prefix("import ").map(|value| {
-            value
-                .trim()
-                .trim_matches('"')
-                .trim_matches('(')
-                .trim_matches(')')
-                .to_string()
-        }),
-        Language::Unknown => None,
+            })
+            .into_iter()
+            .collect(),
+        Language::Go => line
+            .strip_prefix("import ")
+            .map(|value| {
+                value
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('(')
+                    .trim_matches(')')
+                    .to_string()
+            })
+            .into_iter()
+            .collect(),
+        Language::Unknown => Vec::new(),
+    }
+}
+
+fn parse_rust_imports(line: &str) -> Vec<String> {
+    line.trim()
+        .strip_prefix("use ")
+        .or_else(|| line.trim().strip_prefix("pub use "))
+        .map(parse_rust_import_body)
+        .unwrap_or_default()
+}
+
+fn parse_rust_import_body(body: &str) -> Vec<String> {
+    let body = body.trim().trim_end_matches(';').trim();
+    let mut rows = expand_rust_import("", body);
+    rows.sort();
+    rows.dedup();
+    rows
+}
+
+fn expand_rust_import(prefix: &str, body: &str) -> Vec<String> {
+    let body = body.trim();
+    if body.is_empty() {
+        return Vec::new();
+    }
+
+    if let Some((open, close)) = rust_group_bounds(body) {
+        let head = body[..open].trim().trim_end_matches("::");
+        let base = join_rust_import(prefix, head);
+        return split_top_level_commas(&body[open + 1..close])
+            .into_iter()
+            .flat_map(|part| expand_rust_import(&base, part))
+            .collect();
+    }
+
+    let leaf = body
+        .split_once(" as ")
+        .map(|(module, _)| module)
+        .unwrap_or(body)
+        .trim();
+    let module = join_rust_import(prefix, leaf);
+    if module.is_empty() {
+        Vec::new()
+    } else {
+        vec![module]
+    }
+}
+
+fn rust_group_bounds(value: &str) -> Option<(usize, usize)> {
+    let mut depth = 0usize;
+    let mut open = None;
+    for (index, ch) in value.char_indices() {
+        match ch {
+            '{' => {
+                if depth == 0 {
+                    open = Some(index);
+                }
+                depth += 1;
+            }
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return open.map(|open| (open, index));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn split_top_level_commas(value: &str) -> Vec<&str> {
+    let mut rows = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    for (index, ch) in value.char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                rows.push(value[start..index].trim());
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    rows.push(value[start..].trim());
+    rows.into_iter().filter(|row| !row.is_empty()).collect()
+}
+
+fn join_rust_import(prefix: &str, leaf: &str) -> String {
+    let leaf = leaf.trim().trim_matches(':');
+    if leaf.is_empty() || leaf == "self" {
+        return prefix.to_string();
+    }
+    let leaf = leaf.strip_prefix("self::").unwrap_or(leaf);
+    if prefix.is_empty() {
+        leaf.to_string()
+    } else {
+        format!("{}::{}", prefix.trim_end_matches("::"), leaf)
     }
 }
 
@@ -1319,6 +1434,27 @@ fn helper() {}
             }
         );
         assert_eq!(file.symbols[0].calls[0].target, "helper");
+    }
+
+    #[test]
+    fn normalizes_grouped_and_aliased_rust_imports() {
+        let file = parse_source_file(
+            "src/lib.rs",
+            r#"
+use crate::{infra::db, ui::{self, view as ui_view}};
+use crate::infra as infra;
+"#,
+        );
+        let imports = file
+            .imports
+            .iter()
+            .map(|import| import.module.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(imports.contains(&"crate::infra"));
+        assert!(imports.contains(&"crate::infra::db"));
+        assert!(imports.contains(&"crate::ui"));
+        assert!(imports.contains(&"crate::ui::view"));
     }
 
     #[test]

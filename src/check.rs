@@ -276,7 +276,7 @@ fn policy_violations(root: &Path, vault: &Vault) -> Result<Vec<PolicyViolation>>
         let Some(adr_id) = &note.id else {
             continue;
         };
-        let scopes = vault.effective_governs(note);
+        let scopes = policy_scope_files(vault, &vault.effective_governs(note));
         for pattern in &note.policy_pattern_ids {
             let pattern_id = format!("{adr_id}/{pattern}");
             let rows =
@@ -291,6 +291,15 @@ fn policy_violations(root: &Path, vault: &Vault) -> Result<Vec<PolicyViolation>>
         }
     }
     Ok(violations)
+}
+
+fn policy_scope_files(vault: &Vault, scopes: &[String]) -> Vec<String> {
+    scopes
+        .iter()
+        .flat_map(|scope| vault.source_files_matching_glob(scope))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 pub(crate) fn validate(vault: &Vault) -> Vec<Diagnostic> {

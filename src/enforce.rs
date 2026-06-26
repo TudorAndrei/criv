@@ -1,5 +1,6 @@
+use std::collections::BTreeSet;
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use clap::{Args as ClapArgs, ValueEnum};
@@ -133,7 +134,7 @@ fn policy_violations(
         let Some(adr_id) = &note.id else {
             continue;
         };
-        let scopes = vault.effective_governs(note);
+        let scopes = policy_scope_files(vault, &vault.effective_governs(note));
         for pattern in &note.policy_pattern_ids {
             let pattern_id = format!("{adr_id}/{pattern}");
             let rows =
@@ -150,6 +151,15 @@ fn policy_violations(
         }
     }
     Ok(violations)
+}
+
+fn policy_scope_files(vault: &Vault, scopes: &[String]) -> Vec<String> {
+    scopes
+        .iter()
+        .flat_map(|scope| vault.source_files_matching_glob(scope))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn import_policy_violations(vault: &Vault, changed_files: Option<&Vec<String>>) -> Vec<String> {
@@ -497,13 +507,8 @@ fn run_native_tools(root: &Path, files: &[String]) -> Result<usize> {
         .collect::<Vec<_>>();
 
     let mut failures = 0;
-    failures += run_optional_tool(root, "Oxlint", oxlint_command(root), &js_ts)?;
-    failures += run_optional_tool(
-        root,
-        "Ruff",
-        local_or_path(root, ".venv/bin/ruff", "ruff"),
-        &python,
-    )?;
+    failures += run_optional_tool(root, "Oxlint", tool_on_path("oxlint"), &js_ts)?;
+    failures += run_optional_tool(root, "Ruff", tool_on_path("ruff"), &python)?;
     Ok(failures)
 }
 
@@ -550,45 +555,18 @@ fn print_tool_output(bytes: &[u8]) {
     }
 }
 
-fn local_or_path(root: &Path, local: &str, fallback: &'static str) -> ToolCommand {
-    let local = root.join(local);
-    if local.exists() {
-        ToolCommand::Path(local)
-    } else {
-        ToolCommand::Name(fallback)
-    }
-}
-
-fn oxlint_command(root: &Path) -> ToolCommand {
-    local_or_path_in(
-        root,
-        &[
-            "node_modules/.bin/oxlint",
-            ".obsidian/plugins/criv/node_modules/.bin/oxlint",
-        ],
-        "oxlint",
-    )
-}
-
-fn local_or_path_in(root: &Path, locals: &[&str], fallback: &'static str) -> ToolCommand {
-    locals
-        .iter()
-        .map(|local| root.join(local))
-        .find(|local| local.exists())
-        .map(ToolCommand::Path)
-        .unwrap_or(ToolCommand::Name(fallback))
+fn tool_on_path(name: &'static str) -> ToolCommand {
+    ToolCommand::Name(name)
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 enum ToolCommand {
-    Path(PathBuf),
     Name(&'static str),
 }
 
 impl ToolCommand {
     fn program(&self) -> &std::ffi::OsStr {
         match self {
-            Self::Path(path) => path.as_os_str(),
             Self::Name(name) => std::ffi::OsStr::new(name),
         }
     }
@@ -722,14 +700,18 @@ mod tests {
     }
 
     #[test]
-    fn oxlint_command_uses_plugin_local_tool_before_path_fallback() {
+    fn native_tool_commands_use_path_names_only() {
         let root = tempfile::TempDir::new().unwrap();
-        let bin = root
+        let oxlint = root
             .path()
             .join(".obsidian/plugins/criv/node_modules/.bin/oxlint");
-        std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
-        std::fs::write(&bin, "").unwrap();
+        let ruff = root.path().join(".venv/bin/ruff");
+        std::fs::create_dir_all(oxlint.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(ruff.parent().unwrap()).unwrap();
+        std::fs::write(&oxlint, "").unwrap();
+        std::fs::write(&ruff, "").unwrap();
 
-        assert_eq!(oxlint_command(root.path()), ToolCommand::Path(bin));
+        assert_eq!(tool_on_path("oxlint"), ToolCommand::Name("oxlint"));
+        assert_eq!(tool_on_path("ruff"), ToolCommand::Name("ruff"));
     }
 }

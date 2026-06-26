@@ -56,6 +56,11 @@ pub(crate) fn find(
         if !path_allowed(source_file, paths) {
             continue;
         }
+        if forced_language
+            .is_some_and(|language| SupportLang::from_path(source_file) != Some(language))
+        {
+            continue;
+        }
         let Some(language) = forced_language.or_else(|| SupportLang::from_path(source_file)) else {
             continue;
         };
@@ -115,17 +120,7 @@ pub(crate) fn find_pattern_id(
             "registered pattern `{pattern_id}` has no ast-grep rule or pattern body"
         )));
     };
-    let mut scoped_paths = paths.to_vec();
-    if let Some(language) = &pattern.language {
-        scoped_paths.push(language_glob(language).to_string());
-    }
-    find(
-        root,
-        vault,
-        source,
-        &scoped_paths,
-        pattern.language.as_deref(),
-    )
+    find(root, vault, source, paths, pattern.language.as_deref())
 }
 
 pub(crate) fn find_policy_pattern(
@@ -139,17 +134,7 @@ pub(crate) fn find_policy_pattern(
         let Some(source) = pattern_source(pattern) else {
             return Ok(Vec::new());
         };
-        let mut scoped_paths = paths.to_vec();
-        if let Some(language) = &pattern.language {
-            scoped_paths.push(language_glob(language).to_string());
-        }
-        return find(
-            root,
-            vault,
-            source,
-            &scoped_paths,
-            pattern.language.as_deref(),
-        );
+        return find(root, vault, source, paths, pattern.language.as_deref());
     }
 
     find(
