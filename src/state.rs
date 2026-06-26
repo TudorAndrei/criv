@@ -464,13 +464,18 @@ fn state_pattern_matches(
     paths: &[String],
 ) -> Result<Vec<PatternMatch>> {
     let matches = if let Some((adr_id, local_id)) = pattern_id.split_once('/') {
-        let pattern = local_id;
-        let scopes = vault
-            .resolve_note(adr_id)
+        let note = vault.resolve_note(adr_id);
+        let scopes = note
             .map(|note| vault.effective_governs(note))
             .unwrap_or_else(|| vec!["**".into()]);
         let scoped_paths = scoped_changed_paths(paths, &scopes);
-        if let Some(configured) = vault.config.pattern_defs.get(pattern_id) {
+        if let Some(policy) = note.and_then(|note| {
+            note.policy_patterns
+                .iter()
+                .find(|policy| policy.id.as_deref() == Some(local_id))
+        }) {
+            structural::find_policy_pattern_entry(root, vault, pattern_id, policy, &scoped_paths)?
+        } else if let Some(configured) = vault.config.pattern_defs.get(pattern_id) {
             if let Some(source) = structural::pattern_source(configured) {
                 let scoped_paths = if paths.is_empty() {
                     scoped_paths
@@ -496,7 +501,7 @@ fn state_pattern_matches(
             structural::find(
                 root,
                 vault,
-                structural::PatternSource::Pattern(pattern),
+                structural::PatternSource::Pattern(local_id),
                 &scoped_paths,
                 None,
             )?

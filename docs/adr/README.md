@@ -49,3 +49,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0036-vscode-extension-test-stack|ADR-0036]] - VS Code extension test stack
 - [[0037-vscode-json-diagnostics-in-hooks|ADR-0037]] - VS Code JSON diagnostics in hooks
 - [[0038-adr-policy-rule-generation|ADR-0038]] - ADR Policy Rule Generation
+- [[0039-inline-adr-policy-rules|ADR-0039]] - Inline ADR Policy Rules

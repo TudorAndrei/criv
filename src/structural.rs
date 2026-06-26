@@ -9,7 +9,7 @@ use ast_grep_language::{Language, LanguageExt, SupportLang};
 use crate::config::PatternConfig;
 use crate::source_paths::read_source_to_string;
 use crate::util::glob_matches;
-use crate::vault::Vault;
+use crate::vault::{PolicyPattern, Vault};
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Copy)]
@@ -149,6 +149,49 @@ pub(crate) fn find_policy_pattern(
         paths,
         None,
     )
+}
+
+pub(crate) fn find_policy_pattern_entry(
+    root: &Path,
+    vault: &Vault,
+    pattern_id: &str,
+    policy: &PolicyPattern,
+    paths: &[String],
+) -> Result<Vec<StructuralMatch>> {
+    match policy_source(policy)? {
+        Some((source, language)) => {
+            if validate_source(source, language).is_err() {
+                return Ok(Vec::new());
+            }
+            find(root, vault, source, paths, Some(language))
+        }
+        None => {
+            let Some(local_id) = policy.id.as_deref() else {
+                return Ok(Vec::new());
+            };
+            find_policy_pattern(root, vault, pattern_id, local_id, paths)
+        }
+    }
+}
+
+fn policy_source(policy: &PolicyPattern) -> Result<Option<(PatternSource<'_>, &str)>> {
+    if !policy.has_inline_definition() {
+        return Ok(None);
+    }
+    let Some(language) = policy
+        .language
+        .as_deref()
+        .map(str::trim)
+        .filter(|language| !language.is_empty())
+    else {
+        return Ok(None);
+    };
+
+    match (policy.pattern.as_deref(), policy.rule.as_deref()) {
+        (Some(_), Some(_)) | (None, None) => Ok(None),
+        (Some(pattern), None) => Ok(Some((PatternSource::Pattern(pattern), language))),
+        (None, Some(rule)) => Ok(Some((PatternSource::Rule(rule), language))),
+    }
 }
 
 pub(crate) fn language_glob(language: &str) -> &'static str {

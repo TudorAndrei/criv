@@ -135,10 +135,23 @@ fn policy_violations(
             continue;
         };
         let scopes = policy_scope_files(vault, &vault.effective_governs(note));
-        for pattern in &note.policy_pattern_ids {
-            let pattern_id = format!("{adr_id}/{pattern}");
-            let rows =
-                crate::structural::find_policy_pattern(root, vault, &pattern_id, pattern, &scopes)?;
+        for pattern in &note.policy_patterns {
+            let Some(local_id) = pattern
+                .id
+                .as_deref()
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+            else {
+                continue;
+            };
+            let pattern_id = format!("{adr_id}/{local_id}");
+            let rows = crate::structural::find_policy_pattern_entry(
+                root,
+                vault,
+                &pattern_id,
+                pattern,
+                &scopes,
+            )?;
             for row in rows {
                 if changed_files.is_some_and(|files| !files.contains(&row.path)) {
                     continue;

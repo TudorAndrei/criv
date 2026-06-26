@@ -158,15 +158,23 @@ fn search_rule(root: &Path, vault: &Vault, adr_id: &str, paths: &[String]) -> Re
         .ok_or_else(|| CrivError::new(format!("decision `{adr_id}` does not resolve")))?;
     let default_scopes;
     let scopes = if paths.is_empty() {
-        default_scopes = vault.effective_governs(note);
+        default_scopes = policy_scope_files(vault, &vault.effective_governs(note));
         &default_scopes
     } else {
         paths
     };
     let mut rows = Vec::new();
-    for pattern in &note.policy_pattern_ids {
-        let pattern_id = format!("{}/{}", note.display_id(), pattern);
-        rows.extend(structural_rows(structural::find_policy_pattern(
+    for pattern in &note.policy_patterns {
+        let Some(local_id) = pattern
+            .id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        else {
+            continue;
+        };
+        let pattern_id = format!("{}/{}", note.display_id(), local_id);
+        rows.extend(structural_rows(structural::find_policy_pattern_entry(
             root,
             vault,
             &pattern_id,
@@ -177,6 +185,15 @@ fn search_rule(root: &Path, vault: &Vault, adr_id: &str, paths: &[String]) -> Re
     rows.sort_by(|left, right| (&left.path, left.line).cmp(&(&right.path, right.line)));
     rows.dedup_by(|left, right| left.path == right.path && left.line == right.line);
     Ok(rows)
+}
+
+fn policy_scope_files(vault: &Vault, scopes: &[String]) -> Vec<String> {
+    scopes
+        .iter()
+        .flat_map(|scope| vault.source_files_matching_glob(scope))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn grep(vault: &Vault, text: &str, mode: SourceGrepMode, paths: &[String]) -> Result<Vec<Row>> {

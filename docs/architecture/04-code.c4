@@ -486,10 +486,12 @@ digraph criv_code {
   "src/check.rs#fn:validate_c4_interface_drift" [label="validate_c4_interface_drift\nsrc/check.rs"];
   "src/check.rs#fn:validate_decision_note" [label="validate_decision_note\nsrc/check.rs"];
   "src/check.rs#fn:validate_dot_shape" [label="validate_dot_shape\nsrc/check.rs"];
+  "src/check.rs#fn:validate_inline_policy_pattern" [label="validate_inline_policy_pattern\nsrc/check.rs"];
   "src/check.rs#fn:validate_links" [label="validate_links\nsrc/check.rs"];
   "src/check.rs#fn:validate_markdown_format" [label="validate_markdown_format\nsrc/check.rs"];
   "src/check.rs#fn:validate_notes" [label="validate_notes\nsrc/check.rs"];
   "src/check.rs#fn:validate_pattern_collisions" [label="validate_pattern_collisions\nsrc/check.rs"];
+  "src/check.rs#fn:validate_policy_patterns" [label="validate_policy_patterns\nsrc/check.rs"];
   "src/check.rs#fn:validate_supersession" [label="validate_supersession\nsrc/check.rs"];
   "src/check.rs#fn:validate_targets" [label="validate_targets\nsrc/check.rs"];
   "src/check.rs#fn:validate_with_previous_c4_interfaces" [label="validate_with_previous_c4_interfaces\nsrc/check.rs"];
@@ -710,6 +712,7 @@ digraph criv_code {
   "src/search.rs#fn:note_search_requires_all_terms_and_ranks_title_matches" [label="note_search_requires_all_terms_and_ranks_title_matches\nsrc/search.rs"];
   "src/search.rs#fn:note_title" [label="note_title\nsrc/search.rs"];
   "src/search.rs#fn:notes" [label="notes\nsrc/search.rs"];
+  "src/search.rs#fn:policy_scope_files" [label="policy_scope_files\nsrc/search.rs"];
   "src/search.rs#fn:print_rows" [label="print_rows\nsrc/search.rs"];
   "src/search.rs#fn:run" [label="run\nsrc/search.rs"];
   "src/search.rs#fn:search_pattern_id" [label="search_pattern_id\nsrc/search.rs"];
@@ -914,14 +917,17 @@ digraph criv_code {
   "src/structural.rs#fn:find" [label="find\nsrc/structural.rs"];
   "src/structural.rs#fn:find_pattern_id" [label="find_pattern_id\nsrc/structural.rs"];
   "src/structural.rs#fn:find_policy_pattern" [label="find_policy_pattern\nsrc/structural.rs"];
+  "src/structural.rs#fn:find_policy_pattern_entry" [label="find_policy_pattern_entry\nsrc/structural.rs"];
   "src/structural.rs#fn:indent_yaml" [label="indent_yaml\nsrc/structural.rs"];
   "src/structural.rs#fn:language_glob" [label="language_glob\nsrc/structural.rs"];
   "src/structural.rs#fn:normalize_rule" [label="normalize_rule\nsrc/structural.rs"];
   "src/structural.rs#fn:parse_language" [label="parse_language\nsrc/structural.rs"];
   "src/structural.rs#fn:path_allowed" [label="path_allowed\nsrc/structural.rs"];
   "src/structural.rs#fn:pattern_source" [label="pattern_source\nsrc/structural.rs"];
+  "src/structural.rs#fn:policy_source" [label="policy_source\nsrc/structural.rs"];
   "src/structural.rs#fn:row_from_match" [label="row_from_match\nsrc/structural.rs"];
   "src/structural.rs#fn:scan_source" [label="scan_source\nsrc/structural.rs"];
+  "src/structural.rs#fn:validate_source" [label="validate_source\nsrc/structural.rs"];
   "src/structural.rs#type:CompiledMatcher" [label="CompiledMatcher\nsrc/structural.rs"];
   "src/structural.rs#type:PatternSource" [label="PatternSource\nsrc/structural.rs"];
   "src/structural.rs#type:StructuralMatch" [label="StructuralMatch\nsrc/structural.rs"];
@@ -961,7 +967,9 @@ digraph criv_code {
   "src/vault.rs#fn:parse_frontmatter" [label="parse_frontmatter\nsrc/vault.rs"];
   "src/vault.rs#fn:parse_note" [label="parse_note\nsrc/vault.rs"];
   "src/vault.rs#fn:parses_core_frontmatter_fields" [label="parses_core_frontmatter_fields\nsrc/vault.rs"];
+  "src/vault.rs#fn:parses_inline_policy_pattern_definitions" [label="parses_inline_policy_pattern_definitions\nsrc/vault.rs"];
   "src/vault.rs#fn:pattern_link_id" [label="pattern_link_id\nsrc/vault.rs"];
+  "src/vault.rs#fn:raw_pattern_line" [label="raw_pattern_line\nsrc/vault.rs"];
   "src/vault.rs#fn:shared_link_resolution_fixture_matches_vault" [label="shared_link_resolution_fixture_matches_vault\nsrc/vault.rs"];
   "src/vault.rs#fn:source_fragment_name" [label="source_fragment_name\nsrc/vault.rs"];
   "src/vault.rs#fn:source_fragment_path" [label="source_fragment_path\nsrc/vault.rs"];
@@ -982,6 +990,8 @@ digraph criv_code {
   "src/vault.rs#type:Note/member:filename_stem" [label="filename_stem\nsrc/vault.rs"];
   "src/vault.rs#type:NoteKind" [label="NoteKind\nsrc/vault.rs"];
   "src/vault.rs#type:PatternRef" [label="PatternRef\nsrc/vault.rs"];
+  "src/vault.rs#type:PolicyPattern" [label="PolicyPattern\nsrc/vault.rs"];
+  "src/vault.rs#type:PolicyPattern/member:has_inline_definition" [label="has_inline_definition\nsrc/vault.rs"];
   "src/vault.rs#type:RawFrontmatter" [label="RawFrontmatter\nsrc/vault.rs"];
   "src/vault.rs#type:RawPatternRef" [label="RawPatternRef\nsrc/vault.rs"];
   "src/vault.rs#type:RawPolicy" [label="RawPolicy\nsrc/vault.rs"];
@@ -1754,7 +1764,9 @@ digraph criv_code {
   "src/check.rs#fn:validate_c4_diagrams" -> "src/vault.rs#type:index/member:resolve_source_target";
   "src/check.rs#fn:validate_c4_interface_drift" -> "src/check.rs#fn:warning";
   "src/check.rs#fn:validate_decision_note" -> "src/check.rs#fn:error";
+  "src/check.rs#fn:validate_decision_note" -> "src/check.rs#fn:validate_policy_patterns";
   "src/check.rs#fn:validate_decision_note" -> "src/util.rs#fn:is_adr_id";
+  "src/check.rs#fn:validate_inline_policy_pattern" -> "src/check.rs#fn:error";
   "src/check.rs#fn:validate_links" -> "src/check.rs#fn:error";
   "src/check.rs#fn:validate_links" -> "src/check.rs#fn:warning";
   "src/check.rs#fn:validate_links" -> "src/vault.rs#type:index/member:canonical_source_target";
@@ -1772,6 +1784,9 @@ digraph criv_code {
   "src/check.rs#fn:validate_notes" -> "src/check.rs#fn:validate_decision_note";
   "src/check.rs#fn:validate_notes" -> "src/check.rs#fn:validate_targets";
   "src/check.rs#fn:validate_pattern_collisions" -> "src/check.rs#fn:error";
+  "src/check.rs#fn:validate_policy_patterns" -> "src/check.rs#fn:error";
+  "src/check.rs#fn:validate_policy_patterns" -> "src/check.rs#fn:validate_inline_policy_pattern";
+  "src/check.rs#fn:validate_policy_patterns" -> "src/vault.rs#type:PolicyPattern/member:has_inline_definition";
   "src/check.rs#fn:validate_supersession" -> "src/c4.rs#type:C4Level/member:as_str";
   "src/check.rs#fn:validate_supersession" -> "src/check.rs#fn:error";
   "src/check.rs#fn:validate_supersession" -> "src/check.rs#fn:supersession_cycles";
@@ -2066,6 +2081,7 @@ digraph criv_code {
   "src/search.rs#fn:notes" -> "src/lib.rs#type:CrivError";
   "src/search.rs#fn:notes" -> "src/search.rs#fn:lexical_notes";
   "src/search.rs#fn:notes" -> "src/search.rs#fn:semantic_notes";
+  "src/search.rs#fn:policy_scope_files" -> "src/vault.rs#type:index/member:source_files_matching_glob";
   "src/search.rs#fn:print_rows" -> "src/lib.rs#type:CrivError";
   "src/search.rs#fn:run" -> "src/search.rs#fn:files";
   "src/search.rs#fn:run" -> "src/search.rs#fn:grep";
@@ -2079,6 +2095,7 @@ digraph criv_code {
   "src/search.rs#fn:run" -> "src/vault.rs#type:Vault";
   "src/search.rs#fn:search_pattern_id" -> "src/lib.rs#type:CrivError";
   "src/search.rs#fn:search_rule" -> "src/lib.rs#type:CrivError";
+  "src/search.rs#fn:search_rule" -> "src/search.rs#fn:policy_scope_files";
   "src/search.rs#fn:search_rule" -> "src/search.rs#fn:structural_rows";
   "src/search.rs#fn:search_rule" -> "src/vault.rs#type:index/member:effective_governs";
   "src/search.rs#fn:search_rule" -> "src/vault.rs#type:index/member:resolve_note";
@@ -2329,6 +2346,7 @@ digraph criv_code {
   "src/state.rs#fn:state_and_snapshot_writes_are_parseable" -> "src/vault.rs#type:Vault";
   "src/state.rs#fn:state_pattern_matches" -> "src/state.rs#fn:configured_pattern_paths";
   "src/state.rs#fn:state_pattern_matches" -> "src/state.rs#fn:scoped_changed_paths";
+  "src/state.rs#fn:state_pattern_matches" -> "src/structural.rs#fn:find";
   "src/state.rs#fn:state_pattern_matches" -> "src/vault.rs#type:index/member:effective_governs";
   "src/state.rs#fn:state_pattern_matches" -> "src/vault.rs#type:index/member:resolve_note";
   "src/state.rs#fn:write_state" -> "src/state.rs#type:State";
@@ -2387,10 +2405,18 @@ digraph criv_code {
   "src/structural.rs#fn:find_policy_pattern" -> "src/structural.rs#fn:find";
   "src/structural.rs#fn:find_policy_pattern" -> "src/structural.rs#fn:pattern_source";
   "src/structural.rs#fn:find_policy_pattern" -> "src/structural.rs#type:PatternSource";
+  "src/structural.rs#fn:find_policy_pattern_entry" -> "src/structural.rs#fn:find";
+  "src/structural.rs#fn:find_policy_pattern_entry" -> "src/structural.rs#fn:find_policy_pattern";
+  "src/structural.rs#fn:find_policy_pattern_entry" -> "src/structural.rs#fn:policy_source";
+  "src/structural.rs#fn:find_policy_pattern_entry" -> "src/structural.rs#fn:validate_source";
   "src/structural.rs#fn:parse_language" -> "src/lib.rs#type:CrivError";
   "src/structural.rs#fn:path_allowed" -> "src/util.rs#fn:glob_matches";
+  "src/structural.rs#fn:policy_source" -> "src/structural.rs#type:PatternSource";
+  "src/structural.rs#fn:policy_source" -> "src/vault.rs#type:PolicyPattern/member:has_inline_definition";
   "src/structural.rs#fn:row_from_match" -> "src/structural.rs#fn:capture_map";
   "src/structural.rs#fn:scan_source" -> "src/structural.rs#fn:row_from_match";
+  "src/structural.rs#fn:validate_source" -> "src/structural.rs#fn:compile";
+  "src/structural.rs#fn:validate_source" -> "src/structural.rs#fn:parse_language";
   "src/util.rs#fn:atomic_write_replaces_existing_file_contents" -> "src/util.rs#fn:write_atomic";
   "src/util.rs#fn:fenced_blocks_include_line_info_and_contents" -> "src/util.rs#fn:markdown_fenced_blocks";
   "src/util.rs#fn:find_wiki_links_with_lines" -> "src/structural.rs#fn:find";
@@ -2424,6 +2450,7 @@ digraph criv_code {
   "src/vault.rs#fn:is_line_fragment" -> "src/util.rs#fn:strip_prefix";
   "src/vault.rs#fn:note_has_heading" -> "src/util.rs#fn:kebab";
   "src/vault.rs#fn:parse_frontmatter" -> "src/vault.rs#fn:frontmatter_line";
+  "src/vault.rs#fn:parse_frontmatter" -> "src/vault.rs#fn:raw_pattern_line";
   "src/vault.rs#fn:parse_frontmatter" -> "src/vault.rs#type:RawFrontmatter";
   "src/vault.rs#fn:parse_note" -> "src/util.rs#fn:find_wiki_links_with_lines";
   "src/vault.rs#fn:parse_note" -> "src/util.rs#fn:read_to_string";
@@ -2431,7 +2458,9 @@ digraph criv_code {
   "src/vault.rs#fn:parse_note" -> "src/vault.rs#fn:parse_frontmatter";
   "src/vault.rs#fn:parse_note" -> "src/vault.rs#fn:split_frontmatter";
   "src/vault.rs#fn:parses_core_frontmatter_fields" -> "src/vault.rs#fn:parse_frontmatter";
+  "src/vault.rs#fn:parses_inline_policy_pattern_definitions" -> "src/vault.rs#fn:parse_frontmatter";
   "src/vault.rs#fn:pattern_link_id" -> "src/util.rs#fn:strip_prefix";
+  "src/vault.rs#fn:raw_pattern_line" -> "src/vault.rs#fn:frontmatter_line";
   "src/vault.rs#fn:shared_link_resolution_fixture_matches_vault" -> "src/vault.rs#fn:unique_temp_dir";
   "src/vault.rs#fn:shared_link_resolution_fixture_matches_vault" -> "src/vault.rs#type:Vault";
   "src/vault.rs#fn:shared_link_resolution_fixture_matches_vault" -> "src/vault.rs#type:index/member:resolve_link";

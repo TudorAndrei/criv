@@ -28,6 +28,7 @@ Use `criv-me` as a decision-development mode for criv vaults.
 - Update criv docs inline when a settled explanation should persist.
 - Create or update an ADR only when the decision is hard to reverse, surprising without context, and the result of a real tradeoff.
 - Use the existing criv ADR format under `docs/adr/`: `id`, `kind: decision`, `title`, `status`, `date`, and relevant `governs:` scopes.
+- When a decision includes an enforceable structural rule, add an inline `policy.patterns` entry with `id`, `language`, and either `pattern` or `rule`.
 - Link decisions and docs to source with criv wiki-links such as `[[src/lib.rs#run]]`, `[[src/lib.rs#L10-L20]]`, `[[match:ADR-0007/pattern-id]]`, and `[[0007-content-addressed-state-and-diffing|ADR-0007]]`.
 - Prefer updating or superseding an existing ADR over creating a duplicate decision note.
 
@@ -35,4 +36,5 @@ Use `criv-me` as a decision-development mode for criv vaults.
 
 - Run `criv watch --once` after docs, ADR, or code changes to refresh `.criv/state.json`.
 - Run `criv check` before declaring documentation work complete.
+- Run `criv search --rule ADR-NNNN` to inspect inline policy matches when adding or changing ADR policy patterns.
 - Run `criv enforce --stage ci` when the session changes ADR-governed code or policy patterns.

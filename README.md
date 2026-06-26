@@ -123,6 +123,23 @@ criv check
 criv check --fix
 ```
 
+ADRs can enforce structural policy directly from their frontmatter:
+
+```yaml
+governs:
+  - src/**/*.rs
+policy:
+  patterns:
+    - id: no-println
+      language: rust
+      pattern: "println!($$$ARGS)"
+      message: Prefer structured diagnostics.
+```
+
+`criv check`, `criv search --rule ADR-NNNN`, and `criv enforce` parse those
+inline ast-grep rules from the ADR each time they run. ID-only policy entries
+still work when their rule body is configured in `criv.toml`.
+
 Refresh generated state when docs or source files change:
 
 ```sh

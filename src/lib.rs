@@ -6,7 +6,6 @@ mod check;
 mod config;
 mod enforce;
 mod init;
-mod policy;
 mod query;
 mod search;
 mod source_graph;
@@ -69,7 +68,6 @@ struct Cli {
 enum Command {
     Init(init::InitOptions),
     Check(check::CheckOptions),
-    Policy(policy::PolicyOptions),
     Query(query::QueryOptions),
     Search(search::SearchOptions),
     Watch(watch::WatchOptions),
@@ -110,7 +108,6 @@ pub fn run(args: Vec<String>) -> Result<()> {
         }
         Some(Command::Init(options)) => init::run(&cwd, options),
         Some(Command::Check(options)) => check::run(&cwd, options),
-        Some(Command::Policy(options)) => policy::run(&cwd, options),
         Some(Command::Query(options)) => query::run(&cwd, options),
         Some(Command::Search(options)) => search::run(&cwd, options),
         Some(Command::Watch(options)) => watch::run(&cwd, options),
