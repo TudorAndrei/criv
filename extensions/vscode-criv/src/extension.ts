@@ -13,7 +13,7 @@ import {
   CRIV_COMMANDS,
 } from "./commands";
 import { runProcess, type CommandResult } from "./commandRunner";
-import { crivConfiguration } from "./config";
+import { crivConfiguration, executablePathError } from "./config";
 import { registerSourceLanguageFeatures } from "./languageFeatures";
 import { parseSourceTarget } from "./sourceTarget";
 import { WorkspaceStateStore, type WorkspaceStateStatus } from "./stateStore";
@@ -196,6 +196,16 @@ async function runCrivWithProgress(
   title: string,
 ): Promise<CommandResult | undefined> {
   const config = crivConfiguration();
+  const executableError = executablePathError(config.binaryPath);
+  if (executableError) {
+    await vscode.window.showWarningMessage(executableError);
+    return undefined;
+  }
+  if (config.workspaceExecutionOverrideIgnored) {
+    await vscode.window.showWarningMessage(
+      "Workspace criv command-execution settings were ignored. Configure criv.binaryPath and criv.checkOnSave in user or machine settings.",
+    );
+  }
   return vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, cancellable: true, title },
     async (_progress, token) => {

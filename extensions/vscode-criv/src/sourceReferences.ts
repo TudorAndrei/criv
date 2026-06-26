@@ -24,6 +24,11 @@ export interface SourceTargetIndex {
   readonly canonicalByLegacy: ReadonlyMap<string, string>;
 }
 
+export interface MarkdownSink {
+  appendMarkdown(value: string): void;
+  appendText(value: string): void;
+}
+
 interface MutableSourceTargetIndex {
   targets: Set<string>;
   nodesByTarget: Map<string, CrivGraphNode>;
@@ -139,6 +144,38 @@ export function sourceReferenceDiagnostic(reference: SourceReference): string | 
   }
 
   return undefined;
+}
+
+export function appendSourceHoverContents(
+  contents: MarkdownSink,
+  reference: SourceReference,
+): void {
+  if (!reference.canonicalTarget) {
+    contents.appendText(`Unresolved criv source target: ${reference.target}.`);
+    return;
+  }
+
+  const node = reference.node;
+  contents.appendMarkdown("`");
+  contents.appendText(reference.canonicalTarget);
+  contents.appendMarkdown("`");
+  if (node?.label) {
+    contents.appendMarkdown("\n\n");
+    contents.appendText(node.label);
+  }
+  if (node?.kind) {
+    contents.appendMarkdown("\n\nKind: `");
+    contents.appendText(node.kind);
+    contents.appendMarkdown("`");
+  }
+  if (node?.line_range) {
+    contents.appendMarkdown("\n\nRange: `");
+    contents.appendText(node.line_range);
+    contents.appendMarkdown("`");
+  }
+  if (reference.legacy) {
+    contents.appendText("\n\nLegacy source link; prefer the AST-aware selector above.");
+  }
 }
 
 export function completionToken(text: string, offset: number): { query: string; start: number } {

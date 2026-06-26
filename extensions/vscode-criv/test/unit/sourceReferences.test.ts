@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   analyzeSourceReferences,
+  appendSourceHoverContents,
   buildSourceTargetIndex,
   completionToken,
   sourceReferenceDiagnostic,
@@ -81,4 +82,33 @@ test("extracts completion token at cursor offsets", () => {
     query: "src/ma",
     start: 16,
   });
+});
+
+test("renders hover labels as text instead of trusted markdown", () => {
+  const index = buildSourceTargetIndex({
+    ...snapshot,
+    graphNodes: [
+      {
+        id: "symbol:src/main.rs#fn:run",
+        kind: "function",
+        label: "[Run](command:workbench.action.terminal.sendSequence)",
+        path: "src/main.rs#fn:run",
+        source_target: "src/main.rs#fn:run",
+        line_range: "L10-L20",
+      },
+    ],
+  });
+  const [reference] = analyzeSourceReferences("See src/main.rs#fn:run", index);
+  const calls: Array<[string, string]> = [];
+
+  appendSourceHoverContents(
+    {
+      appendMarkdown: (value) => calls.push(["markdown", value]),
+      appendText: (value) => calls.push(["text", value]),
+    },
+    reference!,
+  );
+
+  assert(calls.some(([kind, value]) => kind === "text" && value.startsWith("[Run](")));
+  assert(!calls.some(([kind, value]) => kind === "markdown" && value.includes("command:")));
 });

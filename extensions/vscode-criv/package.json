@@ -116,6 +116,7 @@
       "properties": {
         "criv.binaryPath": {
           "type": "string",
+          "scope": "machine",
           "default": "criv",
           "description": "Path to the criv executable used for workspace commands."
         },
@@ -126,6 +127,7 @@
         },
         "criv.checkOnSave": {
           "type": "boolean",
+          "scope": "machine",
           "default": false,
           "description": "Run criv check when Markdown or .c4 files are saved in a trusted workspace."
         },

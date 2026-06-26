@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import { COMMAND_OPEN_SOURCE_TARGET } from "./commands";
 import {
   analyzeSourceReferences,
+  appendSourceHoverContents,
   buildSourceTargetIndex,
   completionToken,
   referenceAtOffset,
@@ -70,26 +71,7 @@ class SourceHoverProvider implements vscode.HoverProvider {
     }
 
     const contents = new vscode.MarkdownString(undefined, true);
-    contents.isTrusted = true;
-    if (!reference.canonicalTarget) {
-      contents.appendMarkdown(`Unresolved criv source target: \`${reference.target}\`.`);
-      return new vscode.Hover(contents, rangeFromOffsets(document, reference.start, reference.end));
-    }
-
-    const node = reference.node;
-    contents.appendMarkdown(`\`${reference.canonicalTarget}\``);
-    if (node?.label) {
-      contents.appendMarkdown(`\n\n${node.label}`);
-    }
-    if (node?.kind) {
-      contents.appendMarkdown(`\n\nKind: \`${node.kind}\``);
-    }
-    if (node?.line_range) {
-      contents.appendMarkdown(`\n\nRange: \`${node.line_range}\``);
-    }
-    if (reference.legacy) {
-      contents.appendMarkdown("\n\nLegacy source link; prefer the AST-aware selector above.");
-    }
+    appendSourceHoverContents(contents, reference);
     return new vscode.Hover(contents, rangeFromOffsets(document, reference.start, reference.end));
   }
 }
