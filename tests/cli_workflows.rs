@@ -702,6 +702,125 @@ policy:
 }
 
 #[test]
+fn policy_generate_materializes_inline_adr_patterns() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("docs/adr")).unwrap();
+    fs::write(
+        root.join("criv.toml"),
+        r#"[vault]
+docs = "docs"
+adr = "adr"
+
+[source]
+roots = ["src"]
+exclude = ["**/target/**", "**/node_modules/**"]
+
+[index]
+source = false
+embeddings = false
+
+[enforce]
+stages = ["commit", "push", "ci"]
+
+[patterns."manual/keep"]
+language = "rust"
+pattern = "dbg!($$$ARGS)"
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("docs/adr/0995-generated-policy.md"),
+        r#"---
+id: ADR-0995
+kind: decision
+title: Generated policy
+status: accepted
+date: 2026-06-26
+policy:
+  patterns:
+    - id: no-println
+      language: rust
+      pattern: "println!($$$ARGS)"
+      message: Prefer structured diagnostics.
+---
+
+# Generated policy
+"#,
+    )
+    .unwrap();
+
+    criv(root)
+        .args(["policy", "generate", "--check"])
+        .assert()
+        .failure();
+    criv(root).args(["policy", "generate"]).assert().success();
+
+    let generated = fs::read_to_string(root.join("criv.toml")).unwrap();
+    assert!(generated.contains(r#"[patterns."manual/keep"]"#));
+    assert!(generated.contains("# criv:generated policy-patterns start"));
+    assert!(generated.contains(r#"[patterns."ADR-0995/no-println"]"#));
+    assert!(generated.contains(r#"pattern = "println!($$$ARGS)""#));
+    assert!(generated.contains(r#"message = "Prefer structured diagnostics.""#));
+
+    criv(root)
+        .args(["policy", "generate", "--check"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn policy_generate_check_fails_when_generated_patterns_are_stale() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("docs/adr")).unwrap();
+    write_criv_config(
+        root,
+        vec!["src"],
+        vec!["**/target/**", "**/node_modules/**"],
+        false,
+    );
+    fs::write(
+        root.join("docs/adr/0994-stale-policy.md"),
+        r#"---
+id: ADR-0994
+kind: decision
+title: Stale policy
+status: accepted
+date: 2026-06-26
+policy:
+  patterns:
+    - id: no-println
+      language: rust
+      pattern: "println!($$$ARGS)"
+---
+
+# Stale policy
+"#,
+    )
+    .unwrap();
+
+    criv(root).args(["policy", "generate"]).assert().success();
+    let adr_path = root.join("docs/adr/0994-stale-policy.md");
+    let changed = fs::read_to_string(&adr_path)
+        .unwrap()
+        .replace("println!($$$ARGS)", "eprintln!($$$ARGS)");
+    fs::write(adr_path, changed).unwrap();
+
+    criv(root)
+        .args(["policy", "generate", "--check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "generated policy patterns are stale",
+        ));
+}
+
+#[test]
 fn import_policy_denies_grouped_and_aliased_rust_imports() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
