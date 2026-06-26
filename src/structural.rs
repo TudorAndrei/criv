@@ -149,14 +149,11 @@ fn policy_source(policy: &PolicyPattern) -> Option<(PatternSource<'_>, &str)> {
     if !policy.has_inline_definition() {
         return None;
     }
-    let Some(language) = policy
+    let language = policy
         .language
         .as_deref()
         .map(str::trim)
-        .filter(|language| !language.is_empty())
-    else {
-        return None;
-    };
+        .filter(|language| !language.is_empty())?;
 
     match (policy.pattern.as_deref(), policy.rule.as_deref()) {
         (Some(_), Some(_)) | (None, None) => None,
