@@ -9,6 +9,7 @@ fn criv(root: &Path) -> Command {
     let mut command = Command::cargo_bin("criv").expect("criv binary");
     command.current_dir(root);
     command.env_remove("CI");
+    command.env_remove("GITHUB_ACTIONS");
     command.env_remove("CRIV_BASE_REF");
     command.env_remove("GITHUB_BASE_REF");
     command
