@@ -169,7 +169,7 @@ Search code and notes:
 criv search --files main
 criv search --grep "watch --once"
 criv search --notes "Obsidian"
-criv search --rule docs/policies/no-unsafe.yml
+criv search --rule ADR-0005
 ```
 
 Run the same enforcement path used by hooks and CI:
