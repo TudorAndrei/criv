@@ -659,6 +659,49 @@ policy:
 }
 
 #[test]
+fn inline_policy_pattern_definitions_are_validated() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("docs/adr")).unwrap();
+    write_criv_config(
+        root,
+        vec!["src"],
+        vec!["**/target/**", "**/node_modules/**"],
+        false,
+    );
+    fs::write(
+        root.join("docs/adr/0996-inline-policy-validation.md"),
+        r#"---
+id: ADR-0996
+kind: decision
+title: Inline policy validation
+status: accepted
+date: 2026-06-26
+policy:
+  patterns:
+    - id: no-language
+      pattern: "println!($$$ARGS)"
+    - id: invalid-rule
+      language: rust
+      rule: "not: [valid"
+---
+
+# Inline policy validation
+"#,
+    )
+    .unwrap();
+
+    criv(root)
+        .args(["check", "--filter", "policy-pattern"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("missing-policy-pattern-language"))
+        .stdout(predicate::str::contains("invalid-policy-pattern"));
+}
+
+#[test]
 fn import_policy_denies_grouped_and_aliased_rust_imports() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

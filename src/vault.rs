@@ -26,6 +26,25 @@ pub(crate) struct PatternRef {
     pub(crate) line: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PolicyPattern {
+    pub(crate) id: Option<String>,
+    pub(crate) line: usize,
+    pub(crate) language: Option<String>,
+    pub(crate) pattern: Option<String>,
+    pub(crate) rule: Option<String>,
+    pub(crate) message: Option<String>,
+}
+
+impl PolicyPattern {
+    pub(crate) fn has_inline_definition(&self) -> bool {
+        self.language.is_some()
+            || self.pattern.is_some()
+            || self.rule.is_some()
+            || self.message.is_some()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct WikiLink {
     pub(crate) raw: String,
@@ -55,6 +74,7 @@ pub(crate) struct Note {
     pub(crate) target_pattern_refs: Vec<PatternRef>,
     pub(crate) target_pattern_ids: Vec<String>,
     pub(crate) policy_pattern_ids: Vec<String>,
+    pub(crate) policy_patterns: Vec<PolicyPattern>,
     pub(crate) governs: Vec<String>,
     pub(crate) supersedes: Vec<String>,
     pub(crate) superseded_by: Vec<String>,
@@ -441,6 +461,7 @@ fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
             target_pattern_refs: Vec::new(),
             target_pattern_ids: Vec::new(),
             policy_pattern_ids: Vec::new(),
+            policy_patterns: Vec::new(),
             governs: Vec::new(),
             supersedes: Vec::new(),
             superseded_by: Vec::new(),
@@ -523,16 +544,30 @@ fn parse_frontmatter(
         }
     }
 
-    let policy_pattern_ids = raw
+    let policy_patterns: Vec<PolicyPattern> = raw
         .policy
         .map(|policy| {
             policy
                 .patterns
                 .into_iter()
-                .filter_map(|pattern| pattern.id)
+                .map(|pattern| {
+                    let line = raw_pattern_line(frontmatter, &pattern);
+                    PolicyPattern {
+                        id: pattern.id,
+                        line,
+                        language: pattern.language,
+                        pattern: pattern.pattern,
+                        rule: pattern.rule,
+                        message: pattern.message,
+                    }
+                })
                 .collect()
         })
         .unwrap_or_default();
+    let policy_pattern_ids = policy_patterns
+        .iter()
+        .filter_map(|pattern| pattern.id.clone())
+        .collect();
 
     Ok(Note {
         path,
@@ -548,6 +583,7 @@ fn parse_frontmatter(
         target_pattern_refs,
         target_pattern_ids,
         policy_pattern_ids,
+        policy_patterns,
         governs: raw.governs,
         supersedes: raw.supersedes,
         superseded_by: raw.superseded_by,
@@ -655,6 +691,19 @@ fn frontmatter_line(frontmatter: &str, needle: &str) -> usize {
         .unwrap_or(2)
 }
 
+fn raw_pattern_line(frontmatter: &str, pattern: &RawPatternRef) -> usize {
+    pattern
+        .id
+        .as_deref()
+        .or(pattern.reference.as_deref())
+        .or(pattern.pattern.as_deref())
+        .or(pattern.rule.as_deref())
+        .or(pattern.language.as_deref())
+        .or(pattern.message.as_deref())
+        .map(|needle| frontmatter_line(frontmatter, needle))
+        .unwrap_or_else(|| frontmatter_line(frontmatter, "patterns:"))
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct RawFrontmatter {
@@ -690,6 +739,10 @@ struct RawPatternRef {
     id: Option<String>,
     #[serde(rename = "ref")]
     reference: Option<String>,
+    language: Option<String>,
+    pattern: Option<String>,
+    rule: Option<String>,
+    message: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -734,6 +787,49 @@ targets:
         assert_eq!(note.targets_symbols, vec!["src/lib.rs#run"]);
         assert_eq!(note.target_pattern_refs[0].id, "ADR-0007/no-block-on");
         assert_eq!(note.target_pattern_refs[0].line, 16);
+    }
+
+    #[test]
+    fn parses_inline_policy_pattern_definitions() {
+        let note = parse_frontmatter(
+            r#"id: ADR-0042
+kind: decision
+title: Inline policy
+status: accepted
+policy:
+  patterns:
+    - id: no-println
+      language: rust
+      pattern: "println!($$$ARGS)"
+      message: Use diagnostics instead.
+    - id: no-block-on
+      language: rust
+      rule: |
+        all:
+          - pattern: "$RT.block_on($$$ARGS)"
+"#,
+            PathBuf::from("x.md"),
+            "x.md".into(),
+            String::new(),
+        )
+        .unwrap();
+
+        assert_eq!(note.policy_pattern_ids, vec!["no-println", "no-block-on"]);
+        assert_eq!(note.policy_patterns.len(), 2);
+        assert_eq!(note.policy_patterns[0].id.as_deref(), Some("no-println"));
+        assert_eq!(note.policy_patterns[0].language.as_deref(), Some("rust"));
+        assert_eq!(
+            note.policy_patterns[0].pattern.as_deref(),
+            Some("println!($$$ARGS)")
+        );
+        assert_eq!(
+            note.policy_patterns[0].message.as_deref(),
+            Some("Use diagnostics instead.")
+        );
+        assert_eq!(
+            note.policy_patterns[1].rule.as_deref(),
+            Some("all:\n  - pattern: \"$RT.block_on($$$ARGS)\"\n")
+        );
     }
 
     #[test]

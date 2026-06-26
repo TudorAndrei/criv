@@ -15,8 +15,8 @@ use crate::c4_artifact::C4ArtifactFormat;
 use crate::state::{self, State};
 use crate::util::{is_adr_id, kebab};
 use crate::vault::{
-    Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault, is_typed_source_target,
-    source_target_body,
+    Note, NoteKind, PolicyPattern, ResolvedLink, SourceTargetResolution, Vault,
+    is_typed_source_target, source_target_body,
 };
 use crate::{CrivError, Result};
 
@@ -469,14 +469,107 @@ fn validate_decision_note(
         }
     }
 
-    for pattern in &note.policy_pattern_ids {
-        if pattern.trim().is_empty() {
+    validate_policy_patterns(note, diagnostics);
+}
+
+fn validate_policy_patterns(note: &Note, diagnostics: &mut Vec<Diagnostic>) {
+    let mut ids = BTreeSet::new();
+    for pattern in &note.policy_patterns {
+        let Some(id) = pattern.id.as_deref() else {
+            diagnostics.push(error(
+                "missing-policy-pattern-id",
+                &note.rel_path,
+                Some(pattern.line),
+                "policy pattern must declare an id",
+            ));
+            continue;
+        };
+
+        let id = id.trim();
+        if id.is_empty() {
             diagnostics.push(error(
                 "empty-policy-pattern",
                 &note.rel_path,
-                None,
+                Some(pattern.line),
                 "policy pattern id may not be empty",
             ));
+            continue;
+        }
+
+        if !ids.insert(id.to_string()) {
+            diagnostics.push(error(
+                "duplicate-policy-pattern",
+                &note.rel_path,
+                Some(pattern.line),
+                format!("policy pattern id `{id}` is declared more than once"),
+            ));
+        }
+
+        if pattern.has_inline_definition() {
+            validate_inline_policy_pattern(note, pattern, id, diagnostics);
+        }
+    }
+}
+
+fn validate_inline_policy_pattern(
+    note: &Note,
+    pattern: &PolicyPattern,
+    id: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(language) = pattern
+        .language
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        diagnostics.push(error(
+            "missing-policy-pattern-language",
+            &note.rel_path,
+            Some(pattern.line),
+            format!("inline policy pattern `{id}` must declare a language"),
+        ));
+        return;
+    };
+
+    match (pattern.pattern.as_deref(), pattern.rule.as_deref()) {
+        (Some(_), Some(_)) => diagnostics.push(error(
+            "ambiguous-policy-pattern-body",
+            &note.rel_path,
+            Some(pattern.line),
+            format!("inline policy pattern `{id}` must declare either pattern or rule, not both"),
+        )),
+        (None, None) => diagnostics.push(error(
+            "missing-policy-pattern-body",
+            &note.rel_path,
+            Some(pattern.line),
+            format!("inline policy pattern `{id}` must declare pattern or rule"),
+        )),
+        (Some(pattern_body), None) => {
+            if let Err(err) = crate::structural::validate_source(
+                crate::structural::PatternSource::Pattern(pattern_body),
+                language,
+            ) {
+                diagnostics.push(error(
+                    "invalid-policy-pattern",
+                    &note.rel_path,
+                    Some(pattern.line),
+                    format!("inline policy pattern `{id}` does not compile: {err}"),
+                ));
+            }
+        }
+        (None, Some(rule_body)) => {
+            if let Err(err) = crate::structural::validate_source(
+                crate::structural::PatternSource::Rule(rule_body),
+                language,
+            ) {
+                diagnostics.push(error(
+                    "invalid-policy-pattern",
+                    &note.rel_path,
+                    Some(pattern.line),
+                    format!("inline policy rule `{id}` does not compile: {err}"),
+                ));
+            }
         }
     }
 }
@@ -1718,6 +1811,7 @@ pub fn run(input: String, fallback: usize) -> usize {
             target_pattern_refs: Vec::new(),
             target_pattern_ids: Vec::new(),
             policy_pattern_ids: Vec::new(),
+            policy_patterns: Vec::new(),
             governs: Vec::new(),
             supersedes: Vec::new(),
             superseded_by: Vec::new(),

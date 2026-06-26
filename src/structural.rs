@@ -40,6 +40,11 @@ pub(crate) fn pattern_source(config: &PatternConfig) -> Option<PatternSource<'_>
         .or_else(|| config.rule.as_deref().map(PatternSource::Rule))
 }
 
+pub(crate) fn validate_source(source: PatternSource<'_>, language: &str) -> Result<()> {
+    let language = parse_language(language)?;
+    compile(source, language).map(|_| ())
+}
+
 pub(crate) fn find(
     root: &Path,
     vault: &Vault,

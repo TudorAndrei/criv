@@ -18,6 +18,8 @@ roots = [
   "hk.pkl",
   "mise.toml",
   "README.md",
+  "assets/skills",
+  ".agents/skills",
 ]
 exclude = [
   "**/target/**",
