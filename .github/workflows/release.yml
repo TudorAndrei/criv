@@ -105,12 +105,29 @@ jobs:
     name: Publish GitHub Release
     needs: build
     runs-on: ubuntu-24.04
+    environment: release
     permissions:
       attestations: write
       contents: write
       id-token: write
 
     steps:
+      - name: Checkout release tag
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate tag is reachable from main
+        shell: bash
+        run: |
+          git fetch --force origin main:refs/remotes/origin/main
+          tag_commit="$(git rev-list -n 1 "$GITHUB_REF_NAME")"
+          if ! git merge-base --is-ancestor "$tag_commit" origin/main; then
+            echo "Tag $GITHUB_REF_NAME points to $tag_commit, which is not reachable from origin/main" >&2
+            exit 1
+          fi
+
       - name: Download packaged binaries
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:

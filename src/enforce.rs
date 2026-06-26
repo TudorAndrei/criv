@@ -40,7 +40,7 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();
 
-    let changed_entries = changed_entries(root, options.stage);
+    let changed_entries = changed_entries(root, options.stage)?;
     let changed_files = if options.stage == Stage::Ci {
         None
     } else {
@@ -219,15 +219,15 @@ enum ChangeStatus {
     Other,
 }
 
-fn changed_entries(root: &Path, stage: Stage) -> Option<ChangedSet> {
+fn changed_entries(root: &Path, stage: Stage) -> Result<Option<ChangedSet>> {
     match stage {
-        Stage::Commit => git_changed_set(
+        Stage::Commit => Ok(git_changed_set(
             root,
             &["diff", "--name-status", "--cached"],
             Some("HEAD"),
             Some(":"),
-        ),
-        Stage::Push => git_changed_set(
+        )),
+        Stage::Push => Ok(git_changed_set(
             root,
             &["diff", "--name-status", "@{upstream}...HEAD"],
             Some("@{upstream}"),
@@ -240,13 +240,21 @@ fn changed_entries(root: &Path, stage: Stage) -> Option<ChangedSet> {
                 Some("HEAD~1"),
                 Some("HEAD"),
             )
-        }),
+        })),
         Stage::Ci => ci_changed_entries(root),
     }
 }
 
-fn ci_changed_entries(root: &Path) -> Option<ChangedSet> {
-    if let Ok(base_ref) = env::var("CRIV_BASE_REF")
+fn ci_changed_entries(root: &Path) -> Result<Option<ChangedSet>> {
+    ci_changed_entries_with_env(root, env_string, is_ci_environment())
+}
+
+fn ci_changed_entries_with_env(
+    root: &Path,
+    env_value: impl Fn(&str) -> Option<String>,
+    ci_environment: bool,
+) -> Result<Option<ChangedSet>> {
+    if let Some(base_ref) = env_value("CRIV_BASE_REF")
         && let Some(changes) = git_changed_set(
             root,
             &["diff", "--name-status", &base_ref, "HEAD"],
@@ -254,10 +262,10 @@ fn ci_changed_entries(root: &Path) -> Option<ChangedSet> {
             Some("HEAD"),
         )
     {
-        return Some(changes);
+        return Ok(Some(changes));
     }
 
-    if let Ok(base_ref) = env::var("GITHUB_BASE_REF") {
+    if let Some(base_ref) = env_value("GITHUB_BASE_REF") {
         let origin_ref = format!("origin/{base_ref}");
         if let Some(changes) = git_changed_set(
             root,
@@ -265,7 +273,7 @@ fn ci_changed_entries(root: &Path) -> Option<ChangedSet> {
             Some(&origin_ref),
             Some("HEAD"),
         ) {
-            return Some(changes);
+            return Ok(Some(changes));
         }
         if let Some(changes) = git_changed_set(
             root,
@@ -273,11 +281,31 @@ fn ci_changed_entries(root: &Path) -> Option<ChangedSet> {
             Some(&base_ref),
             Some("HEAD"),
         ) {
-            return Some(changes);
+            return Ok(Some(changes));
         }
     }
 
-    git_changed_set(root, &["diff", "--name-status", "HEAD"], Some("HEAD"), None)
+    if ci_environment {
+        return Err(CrivError::new(
+            "ci enforcement requires CRIV_BASE_REF or a fetchable GITHUB_BASE_REF",
+        ));
+    }
+
+    Ok(git_changed_set(
+        root,
+        &["diff", "--name-status", "HEAD"],
+        Some("HEAD"),
+        None,
+    ))
+}
+
+fn env_string(name: &str) -> Option<String> {
+    env::var(name).ok()
+}
+
+fn is_ci_environment() -> bool {
+    env::var("CI").is_ok_and(|value| value == "true")
+        || env::var("GITHUB_ACTIONS").is_ok_and(|value| value == "true")
 }
 
 fn git_changed_entries(root: &Path, args: &[&str]) -> Option<Vec<ChangedEntry>> {
@@ -631,6 +659,43 @@ mod tests {
     }
 
     #[test]
+    fn ci_changed_entries_fails_closed_without_base_in_ci() {
+        let root = tempfile::TempDir::new().unwrap();
+        let error = ci_changed_entries_with_env(root.path(), |_| None, true)
+            .expect_err("ci without a base ref should fail");
+
+        assert!(error.to_string().contains("CRIV_BASE_REF"));
+    }
+
+    #[test]
+    fn ci_changed_entries_uses_explicit_base_ref() {
+        let root = tempfile::TempDir::new().unwrap();
+        git(root.path(), &["init"]);
+        git(root.path(), &["config", "user.email", "criv@example.com"]);
+        git(root.path(), &["config", "user.name", "criv"]);
+        std::fs::write(root.path().join("tracked.txt"), "before\n").unwrap();
+        git(root.path(), &["add", "tracked.txt"]);
+        git(root.path(), &["commit", "-m", "initial"]);
+        let base = git_stdout(root.path(), &["rev-parse", "HEAD"]);
+        std::fs::write(root.path().join("tracked.txt"), "after\n").unwrap();
+        git(root.path(), &["add", "tracked.txt"]);
+        git(root.path(), &["commit", "-m", "change"]);
+
+        let changes = ci_changed_entries_with_env(
+            root.path(),
+            |name| (name == "CRIV_BASE_REF").then(|| base.clone()),
+            true,
+        )
+        .unwrap()
+        .expect("changes from explicit base ref");
+
+        assert_eq!(changes.old_ref.as_deref(), Some(base.as_str()));
+        assert_eq!(changes.new_ref.as_deref(), Some("HEAD"));
+        assert_eq!(changes.entries[0].status, ChangeStatus::Modified);
+        assert_eq!(changes.entries[0].path, "tracked.txt");
+    }
+
+    #[test]
     fn adr_immutability_allows_new_adrs_but_blocks_existing_changes() {
         let entries = vec![
             ChangedEntry {
@@ -713,5 +778,36 @@ mod tests {
 
         assert_eq!(tool_on_path("oxlint"), ToolCommand::Name("oxlint"));
         assert_eq!(tool_on_path("ruff"), ToolCommand::Name("ruff"));
+    }
+
+    fn git(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .current_dir(root)
+            .args(args)
+            .output()
+            .expect("git command should run");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn git_stdout(root: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .current_dir(root)
+            .args(args)
+            .output()
+            .expect("git command should run");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}{}",
+            args,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
     }
 }

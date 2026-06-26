@@ -21,7 +21,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Set criv base ref
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "CRIV_BASE_REF=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_ENV"
+          elif [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            echo "CRIV_BASE_REF=${{ github.event.before }}" >> "$GITHUB_ENV"
+          else
+            echo "Unable to determine CRIV_BASE_REF for ${{ github.event_name }}" >&2
+            exit 1
+          fi
 
       - name: Cache Cargo
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
