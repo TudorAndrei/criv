@@ -85,13 +85,44 @@ export function linkedSourcesFromMarkdown(markdown: string, state: CrivState): L
 export function sourceEntries(state: CrivState | null | undefined): SourceIndexEntry[] {
   const entries = state?.["source-index"] ?? [];
   const seen = new Set<string>();
-  return entries.filter((entry) => {
-    if (!entry.path || seen.has(entry.path)) {
-      return false;
+  const safeEntries: SourceIndexEntry[] = [];
+  for (const entry of entries) {
+    const path = safeVaultPath(entry.path);
+    if (!path || seen.has(path)) {
+      continue;
     }
-    seen.add(entry.path);
-    return true;
-  });
+    seen.add(path);
+    safeEntries.push({ ...entry, path });
+  }
+  return safeEntries;
+}
+
+export function safeVaultPath(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const path = value.trim().replace(/\\/g, "/");
+  if (
+    !path ||
+    path.startsWith("/") ||
+    path.startsWith("//") ||
+    /^[A-Za-z]:/.test(path) ||
+    path.includes("\0")
+  ) {
+    return null;
+  }
+  const segments = path.split("/");
+  const normalized: string[] = [];
+  for (const segment of segments) {
+    if (!segment || segment === ".") {
+      continue;
+    }
+    if (segment === "..") {
+      return null;
+    }
+    normalized.push(segment);
+  }
+  return normalized.length > 0 ? normalized.join("/") : null;
 }
 
 export function sourceSuggestions(

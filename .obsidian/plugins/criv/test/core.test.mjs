@@ -67,6 +67,28 @@ assert.equal(
 );
 assert.equal(core.sourceSuggestions(rankedState, "", 1)[0].path, "crates/criv-wasm/src/lib.rs");
 
+const unsafeSourceState = {
+  ...state,
+  "source-index": [
+    { path: "src/lib.rs", frecency: 1 },
+    { path: "../.ssh/id_rsa", frecency: 100 },
+    { path: "/etc/passwd", frecency: 100 },
+    { path: "C:\\Users\\name\\.ssh\\id_rsa", frecency: 100 },
+    { path: "\\\\server\\share\\secret.rs", frecency: 100 },
+    { path: "src\\windows\\path.rs", frecency: 2 },
+  ],
+};
+
+assert.deepEqual(
+  core.sourceEntries(unsafeSourceState).map((entry) => entry.path),
+  ["src/lib.rs", "src/windows/path.rs"],
+);
+assert.equal(core.resolveSource(unsafeSourceState, "../.ssh/id_rsa"), null);
+assert.equal(core.safeVaultPath("../.ssh/id_rsa"), null);
+assert.equal(core.safeVaultPath("/etc/passwd"), null);
+assert.equal(core.safeVaultPath("C:\\Users\\name\\.ssh\\id_rsa"), null);
+assert.equal(core.safeVaultPath("src\\lib.rs"), "src/lib.rs");
+
 const ranges = core.crivLinkRanges(
   "[[src/lib.rs]] [[missing.rs]] [[match:ADR-0001/no-block-on]]",
   state,

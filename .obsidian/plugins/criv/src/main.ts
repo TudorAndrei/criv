@@ -41,6 +41,7 @@ import {
   resolvePattern,
   resolveSource,
   sanitizeDotSvg,
+  safeVaultPath,
   sourceEntries,
   sourceSuggestions,
   sourceTooltip,
@@ -181,8 +182,12 @@ export default class CrivPlugin extends Plugin {
   }
 
   async readState() {
+    const statePath = this.safeStatePath();
+    if (!statePath) {
+      return null;
+    }
     try {
-      const raw = await this.app.vault.adapter.read(this.settings.statePath);
+      const raw = await this.app.vault.adapter.read(statePath);
       return await summarizeState(raw);
     } catch {
       return null;
@@ -190,8 +195,14 @@ export default class CrivPlugin extends Plugin {
   }
 
   async loadState(): Promise<CrivState | null> {
+    const statePath = this.safeStatePath();
+    if (!statePath) {
+      this.state = null;
+      this.stateError = `Invalid criv state path ${this.settings.statePath}.`;
+      return null;
+    }
     try {
-      const raw = await this.app.vault.adapter.read(this.settings.statePath);
+      const raw = await this.app.vault.adapter.read(statePath);
       const state = JSON.parse(raw) as CrivState;
       if (state.schema !== EXPECTED_SCHEMA) {
         this.state = null;
@@ -203,7 +214,7 @@ export default class CrivPlugin extends Plugin {
       return state;
     } catch (error) {
       this.state = null;
-      this.stateError = `Could not read ${this.settings.statePath}: ${errorMessage(error)}`;
+      this.stateError = `Could not read ${statePath}: ${errorMessage(error)}`;
       return null;
     }
   }
@@ -290,7 +301,11 @@ export default class CrivPlugin extends Plugin {
   }
 
   async sourcePreview(linked: LinkedSource): Promise<SourcePreview> {
-    const raw = await this.app.vault.adapter.read(linked.entry.path);
+    const sourcePath = safeVaultPath(linked.entry.path);
+    if (!sourcePath) {
+      throw new Error(`Invalid source path ${linked.entry.path}`);
+    }
+    const raw = await this.app.vault.adapter.read(sourcePath);
     const lines = raw.split(/\r?\n/);
     const lineRange = parseLineRange(linked.fragment);
     const start = lineRange?.start ?? 1;
@@ -298,8 +313,8 @@ export default class CrivPlugin extends Plugin {
     const selected = lines.slice(Math.max(0, start - 1), Math.min(lines.length, end));
     const truncated = !lineRange && start + selected.length - 1 < lines.length;
     return {
-      path: linked.entry.path,
-      language: languageForPath(linked.entry.path),
+      path: sourcePath,
+      language: languageForPath(sourcePath),
       text: selected.join("\n"),
       startLine: start,
       truncated,
@@ -394,6 +409,10 @@ export default class CrivPlugin extends Plugin {
 
   async saveSettings() {
     await this.saveData(this.settings);
+  }
+
+  private safeStatePath(): string | null {
+    return safeVaultPath(this.settings.statePath);
   }
 
   private patchNativeSaveCommand(): void {
@@ -1454,7 +1473,7 @@ class CrivSettingTab extends PluginSettingTab {
           .setPlaceholder(".criv/state.json")
           .setValue(this.plugin.settings.statePath)
           .onChange(async (value) => {
-            this.plugin.settings.statePath = value.trim() || DEFAULT_SETTINGS.statePath;
+            this.plugin.settings.statePath = safeVaultPath(value) ?? DEFAULT_SETTINGS.statePath;
             await this.plugin.saveSettings();
           }),
       );
