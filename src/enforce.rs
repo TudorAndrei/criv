@@ -134,7 +134,7 @@ fn policy_violations(
         let Some(adr_id) = &note.id else {
             continue;
         };
-        let scopes = policy_scope_files(vault, &vault.effective_governs(note));
+        let scopes = policy_scan_files(vault, &vault.effective_governs(note), changed_files);
         for pattern in &note.policy_patterns {
             if !crate::structural::policy_pattern_entry_is_valid(pattern) {
                 continue;
@@ -150,9 +150,6 @@ fn policy_violations(
             let pattern_id = format!("{adr_id}/{local_id}");
             let rows = crate::structural::find_policy_pattern_entry(root, vault, pattern, &scopes)?;
             for row in rows {
-                if changed_files.is_some_and(|files| !files.contains(&row.path)) {
-                    continue;
-                }
                 violations.push(format!(
                     "{}:{}: {} policy `{pattern_id}` matched `{}`",
                     row.path, row.line, adr_id, row.text
@@ -161,6 +158,22 @@ fn policy_violations(
         }
     }
     Ok(violations)
+}
+
+fn policy_scan_files(
+    vault: &Vault,
+    scopes: &[String],
+    changed_files: Option<&Vec<String>>,
+) -> Vec<String> {
+    let files = policy_scope_files(vault, scopes);
+    let Some(changed_files) = changed_files else {
+        return files;
+    };
+    let changed = changed_files.iter().collect::<BTreeSet<_>>();
+    files
+        .into_iter()
+        .filter(|file| changed.contains(file))
+        .collect()
 }
 
 fn policy_scope_files(vault: &Vault, scopes: &[String]) -> Vec<String> {
@@ -788,6 +801,37 @@ mod tests {
 
         assert_eq!(tool_on_path("oxlint"), ToolCommand::Name("oxlint"));
         assert_eq!(tool_on_path("ruff"), ToolCommand::Name("ruff"));
+    }
+
+    #[test]
+    fn policy_scan_files_intersects_changed_files_with_governed_sources() {
+        let root = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(root.path().join("src")).unwrap();
+        std::fs::write(
+            root.path().join("criv.toml"),
+            r#"
+[source]
+roots = ["src"]
+"#,
+        )
+        .unwrap();
+        std::fs::write(root.path().join("src/lib.rs"), "fn run() {}\n").unwrap();
+        std::fs::write(root.path().join("src/other.rs"), "fn other() {}\n").unwrap();
+        let vault = Vault::load(root.path()).unwrap();
+
+        let changed = vec!["src/lib.rs".into(), "docs/readme.md".into()];
+        assert_eq!(
+            policy_scan_files(&vault, &["src/**".into()], Some(&changed)),
+            vec!["src/lib.rs"]
+        );
+        assert_eq!(
+            policy_scan_files(&vault, &["src/other.rs#fn:other".into()], Some(&changed)),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            policy_scan_files(&vault, &["src/other.rs#fn:other".into()], None),
+            vec!["src/other.rs"]
+        );
     }
 
     fn git(root: &Path, args: &[&str]) {

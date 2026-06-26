@@ -794,6 +794,135 @@ policy:
 }
 
 #[test]
+fn commit_enforcement_scans_staged_governed_policy_files() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    git(root, &["init"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("docs/adr")).unwrap();
+    write_criv_config(
+        root,
+        vec!["src"],
+        vec!["**/target/**", "**/node_modules/**"],
+        true,
+    );
+    fs::write(root.join("src/clean.rs"), "pub fn clean() {}\n").unwrap();
+    fs::write(
+        root.join("src/violating.rs"),
+        "pub fn bad() {\n    println!(\"blocked\");\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("docs/adr/0993-staged-policy.md"),
+        r#"---
+id: ADR-0993
+kind: decision
+title: Staged policy
+status: accepted
+date: 2026-06-26
+governs:
+  - src/**
+policy:
+  patterns:
+    - id: no-println
+      language: rust
+      pattern: "println!($$$ARGS)"
+---
+
+# Staged policy
+"#,
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "initial"]);
+
+    fs::write(
+        root.join("src/clean.rs"),
+        "pub fn clean() -> bool { true }\n",
+    )
+    .unwrap();
+    git(root, &["add", "src/clean.rs"]);
+    criv(root)
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .success();
+
+    fs::write(
+        root.join("src/clean.rs"),
+        "pub fn clean() {\n    println!(\"blocked too\");\n}\n",
+    )
+    .unwrap();
+    git(root, &["add", "src/clean.rs"]);
+    criv(root)
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR-0993 policy"))
+        .stdout(predicate::str::contains("src/clean.rs"));
+}
+
+#[test]
+fn commit_enforcement_respects_selector_governed_policy_files() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    git(root, &["init"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("docs/adr")).unwrap();
+    write_criv_config(
+        root,
+        vec!["src"],
+        vec!["**/target/**", "**/node_modules/**"],
+        true,
+    );
+    fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+    fs::write(
+        root.join("docs/adr/0992-selector-staged-policy.md"),
+        r#"---
+id: ADR-0992
+kind: decision
+title: Selector staged policy
+status: accepted
+date: 2026-06-26
+governs:
+  - src/lib.rs#fn:run
+policy:
+  patterns:
+    - id: no-println
+      language: rust
+      pattern: "println!($$$ARGS)"
+---
+
+# Selector staged policy
+"#,
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "initial"]);
+
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn run() {\n    println!(\"blocked\");\n}\n",
+    )
+    .unwrap();
+    git(root, &["add", "src/lib.rs"]);
+
+    criv(root)
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR-0992 policy"))
+        .stdout(predicate::str::contains("src/lib.rs"));
+}
+
+#[test]
 fn import_policy_denies_grouped_and_aliased_rust_imports() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
@@ -890,4 +1019,19 @@ fn write_criv_config(root: &Path, roots: Vec<&str>, exclude: Vec<&str>, source_i
         stages = ["commit", "push", "ci"]
     };
     fs::write(root.join("criv.toml"), config.to_string()).unwrap();
+}
+
+fn git(root: &Path, args: &[&str]) {
+    let output = std::process::Command::new("git")
+        .current_dir(root)
+        .args(args)
+        .output()
+        .expect("git command should run");
+    assert!(
+        output.status.success(),
+        "git {:?} failed: {}{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
