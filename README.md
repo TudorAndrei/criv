@@ -137,8 +137,7 @@ policy:
 ```
 
 `criv check`, `criv search --rule ADR-NNNN`, and `criv enforce` parse those
-inline ast-grep rules from the ADR each time they run. ID-only policy entries
-still work when their rule body is configured in `criv.toml`.
+inline ast-grep rules from the ADR each time they run.
 
 Refresh generated state when docs or source files change:
 

@@ -608,29 +608,12 @@ fn selector_scoped_policy_patterns_are_enforced() {
         "pub fn run() {\n    println!(\"blocked\");\n}\n",
     )
     .unwrap();
-    fs::write(
-        root.join("criv.toml"),
-        r#"[vault]
-docs = "docs"
-adr = "adr"
-
-[source]
-roots = ["src"]
-exclude = ["**/target/**", "**/node_modules/**"]
-
-[index]
-source = true
-embeddings = false
-
-[enforce]
-stages = ["commit", "push", "ci"]
-
-[patterns."ADR-0997/no-println"]
-language = "rust"
-pattern = "println!($$$ARGS)"
-"#,
-    )
-    .unwrap();
+    write_criv_config(
+        root,
+        vec!["src"],
+        vec!["**/target/**", "**/node_modules/**"],
+        true,
+    );
     fs::write(
         root.join("docs/adr/0997-selector-policy.md"),
         r#"---
@@ -643,6 +626,8 @@ governs:
 policy:
   patterns:
     - id: no-println
+      language: rust
+      pattern: "println!($$$ARGS)"
 ---
 
 # Selector policy
@@ -686,6 +671,7 @@ policy:
     - id: invalid-rule
       language: rust
       rule: "not: [valid"
+    - id: id-only
 ---
 
 # Inline policy validation
@@ -698,7 +684,10 @@ policy:
         .assert()
         .failure()
         .stdout(predicate::str::contains("missing-policy-pattern-language"))
-        .stdout(predicate::str::contains("invalid-policy-pattern"));
+        .stdout(predicate::str::contains("invalid-policy-pattern"))
+        .stdout(predicate::str::contains(
+            "missing-policy-pattern-definition",
+        ));
 }
 
 #[test]

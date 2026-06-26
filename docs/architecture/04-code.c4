@@ -916,7 +916,6 @@ digraph criv_code {
   "src/structural.rs#fn:compile" [label="compile\nsrc/structural.rs"];
   "src/structural.rs#fn:find" [label="find\nsrc/structural.rs"];
   "src/structural.rs#fn:find_pattern_id" [label="find_pattern_id\nsrc/structural.rs"];
-  "src/structural.rs#fn:find_policy_pattern" [label="find_policy_pattern\nsrc/structural.rs"];
   "src/structural.rs#fn:find_policy_pattern_entry" [label="find_policy_pattern_entry\nsrc/structural.rs"];
   "src/structural.rs#fn:indent_yaml" [label="indent_yaml\nsrc/structural.rs"];
   "src/structural.rs#fn:language_glob" [label="language_glob\nsrc/structural.rs"];
@@ -2402,11 +2401,7 @@ digraph criv_code {
   "src/structural.rs#fn:find_pattern_id" -> "src/lib.rs#type:CrivError";
   "src/structural.rs#fn:find_pattern_id" -> "src/structural.rs#fn:find";
   "src/structural.rs#fn:find_pattern_id" -> "src/structural.rs#fn:pattern_source";
-  "src/structural.rs#fn:find_policy_pattern" -> "src/structural.rs#fn:find";
-  "src/structural.rs#fn:find_policy_pattern" -> "src/structural.rs#fn:pattern_source";
-  "src/structural.rs#fn:find_policy_pattern" -> "src/structural.rs#type:PatternSource";
   "src/structural.rs#fn:find_policy_pattern_entry" -> "src/structural.rs#fn:find";
-  "src/structural.rs#fn:find_policy_pattern_entry" -> "src/structural.rs#fn:find_policy_pattern";
   "src/structural.rs#fn:find_policy_pattern_entry" -> "src/structural.rs#fn:policy_source";
   "src/structural.rs#fn:find_policy_pattern_entry" -> "src/structural.rs#fn:validate_source";
   "src/structural.rs#fn:parse_language" -> "src/lib.rs#type:CrivError";

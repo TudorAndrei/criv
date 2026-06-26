@@ -474,7 +474,9 @@ fn state_pattern_matches(
                 .iter()
                 .find(|policy| policy.id.as_deref() == Some(local_id))
         }) {
-            structural::find_policy_pattern_entry(root, vault, pattern_id, policy, &scoped_paths)?
+            structural::find_policy_pattern_entry(root, vault, policy, &scoped_paths)?
+        } else if note.is_some() {
+            Vec::new()
         } else if let Some(configured) = vault.config.pattern_defs.get(pattern_id) {
             if let Some(source) = structural::pattern_source(configured) {
                 let scoped_paths = if paths.is_empty() {

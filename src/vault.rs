@@ -73,7 +73,6 @@ pub(crate) struct Note {
     pub(crate) targets_scope: Vec<String>,
     pub(crate) target_pattern_refs: Vec<PatternRef>,
     pub(crate) target_pattern_ids: Vec<String>,
-    pub(crate) policy_pattern_ids: Vec<String>,
     pub(crate) policy_patterns: Vec<PolicyPattern>,
     pub(crate) governs: Vec<String>,
     pub(crate) supersedes: Vec<String>,
@@ -162,8 +161,10 @@ impl Vault {
         let mut patterns = config.patterns.clone();
         for note in &notes {
             if let Some(id) = &note.id {
-                for pattern in &note.policy_pattern_ids {
-                    patterns.insert(format!("{id}/{pattern}"));
+                for pattern in &note.policy_patterns {
+                    if let Some(pattern_id) = pattern.id.as_deref() {
+                        patterns.insert(format!("{id}/{pattern_id}"));
+                    }
                 }
             }
         }
@@ -460,7 +461,6 @@ fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
             targets_scope: Vec::new(),
             target_pattern_refs: Vec::new(),
             target_pattern_ids: Vec::new(),
-            policy_pattern_ids: Vec::new(),
             policy_patterns: Vec::new(),
             governs: Vec::new(),
             supersedes: Vec::new(),
@@ -564,11 +564,6 @@ fn parse_frontmatter(
                 .collect()
         })
         .unwrap_or_default();
-    let policy_pattern_ids = policy_patterns
-        .iter()
-        .filter_map(|pattern| pattern.id.clone())
-        .collect();
-
     Ok(Note {
         path,
         rel_path,
@@ -582,7 +577,6 @@ fn parse_frontmatter(
         targets_scope,
         target_pattern_refs,
         target_pattern_ids,
-        policy_pattern_ids,
         policy_patterns,
         governs: raw.governs,
         supersedes: raw.supersedes,
@@ -768,6 +762,8 @@ governs:
 policy:
   patterns:
     - id: no-block-on
+      language: rust
+      pattern: "$RT.block_on($$$ARGS)"
 targets:
   symbols:
     - src/lib.rs#run
@@ -783,10 +779,11 @@ targets:
         assert_eq!(note.id.as_deref(), Some("ADR-0007"));
         assert_eq!(note.kind, NoteKind::Decision);
         assert_eq!(note.governs, vec!["src/**"]);
-        assert_eq!(note.policy_pattern_ids, vec!["no-block-on"]);
+        assert_eq!(note.policy_patterns.len(), 1);
+        assert_eq!(note.policy_patterns[0].id.as_deref(), Some("no-block-on"));
         assert_eq!(note.targets_symbols, vec!["src/lib.rs#run"]);
         assert_eq!(note.target_pattern_refs[0].id, "ADR-0007/no-block-on");
-        assert_eq!(note.target_pattern_refs[0].line, 16);
+        assert_eq!(note.target_pattern_refs[0].line, 18);
     }
 
     #[test]
@@ -814,7 +811,6 @@ policy:
         )
         .unwrap();
 
-        assert_eq!(note.policy_pattern_ids, vec!["no-println", "no-block-on"]);
         assert_eq!(note.policy_patterns.len(), 2);
         assert_eq!(note.policy_patterns[0].id.as_deref(), Some("no-println"));
         assert_eq!(note.policy_patterns[0].language.as_deref(), Some("rust"));

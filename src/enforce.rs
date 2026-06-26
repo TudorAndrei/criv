@@ -145,13 +145,7 @@ fn policy_violations(
                 continue;
             };
             let pattern_id = format!("{adr_id}/{local_id}");
-            let rows = crate::structural::find_policy_pattern_entry(
-                root,
-                vault,
-                &pattern_id,
-                pattern,
-                &scopes,
-            )?;
+            let rows = crate::structural::find_policy_pattern_entry(root, vault, pattern, &scopes)?;
             for row in rows {
                 if changed_files.is_some_and(|files| !files.contains(&row.path)) {
                     continue;

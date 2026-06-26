@@ -287,13 +287,7 @@ fn policy_violations(root: &Path, vault: &Vault) -> Result<Vec<PolicyViolation>>
                 continue;
             };
             let pattern_id = format!("{adr_id}/{local_id}");
-            let rows = crate::structural::find_policy_pattern_entry(
-                root,
-                vault,
-                &pattern_id,
-                pattern,
-                &scopes,
-            )?;
+            let rows = crate::structural::find_policy_pattern_entry(root, vault, pattern, &scopes)?;
             violations.extend(rows.into_iter().map(|row| PolicyViolation {
                 path: row.path,
                 line: Some(row.line),
@@ -518,7 +512,14 @@ fn validate_policy_patterns(note: &Note, diagnostics: &mut Vec<Diagnostic>) {
             ));
         }
 
-        if pattern.has_inline_definition() {
+        if !pattern.has_inline_definition() {
+            diagnostics.push(error(
+                "missing-policy-pattern-definition",
+                &note.rel_path,
+                Some(pattern.line),
+                format!("policy pattern `{id}` must declare language and pattern or rule"),
+            ));
+        } else {
             validate_inline_policy_pattern(note, pattern, id, diagnostics);
         }
     }
@@ -926,11 +927,13 @@ fn validate_pattern_collisions(vault: &Vault, diagnostics: &mut Vec<Diagnostic>)
                 .push(note.rel_path.clone());
         }
         if let Some(id) = &note.id {
-            for pattern in &note.policy_pattern_ids {
-                declarations
-                    .entry(format!("{id}/{pattern}"))
-                    .or_default()
-                    .push(note.rel_path.clone());
+            for pattern in &note.policy_patterns {
+                if let Some(pattern_id) = pattern.id.as_deref() {
+                    declarations
+                        .entry(format!("{id}/{pattern_id}"))
+                        .or_default()
+                        .push(note.rel_path.clone());
+                }
             }
         }
     }
@@ -1823,7 +1826,6 @@ pub fn run(input: String, fallback: usize) -> usize {
             targets_scope: Vec::new(),
             target_pattern_refs: Vec::new(),
             target_pattern_ids: Vec::new(),
-            policy_pattern_ids: Vec::new(),
             policy_patterns: Vec::new(),
             governs: Vec::new(),
             supersedes: Vec::new(),

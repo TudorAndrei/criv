@@ -128,55 +128,26 @@ pub(crate) fn find_pattern_id(
     find(root, vault, source, paths, pattern.language.as_deref())
 }
 
-pub(crate) fn find_policy_pattern(
-    root: &Path,
-    vault: &Vault,
-    pattern_id: &str,
-    fallback_pattern: &str,
-    paths: &[String],
-) -> Result<Vec<StructuralMatch>> {
-    if let Some(pattern) = vault.config.pattern_defs.get(pattern_id) {
-        let Some(source) = pattern_source(pattern) else {
-            return Ok(Vec::new());
-        };
-        return find(root, vault, source, paths, pattern.language.as_deref());
-    }
-
-    find(
-        root,
-        vault,
-        PatternSource::Pattern(fallback_pattern),
-        paths,
-        None,
-    )
-}
-
 pub(crate) fn find_policy_pattern_entry(
     root: &Path,
     vault: &Vault,
-    pattern_id: &str,
     policy: &PolicyPattern,
     paths: &[String],
 ) -> Result<Vec<StructuralMatch>> {
-    match policy_source(policy)? {
+    match policy_source(policy) {
         Some((source, language)) => {
             if validate_source(source, language).is_err() {
                 return Ok(Vec::new());
             }
             find(root, vault, source, paths, Some(language))
         }
-        None => {
-            let Some(local_id) = policy.id.as_deref() else {
-                return Ok(Vec::new());
-            };
-            find_policy_pattern(root, vault, pattern_id, local_id, paths)
-        }
+        None => Ok(Vec::new()),
     }
 }
 
-fn policy_source(policy: &PolicyPattern) -> Result<Option<(PatternSource<'_>, &str)>> {
+fn policy_source(policy: &PolicyPattern) -> Option<(PatternSource<'_>, &str)> {
     if !policy.has_inline_definition() {
-        return Ok(None);
+        return None;
     }
     let Some(language) = policy
         .language
@@ -184,13 +155,13 @@ fn policy_source(policy: &PolicyPattern) -> Result<Option<(PatternSource<'_>, &s
         .map(str::trim)
         .filter(|language| !language.is_empty())
     else {
-        return Ok(None);
+        return None;
     };
 
     match (policy.pattern.as_deref(), policy.rule.as_deref()) {
-        (Some(_), Some(_)) | (None, None) => Ok(None),
-        (Some(pattern), None) => Ok(Some((PatternSource::Pattern(pattern), language))),
-        (None, Some(rule)) => Ok(Some((PatternSource::Rule(rule), language))),
+        (Some(_), Some(_)) | (None, None) => None,
+        (Some(pattern), None) => Some((PatternSource::Pattern(pattern), language)),
+        (None, Some(rule)) => Some((PatternSource::Rule(rule), language)),
     }
 }
 

@@ -165,21 +165,8 @@ fn search_rule(root: &Path, vault: &Vault, adr_id: &str, paths: &[String]) -> Re
     };
     let mut rows = Vec::new();
     for pattern in &note.policy_patterns {
-        let Some(local_id) = pattern
-            .id
-            .as_deref()
-            .map(str::trim)
-            .filter(|id| !id.is_empty())
-        else {
-            continue;
-        };
-        let pattern_id = format!("{}/{}", note.display_id(), local_id);
         rows.extend(structural_rows(structural::find_policy_pattern_entry(
-            root,
-            vault,
-            &pattern_id,
-            pattern,
-            scopes,
+            root, vault, pattern, scopes,
         )?));
     }
     rows.sort_by(|left, right| (&left.path, left.line).cmp(&(&right.path, right.line)));
@@ -537,7 +524,6 @@ mod tests {
             targets_scope: Vec::new(),
             target_pattern_refs: Vec::new(),
             target_pattern_ids: Vec::new(),
-            policy_pattern_ids: Vec::new(),
             policy_patterns: Vec::new(),
             governs: Vec::new(),
             supersedes: Vec::new(),
@@ -575,7 +561,6 @@ mod tests {
             targets_scope: Vec::new(),
             target_pattern_refs: Vec::new(),
             target_pattern_ids: Vec::new(),
-            policy_pattern_ids: Vec::new(),
             policy_patterns: Vec::new(),
             governs: Vec::new(),
             supersedes: Vec::new(),
