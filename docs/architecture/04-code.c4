@@ -218,6 +218,9 @@ digraph criv_code {
   "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:dispose" [label="dispose\nextensions/vscode-criv/src/checkDiagnostics.ts"];
   "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:setFromJson" [label="setFromJson\nextensions/vscode-criv/src/checkDiagnostics.ts"];
   "extensions/vscode-criv/src/commandRunner.ts#fn:cancel" [label="cancel\nextensions/vscode-criv/src/commandRunner.ts"];
+  "extensions/vscode-criv/src/commandRunner.ts#fn:captureOutput" [label="captureOutput\nextensions/vscode-criv/src/commandRunner.ts"];
+  "extensions/vscode-criv/src/commandRunner.ts#fn:capturedText" [label="capturedText\nextensions/vscode-criv/src/commandRunner.ts"];
+  "extensions/vscode-criv/src/commandRunner.ts#fn:cleanup" [label="cleanup\nextensions/vscode-criv/src/commandRunner.ts"];
   "extensions/vscode-criv/src/commandRunner.ts#fn:runProcess" [label="runProcess\nextensions/vscode-criv/src/commandRunner.ts"];
   "extensions/vscode-criv/src/config.ts#fn:crivConfiguration" [label="crivConfiguration\nextensions/vscode-criv/src/config.ts"];
   "extensions/vscode-criv/src/configModel.ts#fn:executablePathError" [label="executablePathError\nextensions/vscode-criv/src/configModel.ts"];
@@ -507,6 +510,7 @@ digraph criv_code {
   "src/check.rs#type:Format" [label="Format\nsrc/check.rs"];
   "src/check.rs#type:PolicyViolation" [label="PolicyViolation\nsrc/check.rs"];
   "src/check.rs#type:Severity" [label="Severity\nsrc/check.rs"];
+  "src/config.rs#fn:is_adr_prefixed_pattern_id" [label="is_adr_prefixed_pattern_id\nsrc/config.rs"];
   "src/config.rs#fn:normalizes_relative_vault_paths" [label="normalizes_relative_vault_paths\nsrc/config.rs"];
   "src/config.rs#fn:parses_architecture_code_c4_output_path" [label="parses_architecture_code_c4_output_path\nsrc/config.rs"];
   "src/config.rs#fn:parses_architecture_code_config_without_source_glob" [label="parses_architecture_code_config_without_source_glob\nsrc/config.rs"];
@@ -568,6 +572,8 @@ digraph criv_code {
   "src/enforce.rs#fn:parse_changed_entries" [label="parse_changed_entries\nsrc/enforce.rs"];
   "src/enforce.rs#fn:parses_git_name_status_entries" [label="parses_git_name_status_entries\nsrc/enforce.rs"];
   "src/enforce.rs#fn:path_matches" [label="path_matches\nsrc/enforce.rs"];
+  "src/enforce.rs#fn:policy_scan_files" [label="policy_scan_files\nsrc/enforce.rs"];
+  "src/enforce.rs#fn:policy_scan_files_intersects_changed_files_with_governed_sources" [label="policy_scan_files_intersects_changed_files_with_governed_sources\nsrc/enforce.rs"];
   "src/enforce.rs#fn:policy_scope_files" [label="policy_scope_files\nsrc/enforce.rs"];
   "src/enforce.rs#fn:policy_violations" [label="policy_violations\nsrc/enforce.rs"];
   "src/enforce.rs#fn:portable_adr_link_alias" [label="portable_adr_link_alias\nsrc/enforce.rs"];
@@ -830,6 +836,7 @@ digraph criv_code {
   "src/source_index.rs#fn:normalize_source_roots" [label="normalize_source_roots\nsrc/source_index.rs"];
   "src/source_index.rs#fn:path_allowed" [label="path_allowed\nsrc/source_index.rs"];
   "src/source_index.rs#fn:prefixed_path" [label="prefixed_path\nsrc/source_index.rs"];
+  "src/source_index.rs#fn:regex_matcher" [label="regex_matcher\nsrc/source_index.rs"];
   "src/source_index.rs#fn:source_index_rejects_parent_traversing_source_roots" [label="source_index_rejects_parent_traversing_source_roots\nsrc/source_index.rs"];
   "src/source_index.rs#fn:source_index_rejects_symlinked_source_roots_and_files" [label="source_index_rejects_symlinked_source_roots_and_files\nsrc/source_index.rs"];
   "src/source_index.rs#fn:source_index_scans_configured_roots_and_preserves_file_roots" [label="source_index_scans_configured_roots_and_preserves_file_roots\nsrc/source_index.rs"];
@@ -888,6 +895,7 @@ digraph criv_code {
   "src/state.rs#fn:note_node_id" [label="note_node_id\nsrc/state.rs"];
   "src/state.rs#fn:pattern_node_id" [label="pattern_node_id\nsrc/state.rs"];
   "src/state.rs#fn:scoped_changed_paths" [label="scoped_changed_paths\nsrc/state.rs"];
+  "src/state.rs#fn:slash_qualified_state_patterns_require_registered_sources" [label="slash_qualified_state_patterns_require_registered_sources\nsrc/state.rs"];
   "src/state.rs#fn:stable_hash" [label="stable_hash\nsrc/state.rs"];
   "src/state.rs#fn:state_and_snapshot_writes_are_parseable" [label="state_and_snapshot_writes_are_parseable\nsrc/state.rs"];
   "src/state.rs#fn:state_pattern_matches" [label="state_pattern_matches\nsrc/state.rs"];
@@ -923,6 +931,7 @@ digraph criv_code {
   "src/structural.rs#fn:parse_language" [label="parse_language\nsrc/structural.rs"];
   "src/structural.rs#fn:path_allowed" [label="path_allowed\nsrc/structural.rs"];
   "src/structural.rs#fn:pattern_source" [label="pattern_source\nsrc/structural.rs"];
+  "src/structural.rs#fn:policy_pattern_entry_is_valid" [label="policy_pattern_entry_is_valid\nsrc/structural.rs"];
   "src/structural.rs#fn:policy_source" [label="policy_source\nsrc/structural.rs"];
   "src/structural.rs#fn:row_from_match" [label="row_from_match\nsrc/structural.rs"];
   "src/structural.rs#fn:scan_source" [label="scan_source\nsrc/structural.rs"];
@@ -1369,6 +1378,9 @@ digraph criv_code {
   "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:setFromJson" -> "extensions/vscode-criv/src/checkDiagnostics.ts#fn:diagnosticRange";
   "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:setFromJson" -> "extensions/vscode-criv/src/checkDiagnostics.ts#fn:severityValue";
   "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:setFromJson" -> "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:clear";
+  "extensions/vscode-criv/src/commandRunner.ts#fn:runProcess" -> "extensions/vscode-criv/src/commandRunner.ts#fn:captureOutput";
+  "extensions/vscode-criv/src/commandRunner.ts#fn:runProcess" -> "extensions/vscode-criv/src/commandRunner.ts#fn:capturedText";
+  "extensions/vscode-criv/src/commandRunner.ts#fn:runProcess" -> "extensions/vscode-criv/src/commandRunner.ts#fn:cleanup";
   "extensions/vscode-criv/src/config.ts#fn:crivConfiguration" -> "extensions/vscode-criv/src/configModel.ts#fn:hasWorkspaceConfigurationValue";
   "extensions/vscode-criv/src/config.ts#fn:crivConfiguration" -> "extensions/vscode-criv/src/configModel.ts#fn:machineScopedValue";
   "extensions/vscode-criv/src/extension.ts#fn:activate" -> ".obsidian/plugins/criv/src/main.ts#type:CrivEditorDriftPlugin/member:update";
@@ -1808,6 +1820,7 @@ digraph criv_code {
   "src/check.rs#fn:warn_legacy_source_target" -> "src/vault.rs#fn:is_typed_source_target";
   "src/check.rs#fn:warn_legacy_source_target" -> "src/vault.rs#fn:source_target_body";
   "src/check.rs#fn:warn_legacy_source_target" -> "src/vault.rs#type:index/member:canonical_source_target";
+  "src/config.rs#fn:is_adr_prefixed_pattern_id" -> "src/util.rs#fn:is_adr_id";
   "src/config.rs#fn:normalizes_relative_vault_paths" -> "src/config.rs#type:RawConfig/member:into_config";
   "src/config.rs#fn:parses_architecture_code_c4_output_path" -> "src/config.rs#type:RawConfig/member:into_config";
   "src/config.rs#fn:parses_architecture_code_config_without_source_glob" -> "src/config.rs#type:RawConfig/member:into_config";
@@ -1820,6 +1833,7 @@ digraph criv_code {
   "src/config.rs#type:Config/member:load" -> "src/config.rs#type:RawConfig/member:into_config";
   "src/config.rs#type:Config/member:load" -> "src/lib.rs#type:CrivError";
   "src/config.rs#type:Config/member:load" -> "src/util.rs#fn:read_to_string";
+  "src/config.rs#type:RawConfig/member:into_config" -> "src/config.rs#fn:is_adr_prefixed_pattern_id";
   "src/config.rs#type:RawConfig/member:into_config" -> "src/config.rs#fn:vault_path";
   "src/config.rs#type:RawConfig/member:into_config" -> "src/config.rs#type:Config";
   "src/config.rs#type:RawConfig/member:into_config" -> "src/config.rs#type:PatternConfig";
@@ -1852,8 +1866,11 @@ digraph criv_code {
   "src/enforce.rs#fn:normalize_portable_adr_links" -> "src/enforce.rs#fn:portable_adr_link_alias";
   "src/enforce.rs#fn:normalize_portable_adr_links" -> "src/structural.rs#fn:find";
   "src/enforce.rs#fn:parses_git_name_status_entries" -> "src/enforce.rs#fn:parse_changed_entries";
+  "src/enforce.rs#fn:policy_scan_files" -> "src/enforce.rs#fn:policy_scope_files";
+  "src/enforce.rs#fn:policy_scan_files" -> "src/source_graph.rs#type:source_file/member:changed_files";
+  "src/enforce.rs#fn:policy_scan_files_intersects_changed_files_with_governed_sources" -> "src/vault.rs#type:Vault";
   "src/enforce.rs#fn:policy_scope_files" -> "src/vault.rs#type:index/member:source_files_matching_glob";
-  "src/enforce.rs#fn:policy_violations" -> "src/enforce.rs#fn:policy_scope_files";
+  "src/enforce.rs#fn:policy_violations" -> "src/enforce.rs#fn:policy_scan_files";
   "src/enforce.rs#fn:policy_violations" -> "src/vault.rs#type:index/member:effective_governs";
   "src/enforce.rs#fn:read_changed_content" -> "src/lib.rs#type:Command";
   "src/enforce.rs#fn:run" -> "src/check.rs#type:Diagnostic/member:is_error";
@@ -2244,11 +2261,13 @@ digraph criv_code {
   "src/source_graph.rs#type:source_file/member:symbol" -> "src/structural.rs#fn:find";
   "src/source_index.rs#fn:explicit_file_fingerprint" -> "src/source_paths.rs#fn:source_metadata";
   "src/source_index.rs#fn:path_allowed" -> "src/util.rs#fn:glob_matches";
+  "src/source_index.rs#fn:regex_matcher" -> "src/lib.rs#type:CrivError";
   "src/source_index.rs#fn:source_index_rejects_parent_traversing_source_roots" -> "src/source_index.rs#type:FffSourceIndex";
   "src/source_index.rs#fn:source_index_rejects_symlinked_source_roots_and_files" -> "src/source_index.rs#type:FffSourceIndex";
   "src/source_index.rs#fn:source_index_scans_configured_roots_and_preserves_file_roots" -> ".obsidian/plugins/criv/src/core.ts#fn:index";
   "src/source_index.rs#fn:source_index_scans_configured_roots_and_preserves_file_roots" -> "src/source_index.rs#type:FffSourceIndex";
   "src/source_index.rs#fn:source_index_scans_configured_roots_and_preserves_file_roots" -> "src/source_index.rs#type:FffSourceIndex/member:entries";
+  "src/source_index.rs#fn:source_index_scans_configured_roots_and_preserves_file_roots" -> "src/source_index.rs#type:FffSourceIndex/member:grep";
   "src/source_index.rs#type:FffSourceIndex/member:entries" -> "src/check.rs#fn:relative_path";
   "src/source_index.rs#type:FffSourceIndex/member:entries" -> "src/source_index.rs#fn:prefixed_path";
   "src/source_index.rs#type:FffSourceIndex/member:entries" -> "src/source_index.rs#type:scan_root/member:indexed_path";
@@ -2262,6 +2281,7 @@ digraph criv_code {
   "src/source_index.rs#type:FffSourceIndex/member:grep" -> "src/check.rs#fn:relative_path";
   "src/source_index.rs#type:FffSourceIndex/member:grep" -> "src/source_index.rs#fn:path_allowed";
   "src/source_index.rs#type:FffSourceIndex/member:grep" -> "src/source_index.rs#fn:prefixed_path";
+  "src/source_index.rs#type:FffSourceIndex/member:grep" -> "src/source_index.rs#fn:regex_matcher";
   "src/source_index.rs#type:FffSourceIndex/member:grep" -> "src/source_index.rs#type:FffSourceIndex/member:grep";
   "src/source_index.rs#type:FffSourceIndex/member:grep" -> "src/source_index.rs#type:scan_root/member:grep_explicit_files";
   "src/source_index.rs#type:FffSourceIndex/member:grep" -> "src/source_index.rs#type:scan_root/member:indexed_path";
@@ -2340,6 +2360,8 @@ digraph criv_code {
   "src/state.rs#fn:interface_anchor_hash" -> "src/source_graph.rs#type:source_file/member:interface_hash";
   "src/state.rs#fn:interface_anchor_hash" -> "src/vault.rs#type:index/member:source_graph";
   "src/state.rs#fn:node_hash" -> "src/state.rs#fn:stable_hash";
+  "src/state.rs#fn:slash_qualified_state_patterns_require_registered_sources" -> "src/state.rs#fn:unique_temp_dir";
+  "src/state.rs#fn:slash_qualified_state_patterns_require_registered_sources" -> "src/vault.rs#type:Vault";
   "src/state.rs#fn:state_and_snapshot_writes_are_parseable" -> "src/state.rs#fn:unique_temp_dir";
   "src/state.rs#fn:state_and_snapshot_writes_are_parseable" -> "src/state.rs#fn:write_state";
   "src/state.rs#fn:state_and_snapshot_writes_are_parseable" -> "src/vault.rs#type:Vault";
@@ -2406,6 +2428,9 @@ digraph criv_code {
   "src/structural.rs#fn:find_policy_pattern_entry" -> "src/structural.rs#fn:validate_source";
   "src/structural.rs#fn:parse_language" -> "src/lib.rs#type:CrivError";
   "src/structural.rs#fn:path_allowed" -> "src/util.rs#fn:glob_matches";
+  "src/structural.rs#fn:policy_pattern_entry_is_valid" -> "src/structural.rs#fn:policy_source";
+  "src/structural.rs#fn:policy_pattern_entry_is_valid" -> "src/structural.rs#fn:validate_source";
+  "src/structural.rs#fn:policy_source" -> "src/lib.rs#type:CrivError";
   "src/structural.rs#fn:policy_source" -> "src/structural.rs#type:PatternSource";
   "src/structural.rs#fn:policy_source" -> "src/vault.rs#type:PolicyPattern/member:has_inline_definition";
   "src/structural.rs#fn:row_from_match" -> "src/structural.rs#fn:capture_map";

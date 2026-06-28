@@ -30,4 +30,6 @@ policy:
 
 Use `pattern` for simple ast-grep patterns and `rule` for full ast-grep YAML. Test non-trivial rules with `criv search --rule ADR-NNNN` or `criv check --filter policy` before finishing.
 
+Do not put ADR-owned structural rules in `criv.toml` as `[patterns."ADR-NNNN/..."]`. ADR-owned rules belong in the ADR's `policy.patterns` frontmatter.
+
 Accepted ADRs are immutable. Do not edit, delete, or rename an existing ADR to change a decision. Create a new ADR and use `supersedes:` to point to the older decision when the new decision replaces it.

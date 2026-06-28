@@ -3,7 +3,7 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::util::read_to_string;
+use crate::util::{is_adr_id, read_to_string};
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone)]
@@ -99,6 +99,11 @@ struct RawConfig {
 impl RawConfig {
     fn into_config(self) -> Result<Config> {
         let defaults = Config::default();
+        let patterns: BTreeMap<_, _> = self
+            .patterns
+            .into_iter()
+            .filter(|(id, _)| !is_adr_prefixed_pattern_id(id))
+            .collect();
         Ok(Config {
             docs_dir: vault_path("vault.docs", &self.vault.docs.unwrap_or(defaults.docs_dir))?,
             adr_dir: vault_path("vault.adr", &self.vault.adr.unwrap_or(defaults.adr_dir))?,
@@ -124,14 +129,18 @@ impl RawConfig {
                 .into_iter()
                 .map(RawImportPolicy::into_policy)
                 .collect(),
-            patterns: self.patterns.keys().cloned().collect(),
-            pattern_defs: self
-                .patterns
+            patterns: patterns.keys().cloned().collect(),
+            pattern_defs: patterns
                 .into_iter()
                 .map(|(id, value)| (id, PatternConfig::from_toml(value)))
                 .collect(),
         })
     }
+}
+
+fn is_adr_prefixed_pattern_id(id: &str) -> bool {
+    id.split_once('/')
+        .is_some_and(|(adr_id, local_id)| is_adr_id(adr_id) && !local_id.trim().is_empty())
 }
 
 fn vault_path(field: &str, value: &str) -> Result<String> {
