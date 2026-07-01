@@ -54,3 +54,36 @@ done as a focused path-type refactor across config, vault, state, search, and
 query modules.
 
 Reference: <https://docs.rs/camino>
+
+## Cargo Audit Snapshot, 2026-07-01
+
+Decision: document and monitor; do not add a failing `cargo audit` gate yet.
+
+`cargo audit --no-fetch` loaded the local advisory database and reported four
+allowed warnings in `Cargo.lock`. The command also warned that it could not open
+the crates.io index cache lock, so this is useful dependency posture signal, not
+a clean hosted-audit baseline.
+
+The actionable paths are currently transitive:
+
+- `git2 v0.20.4` reaches criv through `fff-search v0.9.6`; criv's direct
+  `git2` dependency is already `0.21`.
+- `bincode v1.3.3` reaches criv through `heed-types -> heed -> fff-search`.
+- `paste v1.0.15` is present in `Cargo.lock` through transitive/optional
+  dependency paths, including `macro_rules_attribute` and `tokenizers`; it does
+  not appear in the default `cargo tree` output.
+
+Evidence commands:
+
+```sh
+cargo audit --no-fetch
+cargo tree -i git2@0.20.4
+cargo tree -i git2@0.21.0
+cargo tree -i bincode
+```
+
+Do not add an ignore list or CI gate until the team decides whether the
+`fff-search` and optional embeddings dependency trees are acceptable as-is,
+upgradable in place, or need a replacement/spike. A future audit gate should use
+a reproducible advisory database update path rather than relying on the local
+developer cache.
