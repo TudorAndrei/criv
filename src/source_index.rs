@@ -285,10 +285,7 @@ impl SourceIndex for FffSourceIndex {
                         max_threads: 0,
                         project_path: None,
                         current_file: None,
-                        pagination: PaginationArgs {
-                            offset: 0,
-                            limit: limit.max(picker.get_files().len()),
-                        },
+                        pagination: PaginationArgs { offset: 0, limit },
                         ..Default::default()
                     },
                 );
@@ -568,6 +565,10 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|hit| hit.path == "Cargo.toml")
+        );
+        assert!(
+            index.fuzzy_files("", 2).unwrap().len() <= 2,
+            "file search should honor requested result limits"
         );
         assert!(
             index
