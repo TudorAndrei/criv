@@ -5,6 +5,7 @@ import {
   normalizeSourceTarget,
   parseLineFragment,
   parseSourceTarget,
+  safeVaultPath,
 } from "../../src/sourceTarget";
 
 test("normalizes graph node source prefixes", () => {
@@ -18,6 +19,37 @@ test("normalizes graph node source prefixes", () => {
 
 test("parses source targets with one-based line fragments into zero-based ranges", () => {
   assert.deepEqual(parseSourceTarget("src/lib.rs#L10-L12"), {
+    path: "src/lib.rs",
+    fragment: "L10-L12",
+    line: 9,
+    endLine: 11,
+  });
+});
+
+test("normalizes safe vault-relative source paths", () => {
+  assert.equal(safeVaultPath("src/lib.rs"), "src/lib.rs");
+  assert.equal(safeVaultPath("source:src/lib.rs"), "source:src/lib.rs");
+  assert.equal(safeVaultPath("src\\windows\\path.rs"), "src/windows/path.rs");
+  assert.equal(safeVaultPath("./src//lib.rs"), "src/lib.rs");
+});
+
+test("rejects source targets that escape the workspace", () => {
+  for (const target of [
+    "../secret.rs",
+    "src/../secret.rs",
+    "/etc/passwd",
+    "C:\\Users\\name\\secret.rs",
+    "\\\\server\\share\\secret.rs",
+    "src\0secret.rs",
+    "",
+    ".",
+  ]) {
+    assert.equal(parseSourceTarget(target), undefined, target);
+  }
+});
+
+test("normalizes windows separators after source prefixes", () => {
+  assert.deepEqual(parseSourceTarget("source:src\\lib.rs#L10-L12"), {
     path: "src/lib.rs",
     fragment: "L10-L12",
     line: 9,

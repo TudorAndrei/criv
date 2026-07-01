@@ -14,13 +14,14 @@ export function parseSourceTarget(target: string): ParsedSourceTarget | undefine
   }
 
   const [path, fragment] = splitFragment(normalized);
-  if (!path) {
+  const safePath = safeVaultPath(path);
+  if (!safePath) {
     return undefined;
   }
 
   const parsedLines = parseLineFragment(fragment);
   return {
-    path,
+    path: safePath,
     fragment,
     line: parsedLines?.line,
     endLine: parsedLines?.endLine,
@@ -57,6 +58,35 @@ export function parseLineFragment(fragment: string | undefined):
     ? Math.max(Number.parseInt(lineMatch.groups.end, 10) - 1, line)
     : undefined;
   return { line, endLine };
+}
+
+export function safeVaultPath(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const path = value.trim().replace(/\\/g, "/");
+  if (
+    !path ||
+    path.startsWith("/") ||
+    path.startsWith("//") ||
+    /^[A-Za-z]:/.test(path) ||
+    path.includes("\0")
+  ) {
+    return undefined;
+  }
+
+  const segments: string[] = [];
+  for (const segment of path.split("/")) {
+    if (!segment || segment === ".") {
+      continue;
+    }
+    if (segment === "..") {
+      return undefined;
+    }
+    segments.push(segment);
+  }
+
+  return segments.length > 0 ? segments.join("/") : undefined;
 }
 
 function splitFragment(target: string): [string, string | undefined] {
