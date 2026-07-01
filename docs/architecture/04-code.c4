@@ -284,6 +284,7 @@ digraph criv_code {
   "extensions/vscode-criv/src/sourceTarget.ts#fn:normalizeSourceTarget" [label="normalizeSourceTarget\nextensions/vscode-criv/src/sourceTarget.ts"];
   "extensions/vscode-criv/src/sourceTarget.ts#fn:parseLineFragment" [label="parseLineFragment\nextensions/vscode-criv/src/sourceTarget.ts"];
   "extensions/vscode-criv/src/sourceTarget.ts#fn:parseSourceTarget" [label="parseSourceTarget\nextensions/vscode-criv/src/sourceTarget.ts"];
+  "extensions/vscode-criv/src/sourceTarget.ts#fn:safeVaultPath" [label="safeVaultPath\nextensions/vscode-criv/src/sourceTarget.ts"];
   "extensions/vscode-criv/src/sourceTarget.ts#fn:splitFragment" [label="splitFragment\nextensions/vscode-criv/src/sourceTarget.ts"];
   "extensions/vscode-criv/src/stateModel.ts#fn:buildStateSnapshot" [label="buildStateSnapshot\nextensions/vscode-criv/src/stateModel.ts"];
   "extensions/vscode-criv/src/stateModel.ts#fn:c4Artifacts" [label="c4Artifacts\nextensions/vscode-criv/src/stateModel.ts"];
@@ -1482,6 +1483,7 @@ digraph criv_code {
   "extensions/vscode-criv/src/sourceReferences.ts#fn:sourceReferenceDiagnostic" -> "extensions/vscode-criv/src/sourceReferences.ts#fn:stripSourcePrefix";
   "extensions/vscode-criv/src/sourceTarget.ts#fn:parseSourceTarget" -> "extensions/vscode-criv/src/sourceTarget.ts#fn:normalizeSourceTarget";
   "extensions/vscode-criv/src/sourceTarget.ts#fn:parseSourceTarget" -> "extensions/vscode-criv/src/sourceTarget.ts#fn:parseLineFragment";
+  "extensions/vscode-criv/src/sourceTarget.ts#fn:parseSourceTarget" -> "extensions/vscode-criv/src/sourceTarget.ts#fn:safeVaultPath";
   "extensions/vscode-criv/src/sourceTarget.ts#fn:parseSourceTarget" -> "extensions/vscode-criv/src/sourceTarget.ts#fn:splitFragment";
   "extensions/vscode-criv/src/stateModel.ts#fn:buildStateSnapshot" -> "extensions/vscode-criv/src/stateModel.ts#fn:c4Artifacts";
   "extensions/vscode-criv/src/stateModel.ts#fn:buildStateSnapshot" -> "extensions/vscode-criv/src/stateModel.ts#fn:registeredPatterns";
