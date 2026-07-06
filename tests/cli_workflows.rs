@@ -72,6 +72,44 @@ fn init_check_watch_query_search_and_enforce_workflow() {
 }
 
 #[test]
+fn source_graph_cache_is_written_and_refreshed() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+
+    criv(root).args(["watch", "--once"]).assert().success();
+
+    let cache_path = root.join(".criv/source-graph.json");
+    assert!(cache_path.exists());
+    let before = fs::read_to_string(&cache_path).unwrap();
+    let before: serde_json::Value = serde_json::from_str(&before).unwrap();
+    let before_fingerprint = before["graph"]["file_fingerprints"]["src/lib.rs"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn run() {}\n\npub fn added() {}\n",
+    )
+    .unwrap();
+    criv(root).arg("check").assert().success();
+
+    let after = fs::read_to_string(&cache_path).unwrap();
+    let after: serde_json::Value = serde_json::from_str(&after).unwrap();
+    assert_eq!(after["schema"], "criv.source-graph/1");
+    assert_ne!(
+        after["graph"]["file_fingerprints"]["src/lib.rs"]
+            .as_str()
+            .unwrap(),
+        before_fingerprint
+    );
+}
+
+#[test]
 fn watch_once_does_not_rebuild_while_watch_lock_is_held() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
@@ -236,6 +274,167 @@ fn query_json_output_is_valid_for_special_characters() {
             && row.contains('\t')
             && row.contains('\n')
     }));
+}
+
+#[test]
+fn query_subcommands_cover_docs_sources_and_governance() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    query_fixture(root);
+
+    criv(root)
+        .args(["query", "next-adr-id"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ADR-0002"));
+    criv(root)
+        .args(["query", "callers", "src/lib.rs#fn:helper"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/lib.rs#fn:run"));
+    criv(root)
+        .args(["query", "callees", "src/lib.rs#fn:run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/lib.rs#fn:helper"));
+    criv(root)
+        .args(["query", "attack-surface"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/lib.rs#fn:run"));
+    criv(root)
+        .args(["query", "targets", "guide"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/lib.rs"));
+    criv(root)
+        .args(["query", "cites", "guide"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ADR-0001"))
+        .stdout(predicate::str::contains("src/lib.rs"));
+    criv(root)
+        .args(["query", "cited-by", "ADR-0001"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("guide"));
+    criv(root)
+        .args(["query", "governs", "ADR-0001"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/lib.rs"));
+    criv(root)
+        .args(["query", "governing", "src/lib.rs#fn:run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("ADR-0001"));
+    criv(root)
+        .args(["query", "references", "src/lib.rs#fn:run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("guide"));
+    criv(root)
+        .args(["query", "orphan-docs"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("orphan"))
+        .stdout(predicate::str::contains("guide").not());
+
+    let callers = criv(root)
+        .args([
+            "query",
+            "callers",
+            "src/lib.rs#fn:helper",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success();
+    let callers: Vec<String> = serde_json::from_slice(&callers.get_output().stdout).unwrap();
+    assert!(callers.iter().any(|row| row == "src/lib.rs#fn:run"));
+
+    let governs = criv(root)
+        .args(["query", "governs", "ADR-0001", "--format", "json"])
+        .assert()
+        .success();
+    let governs: Vec<String> = serde_json::from_slice(&governs.get_output().stdout).unwrap();
+    assert!(governs.iter().any(|row| row == "src/lib.rs"));
+}
+
+#[test]
+fn query_usage_errors_are_reported() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    query_fixture(root);
+
+    criv(root)
+        .args(["query", "callers"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "query `callers` requires <symbol>",
+        ));
+    criv(root)
+        .args(["query", "bogus"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("query `bogus` is not implemented"));
+}
+
+#[test]
+fn query_diff_compares_snapshots_and_reports_errors() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    query_fixture(root);
+    let hash_a = fs::read_to_string(root.join(".criv/latest"))
+        .unwrap()
+        .trim()
+        .to_string();
+
+    criv(root)
+        .args(["query", "diff", "latest", "latest"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("node_added").not())
+        .stdout(predicate::str::contains("node_removed").not());
+
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn run() {\n    helper();\n}\n\nfn helper() {}\n\npub fn added() {}\n",
+    )
+    .unwrap();
+    criv(root).args(["watch", "--once"]).assert().success();
+    let hash_b = fs::read_to_string(root.join(".criv/latest"))
+        .unwrap()
+        .trim()
+        .to_string();
+    assert_ne!(hash_a, hash_b);
+
+    criv(root)
+        .args(["query", "diff", &hash_a, &hash_b])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("node_added"))
+        .stdout(predicate::str::contains("src/lib.rs#fn:added"));
+    criv(root)
+        .args(["query", "diff", &hash_b, &hash_a])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("node_removed"))
+        .stdout(predicate::str::contains("src/lib.rs#fn:added"));
+    criv(root)
+        .args(["query", "diff", &hash_a])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("requires <ref-a> <ref-b>"));
+    criv(root)
+        .args(["query", "diff", "nonexistent", "latest"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("does not resolve"));
 }
 
 #[test]
@@ -1041,6 +1240,69 @@ fn write_criv_config(root: &Path, roots: Vec<&str>, exclude: Vec<&str>, source_i
         stages = ["commit", "push", "ci"]
     };
     fs::write(root.join("criv.toml"), config.to_string()).unwrap();
+}
+
+fn query_fixture(root: &Path) {
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("docs/adr")).unwrap();
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn run() {\n    helper();\n}\n\nfn helper() {}\n",
+    )
+    .unwrap();
+    write_criv_config(
+        root,
+        vec!["src"],
+        vec!["**/target/**", "**/node_modules/**"],
+        true,
+    );
+    fs::write(
+        root.join("docs/adr/0001-test-decision.md"),
+        r#"---
+id: ADR-0001
+kind: decision
+title: Test decision
+status: accepted
+governs:
+  - src/**/*.rs
+---
+
+# Test decision
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("docs/guide.md"),
+        r#"---
+id: guide
+kind: doc
+title: Guide
+targets:
+  symbols:
+    - src/lib.rs#fn:run
+---
+
+# Guide
+
+This cites [[ADR-0001]] and mentions [[src/lib.rs#fn:helper]].
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("docs/orphan.md"),
+        r#"---
+id: orphan
+kind: doc
+title: Orphan
+---
+
+# Orphan
+"#,
+    )
+    .unwrap();
+
+    criv(root).args(["watch", "--once"]).assert().success();
 }
 
 fn git(root: &Path, args: &[&str]) {

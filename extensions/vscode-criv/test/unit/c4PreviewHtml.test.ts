@@ -31,4 +31,7 @@ test("keeps source fallback and render-error surface in preview HTML", () => {
   assert.match(html, /Unknown \.c4 format/);
   assert.match(html, /fallback/);
   assert.match(html, /\\u003cbad\\u003e/);
+  assert.match(html, /function showError/);
+  assert.match(html, /node\.textContent = text/);
+  assert.doesNotMatch(html, /'<div class="error">' \+ String/);
 });

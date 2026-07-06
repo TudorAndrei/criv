@@ -441,13 +441,21 @@ fn tokenize(value: &str) -> Vec<String> {
 
 fn excerpt(body: &str, query_terms: &[String]) -> String {
     let body_lower = body.to_lowercase();
-    let Some(offset) = query_terms
+    let Some(lower_offset) = query_terms
         .iter()
         .filter_map(|term| body_lower.find(term))
         .min()
     else {
         return String::new();
     };
+    // `to_lowercase` can change byte lengths, so a byte offset into
+    // `body_lower` is not valid for `body`.
+    let char_index = body_lower[..lower_offset].chars().count();
+    let offset = body
+        .char_indices()
+        .nth(char_index)
+        .map(|(index, _)| index)
+        .unwrap_or(body.len());
     let start = body[..offset]
         .rfind(|ch: char| ['.', '\n'].contains(&ch))
         .map(|index| index + 1)
@@ -544,6 +552,23 @@ mod tests {
         let body_score = note_score(&body, &tokenize("async")).unwrap().0;
         assert!(title_score > body_score);
         assert!(note_score(&body, &tokenize("async missing")).is_none());
+    }
+
+    #[test]
+    fn excerpt_handles_multibyte_lowercase_expansion() {
+        let text = excerpt("İİaé. tail", &["a".to_string()]);
+
+        assert!(!text.is_empty());
+    }
+
+    #[test]
+    fn excerpt_returns_matching_sentence() {
+        let text = excerpt(
+            "First sentence has setup. Second sentence has needle. Third sentence.",
+            &["needle".to_string()],
+        );
+
+        assert_eq!(text, "Second sentence has needle");
     }
 
     #[test]

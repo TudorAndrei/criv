@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -24,6 +24,7 @@ use crate::{CrivError, Result};
 enum Format {
     Text,
     Json,
+    Github,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -97,6 +98,7 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
     match options.format {
         Format::Text => print_text(&diagnostics),
         Format::Json => print_json(&diagnostics)?,
+        Format::Github => print_github(&diagnostics),
     }
 
     if diagnostics.iter().any(Diagnostic::is_error) {
@@ -109,24 +111,45 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
 fn validate_markdown_format(root: &Path, fix: bool) -> Result<Vec<Diagnostic>> {
     let config = load_rumdl_config(root)?;
     let files = markdown_files(root, &config);
+    let base_rules = base_rules(&config);
     let mut diagnostics = Vec::new();
 
     for rel_path in files {
         let path = root.join(&rel_path);
         let mut contents = crate::util::read_to_string(&path)?;
         if fix {
-            apply_markdown_fixes(&path, &rel_path, &mut contents, &config, &mut diagnostics)?;
+            apply_markdown_fixes(
+                &path,
+                &rel_path,
+                &mut contents,
+                &config,
+                &base_rules,
+                &mut diagnostics,
+            )?;
         }
 
-        let rules = rules_for_file(&path, &config);
-        match rumdl_lib::lint(
-            &contents,
-            &rules,
-            false,
-            config.get_flavor_for_file(&path),
-            Some(path.clone()),
-            Some(&config),
-        ) {
+        let ignored_rules = config.get_ignored_rules_for_file(&path);
+        let result = if ignored_rules.is_empty() {
+            rumdl_lib::lint(
+                &contents,
+                &base_rules,
+                false,
+                config.get_flavor_for_file(&path),
+                Some(path.clone()),
+                Some(&config),
+            )
+        } else {
+            let rules = rules_for_ignored_rules(&config, &ignored_rules);
+            rumdl_lib::lint(
+                &contents,
+                &rules,
+                false,
+                config.get_flavor_for_file(&path),
+                Some(path.clone()),
+                Some(&config),
+            )
+        };
+        match result {
             Ok(warnings) => {
                 diagnostics.extend(
                     warnings
@@ -197,13 +220,21 @@ fn apply_markdown_fixes(
     rel_path: &str,
     contents: &mut String,
     config: &RumdlConfig,
+    base_rules: &[Box<dyn Rule>],
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<()> {
-    let rules = rules_for_file(path, config);
     let original = contents.clone();
-    let result = FixCoordinator::new()
-        .apply_fixes_iterative(&rules, &[], contents, config, 10, Some(path))
-        .map_err(|err| CrivError::new(format!("rumdl failed to fix {rel_path}: {err}")))?;
+    let ignored_rules = config.get_ignored_rules_for_file(path);
+    let result = if ignored_rules.is_empty() {
+        FixCoordinator::new()
+            .apply_fixes_iterative(base_rules, &[], contents, config, 10, Some(path))
+            .map_err(|err| CrivError::new(format!("rumdl failed to fix {rel_path}: {err}")))?
+    } else {
+        let rules = rules_for_ignored_rules(config, &ignored_rules);
+        FixCoordinator::new()
+            .apply_fixes_iterative(&rules, &[], contents, config, 10, Some(path))
+            .map_err(|err| CrivError::new(format!("rumdl failed to fix {rel_path}: {err}")))?
+    };
     if *contents != original {
         fs::write(path, contents.as_bytes())?;
     }
@@ -223,14 +254,15 @@ fn apply_markdown_fixes(
     Ok(())
 }
 
-fn rules_for_file(path: &Path, config: &RumdlConfig) -> Vec<Box<dyn Rule>> {
-    let rules = filter_rules(&all_rules(config), &config.global);
-    let ignored_rules = config.get_ignored_rules_for_file(path);
-    if ignored_rules.is_empty() {
-        return rules;
-    }
+fn base_rules(config: &RumdlConfig) -> Vec<Box<dyn Rule>> {
+    filter_rules(&all_rules(config), &config.global)
+}
 
-    rules
+fn rules_for_ignored_rules(
+    config: &RumdlConfig,
+    ignored_rules: &HashSet<String>,
+) -> Vec<Box<dyn Rule>> {
+    base_rules(config)
         .into_iter()
         .filter(|rule| !ignored_rules.contains(rule.name()))
         .collect()
@@ -268,7 +300,14 @@ struct PolicyViolation {
 }
 
 fn policy_violations(root: &Path, vault: &Vault) -> Result<Vec<PolicyViolation>> {
-    let mut violations = Vec::new();
+    struct ScanRecord<'a> {
+        adr_id: String,
+        pattern_id: String,
+        scopes: Vec<String>,
+        pattern: &'a PolicyPattern,
+    }
+
+    let mut records = Vec::new();
     for note in &vault.notes {
         if note.status.as_deref() != Some("accepted") {
             continue;
@@ -289,13 +328,34 @@ fn policy_violations(root: &Path, vault: &Vault) -> Result<Vec<PolicyViolation>>
             else {
                 continue;
             };
-            let pattern_id = format!("{adr_id}/{local_id}");
-            let rows = crate::structural::find_policy_pattern_entry(root, vault, pattern, &scopes)?;
-            violations.extend(rows.into_iter().map(|row| PolicyViolation {
+            records.push(ScanRecord {
+                adr_id: adr_id.clone(),
+                pattern_id: format!("{adr_id}/{local_id}"),
+                scopes: scopes.clone(),
+                pattern,
+            });
+        }
+    }
+
+    let requests = records
+        .iter()
+        .enumerate()
+        .map(|(key, record)| crate::structural::PolicyScanRequest {
+            key,
+            policy: record.pattern,
+            paths: &record.scopes,
+        })
+        .collect::<Vec<_>>();
+    let rows_by_key = crate::structural::find_policies_batch(root, vault, &requests)?;
+
+    let mut violations = Vec::new();
+    for (key, record) in records.iter().enumerate() {
+        if let Some(rows) = rows_by_key.get(&key) {
+            violations.extend(rows.iter().cloned().map(|row| PolicyViolation {
                 path: row.path,
                 line: Some(row.line),
-                adr_id: adr_id.clone(),
-                pattern_id: pattern_id.clone(),
+                adr_id: record.adr_id.clone(),
+                pattern_id: record.pattern_id.clone(),
                 text: row.text,
             }));
         }
@@ -1168,6 +1228,46 @@ fn print_json(diagnostics: &[Diagnostic]) -> Result<()> {
     Ok(())
 }
 
+fn print_github(diagnostics: &[Diagnostic]) {
+    for diag in diagnostics {
+        println!("{}", github_annotation(diag));
+    }
+}
+
+fn github_annotation(diag: &Diagnostic) -> String {
+    let command = match diag.severity {
+        Severity::Error => "error",
+        Severity::Warning => "warning",
+    };
+    let mut line = format!(
+        "::{command} file={},title={}::{}",
+        escape_github_property(&diag.path),
+        escape_github_property(&format!("criv {}", diag.code)),
+        escape_github_message(&diag.message)
+    );
+    if let Some(location) = diag.line {
+        let insertion = format!(",line={location}");
+        let title_start = line
+            .find(",title=")
+            .expect("github annotation includes title");
+        line.insert_str(title_start, &insertion);
+    }
+    line
+}
+
+fn escape_github_message(value: &str) -> String {
+    value
+        .replace('%', "%25")
+        .replace('\r', "%0D")
+        .replace('\n', "%0A")
+}
+
+fn escape_github_property(value: &str) -> String {
+    escape_github_message(value)
+        .replace(':', "%3A")
+        .replace(',', "%2C")
+}
+
 fn error(
     code: &'static str,
     path: &str,
@@ -1202,6 +1302,38 @@ fn warning(
 mod tests {
     use super::*;
     use crate::vault::WikiLink;
+
+    #[test]
+    fn github_annotation_escapes_workflow_command_data() {
+        let diag = Diagnostic {
+            severity: Severity::Error,
+            code: "broken-link",
+            path: "docs/a,b:guide.md".into(),
+            line: Some(7),
+            message: "bad % link\r\ntry again".into(),
+        };
+
+        assert_eq!(
+            github_annotation(&diag),
+            "::error file=docs/a%2Cb%3Aguide.md,line=7,title=criv broken-link::bad %25 link%0D%0Atry again"
+        );
+    }
+
+    #[test]
+    fn github_annotation_omits_missing_line() {
+        let diag = Diagnostic {
+            severity: Severity::Warning,
+            code: "missing-id",
+            path: "docs/note.md".into(),
+            line: None,
+            message: "missing id".into(),
+        };
+
+        assert_eq!(
+            github_annotation(&diag),
+            "::warning file=docs/note.md,title=criv missing-id::missing id"
+        );
+    }
 
     #[test]
     fn cycles_are_detected() {
@@ -1783,9 +1915,18 @@ pub fn run(input: String, fallback: usize) -> usize {
         let mut contents = "# Title\n\n\nBody\n".to_string();
         fs::write(&path, &contents).unwrap();
         let config = RumdlConfig::default();
+        let base_rules = base_rules(&config);
         let mut diagnostics = Vec::new();
 
-        apply_markdown_fixes(&path, "README.md", &mut contents, &config, &mut diagnostics).unwrap();
+        apply_markdown_fixes(
+            &path,
+            "README.md",
+            &mut contents,
+            &config,
+            &base_rules,
+            &mut diagnostics,
+        )
+        .unwrap();
 
         assert!(diagnostics.is_empty());
         assert_eq!(contents, "# Title\n\nBody\n");

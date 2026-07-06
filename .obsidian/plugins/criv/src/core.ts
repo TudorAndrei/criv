@@ -46,6 +46,10 @@ export interface CrivLinkRange {
   status: "resolved" | "unresolved";
 }
 
+export type StateInterpretation =
+  | { state: CrivState }
+  | { error: string; kind: "parse" | "schema" };
+
 export type C4ArtifactFormat = "mermaid" | "dot" | "unknown";
 export type C4ArtifactLevel = "context" | "container" | "component" | "code" | "unknown";
 
@@ -125,6 +129,65 @@ export function safeVaultPath(value: unknown): string | null {
   return normalized.length > 0 ? normalized.join("/") : null;
 }
 
+export function interpretState(raw: string, expectedSchema: string): StateInterpretation {
+  let state: CrivState;
+  try {
+    state = JSON.parse(raw) as CrivState;
+  } catch (error) {
+    return { error: errorMessage(error), kind: "parse" };
+  }
+
+  if (state.schema !== expectedSchema) {
+    return {
+      error: `Unsupported criv state schema ${state.schema ?? "unknown"}`,
+      kind: "schema",
+    };
+  }
+  return { state };
+}
+
+export function parseLineRange(fragment: string | null): { start: number; end: number } | null {
+  const match = fragment?.match(/^L(\d+)(?:-L?(\d+))?$/i);
+  if (!match) {
+    return null;
+  }
+  const start = Number(match[1]);
+  const end = Number(match[2] ?? match[1]);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return null;
+  }
+  return { start: Math.max(1, start), end: Math.max(start, end) };
+}
+
+export function renderErrorsMessage(errors: { level?: string; message: string }[]): string {
+  return errors.map((error) => error.message).join("; ") || "Graphviz render failed";
+}
+
+export function addTextTargets(targets: string[], value: string | null | undefined): void {
+  if (!value) {
+    return;
+  }
+  addTarget(targets, value);
+  for (const match of value.matchAll(/\[\[([^\]]+)\]\]/g)) {
+    addTarget(targets, match[1]);
+  }
+  const stripped = value.replace(/^\[\[/, "").replace(/\]\]$/, "");
+  if (stripped !== value) {
+    addTarget(targets, stripped);
+  }
+}
+
+export function addTarget(targets: string[], value: string | null | undefined): void {
+  const target = value?.trim();
+  if (target) {
+    targets.push(target);
+  }
+}
+
+/**
+ * Fallback source-suggestion ranking for Obsidian when criv-wasm is unavailable.
+ * Keep this scorer in sync with the wasm port; the parity test covers ASCII paths.
+ */
 export function sourceSuggestions(
   state: CrivState | null | undefined,
   query: string,
@@ -266,9 +329,30 @@ export function parseC4Artifact(path: string, text: string): C4ArtifactSummary {
   }
 
   const directives = c4Directives(text);
-  const assertedFormat = directives.find((directive) => directive.key === "format");
+  let directiveFormat: C4ArtifactFormat = "unknown";
+  let assertedFormat: { key: string; value: string | null; line: number } | null = null;
   const generatedDirective = directives.find((directive) => directive.key === "generated");
   for (const directive of directives) {
+    if (directive.key === "format") {
+      const format = c4FormatFromDirective(directive.value);
+      if (format === "unknown") {
+        diagnostics.push({
+          code: "invalid-c4-format",
+          line: directive.line,
+          message: "criv:format should be mermaid or dot.",
+        });
+      } else {
+        if (directiveFormat !== "unknown" && directiveFormat !== format) {
+          diagnostics.push({
+            code: "duplicate-c4-format",
+            line: directive.line,
+            message: "Conflicting criv:format directives.",
+          });
+        }
+        directiveFormat = format;
+        assertedFormat = directive;
+      }
+    }
     if (!["format", "generated", "source"].includes(directive.key)) {
       diagnostics.push({
         code: "unknown-c4-directive",
@@ -279,14 +363,6 @@ export function parseC4Artifact(path: string, text: string): C4ArtifactSummary {
   }
 
   const inferredFormat = c4FormatFromText(text);
-  const directiveFormat = assertedFormat ? c4FormatFromDirective(assertedFormat.value) : "unknown";
-  if (assertedFormat && directiveFormat === "unknown") {
-    diagnostics.push({
-      code: "invalid-c4-format",
-      line: assertedFormat.line,
-      message: "criv:format should be mermaid or dot.",
-    });
-  }
   if (
     assertedFormat &&
     directiveFormat !== "unknown" &&
@@ -557,4 +633,8 @@ function objectValue(value: unknown): Record<string, unknown> | null {
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

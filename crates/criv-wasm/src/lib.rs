@@ -112,15 +112,26 @@ fn source_selector_suggestions(
     let mut suggestions = Vec::new();
 
     for entry in unique_source_entries(&state.source_index) {
-        if !matches_query(&entry.path, &clean_query) || !seen.insert(entry.path.clone()) {
+        if !seen.insert(entry.path.clone()) {
             continue;
         }
-        suggestions.push(SourceSelectorSuggestion {
-            target: entry.path.clone(),
-            label: entry.path.clone(),
-            kind: "file".into(),
-            path: entry.path,
-            detail: "file".into(),
+        let score = if clean_query.is_empty() {
+            0
+        } else if let Some(score) = source_match_score(&entry.path, &clean_query) {
+            score + i64::from(entry.frecency)
+        } else {
+            continue;
+        };
+        suggestions.push(ScoredSourceSelectorSuggestion {
+            suggestion: SourceSelectorSuggestion {
+                target: entry.path.clone(),
+                label: entry.path.clone(),
+                kind: "file".into(),
+                path: entry.path,
+                detail: "file".into(),
+            },
+            score,
+            frecency: entry.frecency,
         });
     }
 
@@ -128,28 +139,41 @@ fn source_selector_suggestions(
         let Some(target) = node.source_target.clone() else {
             continue;
         };
-        if !target.contains('#')
-            || !matches_query(&target, &clean_query)
-            || !seen.insert(target.clone())
-        {
+        if !target.contains('#') || !seen.insert(target.clone()) {
             continue;
         }
-        suggestions.push(SourceSelectorSuggestion {
-            target,
-            label: node.label,
-            kind: node.kind,
-            path: node.path.unwrap_or_default(),
-            detail: node.id,
+        let score = if clean_query.is_empty() {
+            0
+        } else if let Some(score) = source_match_score(&target, &clean_query) {
+            score
+        } else {
+            continue;
+        };
+        suggestions.push(ScoredSourceSelectorSuggestion {
+            suggestion: SourceSelectorSuggestion {
+                target,
+                label: node.label,
+                kind: node.kind,
+                path: node.path.unwrap_or_default(),
+                detail: node.id,
+            },
+            score,
+            frecency: 0,
         });
     }
 
     suggestions.sort_by(|left, right| {
-        selector_rank(&left.target, &clean_query)
-            .cmp(&selector_rank(&right.target, &clean_query))
-            .then_with(|| left.target.cmp(&right.target))
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| right.frecency.cmp(&left.frecency))
+            .then_with(|| left.suggestion.target.cmp(&right.suggestion.target))
     });
     suggestions.truncate(limit);
     suggestions
+        .into_iter()
+        .map(|scored| scored.suggestion)
+        .collect()
 }
 
 fn find_editor_graph_node(state: &CrivState, target: &str) -> Option<EditorGraphNode> {
@@ -171,22 +195,56 @@ fn line_range(path: &str) -> Option<String> {
     path.split_once("#L").map(|(_, range)| format!("L{range}"))
 }
 
-fn matches_query(candidate: &str, query: &str) -> bool {
-    query.is_empty() || candidate.to_lowercase().contains(query)
+fn source_match_score(path: &str, query: &str) -> Option<i64> {
+    let lower_path = path.to_lowercase();
+    let basename = lower_path.rsplit('/').next().unwrap_or(&lower_path);
+    if lower_path == query {
+        return Some(100_000);
+    }
+    if basename == query {
+        return Some(90_000);
+    }
+    if lower_path.ends_with(query) {
+        return Some(80_000 - lower_path.len() as i64);
+    }
+    if basename.starts_with(query) {
+        return Some(70_000 - basename.len() as i64);
+    }
+    if let Some(index) = lower_path.find(query) {
+        return Some(60_000 - index as i64 - lower_path.len() as i64);
+    }
+    fuzzy_subsequence_score(&lower_path, query)
+        .map(|score| 40_000 + score - lower_path.len() as i64)
 }
 
-fn selector_rank(candidate: &str, query: &str) -> usize {
-    if query.is_empty() {
-        return 0;
+fn fuzzy_subsequence_score(value: &str, query: &str) -> Option<i64> {
+    let mut query_chars = query.chars();
+    let mut current_query = query_chars.next();
+    let mut score = 0;
+    let mut run = 0;
+    let mut previous = None;
+
+    for character in value.chars() {
+        let Some(query_character) = current_query else {
+            break;
+        };
+        if character != query_character {
+            run = 0;
+            previous = Some(character);
+            continue;
+        }
+        run += 1;
+        let boundary_bonus = if previous.is_none() || previous == Some('/') {
+            8
+        } else {
+            0
+        };
+        score += run * 3 + boundary_bonus;
+        current_query = query_chars.next();
+        previous = Some(character);
     }
-    let candidate = candidate.to_lowercase();
-    if candidate == query {
-        0
-    } else if candidate.starts_with(query) {
-        1
-    } else {
-        2
-    }
+
+    current_query.is_none().then_some(score)
 }
 
 #[derive(Debug, Deserialize)]
@@ -273,6 +331,12 @@ struct SourceSelectorSuggestion {
     detail: String,
 }
 
+struct ScoredSourceSelectorSuggestion {
+    suggestion: SourceSelectorSuggestion,
+    score: i64,
+    frecency: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,9 +405,79 @@ mod tests {
 
         let suggestions = source_selector_suggestions(&state, "run", 10);
 
-        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions.len(), 2);
         assert_eq!(suggestions[0].target, "src/lib.rs#fn:run");
         assert_eq!(suggestions[0].kind, "function");
+        assert_eq!(suggestions[1].target, "src/run.rs");
+        assert_eq!(suggestions[1].kind, "file");
+    }
+
+    #[test]
+    fn selector_suggestions_rank_with_weighted_source_scoring() {
+        let state = selector_state();
+
+        let suggestions = source_selector_suggestions(&state, "lib.rs", 10);
+        let targets = suggestion_targets(&suggestions);
+
+        assert_eq!(
+            targets,
+            vec![
+                "lib.rs",
+                "crates/criv-wasm/src/lib.rs",
+                "src/lib.rs",
+                "src/slow_lib.rs",
+                "src/lib.rs#fn:run"
+            ]
+        );
+    }
+
+    #[test]
+    fn selector_suggestions_use_frecency_as_tiebreaker() {
+        let state = selector_state();
+
+        let suggestions = source_selector_suggestions(&state, "src/tie", 10);
+        let targets = suggestion_targets(&suggestions);
+
+        assert_eq!(targets, vec!["src/tie-high.rs", "src/tie-low.rs"]);
+    }
+
+    #[test]
+    fn selector_suggestions_drop_non_matches_and_keep_fuzzy_matches() {
+        let state = selector_state();
+
+        let suggestions = source_selector_suggestions(&state, "slr", 10);
+        let targets = suggestion_targets(&suggestions);
+
+        assert!(targets.contains(&"src/lib.rs"));
+        assert!(targets.contains(&"src/lib.rs#fn:run"));
+        assert!(!targets.contains(&"docs/adr.md"));
+    }
+
+    #[test]
+    fn selector_suggestions_empty_query_orders_by_frecency_and_target() {
+        let state = selector_state();
+
+        let suggestions = source_selector_suggestions(&state, "", 4);
+        let targets = suggestion_targets(&suggestions);
+
+        assert_eq!(
+            targets,
+            vec![
+                "src/tie-high.rs",
+                "crates/criv-wasm/src/lib.rs",
+                "src/lib.rs",
+                "src/main.rs"
+            ]
+        );
+    }
+
+    #[test]
+    fn selector_suggestions_respect_limit() {
+        let state = selector_state();
+
+        let suggestions = source_selector_suggestions(&state, "", 2);
+
+        assert_eq!(suggestions.len(), 2);
     }
 
     #[test]
@@ -380,10 +514,55 @@ mod tests {
               "registered-patterns": [],
               "source-index": [
                 { "path": "src/lib.rs", "frecency": 4, "mime": "text/rust" },
-                { "path": "src/lib.rs", "frecency": 1 }
+                { "path": "src/lib.rs", "frecency": 1 },
+                { "path": "src/run.rs", "frecency": 3 }
               ]
             }"#,
         )
         .unwrap()
+    }
+
+    fn selector_state() -> CrivState {
+        serde_json::from_str(
+            r#"{
+              "schema": "criv.state.v0",
+              "graph": {
+                "nodes": [
+                  {
+                    "id": "symbol:src/lib.rs#fn:run",
+                    "kind": "function",
+                    "label": "run",
+                    "path": "src/lib.rs#L10-L20"
+                  },
+                  {
+                    "id": "symbol:src/main.rs#fn:start",
+                    "kind": "function",
+                    "label": "start",
+                    "path": "src/main.rs#L4-L8"
+                  }
+                ],
+                "edges": []
+              },
+              "registered-patterns": [],
+              "source-index": [
+                { "path": "src/tie-low.rs", "frecency": 1 },
+                { "path": "src/tie-high.rs", "frecency": 50 },
+                { "path": "crates/criv-wasm/src/lib.rs", "frecency": 40 },
+                { "path": "src/lib.rs", "frecency": 5 },
+                { "path": "lib.rs", "frecency": 0 },
+                { "path": "src/slow_lib.rs", "frecency": 0 },
+                { "path": "src/main.rs", "frecency": 2 },
+                { "path": "docs/adr.md", "frecency": 0 }
+              ]
+            }"#,
+        )
+        .unwrap()
+    }
+
+    fn suggestion_targets(suggestions: &[SourceSelectorSuggestion]) -> Vec<&str> {
+        suggestions
+            .iter()
+            .map(|suggestion| suggestion.target.as_str())
+            .collect()
     }
 }

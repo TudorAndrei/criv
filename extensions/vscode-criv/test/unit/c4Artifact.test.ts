@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import test from "node:test";
 import { instance as vizInstance } from "@viz-js/viz";
 
 import { c4SourceTargets, parseC4Artifact, sanitizeDotSvg } from "../../src/c4Artifact";
+
+type ExpectedDiagnostic = { code: string; line: number | null };
 
 test("summarizes Mermaid C4 artifacts", () => {
   const summary = parseC4Artifact(
@@ -78,3 +82,33 @@ test("extracts criv source directives for preview buttons", () => {
     ["src/lib.rs#fn:run", "source:src/check.rs#L10-L12"],
   );
 });
+
+test("matches shared C4 artifact diagnostic fixtures", () => {
+  const fixtureDir = resolve(__dirname, "../../../../fixtures/c4");
+  assert.equal(existsSync(fixtureDir), true, `missing fixture directory ${fixtureDir}`);
+  const expected = JSON.parse(readFileSync(resolve(fixtureDir, "expected.json"), "utf8")) as Record<
+    string,
+    ExpectedDiagnostic[]
+  >;
+  const fixtureNames = readdirSync(fixtureDir).filter((name) => name.endsWith(".c4"));
+  assert.ok(fixtureNames.length > 0, "expected shared C4 fixtures");
+
+  for (const fixtureName of fixtureNames) {
+    const summary = parseC4Artifact(
+      fixtureName,
+      readFileSync(resolve(fixtureDir, fixtureName), "utf8"),
+    );
+    const actual = summary.diagnostics
+      .map(({ code, line }) => ({ code, line }))
+      .sort(compareDiagnostics);
+
+    assert.deepEqual(actual, expected[fixtureName] ?? [], `diagnostics for ${fixtureName}`);
+  }
+});
+
+function compareDiagnostics(left: ExpectedDiagnostic, right: ExpectedDiagnostic): number {
+  return (
+    left.code.localeCompare(right.code) ||
+    (left.line ?? Number.MAX_SAFE_INTEGER) - (right.line ?? Number.MAX_SAFE_INTEGER)
+  );
+}

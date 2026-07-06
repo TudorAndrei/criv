@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -21,6 +22,22 @@ await esbuild.build({
 
 const core = await import(pathToFileURL(outFile).href);
 const { instance: vizInstance } = await import("@viz-js/viz");
+const c4FixtureDir = resolve(__dirname, "../../../../fixtures/c4");
+assert.equal(existsSync(c4FixtureDir), true, `missing fixture directory ${c4FixtureDir}`);
+const c4Expected = JSON.parse(readFileSync(resolve(c4FixtureDir, "expected.json"), "utf8"));
+const c4FixtureNames = readdirSync(c4FixtureDir).filter((name) => name.endsWith(".c4"));
+assert.ok(c4FixtureNames.length > 0, "expected shared C4 fixtures");
+for (const fixtureName of c4FixtureNames) {
+  const summary = core.parseC4Artifact(
+    fixtureName,
+    readFileSync(resolve(c4FixtureDir, fixtureName), "utf8"),
+  );
+  const actual = summary.diagnostics
+    .map(({ code, line }) => ({ code, line }))
+    .sort(compareDiagnostics);
+  assert.deepEqual(actual, c4Expected[fixtureName] ?? [], `diagnostics for ${fixtureName}`);
+}
+
 const fixture = JSON.parse(
   readFileSync(resolve(pluginRoot, "fixtures/link-resolution.json"), "utf8"),
 );
@@ -67,6 +84,57 @@ assert.equal(
 );
 assert.equal(core.sourceSuggestions(rankedState, "", 1)[0].path, "crates/criv-wasm/src/lib.rs");
 
+const wasmPath = resolve(__dirname, "../../../../extensions/vscode-criv/pkg/criv_wasm.js");
+if (existsSync(wasmPath)) {
+  const require = createRequire(import.meta.url);
+  const wasm = require(wasmPath);
+  const parityState = {
+    schema: "criv.state.v0",
+    graph: {
+      nodes: [
+        {
+          id: "symbol:src/lib.rs#fn:run",
+          kind: "function",
+          label: "run",
+          path: "src/lib.rs#L10-L20",
+        },
+        {
+          id: "symbol:src/main.rs#fn:start",
+          kind: "function",
+          label: "start",
+          path: "src/main.rs#L5-L9",
+        },
+      ],
+      edges: [],
+    },
+    "registered-patterns": [],
+    "source-index": [
+      { path: "src/tie-low.rs", frecency: 1 },
+      { path: "src/tie-high.rs", frecency: 50 },
+      { path: "crates/criv-wasm/src/lib.rs", frecency: 40 },
+      { path: "src/lib.rs", frecency: 5 },
+      { path: "lib.rs", frecency: 0 },
+      { path: "src/slow_lib.rs", frecency: 0 },
+      { path: "src/main.rs", frecency: 2 },
+      { path: "src/xray.ts", frecency: 7 },
+      { path: "docs/adr.md", frecency: 0 },
+    ],
+  };
+  const rawParityState = JSON.stringify(parityState);
+  for (const query of ["", "lib", "main.rs", "src/x", "slr"]) {
+    const wasmFilePaths = wasm
+      .suggest_source_selectors(rawParityState, query, 20)
+      .filter((suggestion) => suggestion.kind === "file")
+      .map((suggestion) => suggestion.path);
+    const fallbackPaths = core
+      .sourceSuggestions(parityState, query, 20)
+      .map((suggestion) => suggestion.path);
+    assert.deepEqual(wasmFilePaths, fallbackPaths, `wasm/TS source suggestion parity: ${query}`);
+  }
+} else {
+  console.warn(`Skipping wasm/TS source suggestion parity; missing ${wasmPath}`);
+}
+
 const unsafeSourceState = {
   ...state,
   "source-index": [
@@ -88,6 +156,49 @@ assert.equal(core.safeVaultPath("../.ssh/id_rsa"), null);
 assert.equal(core.safeVaultPath("/etc/passwd"), null);
 assert.equal(core.safeVaultPath("C:\\Users\\name\\.ssh\\id_rsa"), null);
 assert.equal(core.safeVaultPath("src\\lib.rs"), "src/lib.rs");
+
+const validStateRaw = JSON.stringify(state);
+assert.deepEqual(core.interpretState(validStateRaw, "criv.state.v0"), { state });
+assert.deepEqual(core.interpretState(validStateRaw, "criv.state.v1"), {
+  error: "Unsupported criv state schema criv.state.v0",
+  kind: "schema",
+});
+assert.deepEqual(core.interpretState(JSON.stringify({ graph: {} }), "criv.state.v0"), {
+  error: "Unsupported criv state schema unknown",
+  kind: "schema",
+});
+const badJson = core.interpretState("{", "criv.state.v0");
+assert.equal(badJson.kind, "parse");
+assert.match(badJson.error, /JSON|Unexpected|property name/i);
+
+assert.deepEqual(core.parseLineRange("L4"), { start: 4, end: 4 });
+assert.deepEqual(core.parseLineRange("L4-L8"), { start: 4, end: 8 });
+assert.deepEqual(core.parseLineRange("l4-8"), { start: 4, end: 8 });
+assert.deepEqual(core.parseLineRange("L8-L4"), { start: 8, end: 8 });
+assert.equal(core.parseLineRange("4-8"), null);
+assert.equal(core.parseLineRange(null), null);
+
+assert.equal(
+  core.renderErrorsMessage([{ message: "first" }, { level: "warning", message: "second" }]),
+  "first; second",
+);
+assert.equal(core.renderErrorsMessage([]), "Graphviz render failed");
+
+const targets = [];
+core.addTarget(targets, " src/lib.rs ");
+core.addTarget(targets, " ");
+core.addTextTargets(targets, "Open [[docs/adr/0001.md|ADR 1]] and [[src/lib.rs#run]]");
+core.addTextTargets(targets, "[[README.md]]");
+assert.deepEqual(targets, [
+  "src/lib.rs",
+  "Open [[docs/adr/0001.md|ADR 1]] and [[src/lib.rs#run]]",
+  "docs/adr/0001.md|ADR 1",
+  "src/lib.rs#run",
+  "Open [[docs/adr/0001.md|ADR 1]] and [[src/lib.rs#run",
+  "[[README.md]]",
+  "README.md",
+  "README.md",
+]);
 
 const ranges = core.crivLinkRanges(
   "[[src/lib.rs]] [[missing.rs]] [[match:ADR-0001/no-block-on]]",
@@ -182,13 +293,20 @@ assert.deepEqual(
   ["missing-c4-level", "unknown-c4-directive", "unknown-c4-format"],
 );
 
-const c4FixtureDir = resolve(pluginRoot, "fixtures/c4");
-for (const fixtureName of readdirSync(c4FixtureDir).filter((name) => name.endsWith(".c4"))) {
-  const fixturePath = resolve(c4FixtureDir, fixtureName);
+const pluginC4FixtureDir = resolve(pluginRoot, "fixtures/c4");
+for (const fixtureName of readdirSync(pluginC4FixtureDir).filter((name) => name.endsWith(".c4"))) {
+  const fixturePath = resolve(pluginC4FixtureDir, fixtureName);
   const summary = core.parseC4Artifact(
     `docs/architecture/${fixtureName}`,
     readFileSync(fixturePath, "utf8"),
   );
   assert.deepEqual(summary.diagnostics, [], `diagnostics for ${fixtureName}`);
   assert.equal(summary.format, "mermaid", `format for ${fixtureName}`);
+}
+
+function compareDiagnostics(left, right) {
+  return (
+    left.code.localeCompare(right.code) ||
+    (left.line ?? Number.MAX_SAFE_INTEGER) - (right.line ?? Number.MAX_SAFE_INTEGER)
+  );
 }

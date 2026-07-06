@@ -126,7 +126,14 @@ fn policy_violations(
     vault: &Vault,
     changed_files: Option<&Vec<String>>,
 ) -> Result<Vec<String>> {
-    let mut violations = Vec::new();
+    struct ScanRecord<'a> {
+        adr_id: String,
+        pattern_id: String,
+        scopes: Vec<String>,
+        pattern: &'a crate::vault::PolicyPattern,
+    }
+
+    let mut records = Vec::new();
     for note in &vault.notes {
         if note.status.as_deref() != Some("accepted") {
             continue;
@@ -147,12 +154,37 @@ fn policy_violations(
             else {
                 continue;
             };
-            let pattern_id = format!("{adr_id}/{local_id}");
-            let rows = crate::structural::find_policy_pattern_entry(root, vault, pattern, &scopes)?;
+            records.push(ScanRecord {
+                adr_id: adr_id.clone(),
+                pattern_id: format!("{adr_id}/{local_id}"),
+                scopes: scopes.clone(),
+                pattern,
+            });
+        }
+    }
+
+    let requests = records
+        .iter()
+        .enumerate()
+        .map(|(key, record)| crate::structural::PolicyScanRequest {
+            key,
+            policy: record.pattern,
+            paths: &record.scopes,
+        })
+        .collect::<Vec<_>>();
+    let rows_by_key = crate::structural::find_policies_batch(root, vault, &requests)?;
+
+    let mut violations = Vec::new();
+    for (key, record) in records.iter().enumerate() {
+        if let Some(rows) = rows_by_key.get(&key) {
             for row in rows {
                 violations.push(format!(
                     "{}:{}: {} policy `{pattern_id}` matched `{}`",
-                    row.path, row.line, adr_id, row.text
+                    row.path,
+                    row.line,
+                    record.adr_id,
+                    row.text,
+                    pattern_id = record.pattern_id
                 ));
             }
         }
@@ -578,6 +610,7 @@ fn run_optional_tool(
     if label == "Ruff" {
         process.arg("check");
     }
+    process.arg("--");
     process.args(files);
 
     match process.output() {

@@ -32,6 +32,19 @@ enum CompiledMatcher {
     Rule(ast_grep_config::RuleCore),
 }
 
+pub(crate) struct PolicyScanRequest<'a> {
+    pub(crate) key: usize,
+    pub(crate) policy: &'a PolicyPattern,
+    pub(crate) paths: &'a [String],
+}
+
+struct CompiledPolicyRequest<'a> {
+    key: usize,
+    language: SupportLang,
+    matcher: CompiledMatcher,
+    paths: &'a [String],
+}
+
 pub(crate) fn pattern_source(config: &PatternConfig) -> Option<PatternSource<'_>> {
     config
         .pattern
@@ -56,6 +69,9 @@ pub(crate) fn find(
     let mut rows = Vec::new();
     let mut compiled_any_language = false;
     let mut first_compile_error = None;
+    let forced_matcher = forced_language
+        .map(|language| compile(source, language))
+        .transpose()?;
 
     for source_file in vault.source_files() {
         if !path_allowed(source_file, paths) {
@@ -70,31 +86,111 @@ pub(crate) fn find(
             continue;
         };
 
-        let matcher = match compile(source, language) {
-            Ok(matcher) => matcher,
-            Err(err) if forced_language.is_none() => {
-                first_compile_error.get_or_insert(err);
-                continue;
+        let matcher = if let Some(matcher) = forced_matcher.as_ref() {
+            matcher
+        } else {
+            match compile(source, language) {
+                Ok(matcher) => {
+                    let contents = read_source_to_string(root, source_file)?;
+                    rows.extend(scan_compiled_source(
+                        source_file,
+                        language,
+                        &contents,
+                        &matcher,
+                    ));
+                    compiled_any_language = true;
+                    continue;
+                }
+                Err(err) => {
+                    first_compile_error.get_or_insert(err);
+                    continue;
+                }
             }
-            Err(err) => return Err(err),
         };
         compiled_any_language = true;
 
         let contents = read_source_to_string(root, source_file)?;
-        match matcher {
-            CompiledMatcher::Pattern(pattern) => {
-                rows.extend(scan_source(source_file, language, &contents, &pattern));
-            }
-            CompiledMatcher::Rule(rule) => {
-                rows.extend(scan_source(source_file, language, &contents, &rule));
-            }
-        }
+        rows.extend(scan_compiled_source(
+            source_file,
+            language,
+            &contents,
+            matcher,
+        ));
     }
 
     if !compiled_any_language && let Some(err) = first_compile_error {
         return Err(err);
     }
 
+    sort_matches(&mut rows);
+    Ok(rows)
+}
+
+pub(crate) fn find_policies_batch(
+    root: &Path,
+    vault: &Vault,
+    requests: &[PolicyScanRequest<'_>],
+) -> Result<BTreeMap<usize, Vec<StructuralMatch>>> {
+    let mut compiled = Vec::new();
+    for request in requests {
+        let (source, language) = policy_source(request.policy)?;
+        let language = parse_language(language)?;
+        compiled.push(CompiledPolicyRequest {
+            key: request.key,
+            language,
+            matcher: compile(source, language)?,
+            paths: request.paths,
+        });
+    }
+
+    let mut rows_by_key = BTreeMap::<usize, Vec<StructuralMatch>>::new();
+    for request in &compiled {
+        rows_by_key.entry(request.key).or_default();
+    }
+
+    for source_file in vault.source_files() {
+        let Some(language) = SupportLang::from_path(source_file) else {
+            continue;
+        };
+        let requests = compiled
+            .iter()
+            .filter(|request| {
+                request.language == language && path_allowed(source_file, request.paths)
+            })
+            .collect::<Vec<_>>();
+        if requests.is_empty() {
+            continue;
+        }
+
+        let contents = read_source_to_string(root, source_file)?;
+        let ast = language.ast_grep(&contents);
+        let root = ast.root();
+        for request in requests {
+            let rows = rows_by_key.entry(request.key).or_default();
+            match &request.matcher {
+                CompiledMatcher::Pattern(pattern) => {
+                    rows.extend(
+                        root.find_all(pattern)
+                            .map(|matched| row_from_match(source_file, &matched)),
+                    );
+                }
+                CompiledMatcher::Rule(rule) => {
+                    rows.extend(
+                        root.find_all(rule)
+                            .map(|matched| row_from_match(source_file, &matched)),
+                    );
+                }
+            }
+        }
+    }
+
+    for rows in rows_by_key.values_mut() {
+        sort_matches(rows);
+    }
+    Ok(rows_by_key)
+}
+
+fn sort_matches(rows: &mut Vec<StructuralMatch>) {
     rows.sort_by(|left, right| {
         (&left.path, left.line, &left.range, &left.text).cmp(&(
             &right.path,
@@ -106,7 +202,6 @@ pub(crate) fn find(
     rows.dedup_by(|left, right| {
         left.path == right.path && left.range == right.range && left.text == right.text
     });
-    Ok(rows)
 }
 
 pub(crate) fn find_pattern_id(
@@ -228,6 +323,18 @@ fn scan_source<M: Matcher>(
         .collect()
 }
 
+fn scan_compiled_source(
+    source_file: &str,
+    language: SupportLang,
+    contents: &str,
+    matcher: &CompiledMatcher,
+) -> Vec<StructuralMatch> {
+    match matcher {
+        CompiledMatcher::Pattern(pattern) => scan_source(source_file, language, contents, pattern),
+        CompiledMatcher::Rule(rule) => scan_source(source_file, language, contents, rule),
+    }
+}
+
 fn row_from_match<D: Doc>(source_file: &str, matched: &NodeMatch<'_, D>) -> StructuralMatch {
     let node = matched.get_node();
     let start = node.start_pos();
@@ -301,6 +408,8 @@ fn path_allowed(path: &str, patterns: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn ast_grep_pattern_returns_ranges_and_captures() {
@@ -351,5 +460,122 @@ all:
             matches[0].captures.get("ARGS").map(String::as_str),
             Some("\"hi\"")
         );
+    }
+
+    #[test]
+    fn batch_matches_sequential_find() {
+        let (temp, vault) = policy_fixture();
+        let function_policy = policy("rust", "fn $NAME() { $$$ }");
+        let struct_policy = policy("rust", "struct $NAME;");
+        let paths = vec!["src/**".to_string()];
+        let requests = vec![
+            PolicyScanRequest {
+                key: 0,
+                policy: &function_policy,
+                paths: &paths,
+            },
+            PolicyScanRequest {
+                key: 1,
+                policy: &struct_policy,
+                paths: &paths,
+            },
+        ];
+
+        let batch = find_policies_batch(temp.path(), &vault, &requests).unwrap();
+
+        assert_eq!(
+            batch.get(&0).unwrap(),
+            &find_policy_pattern_entry(temp.path(), &vault, &function_policy, &paths).unwrap()
+        );
+        assert_eq!(
+            batch.get(&1).unwrap(),
+            &find_policy_pattern_entry(temp.path(), &vault, &struct_policy, &paths).unwrap()
+        );
+    }
+
+    #[test]
+    fn batch_respects_per_pattern_scopes() {
+        let (temp, vault) = policy_fixture();
+        let function_policy = policy("rust", "fn $NAME() { $$$ }");
+        let left_paths = vec!["src/left.rs".to_string()];
+        let right_paths = vec!["src/right.rs".to_string()];
+        let requests = vec![
+            PolicyScanRequest {
+                key: 0,
+                policy: &function_policy,
+                paths: &left_paths,
+            },
+            PolicyScanRequest {
+                key: 1,
+                policy: &function_policy,
+                paths: &right_paths,
+            },
+        ];
+
+        let batch = find_policies_batch(temp.path(), &vault, &requests).unwrap();
+
+        assert_eq!(
+            batch
+                .get(&0)
+                .unwrap()
+                .iter()
+                .map(|row| row.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["src/left.rs"]
+        );
+        assert_eq!(
+            batch
+                .get(&1)
+                .unwrap()
+                .iter()
+                .map(|row| row.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["src/right.rs"]
+        );
+    }
+
+    #[test]
+    fn batch_skips_non_matching_language() {
+        let (temp, vault) = policy_fixture();
+        let python_policy = policy("python", "def $NAME($$$): $$$");
+        let paths = vec!["src/**".to_string()];
+        let requests = vec![PolicyScanRequest {
+            key: 0,
+            policy: &python_policy,
+            paths: &paths,
+        }];
+
+        let batch = find_policies_batch(temp.path(), &vault, &requests).unwrap();
+
+        assert!(batch.get(&0).unwrap().is_empty());
+    }
+
+    fn policy(language: &str, pattern: &str) -> PolicyPattern {
+        PolicyPattern {
+            id: Some("test".to_string()),
+            line: 1,
+            language: Some(language.to_string()),
+            pattern: Some(pattern.to_string()),
+            rule: None,
+            message: None,
+        }
+    }
+
+    fn policy_fixture() -> (TempDir, Vault) {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("criv.toml"),
+            r#"
+[source]
+roots = ["src"]
+"#,
+        )
+        .unwrap();
+        fs::write(root.join("src/left.rs"), "fn left() {}\nstruct Left;\n").unwrap();
+        fs::write(root.join("src/right.rs"), "fn right() {}\nstruct Right;\n").unwrap();
+        let vault = Vault::load(root).unwrap();
+        (temp, vault)
     }
 }

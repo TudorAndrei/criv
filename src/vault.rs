@@ -125,7 +125,8 @@ pub(crate) enum SourceTargetResolution {
 
 impl Vault {
     pub(crate) fn load(root: &Path) -> Result<Self> {
-        Self::load_incremental(root, None)
+        let cached = crate::source_graph::load_cached(root);
+        Self::load_incremental(root, cached.as_ref())
     }
 
     pub(crate) fn load_incremental(
@@ -182,6 +183,7 @@ impl Vault {
                 false,
             )?);
             let source_graph = SourceGraph::build_incremental(root, &source_files, previous_graph)?;
+            crate::source_graph::store_cached(root, &source_graph)?;
             (source_files, source_index, source_graph)
         } else {
             (

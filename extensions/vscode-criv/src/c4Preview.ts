@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
 
 import { c4SourceTargets, parseC4Artifact } from "./c4Artifact";
@@ -18,9 +19,9 @@ export class C4PreviewManager implements vscode.Disposable {
       return;
     }
 
-    const panel =
-      this.panel ??
-      vscode.window.createWebviewPanel(
+    let panel = this.panel;
+    if (!panel) {
+      panel = vscode.window.createWebviewPanel(
         "criv.c4Preview",
         "criv C4 Preview",
         { viewColumn: vscode.ViewColumn.Beside, preserveFocus: options.preserveFocus ?? false },
@@ -29,15 +30,16 @@ export class C4PreviewManager implements vscode.Disposable {
           localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, "media")],
         },
       );
-    this.panel = panel;
-    panel.onDidDispose(() => {
-      this.panel = undefined;
-    });
-    panel.webview.onDidReceiveMessage(async (message: unknown) => {
-      if (isOpenSourceMessage(message)) {
-        await vscode.commands.executeCommand(COMMAND_OPEN_SOURCE_TARGET, message.target);
-      }
-    });
+      panel.onDidDispose(() => {
+        this.panel = undefined;
+      });
+      panel.webview.onDidReceiveMessage(async (message: unknown) => {
+        if (isOpenSourceMessage(message)) {
+          await vscode.commands.executeCommand(COMMAND_OPEN_SOURCE_TARGET, message.target);
+        }
+      });
+      this.panel = panel;
+    }
 
     const relativePath = vscode.workspace.asRelativePath(document.uri, false);
     const summary = parseC4Artifact(relativePath, document.getText());
@@ -121,10 +123,5 @@ function isOpenSourceMessage(value: unknown): value is { type: "openSource"; tar
 }
 
 function nonceValue(): string {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  let value = "";
-  for (let index = 0; index < 32; index += 1) {
-    value += alphabet[Math.floor(Math.random() * alphabet.length)] ?? "0";
-  }
-  return value;
+  return randomBytes(16).toString("base64");
 }

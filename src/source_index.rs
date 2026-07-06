@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{Duration, UNIX_EPOCH};
 
 use fff_search::file_picker::FilePicker;
@@ -59,6 +60,7 @@ pub(crate) struct FffSourceIndex {
     source_excludes: GlobMatcher,
     pickers: Vec<ScopedPicker>,
     explicit_files: Vec<String>,
+    source_files_cache: OnceLock<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -114,6 +116,7 @@ impl FffSourceIndex {
             source_excludes,
             pickers,
             explicit_files: scan_plan.files,
+            source_files_cache: OnceLock::new(),
         })
     }
 
@@ -145,6 +148,14 @@ impl FffSourceIndex {
     }
 
     fn source_files(&self) -> Result<Vec<String>> {
+        if let Some(cached) = self.source_files_cache.get() {
+            return Ok(cached.clone());
+        }
+        let files = self.collect_source_files_now()?;
+        Ok(self.source_files_cache.get_or_init(|| files).clone())
+    }
+
+    fn collect_source_files_now(&self) -> Result<Vec<String>> {
         let mut files = BTreeSet::new();
         for scoped in &self.pickers {
             files.extend(self.with_picker(scoped, |picker| {
@@ -584,6 +595,7 @@ mod tests {
                 .iter()
                 .any(|hit| hit.path == "Cargo.toml" && hit.line == 1)
         );
+        assert_eq!(index.source_files().unwrap(), index.source_files().unwrap());
         let error = index
             .grep("[", SourceGrepMode::Regex, &[])
             .expect_err("invalid regex should fail");

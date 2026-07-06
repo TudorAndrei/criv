@@ -122,7 +122,18 @@ pub(crate) fn parse_contents(
                     directives.push(C4Directive { key, value, line });
                 }
             },
-            "generated" => directives.push(C4Directive { key, value, line }),
+            "generated" => {
+                if let Some(value) = value.as_deref()
+                    && !matches!(value, "true" | "false")
+                {
+                    diagnostics.push(C4ArtifactDiagnostic {
+                        code: "invalid-c4-generated",
+                        line: Some(line),
+                        message: "criv:generated must be true or false".into(),
+                    });
+                }
+                directives.push(C4Directive { key, value, line });
+            }
             "source" => {}
             _ => {
                 diagnostics.push(C4ArtifactDiagnostic {
@@ -155,6 +166,16 @@ pub(crate) fn parse_contents(
             message: ".c4 content must start with Mermaid C4 or DOT syntax".into(),
         }),
         _ => {}
+    }
+
+    if format == Some(C4ArtifactFormat::Dot)
+        && level.is_some_and(|level| level != C4ArtifactLevel::Code)
+    {
+        diagnostics.push(C4ArtifactDiagnostic {
+            code: "invalid-c4-level",
+            line: None,
+            message: "DOT .c4 artifacts are expected to be code-level files".into(),
+        });
     }
 
     let diagrams = match format {
@@ -309,7 +330,15 @@ fn filename_level(path: &Path) -> Option<C4ArtifactLevel> {
 mod tests {
     use std::path::PathBuf;
 
+    use serde::Deserialize;
+
     use super::*;
+
+    #[derive(Debug, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+    struct ExpectedDiagnostic {
+        code: String,
+        line: Option<usize>,
+    }
 
     #[test]
     fn infers_mermaid_format_and_filename_level() {
@@ -399,6 +428,30 @@ Container(cli, "criv CLI", "Rust", "Validates the vault")
                 .iter()
                 .any(|diag| diag.code == "mismatched-c4-level")
         );
+    }
+
+    #[test]
+    fn shared_c4_fixtures_match_expected_diagnostics() {
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/c4");
+        let expected: std::collections::BTreeMap<String, Vec<ExpectedDiagnostic>> =
+            serde_json::from_str(&std::fs::read_to_string(fixtures.join("expected.json")).unwrap())
+                .unwrap();
+
+        for (fixture, expected_diagnostics) in expected {
+            let contents = std::fs::read_to_string(fixtures.join(&fixture)).unwrap();
+            let artifact = parse_test_artifact(&fixture, &contents);
+            let mut actual = artifact
+                .diagnostics
+                .into_iter()
+                .map(|diagnostic| ExpectedDiagnostic {
+                    code: diagnostic.code.to_string(),
+                    line: diagnostic.line,
+                })
+                .collect::<Vec<_>>();
+            actual.sort();
+
+            assert_eq!(actual, expected_diagnostics, "diagnostics for {fixture}");
+        }
     }
 
     fn parse_test_artifact(path: &str, contents: &str) -> C4Artifact {

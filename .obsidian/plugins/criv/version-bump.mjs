@@ -1,13 +1,23 @@
 import { readFileSync, writeFileSync } from "fs";
+import { pathToFileURL } from "node:url";
 
-const targetVersion = process.env.npm_package_version;
-const manifest = JSON.parse(readFileSync("manifest.json", "utf8"));
-const { minAppVersion } = manifest;
-manifest.version = targetVersion;
-writeFileSync("manifest.json", JSON.stringify(manifest, null, "\t"));
+export function bumpedVersions(versions, targetVersion, minAppVersion) {
+  if (versions[targetVersion] === minAppVersion) {
+    return null;
+  }
+  return { ...versions, [targetVersion]: minAppVersion };
+}
 
-const versions = JSON.parse(readFileSync("versions.json", "utf8"));
-if (!Object.values(versions).includes(minAppVersion)) {
-  versions[targetVersion] = minAppVersion;
-  writeFileSync("versions.json", JSON.stringify(versions, null, "\t"));
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const targetVersion = process.env.npm_package_version;
+  const manifest = JSON.parse(readFileSync("manifest.json", "utf8"));
+  const { minAppVersion } = manifest;
+  manifest.version = targetVersion;
+  writeFileSync("manifest.json", JSON.stringify(manifest, null, "\t"));
+
+  const versions = JSON.parse(readFileSync("versions.json", "utf8"));
+  const updated = bumpedVersions(versions, targetVersion, minAppVersion);
+  if (updated) {
+    writeFileSync("versions.json", JSON.stringify(updated, null, "\t"));
+  }
 }

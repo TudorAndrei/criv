@@ -477,8 +477,10 @@ fn load_snapshot(root: &Path, id: &str) -> Result<serde_json::Value> {
     } else {
         id.to_string()
     };
-    let path = root.join(".criv/snapshots").join(format!("{hash}.json"));
-    let contents = if path.exists() {
+    let path = is_snapshot_hash(&hash)
+        .then(|| root.join(".criv/snapshots").join(format!("{hash}.json")))
+        .filter(|path| path.exists());
+    let contents = if let Some(path) = path {
         fs::read_to_string(&path)
             .map_err(|err| CrivError::new(format!("failed to read snapshot `{hash}`: {err}")))?
     } else {
@@ -486,6 +488,10 @@ fn load_snapshot(root: &Path, id: &str) -> Result<serde_json::Value> {
     };
     serde_json::from_str(&contents)
         .map_err(|err| CrivError::new(format!("failed to parse snapshot `{id}`: {err}")))
+}
+
+fn is_snapshot_hash(value: &str) -> bool {
+    !value.is_empty() && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
 fn load_git_state(root: &Path, id: &str) -> Result<String> {
@@ -596,6 +602,14 @@ mod tests {
                 "level=container from=plugin to=external label=missing".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn snapshot_hash_shape() {
+        assert!(is_snapshot_hash("abc123"));
+        assert!(!is_snapshot_hash("../../etc/passwd"));
+        assert!(!is_snapshot_hash("HEAD~1"));
+        assert!(!is_snapshot_hash(""));
     }
 
     fn write_query_fixture(root: &Path) {

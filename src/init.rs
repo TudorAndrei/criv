@@ -4,10 +4,10 @@ mod templates;
 mod tests;
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitStatus};
 
 use clap::Args as ClapArgs;
-use git2::{ErrorCode, Repository};
 
 use crate::util::{append_line_if_missing, normalize_rel, write_atomic, write_new};
 use crate::{CrivError, Result};
@@ -154,13 +154,13 @@ fn json_pretty(value: &impl serde::Serialize, label: &str) -> Result<String> {
 }
 
 fn install_git_hooks(root: &Path, force: bool) -> Result<Vec<String>> {
-    let Some(repo) = discover_worktree(root)? else {
+    let Some(discovery) = discover_worktree(root)? else {
         return Ok(vec![
             "skipped Git hooks: not inside a Git repository".to_string(),
         ]);
     };
 
-    let Some(workdir) = repo.workdir() else {
+    let GitDiscovery::Worktree(workdir) = discovery else {
         return Ok(vec![
             "skipped Git hooks: bare repositories do not have a worktree".to_string(),
         ]);
@@ -183,18 +183,49 @@ fn install_git_hooks(root: &Path, force: bool) -> Result<Vec<String>> {
             &templates::pre_push_hook(&relative_root),
             force,
         )?,
-        configure_hooks_path(&repo, force)?,
+        configure_hooks_path(&workdir, force)?,
     ];
 
     Ok(messages)
 }
 
-fn discover_worktree(root: &Path) -> Result<Option<Repository>> {
-    match Repository::discover(root) {
-        Ok(repo) => Ok(Some(repo)),
-        Err(err) if err.code() == ErrorCode::NotFound => Ok(None),
-        Err(err) => Err(CrivError::new(format!(
-            "failed to discover Git repository: {err}"
+enum GitDiscovery {
+    Worktree(PathBuf),
+    Bare,
+}
+
+fn discover_worktree(root: &Path) -> Result<Option<GitDiscovery>> {
+    let bare = git_output(root, &["rev-parse", "--is-bare-repository"])?;
+    if !bare.status.success() {
+        if bare.status.code() == Some(128) {
+            return Ok(None);
+        }
+        return Err(git_command_error(
+            "failed to discover Git repository",
+            &bare,
+        ));
+    }
+
+    match bare.stdout.trim() {
+        "true" => Ok(Some(GitDiscovery::Bare)),
+        "false" => {
+            let top_level = git_output(root, &["rev-parse", "--show-toplevel"])?;
+            if !top_level.status.success() {
+                return Err(git_command_error(
+                    "failed to discover Git repository",
+                    &top_level,
+                ));
+            }
+            let path = top_level.stdout.trim();
+            if path.is_empty() {
+                return Err(CrivError::new(
+                    "failed to discover Git repository: git returned an empty worktree path",
+                ));
+            }
+            Ok(Some(GitDiscovery::Worktree(PathBuf::from(path))))
+        }
+        value => Err(CrivError::new(format!(
+            "failed to discover Git repository: unexpected --is-bare-repository output `{value}`"
         ))),
     }
 }
@@ -245,25 +276,61 @@ fn set_executable(_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn configure_hooks_path(repo: &Repository, force: bool) -> Result<String> {
-    let mut config = repo
-        .config()
-        .map_err(|err| CrivError::new(format!("failed to open Git configuration: {err}")))?;
-    match config.get_string("core.hooksPath") {
-        Ok(value) if value == ".githooks" => {
-            Ok("Git core.hooksPath already set to .githooks".to_string())
-        }
-        Ok(value) if !force => Ok(format!(
+fn configure_hooks_path(workdir: &Path, force: bool) -> Result<String> {
+    let config = git_output(workdir, &["config", "core.hooksPath"])?;
+    match (config.status.code(), config.stdout.trim()) {
+        (Some(0), ".githooks") => Ok("Git core.hooksPath already set to .githooks".to_string()),
+        (Some(0), value) if !force => Ok(format!(
             "skipped Git core.hooksPath: already set to `{value}`"
         )),
-        Ok(_) | Err(_) => {
-            config
-                .set_str("core.hooksPath", ".githooks")
-                .map_err(|err| {
-                    CrivError::new(format!("failed to set Git core.hooksPath: {err}"))
-                })?;
+        (Some(0), _) | (Some(1), _) => {
+            let result = git_output(workdir, &["config", "core.hooksPath", ".githooks"])?;
+            if !result.status.success() {
+                return Err(git_command_error(
+                    "failed to set Git core.hooksPath",
+                    &result,
+                ));
+            }
             Ok("configured Git core.hooksPath=.githooks".to_string())
         }
+        _ => Err(git_command_error(
+            "failed to read Git core.hooksPath",
+            &config,
+        )),
+    }
+}
+
+struct GitResult {
+    status: ExitStatus,
+    stdout: String,
+    stderr: String,
+}
+
+fn git_output(root: &Path, args: &[&str]) -> Result<GitResult> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .map_err(|err| CrivError::new(format!("failed to run git: {err}")))?;
+    Ok(GitResult {
+        status: output.status,
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
+}
+
+fn git_command_error(context: &str, result: &GitResult) -> CrivError {
+    let detail = result.stderr.trim();
+    let detail = if detail.is_empty() {
+        result.stdout.trim()
+    } else {
+        detail
+    };
+    if detail.is_empty() {
+        CrivError::new(format!("{context}: git exited with {}", result.status))
+    } else {
+        CrivError::new(format!("{context}: {detail}"))
     }
 }
 

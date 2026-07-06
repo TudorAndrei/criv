@@ -32,12 +32,17 @@ import {
   FrontmatterPatternTarget,
   LinkedSource,
   SourceIndexEntry,
+  addTarget,
+  addTextTargets,
   crivLinkRanges,
   frontmatterPatternTargets,
+  interpretState,
   linkedSourcesFromMarkdown,
   looksLikeSourceOrPattern,
+  parseLineRange,
   parseC4Artifact,
   patternTooltip,
+  renderErrorsMessage,
   resolvePattern,
   resolveSource,
   sanitizeDotSvg,
@@ -46,7 +51,7 @@ import {
   sourceSuggestions,
   sourceTooltip,
 } from "./core";
-import { summarizeState } from "./wasm";
+import { summarizeState, suggestSourceSelectors, type CrivSelectorSuggestion } from "./wasm";
 
 interface CrivSettings {
   statePath: string;
@@ -80,6 +85,13 @@ interface SourcePreview {
   text: string;
   startLine: number;
   truncated: boolean;
+}
+
+interface SourceSuggestionItem {
+  insertText: string;
+  label: string;
+  path: string;
+  detail?: string;
 }
 
 interface ObsidianCommandRegistry {
@@ -203,15 +215,18 @@ export default class CrivPlugin extends Plugin {
     }
     try {
       const raw = await this.app.vault.adapter.read(statePath);
-      const state = JSON.parse(raw) as CrivState;
-      if (state.schema !== EXPECTED_SCHEMA) {
+      const interpreted = interpretState(raw, EXPECTED_SCHEMA);
+      if ("error" in interpreted) {
         this.state = null;
-        this.stateError = `Unsupported criv state schema ${state.schema ?? "unknown"}`;
+        this.stateError =
+          interpreted.kind === "parse"
+            ? `Could not read ${statePath}: ${interpreted.error}`
+            : interpreted.error;
         return null;
       }
-      this.state = state;
+      this.state = interpreted.state;
       this.stateError = null;
-      return state;
+      return interpreted.state;
     } catch (error) {
       this.state = null;
       this.stateError = `Could not read ${statePath}: ${errorMessage(error)}`;
@@ -987,11 +1002,7 @@ function renderWarnings(
   }
 }
 
-function renderErrorsMessage(errors: { level?: string; message: string }[]): string {
-  return errors.map((error) => error.message).join("; ") || "Graphviz render failed";
-}
-
-class CrivSourceSuggest extends EditorSuggest<SourceIndexEntry> {
+class CrivSourceSuggest extends EditorSuggest<SourceSuggestionItem> {
   constructor(private plugin: CrivPlugin) {
     super(plugin.app);
   }
@@ -1013,20 +1024,54 @@ class CrivSourceSuggest extends EditorSuggest<SourceIndexEntry> {
     };
   }
 
-  async getSuggestions(context: EditorSuggestContext): Promise<SourceIndexEntry[]> {
-    return sourceSuggestions(await this.plugin.getState(), context.query, 20);
+  async getSuggestions(context: EditorSuggestContext): Promise<SourceSuggestionItem[]> {
+    const state = await this.plugin.getState();
+    if (!state) {
+      return [];
+    }
+    // The wasm API accepts raw state JSON; the plugin currently caches the parsed state only.
+    const wasmSuggestions = await suggestSourceSelectors(JSON.stringify(state), context.query, 20);
+    if (wasmSuggestions) {
+      return sourceSuggestionItemsFromWasm(wasmSuggestions);
+    }
+    return sourceSuggestions(state, context.query, 20).map((entry) => ({
+      insertText: entry.path,
+      label: entry.path,
+      path: entry.path,
+      detail: entry.mime,
+    }));
   }
 
-  renderSuggestion(value: SourceIndexEntry, el: HTMLElement): void {
-    el.createDiv({ text: value.path });
+  renderSuggestion(value: SourceSuggestionItem, el: HTMLElement): void {
+    el.createDiv({ text: value.label });
+    if (value.detail) {
+      el.createDiv({ cls: "criv-source-suggestion-detail", text: value.detail });
+    }
   }
 
-  selectSuggestion(value: SourceIndexEntry): void {
+  selectSuggestion(value: SourceSuggestionItem): void {
     if (!this.context) {
       return;
     }
-    this.context.editor.replaceRange(value.path, this.context.start, this.context.end);
+    this.context.editor.replaceRange(value.insertText, this.context.start, this.context.end);
   }
+}
+
+function sourceSuggestionItemsFromWasm(items: CrivSelectorSuggestion[]): SourceSuggestionItem[] {
+  const suggestions: SourceSuggestionItem[] = [];
+  for (const item of items) {
+    const path = safeVaultPath(item.path);
+    if (!path) {
+      continue;
+    }
+    suggestions.push({
+      insertText: item.target,
+      label: item.label || item.target,
+      path,
+      detail: item.detail || item.kind,
+    });
+  }
+  return suggestions;
 }
 
 function resolveSourceFromElement(state: CrivState, element: HTMLElement): LinkedSource | null {
@@ -1074,27 +1119,6 @@ function linkTargets(element: HTMLElement): string[] {
   return Array.from(new Set(targets));
 }
 
-function addTextTargets(targets: string[], value: string | null | undefined): void {
-  if (!value) {
-    return;
-  }
-  addTarget(targets, value);
-  for (const match of value.matchAll(/\[\[([^\]]+)\]\]/g)) {
-    addTarget(targets, match[1]);
-  }
-  const stripped = value.replace(/^\[\[/, "").replace(/\]\]$/, "");
-  if (stripped !== value) {
-    addTarget(targets, stripped);
-  }
-}
-
-function addTarget(targets: string[], value: string | null | undefined): void {
-  const target = value?.trim();
-  if (target) {
-    targets.push(target);
-  }
-}
-
 function renderPreview(container: HTMLElement, preview: SourcePreview, compact: boolean): void {
   container.querySelector(".criv-preview-loading")?.remove();
   container.querySelector(".criv-preview-error")?.remove();
@@ -1135,19 +1159,6 @@ function positionHoverPreview(preview: HTMLElement, event: MouseEvent): void {
   preview.style.width = `${width}px`;
   preview.style.left = `${Math.min(event.clientX + margin, window.innerWidth - width - margin)}px`;
   preview.style.top = `${Math.min(event.clientY + margin, window.innerHeight - 260)}px`;
-}
-
-function parseLineRange(fragment: string | null): { start: number; end: number } | null {
-  const match = fragment?.match(/^L(\d+)(?:-L?(\d+))?$/i);
-  if (!match) {
-    return null;
-  }
-  const start = Number(match[1]);
-  const end = Number(match[2] ?? match[1]);
-  if (!Number.isFinite(start) || !Number.isFinite(end)) {
-    return null;
-  }
-  return { start: Math.max(1, start), end: Math.max(start, end) };
 }
 
 function lineNumbers(text: string, startLine: number): string {

@@ -26,9 +26,30 @@ export function parseC4Artifact(path: string, text: string): C4ArtifactSummary {
   }
 
   const directives = c4Directives(text);
-  const assertedFormat = directives.find((directive) => directive.key === "format");
+  let directiveFormat: C4ArtifactFormat = "unknown";
+  let assertedFormat: { key: string; value: string | null; line: number } | null = null;
   const generatedDirective = directives.find((directive) => directive.key === "generated");
   for (const directive of directives) {
+    if (directive.key === "format") {
+      const format = c4FormatFromDirective(directive.value);
+      if (format === "unknown") {
+        diagnostics.push({
+          code: "invalid-c4-format",
+          line: directive.line,
+          message: "criv:format should be mermaid or dot.",
+        });
+      } else {
+        if (directiveFormat !== "unknown" && directiveFormat !== format) {
+          diagnostics.push({
+            code: "duplicate-c4-format",
+            line: directive.line,
+            message: "Conflicting criv:format directives.",
+          });
+        }
+        directiveFormat = format;
+        assertedFormat = directive;
+      }
+    }
     if (!["format", "generated", "source"].includes(directive.key)) {
       diagnostics.push({
         code: "unknown-c4-directive",
@@ -39,14 +60,6 @@ export function parseC4Artifact(path: string, text: string): C4ArtifactSummary {
   }
 
   const inferredFormat = c4FormatFromText(text);
-  const directiveFormat = assertedFormat ? c4FormatFromDirective(assertedFormat.value) : "unknown";
-  if (assertedFormat && directiveFormat === "unknown") {
-    diagnostics.push({
-      code: "invalid-c4-format",
-      line: assertedFormat.line,
-      message: "criv:format should be mermaid or dot.",
-    });
-  }
   if (
     assertedFormat &&
     directiveFormat !== "unknown" &&

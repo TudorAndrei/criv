@@ -9,8 +9,17 @@ export interface CrivStateSummary {
   first_source_path?: string;
 }
 
+export interface CrivSelectorSuggestion {
+  target: string;
+  label: string;
+  kind: string;
+  path: string;
+  detail: string;
+}
+
 type CrivWasmModule = {
   summarize_state(raw: string): CrivStateSummary;
+  suggest_source_selectors(raw: string, query: string, limit: number): CrivSelectorSuggestion[];
 };
 
 let wasmModule: Promise<CrivWasmModule | null> | null = null;
@@ -38,6 +47,18 @@ export async function summarizeState(raw: string): Promise<CrivStateSummary> {
       : undefined,
     first_source_path: sourcePaths[0],
   };
+}
+
+export async function suggestSourceSelectors(
+  raw: string,
+  query: string,
+  limit: number,
+): Promise<CrivSelectorSuggestion[] | null> {
+  const wasm = await loadWasm();
+  if (!wasm) {
+    return null;
+  }
+  return wasm.suggest_source_selectors(raw, query, limit);
 }
 
 function uniqueSourcePaths(sourceIndex: unknown): string[] {

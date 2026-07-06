@@ -65,6 +65,13 @@ function sanitizeDotSvg(svg) {
     .replace(/\\s+on[a-z0-9_-]+\\s*=\\s*(?:"[^"]*"|'[^']*'|[^\\s>]+)/gi, "")
     .replace(/\\s+(?:href|xlink:href|target)\\s*=\\s*(?:"[^"]*"|'[^']*'|[^\\s>]+)/gi, "");
 }
+function showError(text) {
+  diagram.textContent = "";
+  const node = document.createElement("div");
+  node.className = "error";
+  node.textContent = text;
+  diagram.appendChild(node);
+}
 async function render() {
   try {
     if (payload.format === "mermaid") {
@@ -80,9 +87,9 @@ async function render() {
       fallback.hidden = true;
       return;
     }
-    diagram.innerHTML = '<div class="error">Unknown .c4 format.</div>';
+    showError("Unknown .c4 format.");
   } catch (error) {
-    diagram.innerHTML = '<div class="error">' + String(error?.message ?? error) + '</div>';
+    showError(String(error?.message ?? error));
   }
 }
 void render();

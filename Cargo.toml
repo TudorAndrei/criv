@@ -41,7 +41,6 @@ fastembed = { version = "5", optional = true, default-features = false, features
 ] }
 fff-search = "0.9.6"
 globset = "0.4"
-git2 = { version = "0.21", default-features = false }
 ignore = "0.4"
 mime_guess = "2"
 notify = "8"

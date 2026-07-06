@@ -83,6 +83,16 @@ local vscode_lint = new Step {
   check = "mise run vscode-lint"
 }
 
+local vscode_test = new Step {
+  glob = vscode_files
+  check = "mise run vscode-test"
+}
+
+local vscode_format_check = new Step {
+  glob = vscode_files
+  check = "mise run vscode-format-check"
+}
+
 local vscode_json_diagnostics = new Step {
   glob = List(
     "extensions/vscode-criv/package.json",
@@ -141,6 +151,7 @@ hooks {
     steps {
       ["cargo-clippy"] = cargo_clippy
       ["cargo-test"] = cargo_test
+      ["vscode-test"] = vscode_test
       ["criv-enforce"] = enforce_push
     }
   }
@@ -157,7 +168,9 @@ hooks {
       ["plugin-lint"] = plugin_lint
       ["plugin-test"] = plugin_test
       ["plugin-build"] = plugin_build
+      ["vscode-format-check"] = vscode_format_check
       ["vscode-lint"] = vscode_lint
+      ["vscode-test"] = vscode_test
       ["vscode-json-diagnostics"] = vscode_json_diagnostics
       ["criv-check"] = staged_docs
       ["criv-enforce-ci"] = enforce_ci

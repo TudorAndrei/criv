@@ -551,7 +551,6 @@ dependencies = [
  "content_inspector",
  "fastembed",
  "fff-search",
- "git2 0.21.0",
  "globset",
  "ignore",
  "mime_guess",
@@ -948,7 +947,7 @@ dependencies = [
  "fff-grep",
  "fff-notify-debouncer-full",
  "fff-query-parser",
- "git2 0.20.4",
+ "git2",
  "glidesort",
  "globset",
  "heed",
@@ -1205,18 +1204,6 @@ dependencies = [
  "libgit2-sys",
  "log",
  "url",
-]
-
-[[package]]
-name = "git2"
-version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ddddbf932745a6be37109b6112d3ee09696106f848449069d3a57bba937ab82e"
-dependencies = [
- "bitflags",
- "libc",
- "libgit2-sys",
- "log",
 ]
 
 [[package]]

@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 
 import { parseCheckDiagnostics } from "./checkDiagnosticModel";
+import { safeVaultPath } from "./sourceTarget";
 
 export class CrivCheckDiagnostics implements vscode.Disposable {
   private readonly collection = vscode.languages.createDiagnosticCollection("criv-check");
@@ -8,11 +9,12 @@ export class CrivCheckDiagnostics implements vscode.Disposable {
   setFromJson(root: vscode.Uri, raw: string): void {
     const diagnosticsByUri = new Map<string, vscode.Diagnostic[]>();
     for (const item of parseCheckDiagnostics(raw)) {
-      if (!item.path) {
+      const safePath = safeVaultPath(item.path);
+      if (!safePath) {
         continue;
       }
 
-      const uri = vscode.Uri.joinPath(root, ...item.path.split("/"));
+      const uri = vscode.Uri.joinPath(root, ...safePath.split("/"));
       const diagnostic = new vscode.Diagnostic(
         diagnosticRange(item.line),
         item.message,

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use super::*;
 
@@ -157,15 +158,11 @@ fn init_no_vscode_skips_extension_recommendation() {
 #[test]
 fn init_installs_git_hooks_by_default() {
     let root = unique_temp_dir("criv-init-hooks");
-    git2::Repository::init(&root).unwrap();
+    git_init(&root);
 
     run(&root, fast_options()).unwrap();
 
-    let repo = git2::Repository::open(&root).unwrap();
-    assert_eq!(
-        repo.config().unwrap().get_string("core.hooksPath").unwrap(),
-        ".githooks"
-    );
+    assert_eq!(git_config(&root, "core.hooksPath").unwrap(), ".githooks");
 
     let pre_commit = std::fs::read_to_string(root.join(".githooks/pre-commit")).unwrap();
     assert!(pre_commit.contains("cd '.'"));
@@ -189,7 +186,7 @@ fn init_installs_git_hooks_by_default() {
 #[test]
 fn init_hooks_cd_to_nested_criv_root() {
     let root = unique_temp_dir("criv-init-hooks-nested");
-    git2::Repository::init(&root).unwrap();
+    git_init(&root);
     let vault = root.join("docs-vault");
     std::fs::create_dir_all(&vault).unwrap();
 
@@ -205,7 +202,7 @@ fn init_hooks_cd_to_nested_criv_root() {
 #[test]
 fn init_hooks_are_idempotent_without_force() {
     let root = unique_temp_dir("criv-init-hooks-idempotent");
-    git2::Repository::init(&root).unwrap();
+    git_init(&root);
 
     run(&root, fast_options()).unwrap();
     let hook = root.join(".githooks/pre-commit");
@@ -224,11 +221,8 @@ fn init_hooks_are_idempotent_without_force() {
 #[test]
 fn init_force_hooks_overwrites_hooks_and_hookspath() {
     let root = unique_temp_dir("criv-init-hooks-force");
-    let repo = git2::Repository::init(&root).unwrap();
-    repo.config()
-        .unwrap()
-        .set_str("core.hooksPath", "custom-hooks")
-        .unwrap();
+    git_init(&root);
+    git_config_set(&root, "core.hooksPath", "custom-hooks");
     std::fs::create_dir_all(root.join(".githooks")).unwrap();
     std::fs::write(root.join(".githooks/pre-push"), "#!/bin/sh\necho custom\n").unwrap();
 
@@ -236,10 +230,7 @@ fn init_force_hooks_overwrites_hooks_and_hookspath() {
     options.force_hooks = true;
     run(&root, options).unwrap();
 
-    assert_eq!(
-        repo.config().unwrap().get_string("core.hooksPath").unwrap(),
-        ".githooks"
-    );
+    assert_eq!(git_config(&root, "core.hooksPath").unwrap(), ".githooks");
     assert!(
         std::fs::read_to_string(root.join(".githooks/pre-push"))
             .unwrap()
@@ -252,18 +243,12 @@ fn init_force_hooks_overwrites_hooks_and_hookspath() {
 #[test]
 fn init_preserves_existing_non_criv_hookspath_without_force() {
     let root = unique_temp_dir("criv-init-hooks-existing-hookspath");
-    let repo = git2::Repository::init(&root).unwrap();
-    repo.config()
-        .unwrap()
-        .set_str("core.hooksPath", "custom-hooks")
-        .unwrap();
+    git_init(&root);
+    git_config_set(&root, "core.hooksPath", "custom-hooks");
 
     run(&root, fast_options()).unwrap();
 
-    assert_eq!(
-        repo.config().unwrap().get_string("core.hooksPath").unwrap(),
-        "custom-hooks"
-    );
+    assert_eq!(git_config(&root, "core.hooksPath").unwrap(), "custom-hooks");
     assert!(root.join(".githooks/pre-commit").exists());
 
     let _ = std::fs::remove_dir_all(root);
@@ -272,21 +257,14 @@ fn init_preserves_existing_non_criv_hookspath_without_force() {
 #[test]
 fn init_no_hooks_skips_hook_installation() {
     let root = unique_temp_dir("criv-init-hooks-disabled");
-    git2::Repository::init(&root).unwrap();
+    git_init(&root);
     let mut options = fast_options();
     options.no_hooks = true;
 
     run(&root, options).unwrap();
 
     assert!(!root.join(".githooks").exists());
-    assert!(
-        git2::Repository::open(&root)
-            .unwrap()
-            .config()
-            .unwrap()
-            .get_string("core.hooksPath")
-            .is_err()
-    );
+    assert!(git_config(&root, "core.hooksPath").is_none());
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -306,7 +284,7 @@ fn init_outside_git_repo_skips_hooks_without_failing() {
 #[test]
 fn init_bare_git_repo_skips_hooks_without_failing() {
     let root = unique_temp_dir("criv-init-hooks-bare");
-    git2::Repository::init_bare(&root).unwrap();
+    git_init_bare(&root);
 
     run(&root, fast_options()).unwrap();
 
@@ -375,6 +353,48 @@ fn vscode_recommendations(root: &std::path::Path) -> Vec<String> {
 fn vscode_extensions_json(root: &std::path::Path) -> serde_json::Value {
     serde_json::from_str(&std::fs::read_to_string(root.join(".vscode/extensions.json")).unwrap())
         .unwrap()
+}
+
+fn git_init(root: &Path) {
+    git(root, &["init"]);
+}
+
+fn git_init_bare(root: &Path) {
+    git(root, &["init", "--bare"]);
+}
+
+fn git_config(root: &Path, key: &str) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["config", key])
+        .output()
+        .unwrap();
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn git_config_set(root: &Path, key: &str, value: &str) {
+    git(root, &["config", key, value]);
+}
+
+fn git(root: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git -C {} {} failed: {}{}",
+        root.display(),
+        args.join(" "),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {

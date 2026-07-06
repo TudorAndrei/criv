@@ -1,21 +1,28 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
+use serde::{Deserialize, Serialize};
 use tree_sitter::{Node, Parser};
 
-use crate::Result;
 use crate::source_paths::{read_source_to_string, source_metadata};
+use crate::util::write_atomic;
+use crate::{CrivError, Result};
 
-#[derive(Debug, Default, Clone)]
+// Bump when parsed source graph semantics or serialized graph types change.
+const GRAPH_CACHE_SCHEMA: &str = "criv.source-graph/1";
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SourceGraph {
     pub(crate) files: BTreeMap<String, SourceFile>,
     file_fingerprints: BTreeMap<String, String>,
+    #[serde(skip)]
     changed_files: Vec<String>,
     symbol_index: BTreeMap<String, Vec<SymbolId>>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SourceFile {
     pub(crate) path: String,
     pub(crate) language: Language,
@@ -23,13 +30,13 @@ pub(crate) struct SourceFile {
     pub(crate) symbols: Vec<Symbol>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Import {
     pub(crate) module: String,
     pub(crate) line: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Symbol {
     pub(crate) id: SymbolId,
     pub(crate) name: String,
@@ -41,13 +48,13 @@ pub(crate) struct Symbol {
     pub(crate) calls: Vec<Call>,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct SymbolRange {
     pub(crate) start_line: usize,
     pub(crate) end_line: usize,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub(crate) struct SymbolId {
     pub(crate) path: String,
     pub(crate) name: String,
@@ -60,13 +67,13 @@ impl SymbolId {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Call {
     pub(crate) target: String,
     pub(crate) line: usize,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum SymbolKind {
     Function,
     Method,
@@ -83,7 +90,7 @@ impl SymbolKind {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Default, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) enum Language {
     Rust,
     TypeScript,
@@ -107,7 +114,7 @@ impl Language {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct InterfaceSignature {
     pub(crate) language: Language,
     pub(crate) symbol_kind: SymbolKind,
@@ -119,16 +126,48 @@ pub(crate) struct InterfaceSignature {
     pub(crate) variants: Vec<VariantSignature>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub(crate) struct FieldSignature {
     pub(crate) name: String,
     pub(crate) ty: Option<String>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub(crate) struct VariantSignature {
     pub(crate) name: String,
     pub(crate) fields: Vec<FieldSignature>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct GraphCacheFile {
+    schema: String,
+    graph: SourceGraph,
+}
+
+pub(crate) fn load_cached(root: &Path) -> Option<SourceGraph> {
+    let path = graph_cache_path(root);
+    let contents = fs::read_to_string(path).ok()?;
+    let cache = serde_json::from_str::<GraphCacheFile>(&contents).ok()?;
+    (cache.schema == GRAPH_CACHE_SCHEMA).then_some(cache.graph)
+}
+
+pub(crate) fn store_cached(root: &Path, graph: &SourceGraph) -> Result<()> {
+    let path = graph_cache_path(root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let cache = GraphCacheFile {
+        schema: GRAPH_CACHE_SCHEMA.to_string(),
+        graph: graph.clone(),
+    };
+    let contents = serde_json::to_string_pretty(&cache)
+        .map_err(|err| CrivError::new(format!("failed to serialize source graph cache: {err}")))?;
+    write_atomic(&path, &format!("{contents}\n"))?;
+    Ok(())
+}
+
+fn graph_cache_path(root: &Path) -> std::path::PathBuf {
+    root.join(".criv/source-graph.json")
 }
 
 impl InterfaceSignature {
@@ -1409,6 +1448,42 @@ mod tests {
             .expect_err("source graph should reject source file symlink escape");
 
         assert!(error.to_string().contains("outside the criv vault root"));
+    }
+
+    #[test]
+    fn source_graph_cache_round_trips_and_skips_changed_files() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+        let mut graph = SourceGraph::build_incremental(root, &["src/lib.rs".into()], None).unwrap();
+        assert_eq!(graph.changed_files(), &["src/lib.rs".to_string()]);
+        graph.changed_files.push("scratch.rs".to_string());
+
+        store_cached(root, &graph).unwrap();
+        let loaded = load_cached(root).unwrap();
+
+        let mut expected = graph.clone();
+        expected.changed_files.clear();
+        assert_eq!(loaded, expected);
+        assert!(loaded.changed_files().is_empty());
+    }
+
+    #[test]
+    fn source_graph_cache_ignores_garbage_and_wrong_schema() {
+        let temp = TempDir::new().unwrap();
+        let cache_path = graph_cache_path(temp.path());
+        fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
+
+        fs::write(&cache_path, "garbage\n").unwrap();
+        assert!(load_cached(temp.path()).is_none());
+
+        fs::write(
+            &cache_path,
+            r#"{"schema":"criv.source-graph/0","graph":{}}"#,
+        )
+        .unwrap();
+        assert!(load_cached(temp.path()).is_none());
     }
 
     #[test]
