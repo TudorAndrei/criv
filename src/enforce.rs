@@ -153,7 +153,7 @@ fn policy_violations(
     struct ScanRecord<'a> {
         adr_id: String,
         pattern_id: String,
-        scopes: Vec<String>,
+        scopes: BTreeSet<String>,
         pattern: &'a crate::vault::PolicyPattern,
     }
 
@@ -165,7 +165,10 @@ fn policy_violations(
         let Some(adr_id) = &note.id else {
             continue;
         };
-        let scopes = policy_scan_files(vault, &vault.effective_governs(note), changed_files);
+        let scopes: BTreeSet<String> =
+            policy_scan_files(vault, &vault.effective_governs(note), changed_files)
+                .into_iter()
+                .collect();
         for pattern in &note.policy_patterns {
             if !crate::structural::policy_pattern_entry_is_valid(pattern) {
                 continue;
@@ -248,18 +251,17 @@ fn import_policy_violations(vault: &Vault, changed_files: Option<&Vec<String>>) 
             if changed_files.is_some_and(|files| !files.contains(&file.path)) {
                 continue;
             }
-            if !policy
-                .scope
-                .iter()
-                .any(|pattern| path_matches(pattern, &file.path))
-            {
+            if !policy.scope_matcher.is_match(&file.path) {
                 continue;
             }
             for import in &file.imports {
                 if policy
                     .deny
                     .iter()
-                    .any(|pattern| import_matches(pattern, &import.module))
+                    .zip(&policy.deny_matchers)
+                    .any(|(pattern, matcher)| {
+                        import_matches(pattern, matcher.as_ref(), &import.module)
+                    })
                 {
                     violations.push(format!(
                         "{}:{}: import policy `{}` denies `{}`",
@@ -871,14 +873,10 @@ fn matches_extension(path: &str, extensions: &[&str]) -> bool {
         .is_some_and(|extension| extensions.contains(&extension))
 }
 
-fn path_matches(pattern: &str, path: &str) -> bool {
-    crate::util::glob_matches(pattern, path)
-}
-
-fn import_matches(pattern: &str, module: &str) -> bool {
-    if pattern.contains('*') || pattern.contains('?') || pattern.contains('[') {
+fn import_matches(pattern: &str, matcher: Option<&crate::util::GlobMatcher>, module: &str) -> bool {
+    if let Some(matcher) = matcher {
         let normalized = module.replace("::", "/");
-        return crate::util::glob_matches(&pattern.replace("::", "/"), &normalized);
+        return matcher.is_match(&normalized);
     }
     module == pattern || module.starts_with(&format!("{pattern}::"))
 }
@@ -899,10 +897,19 @@ mod tests {
 
     #[test]
     fn import_patterns_match_exact_prefix_and_glob_forms() {
-        assert!(import_matches("crate::infra", "crate::infra::db"));
-        assert!(import_matches("crate::infra::*", "crate::infra::db"));
-        assert!(import_matches("sqlx", "sqlx"));
-        assert!(!import_matches("crate::infra", "crate::infrastructure"));
+        assert!(import_matches("crate::infra", None, "crate::infra::db"));
+        let glob = crate::util::GlobMatcher::new(&["crate/infra/*".into()]).unwrap();
+        assert!(import_matches(
+            "crate::infra::*",
+            Some(&glob),
+            "crate::infra::db"
+        ));
+        assert!(import_matches("sqlx", None, "sqlx"));
+        assert!(!import_matches(
+            "crate::infra",
+            None,
+            "crate::infrastructure"
+        ));
     }
 
     #[test]

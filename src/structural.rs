@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use ast_grep_config::{DeserializeEnv, SerializableRuleCore};
@@ -8,7 +8,7 @@ use ast_grep_language::{Language, LanguageExt, SupportLang};
 
 use crate::config::PatternConfig;
 use crate::source_paths::read_source_to_string;
-use crate::util::glob_matches;
+use crate::util::GlobMatcher;
 use crate::vault::{PolicyPattern, Vault};
 use crate::{CrivError, Result};
 
@@ -35,14 +35,14 @@ enum CompiledMatcher {
 pub(crate) struct PolicyScanRequest<'a> {
     pub(crate) key: usize,
     pub(crate) policy: &'a PolicyPattern,
-    pub(crate) paths: &'a [String],
+    pub(crate) paths: &'a BTreeSet<String>,
 }
 
 struct CompiledPolicyRequest<'a> {
     key: usize,
     language: SupportLang,
     matcher: CompiledMatcher,
-    paths: &'a [String],
+    paths: &'a BTreeSet<String>,
 }
 
 pub(crate) fn pattern_source(config: &PatternConfig) -> Option<PatternSource<'_>> {
@@ -73,8 +73,9 @@ pub(crate) fn find(
         .map(|language| compile(source, language))
         .transpose()?;
 
+    let path_matcher = GlobMatcher::new(paths)?;
     for source_file in vault.source_files() {
-        if !path_allowed(source_file, paths) {
+        if !path_matcher.is_match(source_file) {
             continue;
         }
         if forced_language
@@ -154,9 +155,7 @@ pub(crate) fn find_policies_batch(
         };
         let requests = compiled
             .iter()
-            .filter(|request| {
-                request.language == language && path_allowed(source_file, request.paths)
-            })
+            .filter(|request| request.language == language && request.paths.contains(source_file))
             .collect::<Vec<_>>();
         if requests.is_empty() {
             continue;
@@ -401,10 +400,6 @@ fn parse_language(language: &str) -> Result<SupportLang> {
         .map_err(|err| CrivError::new(format!("unsupported ast-grep language `{language}`: {err}")))
 }
 
-fn path_allowed(path: &str, patterns: &[String]) -> bool {
-    patterns.is_empty() || patterns.iter().any(|pattern| glob_matches(pattern, path))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,16 +463,17 @@ all:
         let function_policy = policy("rust", "fn $NAME() { $$$ }");
         let struct_policy = policy("rust", "struct $NAME;");
         let paths = vec!["src/**".to_string()];
+        let policy_paths = BTreeSet::from(["src/left.rs".to_string(), "src/right.rs".to_string()]);
         let requests = vec![
             PolicyScanRequest {
                 key: 0,
                 policy: &function_policy,
-                paths: &paths,
+                paths: &policy_paths,
             },
             PolicyScanRequest {
                 key: 1,
                 policy: &struct_policy,
-                paths: &paths,
+                paths: &policy_paths,
             },
         ];
 
@@ -497,8 +493,8 @@ all:
     fn batch_respects_per_pattern_scopes() {
         let (temp, vault) = policy_fixture();
         let function_policy = policy("rust", "fn $NAME() { $$$ }");
-        let left_paths = vec!["src/left.rs".to_string()];
-        let right_paths = vec!["src/right.rs".to_string()];
+        let left_paths = BTreeSet::from(["src/left.rs".to_string()]);
+        let right_paths = BTreeSet::from(["src/right.rs".to_string()]);
         let requests = vec![
             PolicyScanRequest {
                 key: 0,
@@ -538,7 +534,7 @@ all:
     fn batch_skips_non_matching_language() {
         let (temp, vault) = policy_fixture();
         let python_policy = policy("python", "def $NAME($$$): $$$");
-        let paths = vec!["src/**".to_string()];
+        let paths = BTreeSet::from(["src/left.rs".to_string(), "src/right.rs".to_string()]);
         let requests = vec![PolicyScanRequest {
             key: 0,
             policy: &python_policy,

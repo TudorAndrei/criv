@@ -609,6 +609,7 @@ digraph criv_code {
   "src/config.rs#fn:rejects_architecture_code_glob_config" [label="rejects_architecture_code_glob_config\nsrc/config.rs"];
   "src/config.rs#fn:rejects_architecture_output_outside_docs_directory" [label="rejects_architecture_output_outside_docs_directory\nsrc/config.rs"];
   "src/config.rs#fn:rejects_empty_vault_paths" [label="rejects_empty_vault_paths\nsrc/config.rs"];
+  "src/config.rs#fn:rejects_invalid_import_policy_scope_and_deny_globs" [label="rejects_invalid_import_policy_scope_and_deny_globs\nsrc/config.rs"];
   "src/config.rs#fn:rejects_parent_traversal_in_vault_paths" [label="rejects_parent_traversal_in_vault_paths\nsrc/config.rs"];
   "src/config.rs#fn:vault_path" [label="vault_path\nsrc/config.rs"];
   "src/config.rs#type:ArchitectureCodeConfig" [label="ArchitectureCodeConfig\nsrc/config.rs"];
@@ -626,11 +627,11 @@ digraph criv_code {
   "src/config.rs#type:RawConfig/member:into_config" [label="into_config\nsrc/config.rs"];
   "src/config.rs#type:RawEnforce" [label="RawEnforce\nsrc/config.rs"];
   "src/config.rs#type:RawImportPolicy" [label="RawImportPolicy\nsrc/config.rs"];
-  "src/config.rs#type:RawImportPolicy/member:into_policy" [label="into_policy\nsrc/config.rs"];
   "src/config.rs#type:RawIndex" [label="RawIndex\nsrc/config.rs"];
   "src/config.rs#type:RawSource" [label="RawSource\nsrc/config.rs"];
   "src/config.rs#type:RawVault" [label="RawVault\nsrc/config.rs"];
   "src/config.rs#type:criv/member:into_config" [label="into_config\nsrc/config.rs"];
+  "src/config.rs#type:policy/member:into_policy" [label="into_policy\nsrc/config.rs"];
   "src/enforce.rs#fn:adr_immutability_allows_new_adrs_but_blocks_existing_changes" [label="adr_immutability_allows_new_adrs_but_blocks_existing_changes\nsrc/enforce.rs"];
   "src/enforce.rs#fn:adr_immutability_gate_can_allow_proven_link_migration" [label="adr_immutability_gate_can_allow_proven_link_migration\nsrc/enforce.rs"];
   "src/enforce.rs#fn:adr_immutability_violations" [label="adr_immutability_violations\nsrc/enforce.rs"];
@@ -670,7 +671,6 @@ digraph criv_code {
   "src/enforce.rs#fn:parse_pre_push_updates" [label="parse_pre_push_updates\nsrc/enforce.rs"];
   "src/enforce.rs#fn:parses_git_name_status_entries" [label="parses_git_name_status_entries\nsrc/enforce.rs"];
   "src/enforce.rs#fn:parses_multiple_pre_push_updates_and_rejects_malformed_records" [label="parses_multiple_pre_push_updates_and_rejects_malformed_records\nsrc/enforce.rs"];
-  "src/enforce.rs#fn:path_matches" [label="path_matches\nsrc/enforce.rs"];
   "src/enforce.rs#fn:policy_scan_files" [label="policy_scan_files\nsrc/enforce.rs"];
   "src/enforce.rs#fn:policy_scan_files_intersects_changed_files_with_governed_sources" [label="policy_scan_files_intersects_changed_files_with_governed_sources\nsrc/enforce.rs"];
   "src/enforce.rs#fn:policy_scope_files" [label="policy_scope_files\nsrc/enforce.rs"];
@@ -1060,7 +1060,6 @@ digraph criv_code {
   "src/structural.rs#fn:language_glob" [label="language_glob\nsrc/structural.rs"];
   "src/structural.rs#fn:normalize_rule" [label="normalize_rule\nsrc/structural.rs"];
   "src/structural.rs#fn:parse_language" [label="parse_language\nsrc/structural.rs"];
-  "src/structural.rs#fn:path_allowed" [label="path_allowed\nsrc/structural.rs"];
   "src/structural.rs#fn:pattern_source" [label="pattern_source\nsrc/structural.rs"];
   "src/structural.rs#fn:policy" [label="policy\nsrc/structural.rs"];
   "src/structural.rs#fn:policy_fixture" [label="policy_fixture\nsrc/structural.rs"];
@@ -2101,6 +2100,7 @@ digraph criv_code {
   "src/config.rs#fn:rejects_absolute_vault_paths" -> "src/config.rs#type:RawConfig/member:into_config";
   "src/config.rs#fn:rejects_architecture_output_outside_docs_directory" -> "src/config.rs#type:RawConfig/member:into_config";
   "src/config.rs#fn:rejects_empty_vault_paths" -> "src/config.rs#type:RawConfig/member:into_config";
+  "src/config.rs#fn:rejects_invalid_import_policy_scope_and_deny_globs" -> "src/config.rs#type:RawConfig/member:into_config";
   "src/config.rs#fn:rejects_parent_traversal_in_vault_paths" -> "src/config.rs#type:RawConfig/member:into_config";
   "src/config.rs#fn:vault_path" -> "src/lib.rs#type:CrivError";
   "src/config.rs#type:Config/member:load" -> "src/config.rs#type:RawConfig/member:into_config";
@@ -2113,6 +2113,7 @@ digraph criv_code {
   "src/config.rs#type:RawConfig/member:into_config" -> "src/config.rs#type:RawConfig/member:into_config";
   "src/config.rs#type:criv/member:into_config" -> "src/config.rs#fn:vault_path";
   "src/config.rs#type:criv/member:into_config" -> "src/lib.rs#type:CrivError";
+  "src/config.rs#type:policy/member:into_policy" -> "src/lib.rs#type:CrivError";
   "src/enforce.rs#fn:adr_immutability_allows_new_adrs_but_blocks_existing_changes" -> "src/enforce.rs#fn:adr_immutability_violations";
   "src/enforce.rs#fn:adr_immutability_gate_can_allow_proven_link_migration" -> "src/enforce.rs#fn:adr_immutability_violations";
   "src/enforce.rs#fn:adr_immutability_violations" -> "src/enforce.rs#fn:is_adr_file";
@@ -2142,8 +2143,9 @@ digraph criv_code {
   "src/enforce.rs#fn:git_output" -> "src/lib.rs#type:Command";
   "src/enforce.rs#fn:git_output" -> "src/lib.rs#type:CrivError";
   "src/enforce.rs#fn:git_stdout" -> "src/lib.rs#type:Command";
+  "src/enforce.rs#fn:import_matches" -> "src/util.rs#type:pattern/member:is_match";
   "src/enforce.rs#fn:import_policy_violations" -> "src/enforce.rs#fn:import_matches";
-  "src/enforce.rs#fn:import_policy_violations" -> "src/enforce.rs#fn:path_matches";
+  "src/enforce.rs#fn:import_policy_violations" -> "src/util.rs#type:pattern/member:is_match";
   "src/enforce.rs#fn:import_policy_violations" -> "src/vault.rs#type:index/member:source_graph";
   "src/enforce.rs#fn:is_allowed_adr_link_migration" -> "src/enforce.rs#fn:is_mechanical_wikilink_portability_migration";
   "src/enforce.rs#fn:is_allowed_adr_link_migration" -> "src/enforce.rs#fn:read_changed_content";
@@ -2778,9 +2780,10 @@ digraph criv_code {
   "src/structural.rs#fn:find" -> "src/source_index.rs#type:scan_root/member:source_files";
   "src/structural.rs#fn:find" -> "src/source_paths.rs#fn:read_source_to_string";
   "src/structural.rs#fn:find" -> "src/structural.rs#fn:compile";
-  "src/structural.rs#fn:find" -> "src/structural.rs#fn:path_allowed";
   "src/structural.rs#fn:find" -> "src/structural.rs#fn:scan_compiled_source";
   "src/structural.rs#fn:find" -> "src/structural.rs#fn:sort_matches";
+  "src/structural.rs#fn:find" -> "src/util.rs#type:GlobMatcher";
+  "src/structural.rs#fn:find" -> "src/util.rs#type:pattern/member:is_match";
   "src/structural.rs#fn:find_pattern_id" -> "src/lib.rs#type:CrivError";
   "src/structural.rs#fn:find_pattern_id" -> "src/structural.rs#fn:find";
   "src/structural.rs#fn:find_pattern_id" -> "src/structural.rs#fn:pattern_source";
@@ -2788,7 +2791,6 @@ digraph criv_code {
   "src/structural.rs#fn:find_policies_batch" -> "src/source_paths.rs#fn:read_source_to_string";
   "src/structural.rs#fn:find_policies_batch" -> "src/structural.rs#fn:compile";
   "src/structural.rs#fn:find_policies_batch" -> "src/structural.rs#fn:parse_language";
-  "src/structural.rs#fn:find_policies_batch" -> "src/structural.rs#fn:path_allowed";
   "src/structural.rs#fn:find_policies_batch" -> "src/structural.rs#fn:policy_source";
   "src/structural.rs#fn:find_policies_batch" -> "src/structural.rs#fn:row_from_match";
   "src/structural.rs#fn:find_policies_batch" -> "src/structural.rs#fn:sort_matches";
@@ -2796,7 +2798,6 @@ digraph criv_code {
   "src/structural.rs#fn:find_policy_pattern_entry" -> "src/structural.rs#fn:policy_source";
   "src/structural.rs#fn:find_policy_pattern_entry" -> "src/structural.rs#fn:validate_source";
   "src/structural.rs#fn:parse_language" -> "src/lib.rs#type:CrivError";
-  "src/structural.rs#fn:path_allowed" -> "src/util.rs#fn:glob_matches";
   "src/structural.rs#fn:policy_fixture" -> "src/vault.rs#type:Vault";
   "src/structural.rs#fn:policy_pattern_entry_is_valid" -> "src/structural.rs#fn:policy_source";
   "src/structural.rs#fn:policy_pattern_entry_is_valid" -> "src/structural.rs#fn:validate_source";

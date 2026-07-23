@@ -326,7 +326,7 @@ fn policy_violations(root: &Path, vault: &Vault) -> Result<Vec<PolicyViolation>>
     struct ScanRecord<'a> {
         adr_id: String,
         pattern_id: String,
-        scopes: Vec<String>,
+        scopes: BTreeSet<String>,
         pattern: &'a PolicyPattern,
     }
 
@@ -338,7 +338,9 @@ fn policy_violations(root: &Path, vault: &Vault) -> Result<Vec<PolicyViolation>>
         let Some(adr_id) = &note.id else {
             continue;
         };
-        let scopes = policy_scope_files(vault, &vault.effective_governs(note));
+        let scopes: BTreeSet<String> = policy_scope_files(vault, &vault.effective_governs(note))
+            .into_iter()
+            .collect();
         for pattern in &note.policy_patterns {
             if !crate::structural::policy_pattern_entry_is_valid(pattern) {
                 continue;

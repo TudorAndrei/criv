@@ -34,11 +34,12 @@ pub(crate) struct ArchitectureCodeConfig {
     pub(crate) title: String,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone)]
 pub(crate) struct ImportPolicy {
     pub(crate) id: String,
-    pub(crate) scope: Vec<String>,
+    pub(crate) scope_matcher: crate::util::GlobMatcher,
     pub(crate) deny: Vec<String>,
+    pub(crate) deny_matchers: Vec<Option<crate::util::GlobMatcher>>,
 }
 
 impl Default for Config {
@@ -129,7 +130,7 @@ impl RawConfig {
                 .imports
                 .into_iter()
                 .map(RawImportPolicy::into_policy)
-                .collect(),
+                .collect::<Result<Vec<_>>>()?,
             patterns: patterns.keys().cloned().collect(),
             pattern_defs: patterns
                 .into_iter()
@@ -267,16 +268,39 @@ struct RawImportPolicy {
 }
 
 impl RawImportPolicy {
-    fn into_policy(self) -> ImportPolicy {
-        ImportPolicy {
-            id: self.id.unwrap_or_else(|| "import-policy".into()),
-            scope: if self.scope.is_empty() {
-                vec!["**".into()]
-            } else {
-                self.scope
-            },
+    fn into_policy(self) -> Result<ImportPolicy> {
+        let id = self.id.unwrap_or_else(|| "import-policy".into());
+        let scope = if self.scope.is_empty() {
+            vec!["**".into()]
+        } else {
+            self.scope
+        };
+        let scope_matcher = crate::util::GlobMatcher::new(&scope).map_err(|err| {
+            CrivError::new(format!(
+                "invalid enforce.imports scope for policy `{id}`: {err}"
+            ))
+        })?;
+        let deny_matchers = self
+            .deny
+            .iter()
+            .map(|deny| {
+                (deny.contains('*') || deny.contains('?') || deny.contains('['))
+                    .then(|| {
+                        crate::util::GlobMatcher::new(&[deny.replace("::", "/")]).map_err(|err| {
+                            CrivError::new(format!(
+                                "invalid enforce.imports deny glob for policy `{id}`: {err}"
+                            ))
+                        })
+                    })
+                    .transpose()
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(ImportPolicy {
+            id,
+            scope_matcher,
             deny: self.deny,
-        }
+            deny_matchers,
+        })
     }
 }
 
@@ -303,8 +327,42 @@ deny = ["crate::db"]
         assert_eq!(config.enforce_stages, vec!["ci"]);
         assert_eq!(config.import_policies.len(), 1);
         assert_eq!(config.import_policies[0].id, "no-db-from-ui");
-        assert_eq!(config.import_policies[0].scope, vec!["src/ui/**"]);
+        assert!(
+            config.import_policies[0]
+                .scope_matcher
+                .is_match("src/ui/view.rs")
+        );
         assert_eq!(config.import_policies[0].deny, vec!["crate::db"]);
+    }
+
+    #[test]
+    fn rejects_invalid_import_policy_scope_and_deny_globs() {
+        let scope = toml::from_str::<RawConfig>(
+            r#"
+[[enforce.imports]]
+id = "bad-scope"
+scope = ["src/[.rs"]
+"#,
+        )
+        .unwrap()
+        .into_config()
+        .unwrap_err();
+        assert!(scope.to_string().contains("bad-scope"));
+        assert!(scope.to_string().contains("scope"));
+
+        let deny = toml::from_str::<RawConfig>(
+            r#"
+[[enforce.imports]]
+id = "bad-deny"
+scope = ["src/**"]
+deny = ["crate::["]
+"#,
+        )
+        .unwrap()
+        .into_config()
+        .unwrap_err();
+        assert!(deny.to_string().contains("bad-deny"));
+        assert!(deny.to_string().contains("deny glob"));
     }
 
     #[test]

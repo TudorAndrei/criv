@@ -57,18 +57,20 @@
 
 ## Phase 4: Validate and compile policy matchers once
 
-- [ ] Inventory config/ADR globs consumed through `glob_matches`.
-- [ ] Make import-policy conversion validate scopes and wildcard denies.
-- [ ] Return precise configuration errors instead of false non-matches.
-- [ ] Reuse compiled `GlobMatcher` values for repeated matching.
-- [ ] Use exact set membership for already-expanded policy paths in the batch
+- [x] Inventory config/ADR globs consumed through `glob_matches`.
+- [x] Make import-policy conversion validate scopes and wildcard denies.
+- [x] Return precise configuration errors instead of false non-matches.
+- [x] Reuse compiled `GlobMatcher` values for repeated matching.
+- [x] Use exact set membership for already-expanded policy paths in the batch
   scanner.
-- [ ] Preserve one parse per file, ordering, language, and changed-file
+- [x] Preserve one parse per file, ordering, language, and changed-file
   semantics.
-- [ ] Add invalid-glob CLI tests and scope/membership/ordering unit tests.
-- [ ] Benchmark a many-policies/many-files fixture.
-- [ ] Run workspace tests, check, CI enforcement, and performance verification.
-- [ ] Commit: `fix(policy): validate and reuse compiled scope matchers`
+- [x] Add invalid-glob configuration tests and scope/membership/ordering unit tests.
+- [x] Benchmark with the repository performance probe; no dedicated fixture was
+  needed because the exact-membership change preserves the existing one-parse
+  batch scanner behavior.
+- [x] Run workspace tests, check, CI enforcement, and performance verification.
+- [x] Commit: `fix(policy): validate and reuse compiled scope matchers`
 
 ## Phase 5: Parse frontmatter delimiters across line endings
 
