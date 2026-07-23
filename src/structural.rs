@@ -274,7 +274,8 @@ pub(crate) fn language_glob(language: &str) -> &'static str {
         "rust" | "rs" => "**/*.rs",
         "typescript" | "ts" => "**/*.ts",
         "tsx" => "**/*.tsx",
-        "javascript" | "js" | "jsx" => "**/*.js",
+        "javascript" | "js" => "**/*.js",
+        "jsx" => "**/*.jsx",
         "python" | "py" => "**/*.py",
         "go" | "golang" => "**/*.go",
         _ => "**",
@@ -403,6 +404,12 @@ fn parse_language(language: &str) -> Result<SupportLang> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jsx_language_glob_matches_only_jsx_files() {
+        assert_eq!(language_glob("jsx"), "**/*.jsx");
+        assert_eq!(language_glob("javascript"), "**/*.js");
+    }
     use std::fs;
     use tempfile::TempDir;
 

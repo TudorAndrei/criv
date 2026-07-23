@@ -262,6 +262,31 @@ fn file_search_honors_path_and_language_filters() {
 }
 
 #[test]
+fn file_search_matches_jsx_for_the_jsx_language_filter() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("src/component.jsx"),
+        "export const Component = () => <div />;\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/component.js"),
+        "export const component = 1;\n",
+    )
+    .unwrap();
+    write_criv_config(root, vec!["src"], vec![], true);
+
+    criv(root)
+        .args(["search", "--files", "component", "--lang", "jsx"])
+        .assert()
+        .success()
+        .stdout("src/component.jsx\n");
+}
+
+#[test]
 fn query_json_output_is_valid_for_special_characters() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

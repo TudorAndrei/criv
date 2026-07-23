@@ -84,12 +84,12 @@
 
 ## Phase 6: Correct JSX language filtering
 
-- [ ] Make `jsx` match `.jsx` paths.
-- [ ] Resolve and document whether `javascript`/`js` also include `.jsx`.
-- [ ] Keep `.js`, `.jsx`, `.ts`, and `.tsx` path/language parsing consistent.
-- [ ] Add structural/state unit tests and a JSX CLI search regression.
-- [ ] Run `cargo test --workspace` and `cargo run --quiet -- check`.
-- [ ] Commit: `fix(search): match JSX files for the JSX language filter`
+- [x] Make `jsx` match `.jsx` paths.
+- [x] Keep `javascript`/`js` scoped to `.js`; only explicit `jsx` includes `.jsx`.
+- [x] Keep `.js`, `.jsx`, `.ts`, and `.tsx` path/language parsing consistent.
+- [x] Add structural and JSX CLI search regressions.
+- [x] Run `cargo test --workspace` and `cargo run --quiet -- check`.
+- [x] Commit: `fix(search): match JSX files for the JSX language filter`
 
 ## Phase 7: Pin the shared `criv.state.v0` producer/consumer contract
 
