@@ -56,44 +56,80 @@ pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
     println!("criv watch running");
 
     loop {
-        let mut docs_changed = false;
-        let mut source_changed = false;
-        match rx.recv_timeout(Duration::from_millis(250)) {
+        let signal = match rx.recv_timeout(Duration::from_millis(250)) {
             Ok(event) => match event {
-                Ok(events) if events.is_empty() => {}
-                Ok(_) => docs_changed = true,
-                Err(err) => eprintln!("criv watch: watcher error: {err}"),
+                Ok(events) if events.is_empty() => WatchSignal::Idle,
+                Ok(_) => WatchSignal::DocsChanged,
+                Err(err) => {
+                    eprintln!("criv watch: watcher error: {err}");
+                    WatchSignal::WatcherError
+                }
             },
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
-        }
+            Err(mpsc::RecvTimeoutError::Timeout) => WatchSignal::Idle,
+            Err(mpsc::RecvTimeoutError::Disconnected) => WatchSignal::Disconnected,
+        };
 
-        if let Some((source_index, source_fingerprint)) = &mut source_watch {
+        let source_changed = if let Some((source_index, source_fingerprint)) = &mut source_watch {
             match source_index.source_fingerprint() {
                 Ok(next_fingerprint) if next_fingerprint != *source_fingerprint => {
                     *source_fingerprint = next_fingerprint;
-                    source_changed = true;
+                    true
                 }
-                Ok(_) => {}
-                Err(err) => eprintln!("criv watch: source index error: {err}"),
+                Ok(_) => false,
+                Err(err) => {
+                    eprintln!("criv watch: source index error: {err}");
+                    false
+                }
             }
-        }
+        } else {
+            false
+        };
 
-        if docs_changed || source_changed {
-            let previous_graph = (!docs_changed).then_some(&source_graph);
-            let previous_state = (!docs_changed).then_some(&state);
-            match rebuild_incremental(root, previous_graph, previous_state) {
-                Ok((next_vault, next_state)) => {
-                    vault = next_vault;
-                    state = next_state;
-                    source_graph = vault.source_graph().clone();
+        match watch_decision(signal, source_changed) {
+            WatchDecision::Rebuild { docs_changed } => {
+                let previous_graph = (!docs_changed).then_some(&source_graph);
+                let previous_state = (!docs_changed).then_some(&state);
+                match rebuild_incremental(root, previous_graph, previous_state) {
+                    Ok((next_vault, next_state)) => {
+                        vault = next_vault;
+                        state = next_state;
+                        source_graph = vault.source_graph().clone();
+                    }
+                    Err(err) => eprintln!("criv watch: {err}"),
                 }
-                Err(err) => eprintln!("criv watch: {err}"),
             }
+            WatchDecision::Continue => {}
+            WatchDecision::Stop => break,
         }
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum WatchSignal {
+    DocsChanged,
+    Idle,
+    WatcherError,
+    Disconnected,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum WatchDecision {
+    Rebuild { docs_changed: bool },
+    Continue,
+    Stop,
+}
+
+fn watch_decision(signal: WatchSignal, source_changed: bool) -> WatchDecision {
+    match signal {
+        WatchSignal::Disconnected => WatchDecision::Stop,
+        WatchSignal::DocsChanged => WatchDecision::Rebuild { docs_changed: true },
+        WatchSignal::Idle | WatchSignal::WatcherError if source_changed => WatchDecision::Rebuild {
+            docs_changed: false,
+        },
+        WatchSignal::Idle | WatchSignal::WatcherError => WatchDecision::Continue,
+    }
 }
 
 fn rebuild(root: &Path, previous_graph: Option<&SourceGraph>) -> Result<(Vault, State)> {
@@ -196,6 +232,42 @@ mod tests {
             nodes
                 .iter()
                 .any(|node| node["id"].as_str() == Some("note:architecture-code"))
+        );
+    }
+
+    #[test]
+    fn watch_decisions_distinguish_docs_source_errors_and_shutdown() {
+        assert_eq!(
+            watch_decision(WatchSignal::DocsChanged, false),
+            WatchDecision::Rebuild { docs_changed: true }
+        );
+        assert_eq!(
+            watch_decision(WatchSignal::Idle, true),
+            WatchDecision::Rebuild {
+                docs_changed: false
+            }
+        );
+        assert_eq!(
+            watch_decision(WatchSignal::DocsChanged, true),
+            WatchDecision::Rebuild { docs_changed: true }
+        );
+        assert_eq!(
+            watch_decision(WatchSignal::Idle, false),
+            WatchDecision::Continue
+        );
+        assert_eq!(
+            watch_decision(WatchSignal::WatcherError, false),
+            WatchDecision::Continue
+        );
+        assert_eq!(
+            watch_decision(WatchSignal::WatcherError, true),
+            WatchDecision::Rebuild {
+                docs_changed: false
+            }
+        );
+        assert_eq!(
+            watch_decision(WatchSignal::Disconnected, true),
+            WatchDecision::Stop
         );
     }
 

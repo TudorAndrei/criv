@@ -120,15 +120,15 @@
 
 ## Phase 9: Exercise the long-running watch event loop
 
-- [ ] Extract deterministic event/rebuild decision logic.
-- [ ] Unit-test docs/source/simultaneous/timeout/error/disconnect decisions.
-- [ ] Add a bounded CLI harness for real note and source events.
-- [ ] Guarantee spawned watcher termination and wait on every path.
-- [ ] Verify recovery after a failed rebuild and valid follow-up event.
-- [ ] Verify debounced bursts converge to correct final state.
-- [ ] Repeat the integration test to detect flakiness.
-- [ ] Run `cargo test --workspace` and `cargo run --quiet -- check`.
-- [ ] Commit: `test(watch): cover event-driven incremental rebuilds`
+- [x] Extract deterministic event/rebuild decision logic.
+- [x] Unit-test docs/source/simultaneous/timeout/error/disconnect decisions.
+- [x] Add a bounded CLI harness for real note and source events.
+- [x] Guarantee spawned watcher termination and wait on every path.
+- [x] Verify recovery after a failed rebuild and valid follow-up event.
+- [x] Verify debounced bursts converge to correct final state.
+- [x] Repeat the integration test to detect flakiness.
+- [x] Run `cargo test --workspace` and `cargo run --quiet -- check`.
+- [x] Commit: `test(watch): cover event-driven incremental rebuilds`
 
 ## Phase 10: Consolidate source enumeration and watch indexing
 

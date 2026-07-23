@@ -1,5 +1,10 @@
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
+use std::process::{Child, Command as ProcessCommand, Stdio};
+use std::sync::mpsc::{self, Receiver};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -1259,6 +1264,171 @@ fn long_running_watch_takes_lock_before_startup_rebuild() {
         .failure()
         .stderr(predicate::str::contains("watch.lock"));
     assert_eq!(fs::read_to_string(state_path).unwrap(), "sentinel\n");
+}
+
+#[test]
+fn long_running_watch_rebuilds_docs_sources_bursts_and_recovers() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn initial() {}\n").unwrap();
+    let config = fs::read_to_string(root.join("criv.toml")).unwrap();
+
+    let mut watch = WatchProcess::spawn(root);
+    watch.wait_until_running();
+
+    fs::write(
+        root.join("docs/live.md"),
+        "---\nid: live\nkind: doc\ntitle: Live note\n---\n\n# Live note\n",
+    )
+    .unwrap();
+    wait_for_state(root, "the docs update", |state| {
+        state["graph"]["nodes"].as_array().is_some_and(|nodes| {
+            nodes
+                .iter()
+                .any(|node| node["id"].as_str() == Some("note:live"))
+        })
+    });
+
+    fs::write(root.join("src/lib.rs"), "pub fn source_update() {}\n").unwrap();
+    wait_for_state(root, "the source update", |state| {
+        state["graph"]["nodes"].as_array().is_some_and(|nodes| {
+            nodes
+                .iter()
+                .any(|node| node["id"].as_str() == Some("symbol:src/lib.rs#fn:source_update"))
+        })
+    });
+
+    let last_good_state = fs::read_to_string(root.join(".criv/state.json")).unwrap();
+    fs::write(root.join("criv.toml"), "[source\nroots = [\"src\"]\n").unwrap();
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn invalid_config_change() {}\n",
+    )
+    .unwrap();
+    assert_state_remains(root, &last_good_state, "a failed rebuild");
+
+    fs::write(root.join("criv.toml"), config).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn recovered() {}\n").unwrap();
+    wait_for_state(root, "recovery after a failed rebuild", |state| {
+        state["graph"]["nodes"].as_array().is_some_and(|nodes| {
+            nodes
+                .iter()
+                .any(|node| node["id"].as_str() == Some("symbol:src/lib.rs#fn:recovered"))
+        })
+    });
+
+    fs::write(root.join("src/lib.rs"), "pub fn burst_one() {}\n").unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn burst_two() {}\n").unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn burst_final() {}\n").unwrap();
+    wait_for_state(root, "the final debounced source burst", |state| {
+        state["graph"]["nodes"].as_array().is_some_and(|nodes| {
+            nodes
+                .iter()
+                .any(|node| node["id"].as_str() == Some("symbol:src/lib.rs#fn:burst_final"))
+        })
+    });
+}
+
+struct WatchProcess {
+    child: Child,
+    lines: Receiver<String>,
+    stdout_reader: Option<JoinHandle<()>>,
+}
+
+impl WatchProcess {
+    fn spawn(root: &Path) -> Self {
+        let mut child = ProcessCommand::new(assert_cmd::cargo::cargo_bin("criv"))
+            .current_dir(root)
+            .env_remove("CI")
+            .env_remove("GITHUB_ACTIONS")
+            .env_remove("CRIV_BASE_REF")
+            .env_remove("GITHUB_BASE_REF")
+            .arg("watch")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .expect("start criv watch");
+        let stdout = child.stdout.take().expect("watch stdout");
+        let (tx, lines) = mpsc::channel();
+        let stdout_reader = thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                if tx
+                    .send(line.unwrap_or_else(|error| format!("<stdout error: {error}>")))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        });
+        Self {
+            child,
+            lines,
+            stdout_reader: Some(stdout_reader),
+        }
+    }
+
+    fn wait_until_running(&mut self) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut output = Vec::new();
+        while Instant::now() < deadline {
+            match self.lines.recv_timeout(Duration::from_millis(100)) {
+                Ok(line) => {
+                    if line == "criv watch running" {
+                        return;
+                    }
+                    output.push(line);
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            if let Some(status) = self.child.try_wait().expect("poll watch process") {
+                panic!("criv watch exited before startup with {status}; stdout: {output:?}");
+            }
+        }
+        panic!("timed out waiting for criv watch running; stdout: {output:?}");
+    }
+}
+
+impl Drop for WatchProcess {
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+        }
+        let _ = self.child.wait();
+        if let Some(stdout_reader) = self.stdout_reader.take() {
+            let _ = stdout_reader.join();
+        }
+    }
+}
+
+fn wait_for_state(root: &Path, description: &str, predicate: impl Fn(&serde_json::Value) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let state_path = root.join(".criv/state.json");
+    let mut latest = String::new();
+    while Instant::now() < deadline {
+        if let Ok(contents) = fs::read_to_string(&state_path) {
+            latest = contents;
+            if let Ok(state) = serde_json::from_str(&latest)
+                && predicate(&state)
+            {
+                return;
+            }
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    panic!("timed out waiting for {description}; last state: {latest}");
+}
+
+fn assert_state_remains(root: &Path, expected: &str, description: &str) {
+    let deadline = Instant::now() + Duration::from_millis(800);
+    while Instant::now() < deadline {
+        let actual = fs::read_to_string(root.join(".criv/state.json")).unwrap();
+        assert_eq!(actual, expected, "state changed during {description}");
+        thread::sleep(Duration::from_millis(50));
+    }
 }
 
 fn write_criv_config(root: &Path, roots: Vec<&str>, exclude: Vec<&str>, source_index: bool) {
