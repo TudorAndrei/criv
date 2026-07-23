@@ -76,14 +76,6 @@ impl Config {
     pub(crate) fn docs_path(&self, root: &Path) -> PathBuf {
         root.join(&self.docs_dir)
     }
-
-    pub(crate) fn source_root_paths(&self, root: &Path) -> Vec<PathBuf> {
-        self.source_roots
-            .iter()
-            .map(|source_root| root.join(source_root))
-            .filter(|path| path.exists())
-            .collect()
-    }
 }
 
 #[derive(Debug, Default, Deserialize)]

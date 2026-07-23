@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -25,22 +26,32 @@ pub(crate) struct WatchOptions {
 pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
     let _lock = WatchLock::acquire(root)?;
     if options.once {
-        rebuild(root, None)?;
+        rebuild(root, None, None)?;
         return Ok(());
     }
-    let (mut vault, mut state) = rebuild(root, None)?;
-    let mut source_graph = vault.source_graph().clone();
-
     let config = Config::load(root)?;
-    let docs_path = config.docs_path(root);
-    let mut source_watch = if config.source_index {
-        let source_index =
-            FffSourceIndex::new(root, &config.source_roots, &config.source_exclude, true)?;
-        let source_fingerprint = source_index.source_fingerprint()?;
-        Some((source_index, source_fingerprint))
+    let shared_source_index: Option<Arc<dyn SourceIndex>> = if config.source_index {
+        Some(Arc::new(FffSourceIndex::new(
+            root,
+            &config.source_roots,
+            &config.source_exclude,
+            true,
+        )?))
     } else {
         None
     };
+    let (mut vault, mut state) = rebuild(root, None, shared_source_index.clone())?;
+    let mut source_graph = vault.source_graph().clone();
+
+    let docs_path = config.docs_path(root);
+    let mut source_watch = shared_source_index
+        .as_ref()
+        .map(|source_index| {
+            source_index
+                .source_fingerprint()
+                .map(|fingerprint| (source_index.clone(), fingerprint))
+        })
+        .transpose()?;
 
     let (tx, rx) = mpsc::channel::<DebounceEventResult>();
     let mut debouncer = new_debouncer(Duration::from_millis(250), move |event| {
@@ -89,7 +100,12 @@ pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
             WatchDecision::Rebuild { docs_changed } => {
                 let previous_graph = (!docs_changed).then_some(&source_graph);
                 let previous_state = (!docs_changed).then_some(&state);
-                match rebuild_incremental(root, previous_graph, previous_state) {
+                match rebuild_incremental(
+                    root,
+                    previous_graph,
+                    previous_state,
+                    shared_source_index.clone(),
+                ) {
                     Ok((next_vault, next_state)) => {
                         vault = next_vault;
                         state = next_state;
@@ -132,13 +148,24 @@ fn watch_decision(signal: WatchSignal, source_changed: bool) -> WatchDecision {
     }
 }
 
-fn rebuild(root: &Path, previous_graph: Option<&SourceGraph>) -> Result<(Vault, State)> {
+fn rebuild(
+    root: &Path,
+    previous_graph: Option<&SourceGraph>,
+    shared_source_index: Option<Arc<dyn SourceIndex>>,
+) -> Result<(Vault, State)> {
     let mut vault = previous_graph.map_or_else(
-        || Vault::load(root),
-        |previous_graph| Vault::load_incremental(root, Some(previous_graph)),
+        || Vault::load_incremental_with_source_index(root, None, shared_source_index.clone()),
+        |previous_graph| {
+            Vault::load_incremental_with_source_index(
+                root,
+                Some(previous_graph),
+                shared_source_index.clone(),
+            )
+        },
     )?;
     if architecture::write_code_architecture(root, &vault)? {
-        vault = Vault::load_incremental(root, previous_graph)?;
+        vault =
+            Vault::load_incremental_with_source_index(root, previous_graph, shared_source_index)?;
     }
     let diagnostics = check::validate_with_previous_state(&vault, None);
     let (snapshot, state) = state::write_state(root, &vault)?;
@@ -152,10 +179,16 @@ fn rebuild_incremental(
     root: &Path,
     previous_graph: Option<&SourceGraph>,
     previous_state: Option<&State>,
+    shared_source_index: Option<Arc<dyn SourceIndex>>,
 ) -> Result<(Vault, State)> {
-    let mut vault = Vault::load_incremental(root, previous_graph)?;
+    let mut vault = Vault::load_incremental_with_source_index(
+        root,
+        previous_graph,
+        shared_source_index.clone(),
+    )?;
     if architecture::write_code_architecture(root, &vault)? {
-        vault = Vault::load_incremental(root, previous_graph)?;
+        vault =
+            Vault::load_incremental_with_source_index(root, previous_graph, shared_source_index)?;
     }
     let diagnostics = check::validate_with_previous_state(&vault, previous_state);
     let changed_files = previous_state
@@ -218,7 +251,7 @@ mod tests {
         write_watch_architecture_fixture(temp.path());
         state::reset_work_counts();
 
-        let (vault, _) = rebuild(temp.path(), None).unwrap();
+        let (vault, _) = rebuild(temp.path(), None, None).unwrap();
 
         assert_eq!(state::work_counts(), (1, 1));
 

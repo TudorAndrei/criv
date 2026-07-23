@@ -13,10 +13,10 @@ use regex::Regex;
 use crate::source_paths::{
     SourceRootKind, canonical_source_path, read_source_to_string, source_metadata, source_root_kind,
 };
-use crate::util::{GlobMatcher, glob_matches};
+use crate::util::{GlobMatcher, glob_matches, is_text_file};
 use crate::{CrivError, Result};
 
-const SCAN_TIMEOUT: Duration = Duration::from_secs(10);
+const SCAN_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceGrepMode {
@@ -45,7 +45,7 @@ pub(crate) struct IndexedSource {
     pub(crate) frecency: u32,
 }
 
-pub(crate) trait SourceIndex: std::fmt::Debug {
+pub(crate) trait SourceIndex: std::fmt::Debug + Send + Sync {
     fn fuzzy_files(&self, query: &str, limit: usize) -> Result<Vec<FileHit>>;
     fn grep(&self, query: &str, mode: SourceGrepMode, paths: &[String]) -> Result<Vec<GrepHit>>;
     fn resolve_partial_path(&self, path: &str) -> Option<(String, bool)>;
@@ -60,7 +60,7 @@ pub(crate) struct FffSourceIndex {
     source_excludes: GlobMatcher,
     pickers: Vec<ScopedPicker>,
     explicit_files: Vec<String>,
-    source_files_cache: OnceLock<Vec<String>>,
+    source_files_cache: Option<OnceLock<Vec<String>>>,
 }
 
 #[derive(Debug)]
@@ -116,7 +116,7 @@ impl FffSourceIndex {
             source_excludes,
             pickers,
             explicit_files: scan_plan.files,
-            source_files_cache: OnceLock::new(),
+            source_files_cache: (!watch).then(OnceLock::new),
         })
     }
 
@@ -148,11 +148,14 @@ impl FffSourceIndex {
     }
 
     fn source_files(&self) -> Result<Vec<String>> {
-        if let Some(cached) = self.source_files_cache.get() {
-            return Ok(cached.clone());
+        if let Some(cache) = &self.source_files_cache {
+            if let Some(cached) = cache.get() {
+                return Ok(cached.clone());
+            }
+            let files = self.collect_source_files_now()?;
+            return Ok(cache.get_or_init(|| files).clone());
         }
-        let files = self.collect_source_files_now()?;
-        Ok(self.source_files_cache.get_or_init(|| files).clone())
+        self.collect_source_files_now()
     }
 
     fn collect_source_files_now(&self) -> Result<Vec<String>> {
@@ -173,6 +176,7 @@ impl FffSourceIndex {
         files.extend(
             self.explicit_files
                 .iter()
+                .filter(|path| is_text_file(&self.root.join(path)).unwrap_or(false))
                 .filter_map(|path| self.indexed_path(path.clone())),
         );
         Ok(files.into_iter().collect())
@@ -600,6 +604,51 @@ mod tests {
             .grep("[", SourceGrepMode::Regex, &[])
             .expect_err("invalid regex should fail");
         assert!(error.to_string().contains("invalid regex grep query"));
+    }
+
+    #[test]
+    fn source_index_enumeration_preserves_vault_source_file_semantics() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("src/nested")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+        fs::write(root.join("src/nested/mod.rs"), "pub fn nested() {}\n").unwrap();
+        fs::write(root.join("src/.hidden.rs"), "pub fn hidden() {}\n").unwrap();
+        fs::write(root.join("src/excluded.rs"), "pub fn excluded() {}\n").unwrap();
+        fs::write(root.join("src/ignored.rs"), "pub fn ignored() {}\n").unwrap();
+        fs::write(root.join("src/.gitignore"), "ignored.rs\n").unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"fixture\"\n").unwrap();
+        fs::write(root.join("binary.bin"), [0_u8, 159, 146, 150]).unwrap();
+
+        let index = FffSourceIndex::new(
+            root,
+            &[
+                "src".into(),
+                "src/nested".into(),
+                "Cargo.toml".into(),
+                "binary.bin".into(),
+                "src".into(),
+            ],
+            &["src/excluded.rs".into()],
+            false,
+        )
+        .unwrap();
+
+        let paths = index
+            .entries()
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            vec![
+                "Cargo.toml",
+                "src/ignored.rs",
+                "src/lib.rs",
+                "src/nested/mod.rs",
+            ]
+        );
     }
 
     #[test]

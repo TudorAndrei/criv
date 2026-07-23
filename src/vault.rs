@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::Deserialize;
 
@@ -8,8 +9,8 @@ use crate::config::Config;
 use crate::source_graph::SourceGraph;
 use crate::source_index::{FffSourceIndex, SourceIndex};
 use crate::util::{
-    GlobMatcher, find_wiki_links_with_lines, glob_matches, is_text_file, kebab,
-    markdown_headings as parse_markdown_headings, read_to_string, strip_prefix, walk_files,
+    find_wiki_links_with_lines, glob_matches, kebab, markdown_headings as parse_markdown_headings,
+    read_to_string, strip_prefix, walk_files,
 };
 use crate::{c4, c4_artifact};
 
@@ -103,7 +104,7 @@ pub(crate) struct Vault {
     filenames: BTreeMap<String, usize>,
     titles: BTreeMap<String, usize>,
     source_files: Vec<String>,
-    source_index: Box<dyn SourceIndex>,
+    source_index: Arc<dyn SourceIndex>,
     source_graph: SourceGraph,
     patterns: BTreeSet<String>,
 }
@@ -126,12 +127,13 @@ pub(crate) enum SourceTargetResolution {
 impl Vault {
     pub(crate) fn load(root: &Path) -> Result<Self> {
         let cached = crate::source_graph::load_cached(root);
-        Self::load_incremental(root, cached.as_ref())
+        Self::load_incremental_with_source_index(root, cached.as_ref(), None)
     }
 
-    pub(crate) fn load_incremental(
+    pub(crate) fn load_incremental_with_source_index(
         root: &Path,
         previous_graph: Option<&SourceGraph>,
+        shared_source_index: Option<Arc<dyn SourceIndex>>,
     ) -> Result<Self> {
         let config = Config::load(root)?;
         let docs_path = config.docs_path(root);
@@ -172,23 +174,30 @@ impl Vault {
 
         let (source_files, source_index, source_graph): (
             Vec<String>,
-            Box<dyn SourceIndex>,
+            Arc<dyn SourceIndex>,
             SourceGraph,
         ) = if config.source_index {
-            let source_files = collect_source_files(root, &config)?;
-            let source_index = Box::new(FffSourceIndex::new(
-                root,
-                &config.source_roots,
-                &config.source_exclude,
-                false,
-            )?);
+            let source_index: Arc<dyn SourceIndex> = match shared_source_index {
+                Some(source_index) => source_index,
+                None => Arc::new(FffSourceIndex::new(
+                    root,
+                    &config.source_roots,
+                    &config.source_exclude,
+                    false,
+                )?),
+            };
+            let source_files = source_index
+                .entries()?
+                .into_iter()
+                .map(|entry| entry.path)
+                .collect::<Vec<_>>();
             let source_graph = SourceGraph::build_incremental(root, &source_files, previous_graph)?;
             crate::source_graph::store_cached(root, &source_graph)?;
             (source_files, source_index, source_graph)
         } else {
             (
                 Vec::new(),
-                Box::new(EmptySourceIndex),
+                Arc::new(EmptySourceIndex),
                 SourceGraph::default(),
             )
         };
@@ -402,7 +411,7 @@ impl Vault {
             filenames,
             titles,
             source_files: Vec::new(),
-            source_index: Box::new(EmptySourceIndex),
+            source_index: Arc::new(EmptySourceIndex),
             source_graph: SourceGraph::default(),
             patterns: BTreeSet::new(),
         }
@@ -617,36 +626,6 @@ fn pattern_link_id(target: &str) -> Option<&str> {
         .map(|(_, pattern_id)| pattern_id)
 }
 
-fn collect_source_files(root: &Path, config: &Config) -> Result<Vec<String>> {
-    let mut files = Vec::new();
-    let excludes = GlobMatcher::new(&config.source_exclude)?;
-    for source_root in config.source_root_paths(root) {
-        for entry in ignore::WalkBuilder::new(&source_root)
-            .hidden(false)
-            .git_ignore(true)
-            .git_exclude(true)
-            .parents(true)
-            .build()
-        {
-            let entry = entry.map_err(|err| crate::CrivError::new(err.to_string()))?;
-            if !entry
-                .file_type()
-                .is_some_and(|file_type| file_type.is_file())
-            {
-                continue;
-            }
-            let path = entry.path();
-            let rel = strip_prefix(path, root);
-            if excludes.is_match(&rel) || !is_text_file(path)? {
-                continue;
-            }
-            files.push(rel);
-        }
-    }
-    files.sort();
-    Ok(files)
-}
-
 pub(crate) fn source_fragment_path(value: &str) -> &str {
     let value = source_target_body(value);
     value.split('#').next().unwrap_or(value)
@@ -769,6 +748,8 @@ struct RawPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source_index::FffSourceIndex;
+    use std::sync::Arc;
 
     #[test]
     fn splits_exact_frontmatter_delimiters_with_lf_and_crlf() {
@@ -987,6 +968,36 @@ source = false
         assert!(vault.source_files().is_empty());
         assert!(vault.source_graph().files.is_empty());
         assert!(vault.source_index().entries().unwrap().is_empty());
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn vault_builds_its_graph_from_the_injected_source_index() {
+        let root = unique_temp_dir("criv-injected-source-index");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("criv.toml"),
+            r#"
+[source]
+roots = ["src"]
+"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+
+        let index: Arc<dyn SourceIndex> =
+            Arc::new(FffSourceIndex::new(&root, &["src".into()], &[], false).unwrap());
+        let expected = index
+            .entries()
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect::<Vec<_>>();
+        let vault = Vault::load_incremental_with_source_index(&root, None, Some(index)).unwrap();
+
+        assert_eq!(vault.source_files(), expected);
+        assert!(vault.source_graph().files.contains_key("src/lib.rs"));
 
         let _ = std::fs::remove_dir_all(root);
     }

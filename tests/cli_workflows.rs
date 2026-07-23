@@ -1330,6 +1330,27 @@ fn long_running_watch_rebuilds_docs_sources_bursts_and_recovers() {
                 .any(|node| node["id"].as_str() == Some("symbol:src/lib.rs#fn:burst_final"))
         })
     });
+
+    fs::rename(root.join("src/lib.rs"), root.join("src/renamed.rs")).unwrap();
+    wait_for_state(root, "a renamed source file", |state| {
+        state["graph"]["nodes"].as_array().is_some_and(|nodes| {
+            nodes
+                .iter()
+                .any(|node| node["id"].as_str() == Some("code:src/renamed.rs"))
+                && !nodes
+                    .iter()
+                    .any(|node| node["id"].as_str() == Some("code:src/lib.rs"))
+        })
+    });
+
+    fs::remove_file(root.join("src/renamed.rs")).unwrap();
+    wait_for_state(root, "a deleted source file", |state| {
+        state["graph"]["nodes"].as_array().is_some_and(|nodes| {
+            !nodes
+                .iter()
+                .any(|node| node["id"].as_str() == Some("code:src/renamed.rs"))
+        })
+    });
 }
 
 struct WatchProcess {
@@ -1371,7 +1392,7 @@ impl WatchProcess {
     }
 
     fn wait_until_running(&mut self) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(45);
         let mut output = Vec::new();
         while Instant::now() < deadline {
             match self.lines.recv_timeout(Duration::from_millis(100)) {

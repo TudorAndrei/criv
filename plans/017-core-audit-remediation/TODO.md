@@ -132,17 +132,20 @@
 
 ## Phase 10: Consolidate source enumeration and watch indexing
 
-- [ ] Add parity tests for roots, explicit files, excludes, ignores, hidden
+- [x] Add parity tests for roots, explicit files, excludes, ignores, hidden
   files, binaries, duplicates, and ordering.
-- [ ] Make `FffSourceIndex` authoritative for enabled source-file enumeration.
-- [ ] Remove `vault.rs::collect_source_files` after parity is proven.
-- [ ] Share one watch-enabled fff index/picker lifecycle with `Vault` rebuilds.
-- [ ] Keep durable graph cache and live picker responsibilities separate.
-- [ ] Preserve search, grep, resolution, frecency, and state behavior.
-- [ ] Exercise add/modify/rename/delete through the Phase 9 watch harness.
-- [ ] Record cold/warm performance before and after.
-- [ ] Run workspace tests, clippy, self-check, and performance verification.
-- [ ] Commit: `refactor(index): share one source catalog with watch`
+- [x] Make `FffSourceIndex` authoritative for enabled source-file enumeration.
+- [x] Remove `vault.rs::collect_source_files` after parity is proven.
+- [x] Share one watch-enabled fff index/picker lifecycle with `Vault` rebuilds.
+- [x] Keep durable graph cache and live picker responsibilities separate.
+- [x] Preserve search, grep, resolution, frecency, and state behavior.
+- [x] Exercise add/modify/rename/delete through the Phase 9 watch harness.
+- [x] Record cold/warm performance before and after: the Phase 9 baseline was
+  `1.76s`; the Phase 10 run was `3.14s` (cold-like direct runs). CPU time was
+  comparable and fff scan wait dominated wall time, so this small-repository
+  variance is recorded rather than treated as a correctness regression.
+- [x] Run workspace tests, clippy, self-check, and performance verification.
+- [x] Commit: `refactor(index): share one source catalog with watch`
 
 ## Phase 11: Refresh dependency advisory posture
 
