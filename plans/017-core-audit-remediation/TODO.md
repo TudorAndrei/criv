@@ -42,16 +42,18 @@
 
 ## Phase 3: Make source-graph cache identity content-correct
 
-- [ ] Replace size/mtime fingerprints with BLAKE3 content digests.
-- [ ] Read each source file once while deciding reuse versus parse.
-- [ ] Bump `GRAPH_CACHE_SCHEMA` and retain cold fallback for bad caches.
-- [ ] Skip cache publication when serialized cache content is unchanged.
-- [ ] Hydrate one-shot and watch startup consistently from the persisted graph.
-- [ ] Add same-size/restored-mtime, deletion, corruption, schema, and unchanged
+- [x] Replace size/mtime fingerprints with BLAKE3 content digests.
+- [x] Read each source file once while deciding reuse versus parse.
+- [x] Bump `GRAPH_CACHE_SCHEMA` and retain cold fallback for bad caches.
+- [x] Skip cache publication when serialized cache content is unchanged.
+- [x] Hydrate one-shot and watch startup consistently from the persisted graph.
+- [x] Add same-size/restored-mtime, deletion, corruption, schema, and unchanged
   cache regressions.
-- [ ] Record before/after `mise run perf`.
-- [ ] Run workspace tests, clippy, self-check, and performance verification.
-- [ ] Commit: `fix(graph): key incremental cache reuse by source content`
+- [x] Record before/after `mise run perf`: baseline `a3aa1ce` reported
+  `watch_once_warm=1.60s`; the Phase 3 worktree reported `1.30s` (cold:
+  `1.87s` → `1.42s`; small-repository timings are informational).
+- [x] Run workspace tests, clippy, self-check, and performance verification.
+- [x] Commit: `fix(graph): key incremental cache reuse by source content`
 
 ## Phase 4: Validate and compile policy matchers once
 

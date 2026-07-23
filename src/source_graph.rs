@@ -1,17 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
-use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 use tree_sitter::{Node, Parser};
 
-use crate::source_paths::{read_source_to_string, source_metadata};
+use crate::source_paths::read_source_to_string;
 use crate::util::write_atomic_in;
 use crate::{CrivError, Result};
 
 // Bump when parsed source graph semantics or serialized graph types change.
-const GRAPH_CACHE_SCHEMA: &str = "criv.source-graph/1";
+const GRAPH_CACHE_SCHEMA: &str = "criv.source-graph/2";
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SourceGraph {
@@ -158,11 +157,16 @@ pub(crate) fn store_cached(root: &Path, graph: &SourceGraph) -> Result<()> {
     };
     let contents = serde_json::to_string_pretty(&cache)
         .map_err(|err| CrivError::new(format!("failed to serialize source graph cache: {err}")))?;
+    let contents = format!("{contents}\n");
+    let path = graph_cache_path(root);
+    if fs::read_to_string(&path).ok().as_deref() == Some(&contents) {
+        return Ok(());
+    }
     write_atomic_in(
         root,
         Path::new(".criv"),
         Path::new(".criv/source-graph.json"),
-        &format!("{contents}\n"),
+        &contents,
     )?;
     Ok(())
 }
@@ -254,7 +258,8 @@ impl SourceGraph {
     ) -> Result<Self> {
         let mut graph = Self::default();
         for source_file in source_files {
-            let fingerprint = source_file_fingerprint(root, source_file)?;
+            let contents = read_source_to_string(root, source_file)?;
+            let fingerprint = blake3::hash(contents.as_bytes()).to_hex().to_string();
             let reused = previous
                 .filter(|previous| {
                     previous.file_fingerprints.get(source_file) == Some(&fingerprint)
@@ -264,7 +269,6 @@ impl SourceGraph {
                 parsed
             } else {
                 graph.changed_files.push(source_file.clone());
-                let contents = read_source_to_string(root, source_file)?;
                 parse_source_file(source_file, &contents)
             };
             for symbol in &parsed.symbols {
@@ -417,17 +421,6 @@ impl SourceGraph {
             .get(&id.path)
             .and_then(|file| file.symbols.iter().find(|symbol| &symbol.id == id))
     }
-}
-
-fn source_file_fingerprint(root: &Path, path: &str) -> Result<String> {
-    let metadata = source_metadata(root, path)?;
-    let modified = metadata
-        .modified()
-        .ok()
-        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    Ok(format!("{}\0{modified}", metadata.len()))
 }
 
 fn parse_source_file(path: &str, contents: &str) -> SourceFile {
@@ -1468,6 +1461,47 @@ mod tests {
         expected.changed_files.clear();
         assert_eq!(loaded, expected);
         assert!(loaded.changed_files().is_empty());
+    }
+
+    #[test]
+    fn source_graph_cache_is_not_republished_when_unchanged() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+        let graph = SourceGraph::build_incremental(root, &["src/lib.rs".into()], None).unwrap();
+
+        store_cached(root, &graph).unwrap();
+        let path = graph_cache_path(root);
+        let before = fs::read_to_string(&path).unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        store_cached(root, &graph).unwrap();
+
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+    }
+
+    #[test]
+    fn incremental_graph_reparses_same_size_content_with_restored_mtime() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        let path = root.join("src/lib.rs");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "pub fn one() {}\n").unwrap();
+        let before = SourceGraph::build_incremental(root, &["src/lib.rs".into()], None).unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+
+        fs::write(&path, "pub fn two() {}\n").unwrap();
+        fs::File::open(&path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        let after =
+            SourceGraph::build_incremental(root, &["src/lib.rs".into()], Some(&before)).unwrap();
+
+        assert!(after.resolve_symbol("two").is_some());
+        assert!(after.resolve_symbol("one").is_none());
+        assert_eq!(after.changed_files(), &["src/lib.rs".to_string()]);
     }
 
     #[test]

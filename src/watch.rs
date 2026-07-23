@@ -98,7 +98,10 @@ pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
 }
 
 fn rebuild(root: &Path, previous_graph: Option<&SourceGraph>) -> Result<Vault> {
-    let mut vault = Vault::load_incremental(root, previous_graph)?;
+    let mut vault = previous_graph.map_or_else(
+        || Vault::load(root),
+        |previous_graph| Vault::load_incremental(root, Some(previous_graph)),
+    )?;
     if architecture::write_code_architecture(root, &vault)? {
         vault = Vault::load_incremental(root, previous_graph)?;
     }
