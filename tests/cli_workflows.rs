@@ -211,6 +211,20 @@ output = "../outside.c4"
 }
 
 #[test]
+fn check_accepts_valid_crlf_frontmatter() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    init(root);
+    fs::write(
+        root.join("docs/crlf.md"),
+        "---\r\nid: crlf\r\nkind: doc\r\ntitle: CRLF note\r\n---\r\n\r\n## CRLF note\r\n",
+    )
+    .unwrap();
+
+    criv(root).arg("check").assert().success();
+}
+
+#[test]
 fn file_search_honors_path_and_language_filters() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

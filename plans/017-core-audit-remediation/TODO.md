@@ -74,13 +74,13 @@
 
 ## Phase 5: Parse frontmatter delimiters across line endings
 
-- [ ] Replace prefix searching with exact delimiter-line parsing.
-- [ ] Support LF and CRLF without globally normalizing note content.
-- [ ] Reject `---suffix` as a closing delimiter.
-- [ ] Add LF, CRLF, mixed, BOM, delimiter-like body, empty, and unclosed tests.
-- [ ] Add a valid-CRLF CLI validation regression.
-- [ ] Run `cargo test --workspace` and `cargo run --quiet -- check`.
-- [ ] Commit: `fix(vault): recognize exact frontmatter delimiters with CRLF`
+- [x] Replace prefix searching with exact delimiter-line parsing.
+- [x] Support LF and CRLF without globally normalizing note content.
+- [x] Reject `---suffix` as a closing delimiter.
+- [x] Add LF, CRLF, mixed, BOM, delimiter-like body, empty, and unclosed tests.
+- [x] Add a valid-CRLF CLI validation regression.
+- [x] Run `cargo test --workspace` and `cargo run --quiet -- check`.
+- [x] Commit: `fix(vault): recognize exact frontmatter delimiters with CRLF`
 
 ## Phase 6: Correct JSX language filtering
 

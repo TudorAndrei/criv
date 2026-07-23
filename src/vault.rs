@@ -490,16 +490,35 @@ fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
 }
 
 fn split_frontmatter(contents: &str) -> (&str, String) {
-    let Some(rest) = contents.strip_prefix("---\n") else {
+    let Some((opening, frontmatter_start)) = delimiter_line(contents, 0) else {
         return ("", contents.to_string());
     };
-    let Some(end) = rest.find("\n---") else {
+    if opening != "---" {
         return ("", contents.to_string());
-    };
-    let frontmatter = &rest[..end];
-    let body_start = end + "\n---".len();
-    let body = rest[body_start..].trim_start_matches('\n').to_string();
-    (frontmatter, body)
+    }
+
+    let mut cursor = frontmatter_start;
+    while let Some((line, next)) = delimiter_line(contents, cursor) {
+        if line == "---" {
+            return (
+                &contents[frontmatter_start..cursor],
+                contents[next..].to_string(),
+            );
+        }
+        cursor = next;
+    }
+
+    ("", contents.to_string())
+}
+
+/// Returns the line without its LF/CRLF terminator plus the next byte offset.
+/// A final unterminated line is deliberately not a frontmatter delimiter.
+fn delimiter_line(contents: &str, start: usize) -> Option<(&str, usize)> {
+    let newline = contents[start..].find('\n')? + start;
+    let line_end = contents[start..newline]
+        .strip_suffix('\r')
+        .map_or(newline, |_| newline - 1);
+    Some((&contents[start..line_end], newline + 1))
 }
 
 fn parse_frontmatter(
@@ -750,6 +769,35 @@ struct RawPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn splits_exact_frontmatter_delimiters_with_lf_and_crlf() {
+        for contents in [
+            "---\nid: doc\n---\n# Body\n",
+            "---\r\nid: doc\r\n---\r\n# Body\r\n",
+            "---\r\nid: doc\n---\r\n# Body\n",
+        ] {
+            let (frontmatter, body) = split_frontmatter(contents);
+            assert!(frontmatter.contains("id: doc"));
+            assert!(body.starts_with("# Body"));
+        }
+    }
+
+    #[test]
+    fn ignores_delimiter_like_or_unclosed_frontmatter() {
+        for contents in [
+            "---\nid: doc\n---suffix\n# Body\n",
+            "---\nid: doc\n# Body\n",
+            "\u{feff}---\nid: doc\n---\n# Body\n",
+        ] {
+            assert_eq!(split_frontmatter(contents), ("", contents.to_string()));
+        }
+    }
+
+    #[test]
+    fn supports_empty_frontmatter() {
+        assert_eq!(split_frontmatter("---\n---\nbody\n"), ("", "body\n".into()));
+    }
 
     #[test]
     fn parses_core_frontmatter_fields() {
