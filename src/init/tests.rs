@@ -175,7 +175,9 @@ fn init_installs_git_hooks_by_default() {
     let pre_push = std::fs::read_to_string(root.join(".githooks/pre-push")).unwrap();
     assert!(pre_push.contains("cd '.'"));
     assert!(pre_push.contains("CRIV_BIN=\"$(command -v criv)\""));
-    assert!(pre_push.contains("\"$CRIV_BIN\" enforce --stage push"));
+    assert!(pre_push.contains(
+        "\"$CRIV_BIN\" enforce --stage push --pre-push --remote-name \"$1\" --remote-url \"$2\""
+    ));
 
     assert_executable(root.join(".githooks/pre-commit"));
     assert_executable(root.join(".githooks/pre-push"));
@@ -234,7 +236,7 @@ fn init_force_hooks_overwrites_hooks_and_hookspath() {
     assert!(
         std::fs::read_to_string(root.join(".githooks/pre-push"))
             .unwrap()
-            .contains("\"$CRIV_BIN\" enforce --stage push")
+            .contains("\"$CRIV_BIN\" enforce --stage push --pre-push")
     );
 
     let _ = std::fs::remove_dir_all(root);

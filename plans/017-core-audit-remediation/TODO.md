@@ -20,25 +20,25 @@
 
 ## Phase 2: Make Git change discovery complete and fail-closed
 
-- [ ] Add explicit pre-push hook mode/arguments to `EnforceOptions` and
+- [x] Add explicit pre-push hook mode/arguments to `EnforceOptions` and
   `pre_push_hook`.
-- [ ] Parse every pre-push ref update, including new/deleted branches and
+- [x] Parse every pre-push ref update, including new/deleted branches and
   multiple updates.
-- [ ] Enumerate outgoing commits and preserve per-commit ADR changes on first
+- [x] Enumerate outgoing commits and preserve per-commit ADR changes on first
   push.
-- [ ] Switch Git name-status transport to `-z` and parse rename/copy records
+- [x] Switch Git name-status transport to `-z` and parse rename/copy records
   without line trimming.
-- [ ] Return contextual errors from Git helpers and fail closed when
+- [x] Return contextual errors from Git helpers and fail closed when
   immutability comparisons are unavailable.
-- [ ] Preserve changed-file policy/native-tool scoping and link-migration
+- [x] Preserve changed-file policy/native-tool scoping and link-migration
   allowances.
-- [ ] Add parser, first-push, multi-commit, multi-ref, Git-error, and upstream
+- [x] Add parser, first-push, multi-commit, multi-ref, Git-error, and upstream
   regressions.
-- [ ] Update generated-hook tests in `src/init/tests.rs`.
-- [ ] Run targeted tests, `cargo test --workspace`,
+- [x] Update generated-hook tests in `src/init/tests.rs`.
+- [x] Run targeted tests, `cargo test --workspace`,
   `cargo run --quiet -- enforce --stage ci`, and
   `cargo run --quiet -- check`.
-- [ ] Commit: `fix(enforce): derive complete fail-closed Git change sets`
+- [x] Commit: `fix(enforce): derive complete fail-closed Git change sets`
 
 ## Phase 3: Make source-graph cache identity content-correct
 

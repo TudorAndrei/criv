@@ -98,7 +98,7 @@ else
   echo "criv hook failed: criv is not on PATH" >&2
   exit 127
 fi
-"$CRIV_BIN" enforce --stage push
+"$CRIV_BIN" enforce --stage push --pre-push --remote-name "$1" --remote-url "$2"
 "#,
         shell_quote(repo_relative_root)
     )
