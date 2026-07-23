@@ -39,7 +39,7 @@ fastembed = { version = "5", optional = true, default-features = false, features
   "hf-hub-rustls-tls",
   "ort-download-binaries-rustls-tls",
 ] }
-fff-search = "0.9.6"
+fff-search = "0.10.1"
 globset = "0.4"
 ignore = "0.4"
 mime_guess = "2"
