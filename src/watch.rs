@@ -1,4 +1,4 @@
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -12,6 +12,7 @@ use crate::config::Config;
 use crate::source_graph::SourceGraph;
 use crate::source_index::{FffSourceIndex, SourceIndex};
 use crate::state::{self, State};
+use crate::util::create_new_in;
 use crate::vault::Vault;
 use crate::{CrivError, Result};
 
@@ -136,25 +137,23 @@ struct WatchLock {
 
 impl WatchLock {
     fn acquire(root: &Path) -> Result<Self> {
-        let criv_dir = root.join(".criv");
-        fs::create_dir_all(&criv_dir)?;
-        let path = criv_dir.join("watch.lock");
-        OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|err| {
-                if err.kind() == std::io::ErrorKind::AlreadyExists {
-                    return CrivError::new(format!(
-                        "failed to acquire watch lock at {}: an active watcher already owns state refresh; do not start another watch or run `criv watch --once` while it is active",
-                        path.display()
-                    ));
-                }
-                CrivError::new(format!(
+        let requested_path = root.join(".criv/watch.lock");
+        let (path, _) = match create_new_in(root, Path::new(".criv"), Path::new(".criv/watch.lock"))
+        {
+            Ok(lock) => lock,
+            Err(CrivError::Io(err)) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(CrivError::new(format!(
+                    "failed to acquire watch lock at {}: an active watcher already owns state refresh; do not start another watch or run `criv watch --once` while it is active",
+                    requested_path.display()
+                )));
+            }
+            Err(err) => {
+                return Err(CrivError::new(format!(
                     "failed to acquire watch lock at {}: {err}",
-                    path.display()
-                ))
-            })?;
+                    requested_path.display()
+                )));
+            }
+        };
         Ok(Self { path })
     }
 }

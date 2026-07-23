@@ -1,10 +1,9 @@
-use std::fs;
 use std::path::Path;
 
 use crate::Result;
 use crate::c4_code;
 use crate::config::ArchitectureCodeConfig;
-use crate::util::read_to_string;
+use crate::util::write_atomic_if_changed_in;
 use crate::vault::Vault;
 
 pub(crate) fn write_code_architecture(root: &Path, vault: &Vault) -> Result<bool> {
@@ -20,17 +19,13 @@ fn write_code_architecture_with_config(
     vault: &Vault,
     config: &ArchitectureCodeConfig,
 ) -> Result<bool> {
-    let path = root.join(&config.output);
     let content = code_architecture_content(vault, config);
-    if path.exists() && read_to_string(&path)? == content {
-        return Ok(false);
-    }
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, content)?;
-    Ok(true)
+    write_atomic_if_changed_in(
+        root,
+        Path::new(&vault.config.docs_dir),
+        Path::new(&config.output),
+        &content,
+    )
 }
 
 fn code_architecture_content(vault: &Vault, config: &ArchitectureCodeConfig) -> String {
@@ -73,11 +68,13 @@ code. Source scope comes from `[source].roots`, `[source].exclude`, and
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::Path;
 
     use tempfile::TempDir;
 
     use super::*;
+    use crate::util::read_to_string;
 
     #[test]
     fn code_architecture_write_reports_changed_then_noop() {
@@ -124,6 +121,23 @@ mod tests {
         assert!(!output.contains("id: architecture-code"));
         assert!(output.contains("\"src/lib.rs#fn:run\" [label=\"run\\nsrc/lib.rs\"]"));
         assert!(output.contains("\"src/lib.rs#fn:run\" -> \"src/lib.rs#fn:helper\""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn code_architecture_rejects_symlinked_output_parent() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        write_architecture_fixture_with_output(temp.path(), true, "docs/architecture/04-code.md");
+        symlink(outside.path(), temp.path().join("docs/architecture")).unwrap();
+        let vault = Vault::load(temp.path()).unwrap();
+
+        let error = write_code_architecture(temp.path(), &vault).unwrap_err();
+
+        assert!(error.to_string().contains("symlinked vault path component"));
+        assert!(!outside.path().join("04-code.md").exists());
     }
 
     fn write_architecture_fixture(root: &Path, source_index: bool) {

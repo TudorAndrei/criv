@@ -58,6 +58,55 @@ pub(crate) fn write_atomic(path: &Path, contents: &str) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
 
+    write_atomic_ready(path, contents)
+}
+
+/// Atomically write a vault-controlled file without following symlinks.
+///
+/// Both `allowed_dir` and `destination` are paths relative to `root`, and the
+/// destination must be inside the allowed directory. Keeping validation and
+/// publication in one operation prevents callers from validating one path and
+/// then accidentally writing another.
+pub(crate) fn write_atomic_in(
+    root: &Path,
+    allowed_dir: &Path,
+    destination: &Path,
+    contents: &str,
+) -> Result<()> {
+    let path = prepare_confined_write(root, allowed_dir, destination)?;
+    write_atomic_ready(&path, contents)
+}
+
+/// Like [`write_atomic_in`], but leaves an identical existing file untouched.
+pub(crate) fn write_atomic_if_changed_in(
+    root: &Path,
+    allowed_dir: &Path,
+    destination: &Path,
+    contents: &str,
+) -> Result<bool> {
+    let path = prepare_confined_write(root, allowed_dir, destination)?;
+    if path.exists() && fs::read_to_string(&path)? == contents {
+        return Ok(false);
+    }
+    write_atomic_ready(&path, contents)?;
+    Ok(true)
+}
+
+/// Create a new vault-controlled file without following symlinks.
+pub(crate) fn create_new_in(
+    root: &Path,
+    allowed_dir: &Path,
+    destination: &Path,
+) -> Result<(PathBuf, fs::File)> {
+    let path = prepare_confined_write(root, allowed_dir, destination)?;
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
+    Ok((path, file))
+}
+
+fn write_atomic_ready(path: &Path, contents: &str) -> Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = path
         .file_name()
@@ -102,6 +151,112 @@ pub(crate) fn write_atomic(path: &Path, contents: &str) -> Result<()> {
         "failed to create temporary file for {}",
         path.display()
     )))
+}
+
+fn prepare_confined_write(root: &Path, allowed_dir: &Path, destination: &Path) -> Result<PathBuf> {
+    validate_relative_path("allowed write directory", allowed_dir)?;
+    validate_relative_path("write destination", destination)?;
+    if allowed_dir != Path::new(".") && !destination.starts_with(allowed_dir) {
+        return Err(CrivError::new(format!(
+            "refusing to write {} outside allowed vault directory {}",
+            destination.display(),
+            allowed_dir.display()
+        )));
+    }
+
+    let root = fs::canonicalize(root).map_err(|err| {
+        CrivError::new(format!(
+            "failed to resolve vault root {} for confined write: {err}",
+            root.display()
+        ))
+    })?;
+    reject_symlink_components(&root, destination)?;
+
+    let path = root.join(destination);
+    let parent = path
+        .parent()
+        .ok_or_else(|| CrivError::new(format!("cannot write atomic file at {}", path.display())))?;
+    fs::create_dir_all(parent)?;
+
+    // Recheck after directory creation: a pre-existing or concurrently placed
+    // symlink must never become the parent of our temporary file.
+    reject_symlink_components(&root, destination)?;
+    let allowed = root.join(allowed_dir);
+    let allowed = fs::canonicalize(&allowed).map_err(|err| {
+        CrivError::new(format!(
+            "failed to resolve allowed vault directory {}: {err}",
+            allowed.display()
+        ))
+    })?;
+    let resolved_parent = fs::canonicalize(parent).map_err(|err| {
+        CrivError::new(format!(
+            "failed to resolve write parent {}: {err}",
+            parent.display()
+        ))
+    })?;
+    if !resolved_parent.starts_with(&allowed) {
+        return Err(CrivError::new(format!(
+            "refusing to write {} outside resolved allowed vault directory {}",
+            path.display(),
+            allowed.display()
+        )));
+    }
+
+    Ok(path)
+}
+
+fn validate_relative_path(label: &str, path: &Path) -> Result<()> {
+    if path.as_os_str().is_empty() || path.is_absolute() {
+        return Err(CrivError::new(format!(
+            "{label} must be a non-empty relative path"
+        )));
+    }
+    if path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        )
+    }) {
+        return Err(CrivError::new(format!(
+            "{label} must not contain parent-directory segments"
+        )));
+    }
+    Ok(())
+}
+
+fn reject_symlink_components(root: &Path, destination: &Path) -> Result<()> {
+    let mut current = root.to_path_buf();
+    let components = destination
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(part) => Some(part),
+            std::path::Component::CurDir => None,
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for (index, component) in components.iter().enumerate() {
+        current.push(component);
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(CrivError::new(format!(
+                    "refusing to write through symlinked vault path component {}",
+                    current.display()
+                )));
+            }
+            Ok(metadata) if index + 1 < components.len() && !metadata.is_dir() => {
+                return Err(CrivError::new(format!(
+                    "cannot create vault path below non-directory component {}",
+                    current.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
+            Err(err) => return Err(err.into()),
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn walk_files(root: &Path, extension: Option<&str>) -> Result<Vec<PathBuf>> {
@@ -391,5 +546,47 @@ mod tests {
         assert_eq!(leftovers, vec!["state.json".to_string()]);
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn confined_atomic_write_creates_nested_directories_and_replaces_files() {
+        let root = tempfile::TempDir::new().unwrap();
+        let destination = Path::new("docs/generated/architecture.md");
+
+        assert!(
+            write_atomic_if_changed_in(root.path(), Path::new("docs"), destination, "first\n",)
+                .unwrap()
+        );
+        assert!(
+            !write_atomic_if_changed_in(root.path(), Path::new("docs"), destination, "first\n",)
+                .unwrap()
+        );
+        write_atomic_in(root.path(), Path::new("docs"), destination, "second\n").unwrap();
+
+        assert_eq!(
+            fs::read_to_string(root.path().join(destination)).unwrap(),
+            "second\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn confined_atomic_write_rejects_symlinked_components() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        symlink(outside.path(), root.path().join("docs")).unwrap();
+
+        let error = write_atomic_in(
+            root.path(),
+            Path::new("docs"),
+            Path::new("docs/generated/architecture.md"),
+            "generated\n",
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("symlinked vault path component"));
+        assert!(!outside.path().join("generated/architecture.md").exists());
     }
 }

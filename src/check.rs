@@ -13,7 +13,7 @@ use serde::Serialize;
 use crate::c4::{C4ElementCategory, C4Level};
 use crate::c4_artifact::C4ArtifactFormat;
 use crate::state::{self, State};
-use crate::util::{is_adr_id, kebab};
+use crate::util::{is_adr_id, kebab, write_atomic_in};
 use crate::vault::{
     Note, NoteKind, PolicyPattern, ResolvedLink, SourceTargetResolution, Vault,
     is_typed_source_target, source_target_body,
@@ -51,6 +51,12 @@ pub(crate) struct Diagnostic {
     path: String,
     line: Option<usize>,
     message: String,
+}
+
+#[derive(Clone, Copy)]
+struct MarkdownFixScope<'a> {
+    root: &'a Path,
+    docs_dir: &'a Path,
 }
 
 impl Diagnostic {
@@ -110,6 +116,7 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
 
 fn validate_markdown_format(root: &Path, fix: bool) -> Result<Vec<Diagnostic>> {
     let config = load_rumdl_config(root)?;
+    let vault_config = crate::config::Config::load(root)?;
     let files = markdown_files(root, &config);
     let base_rules = base_rules(&config);
     let mut diagnostics = Vec::new();
@@ -119,6 +126,10 @@ fn validate_markdown_format(root: &Path, fix: bool) -> Result<Vec<Diagnostic>> {
         let mut contents = crate::util::read_to_string(&path)?;
         if fix {
             apply_markdown_fixes(
+                MarkdownFixScope {
+                    root,
+                    docs_dir: Path::new(&vault_config.docs_dir),
+                },
                 &path,
                 &rel_path,
                 &mut contents,
@@ -216,6 +227,7 @@ fn markdown_files(root: &Path, config: &RumdlConfig) -> Vec<String> {
 }
 
 fn apply_markdown_fixes(
+    write_scope: MarkdownFixScope<'_>,
     path: &Path,
     rel_path: &str,
     contents: &mut String,
@@ -236,7 +248,18 @@ fn apply_markdown_fixes(
             .map_err(|err| CrivError::new(format!("rumdl failed to fix {rel_path}: {err}")))?
     };
     if *contents != original {
-        fs::write(path, contents.as_bytes())?;
+        let destination = path.strip_prefix(write_scope.root).map_err(|_| {
+            CrivError::new(format!(
+                "refusing to fix Markdown outside vault root: {}",
+                path.display()
+            ))
+        })?;
+        write_atomic_in(
+            write_scope.root,
+            write_scope.docs_dir,
+            destination,
+            contents,
+        )?;
     }
 
     if !result.converged {
@@ -1912,6 +1935,7 @@ pub fn run(input: String, fallback: usize) -> usize {
     #[test]
     fn rumdl_fixes_markdown_content_in_process() {
         let path = unique_temp_file("criv-rumdl-fix", "README.md");
+        let root = path.parent().unwrap();
         let mut contents = "# Title\n\n\nBody\n".to_string();
         fs::write(&path, &contents).unwrap();
         let config = RumdlConfig::default();
@@ -1919,6 +1943,10 @@ pub fn run(input: String, fallback: usize) -> usize {
         let mut diagnostics = Vec::new();
 
         apply_markdown_fixes(
+            MarkdownFixScope {
+                root,
+                docs_dir: Path::new("."),
+            },
             &path,
             "README.md",
             &mut contents,

@@ -1,12 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::Path;
 
 use serde::Serialize;
 
 use crate::source_graph::{Language, SymbolKind};
 use crate::structural;
-use crate::util::write_atomic;
+use crate::util::{write_atomic_if_changed_in, write_atomic_in};
 use crate::vault::{NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
 
@@ -382,26 +381,31 @@ impl State {
     }
 
     pub(crate) fn write(&self, root: &Path) -> Result<()> {
-        let path = root.join(".criv/state.json");
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
         let contents = self.to_json()?;
-        write_atomic(&path, &format!("{contents}\n"))?;
+        write_atomic_in(
+            root,
+            Path::new(".criv"),
+            Path::new(".criv/state.json"),
+            &format!("{contents}\n"),
+        )?;
         Ok(())
     }
 
     pub(crate) fn write_snapshot(&self, root: &Path) -> Result<String> {
         let hash = self.hash()?;
-        let criv_dir = root.join(".criv");
-        let snapshots = criv_dir.join("snapshots");
-        fs::create_dir_all(&criv_dir)?;
-        fs::create_dir_all(&snapshots)?;
-        let path = snapshots.join(format!("{hash}.json"));
-        if !path.exists() {
-            write_atomic(&path, &format!("{}\n", self.to_json()?))?;
-        }
-        write_atomic(&criv_dir.join("latest"), &format!("{hash}\n"))?;
+        let snapshot = format!(".criv/snapshots/{hash}.json");
+        write_atomic_if_changed_in(
+            root,
+            Path::new(".criv"),
+            Path::new(&snapshot),
+            &format!("{}\n", self.to_json()?),
+        )?;
+        write_atomic_in(
+            root,
+            Path::new(".criv"),
+            Path::new(".criv/latest"),
+            &format!("{hash}\n"),
+        )?;
         Ok(hash)
     }
 }
@@ -944,6 +948,24 @@ roots = ["src"]
             serde_json::from_str(&std::fs::read_to_string(snapshot_path).unwrap()).unwrap();
         assert_eq!(snapshot_state["schema"], STATE_SCHEMA);
 
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn state_writes_reject_a_symlinked_criv_directory() {
+        use std::os::unix::fs::symlink;
+
+        let root = unique_temp_dir("criv-state-symlink");
+        let outside = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
+        symlink(outside.path(), root.join(".criv")).unwrap();
+
+        let error = Vault::load(&root).unwrap_err();
+
+        assert!(error.to_string().contains("symlinked vault path component"));
+        assert!(!outside.path().join("state.json").exists());
         let _ = std::fs::remove_dir_all(root);
     }
 

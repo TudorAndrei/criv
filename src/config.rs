@@ -99,13 +99,14 @@ struct RawConfig {
 impl RawConfig {
     fn into_config(self) -> Result<Config> {
         let defaults = Config::default();
+        let docs_dir = vault_path("vault.docs", &self.vault.docs.unwrap_or(defaults.docs_dir))?;
         let patterns: BTreeMap<_, _> = self
             .patterns
             .into_iter()
             .filter(|(id, _)| !is_adr_prefixed_pattern_id(id))
             .collect();
         Ok(Config {
-            docs_dir: vault_path("vault.docs", &self.vault.docs.unwrap_or(defaults.docs_dir))?,
+            docs_dir: docs_dir.clone(),
             adr_dir: vault_path("vault.adr", &self.vault.adr.unwrap_or(defaults.adr_dir))?,
             source_roots: self
                 .source
@@ -120,7 +121,7 @@ impl RawConfig {
             architecture_code: self
                 .architecture
                 .code
-                .map(RawArchitectureCode::into_config)
+                .map(|code| code.into_config(&docs_dir))
                 .transpose()?,
             enforce_stages: self.enforce.stages.unwrap_or(defaults.enforce_stages),
             import_policies: self
@@ -231,14 +232,20 @@ struct RawArchitectureCode {
 }
 
 impl RawArchitectureCode {
-    fn into_config(self) -> Result<ArchitectureCodeConfig> {
+    fn into_config(self, docs_dir: &str) -> Result<ArchitectureCodeConfig> {
+        let output = vault_path(
+            "architecture.code.output",
+            &self
+                .output
+                .unwrap_or_else(|| format!("{docs_dir}/architecture/04-code.md")),
+        )?;
+        if !Path::new(&output).starts_with(Path::new(docs_dir)) {
+            return Err(CrivError::new(format!(
+                "architecture.code.output must be inside vault.docs ({docs_dir})"
+            )));
+        }
         Ok(ArchitectureCodeConfig {
-            output: vault_path(
-                "architecture.code.output",
-                &self
-                    .output
-                    .unwrap_or_else(|| "docs/architecture/04-code.md".into()),
-            )?,
+            output,
             title: self.title.unwrap_or_else(|| "Code diagram for criv".into()),
         })
     }
@@ -454,5 +461,23 @@ output = "  "
         let error = raw.into_config().unwrap_err();
         assert!(error.to_string().contains("architecture.code.output"));
         assert!(error.to_string().contains("must not be empty"));
+    }
+
+    #[test]
+    fn rejects_architecture_output_outside_docs_directory() {
+        let raw = toml::from_str::<RawConfig>(
+            r#"
+[vault]
+docs = "guides"
+
+[architecture.code]
+output = "docs/architecture/04-code.md"
+"#,
+        )
+        .unwrap();
+
+        let error = raw.into_config().unwrap_err();
+        assert!(error.to_string().contains("architecture.code.output"));
+        assert!(error.to_string().contains("vault.docs (guides)"));
     }
 }

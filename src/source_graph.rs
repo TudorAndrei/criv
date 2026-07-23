@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tree_sitter::{Node, Parser};
 
 use crate::source_paths::{read_source_to_string, source_metadata};
-use crate::util::write_atomic;
+use crate::util::write_atomic_in;
 use crate::{CrivError, Result};
 
 // Bump when parsed source graph semantics or serialized graph types change.
@@ -152,17 +152,18 @@ pub(crate) fn load_cached(root: &Path) -> Option<SourceGraph> {
 }
 
 pub(crate) fn store_cached(root: &Path, graph: &SourceGraph) -> Result<()> {
-    let path = graph_cache_path(root);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
     let cache = GraphCacheFile {
         schema: GRAPH_CACHE_SCHEMA.to_string(),
         graph: graph.clone(),
     };
     let contents = serde_json::to_string_pretty(&cache)
         .map_err(|err| CrivError::new(format!("failed to serialize source graph cache: {err}")))?;
-    write_atomic(&path, &format!("{contents}\n"))?;
+    write_atomic_in(
+        root,
+        Path::new(".criv"),
+        Path::new(".criv/source-graph.json"),
+        &format!("{contents}\n"),
+    )?;
     Ok(())
 }
 
