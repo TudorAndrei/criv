@@ -104,16 +104,19 @@
 
 ## Phase 8: Serialize and build state once per rebuild
 
-- [ ] Serialize state once and reuse the exact bytes for hash, state, and
+- [x] Serialize state once and reuse the exact bytes for hash, state, and
   snapshot publication.
-- [ ] Preserve pretty JSON, trailing newline, and snapshot hashes.
-- [ ] Return/reuse the built `State` from watch rebuild startup.
-- [ ] Preserve architecture reload and C4-interface validation ordering.
-- [ ] Add non-timing assertions for one state build/serialization per rebuild.
-- [ ] Confirm `query diff latest latest` stays empty.
-- [ ] Record before/after `mise run perf`.
-- [ ] Run workspace, state/watch, check, diff, and performance verification.
-- [ ] Commit: `perf(state): reuse one serialized state per rebuild`
+- [x] Preserve pretty JSON, trailing newline, and snapshot hashes.
+- [x] Return/reuse the built `State` from watch rebuild startup.
+- [x] Preserve architecture reload and C4-interface validation ordering.
+- [x] Add non-timing assertions for one state build/serialization per rebuild.
+- [x] Confirm `query diff latest latest` stays empty.
+- [x] Record before/after `mise run perf`: baseline cold/warm was `1.91s` /
+  `1.41s`; after was `1.87s` / `1.62s`. This small-repository timing variance
+  is informational; the test-only counters prove one state build and
+  serialization per rebuild.
+- [x] Run workspace, state/watch, check, diff, and performance verification.
+- [x] Commit: `perf(state): reuse one serialized state per rebuild`
 
 ## Phase 9: Exercise the long-running watch event loop
 

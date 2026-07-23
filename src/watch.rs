@@ -28,9 +28,8 @@ pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
         rebuild(root, None)?;
         return Ok(());
     }
-    let mut vault = rebuild(root, None)?;
+    let (mut vault, mut state) = rebuild(root, None)?;
     let mut source_graph = vault.source_graph().clone();
-    let mut state = State::build(root, &vault)?;
 
     let config = Config::load(root)?;
     let docs_path = config.docs_path(root);
@@ -97,7 +96,7 @@ pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
     Ok(())
 }
 
-fn rebuild(root: &Path, previous_graph: Option<&SourceGraph>) -> Result<Vault> {
+fn rebuild(root: &Path, previous_graph: Option<&SourceGraph>) -> Result<(Vault, State)> {
     let mut vault = previous_graph.map_or_else(
         || Vault::load(root),
         |previous_graph| Vault::load_incremental(root, Some(previous_graph)),
@@ -106,11 +105,11 @@ fn rebuild(root: &Path, previous_graph: Option<&SourceGraph>) -> Result<Vault> {
         vault = Vault::load_incremental(root, previous_graph)?;
     }
     let diagnostics = check::validate_with_previous_state(&vault, None);
-    let snapshot = state::write_state(root, &vault)?;
+    let (snapshot, state) = state::write_state(root, &vault)?;
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();
     println!("state updated: snapshot {snapshot}, {errors} errors, {warnings} warnings");
-    Ok(vault)
+    Ok((vault, state))
 }
 
 fn rebuild_incremental(
@@ -181,8 +180,11 @@ mod tests {
     fn rebuild_includes_generated_code_architecture_in_same_run_state() {
         let temp = TempDir::new().unwrap();
         write_watch_architecture_fixture(temp.path());
+        state::reset_work_counts();
 
-        let vault = rebuild(temp.path(), None).unwrap();
+        let (vault, _) = rebuild(temp.path(), None).unwrap();
+
+        assert_eq!(state::work_counts(), (1, 1));
 
         assert!(vault.resolve_note("architecture-code").is_some());
         let state: Value = serde_json::from_str(

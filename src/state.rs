@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+#[cfg(test)]
+use std::{cell::Cell, thread_local};
+
 use serde::Serialize;
 
 use crate::source_graph::{Language, SymbolKind};
@@ -20,6 +23,17 @@ pub(crate) struct State {
     patterns: BTreeMap<String, Vec<PatternMatch>>,
     #[serde(rename = "source-index")]
     source_index: Vec<SourceIndexEntry>,
+}
+
+struct SerializedState {
+    published: String,
+    hash: String,
+}
+
+#[cfg(test)]
+thread_local! {
+    static BUILD_COUNT: Cell<usize> = const { Cell::new(0) };
+    static SERIALIZATION_COUNT: Cell<usize> = const { Cell::new(0) };
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -80,6 +94,9 @@ impl State {
         previous: Option<&State>,
         changed_files: &[String],
     ) -> Result<Self> {
+        #[cfg(test)]
+        BUILD_COUNT.with(|count| count.set(count.get() + 1));
+
         let mut graph = Graph::default();
         let mut seen_nodes = BTreeSet::new();
         let mut seen_edges = BTreeSet::new();
@@ -370,50 +387,70 @@ impl State {
         })
     }
 
+    #[cfg(test)]
     pub(crate) fn to_json(&self) -> Result<String> {
-        serde_json::to_string_pretty(self)
-            .map_err(|err| CrivError::new(format!("failed to serialize state: {err}")))
+        Ok(self
+            .serialize()?
+            .published
+            .strip_suffix('\n')
+            .unwrap_or_default()
+            .to_string())
     }
 
+    #[cfg(test)]
     pub(crate) fn hash(&self) -> Result<String> {
-        let contents = self.to_json()?;
-        Ok(stable_hash(&contents))
+        Ok(self.serialize()?.hash)
     }
 
-    pub(crate) fn write(&self, root: &Path) -> Result<()> {
-        let contents = self.to_json()?;
+    fn serialize(&self) -> Result<SerializedState> {
+        #[cfg(test)]
+        SERIALIZATION_COUNT.with(|count| count.set(count.get() + 1));
+
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|err| CrivError::new(format!("failed to serialize state: {err}")))?;
+        Ok(SerializedState {
+            hash: stable_hash(&json),
+            published: format!("{json}\n"),
+        })
+    }
+
+    fn write_serialized(&self, root: &Path, serialized: &SerializedState) -> Result<()> {
         write_atomic_in(
             root,
             Path::new(".criv"),
             Path::new(".criv/state.json"),
-            &format!("{contents}\n"),
-        )?;
-        Ok(())
+            &serialized.published,
+        )
     }
 
-    pub(crate) fn write_snapshot(&self, root: &Path) -> Result<String> {
-        let hash = self.hash()?;
-        let snapshot = format!(".criv/snapshots/{hash}.json");
+    fn write_snapshot_serialized(
+        &self,
+        root: &Path,
+        serialized: &SerializedState,
+    ) -> Result<String> {
+        let snapshot = format!(".criv/snapshots/{}.json", serialized.hash);
         write_atomic_if_changed_in(
             root,
             Path::new(".criv"),
             Path::new(&snapshot),
-            &format!("{}\n", self.to_json()?),
+            &serialized.published,
         )?;
         write_atomic_in(
             root,
             Path::new(".criv"),
             Path::new(".criv/latest"),
-            &format!("{hash}\n"),
+            &format!("{}\n", serialized.hash),
         )?;
-        Ok(hash)
+        Ok(serialized.hash.clone())
     }
 }
 
-pub(crate) fn write_state(root: &Path, vault: &Vault) -> Result<String> {
+pub(crate) fn write_state(root: &Path, vault: &Vault) -> Result<(String, State)> {
     let state = State::build(root, vault)?;
-    state.write(root)?;
-    state.write_snapshot(root)
+    let serialized = state.serialize()?;
+    state.write_serialized(root, &serialized)?;
+    let snapshot = state.write_snapshot_serialized(root, &serialized)?;
+    Ok((snapshot, state))
 }
 
 pub(crate) fn write_state_incremental(
@@ -423,9 +460,24 @@ pub(crate) fn write_state_incremental(
     changed_files: &[String],
 ) -> Result<(String, State)> {
     let state = State::build_incremental(root, vault, previous, changed_files)?;
-    state.write(root)?;
-    let snapshot = state.write_snapshot(root)?;
+    let serialized = state.serialize()?;
+    state.write_serialized(root, &serialized)?;
+    let snapshot = state.write_snapshot_serialized(root, &serialized)?;
     Ok((snapshot, state))
+}
+
+#[cfg(test)]
+pub(crate) fn reset_work_counts() {
+    BUILD_COUNT.with(|count| count.set(0));
+    SERIALIZATION_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn work_counts() -> (usize, usize) {
+    (
+        BUILD_COUNT.with(Cell::get),
+        SERIALIZATION_COUNT.with(Cell::get),
+    )
 }
 
 fn incremental_pattern_matches(
@@ -931,7 +983,7 @@ roots = ["src"]
         std::fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
 
         let vault = Vault::load(&root).unwrap();
-        let snapshot = write_state(&root, &vault).unwrap();
+        let (snapshot, _) = write_state(&root, &vault).unwrap();
 
         let state_path = root.join(".criv/state.json");
         let state: serde_json::Value =
@@ -944,8 +996,11 @@ roots = ["src"]
         let snapshot_path = root
             .join(".criv/snapshots")
             .join(format!("{snapshot}.json"));
-        let snapshot_state: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(snapshot_path).unwrap()).unwrap();
+        let state_contents = std::fs::read_to_string(root.join(".criv/state.json")).unwrap();
+        let snapshot_contents = std::fs::read_to_string(snapshot_path).unwrap();
+        assert_eq!(state_contents, snapshot_contents);
+        assert!(state_contents.ends_with('\n'));
+        let snapshot_state: serde_json::Value = serde_json::from_str(&snapshot_contents).unwrap();
         assert_eq!(snapshot_state["schema"], STATE_SCHEMA);
 
         let _ = std::fs::remove_dir_all(root);
@@ -976,6 +1031,10 @@ pattern = "fn $NAME() { $$$BODY }"
             serde_json::from_str(include_str!("../fixtures/state/criv.state.v0.json")).unwrap();
 
         assert_eq!(actual, expected);
+        assert_eq!(
+            State::build(&root, &vault).unwrap().hash().unwrap(),
+            "1d5fcf7a117fdfee16082f4fa23b527a639b59926cadcb216ae6e781359c1341"
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }
