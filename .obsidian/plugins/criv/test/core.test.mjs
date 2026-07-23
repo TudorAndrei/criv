@@ -24,6 +24,26 @@ const core = await import(pathToFileURL(outFile).href);
 const { instance: vizInstance } = await import("@viz-js/viz");
 const c4FixtureDir = resolve(__dirname, "../../../../fixtures/c4");
 assert.equal(existsSync(c4FixtureDir), true, `missing fixture directory ${c4FixtureDir}`);
+const stateContractPath = resolve(__dirname, "../../../../fixtures/state/criv.state.v0.json");
+assert.equal(
+  existsSync(stateContractPath),
+  true,
+  `missing state contract fixture ${stateContractPath}`,
+);
+const stateContractRaw = readFileSync(stateContractPath, "utf8");
+const stateContract = JSON.parse(stateContractRaw);
+assert.deepEqual(core.interpretState(stateContractRaw, "criv.state.v0"), { state: stateContract });
+assert.deepEqual(
+  core.interpretState(stateContractRaw.replace("criv.state.v0", "criv.state.v1"), "criv.state.v0"),
+  { error: "Unsupported criv state schema criv.state.v1", kind: "schema" },
+);
+assert.equal(stateContract.graph.nodes.length, 2);
+assert.equal(stateContract.graph.edges.length, 1);
+assert.deepEqual(stateContract["registered-patterns"], ["code/entrypoint"]);
+assert.deepEqual(stateContract.patterns["code/entrypoint"][0].captures, {
+  BODY: "",
+  NAME: "run",
+});
 const c4Expected = JSON.parse(readFileSync(resolve(c4FixtureDir, "expected.json"), "utf8"));
 const c4FixtureNames = readdirSync(c4FixtureDir).filter((name) => name.endsWith(".c4"));
 assert.ok(c4FixtureNames.length > 0, "expected shared C4 fixtures");

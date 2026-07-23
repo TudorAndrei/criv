@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import test from "node:test";
 
 import {
@@ -8,11 +10,21 @@ import {
   registeredPatterns,
 } from "../../src/stateModel";
 
-test("validates criv state schema before projection", () => {
-  const parsed = parseStateEnvelope(JSON.stringify({ schema: "criv.state.v0" }));
-  assert.equal(parsed.ok, true);
+const stateContractRaw = readFileSync(
+  resolve(__dirname, "../../../../fixtures/state/criv.state.v0.json"),
+  "utf8",
+);
 
-  const invalid = parseStateEnvelope(JSON.stringify({ schema: "criv.state.v1" }));
+test("validates criv state schema before projection", () => {
+  const parsed = parseStateEnvelope(stateContractRaw);
+  assert.equal(parsed.ok, true);
+  if (parsed.ok) {
+    assert.equal(parsed.envelope.graph?.nodes?.length, 2);
+    assert.equal(parsed.envelope.graph?.edges?.length, 1);
+    assert.deepEqual(registeredPatterns(parsed.envelope), ["code/entrypoint"]);
+  }
+
+  const invalid = parseStateEnvelope(stateContractRaw.replace("criv.state.v0", "criv.state.v1"));
   assert.equal(invalid.ok, false);
   if (!invalid.ok) {
     assert.match(invalid.error, /Unsupported criv state schema/);

@@ -951,6 +951,35 @@ roots = ["src"]
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn serialized_state_matches_the_v0_contract_fixture() {
+        let root = unique_temp_dir("criv-state-contract-fixture");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("criv.toml"),
+            r#"
+[source]
+roots = ["src"]
+
+[patterns."code/entrypoint"]
+language = "rust"
+pattern = "fn $NAME() { $$$BODY }"
+"#,
+        )
+        .unwrap();
+        std::fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+        let actual: serde_json::Value =
+            serde_json::from_str(&State::build(&root, &vault).unwrap().to_json().unwrap()).unwrap();
+        let expected: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/state/criv.state.v0.json")).unwrap();
+
+        assert_eq!(actual, expected);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[cfg(unix)]
     #[test]
     fn state_writes_reject_a_symlinked_criv_directory() {

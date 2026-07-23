@@ -3,6 +3,8 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
+const STATE_SCHEMA: &str = "criv.state.v0";
+
 #[wasm_bindgen]
 pub fn summarize_state(raw: &str) -> Result<JsValue, JsValue> {
     let state = parse_state(raw)?;
@@ -60,8 +62,16 @@ pub fn lookup_graph_node(raw: &str, target: &str) -> Result<JsValue, JsValue> {
 }
 
 fn parse_state(raw: &str) -> Result<CrivState, JsValue> {
-    serde_json::from_str::<CrivState>(raw)
-        .map_err(|err| JsValue::from_str(&format!("invalid criv state JSON: {err}")))
+    decode_state(raw).map_err(|error| JsValue::from_str(&error))
+}
+
+fn decode_state(raw: &str) -> Result<CrivState, String> {
+    let state = serde_json::from_str::<CrivState>(raw)
+        .map_err(|err| format!("invalid criv state JSON: {err}"))?;
+    if state.schema != STATE_SCHEMA {
+        return Err(format!("unsupported criv state schema: {}", state.schema));
+    }
+    Ok(state)
 }
 
 fn unique_source_paths(source_index: &[SourceIndexEntry]) -> Vec<String> {
@@ -342,20 +352,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_state_shape() {
-        let raw = r#"{
-          "schema": "criv.state.v0",
-          "graph": { "nodes": [{ "id": "note:x" }], "edges": [] },
-          "registered-patterns": ["legacy"],
-          "source-index": [{ "path": "src/lib.rs", "frecency": 7, "mime": "text/rust" }]
-        }"#;
-
-        let state = serde_json::from_str::<CrivState>(raw).unwrap();
+    fn parses_shared_state_contract_fixture() {
+        let state =
+            parse_state(include_str!("../../../fixtures/state/criv.state.v0.json")).unwrap();
         assert_eq!(state.schema, "criv.state.v0");
-        assert_eq!(state.graph.nodes.len(), 1);
-        assert_eq!(state.registered_patterns, vec!["legacy"]);
+        assert_eq!(state.graph.nodes.len(), 2);
+        assert_eq!(state.graph.edges.len(), 1);
+        assert_eq!(state.registered_patterns, vec!["code/entrypoint"]);
         assert_eq!(state.source_index.len(), 1);
-        assert_eq!(state.source_index[0].frecency, 7);
+        assert_eq!(state.source_index[0].frecency, 0);
+    }
+
+    #[test]
+    fn rejects_a_wrong_state_schema() {
+        let raw = include_str!("../../../fixtures/state/criv.state.v0.json")
+            .replace("criv.state.v0", "criv.state.v1");
+
+        assert!(decode_state(&raw).is_err());
     }
 
     #[test]

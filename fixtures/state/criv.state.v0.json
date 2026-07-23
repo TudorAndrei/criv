@@ -1,0 +1,52 @@
+{
+  "schema": "criv.state.v0",
+  "graph": {
+    "root": "800e687eb5cbb375417ec68df9bbbcbf12e039895519a1f4d8faa801a52a5251",
+    "nodes": [
+      {
+        "id": "code:src/lib.rs",
+        "hash": "b8d8a28f8ad24895bf455f9fbb24d1a40ea2c94cbc7a0ac0d853344c86492483",
+        "kind": "code",
+        "label": "src/lib.rs (rust)",
+        "path": "src/lib.rs"
+      },
+      {
+        "id": "symbol:src/lib.rs#fn:run",
+        "hash": "69ab2410ac5921ba170347d0d1d63773b959c8c989eef24ea25cc378aa25666b",
+        "kind": "function",
+        "label": "run",
+        "path": "src/lib.rs#L1-L1"
+      }
+    ],
+    "edges": [
+      {
+        "from": "code:src/lib.rs",
+        "to": "symbol:src/lib.rs#fn:run",
+        "kind": "contains",
+        "hash": "113fbed7438b74327e2c72284d65d5cc30d7365fde741c138810be001344c43d"
+      }
+    ]
+  },
+  "registered-patterns": [
+    "code/entrypoint"
+  ],
+  "patterns": {
+    "code/entrypoint": [
+      {
+        "file": "src/lib.rs",
+        "range": "L1:C1-L1:C12",
+        "captures": {
+          "BODY": "",
+          "NAME": "run"
+        }
+      }
+    ]
+  },
+  "source-index": [
+    {
+      "path": "src/lib.rs",
+      "mime": "text/x-rust",
+      "frecency": 0
+    }
+  ]
+}

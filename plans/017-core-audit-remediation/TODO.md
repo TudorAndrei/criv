@@ -93,14 +93,14 @@
 
 ## Phase 7: Pin the shared `criv.state.v0` producer/consumer contract
 
-- [ ] Add the complete canonical fixture under `fixtures/state/`.
-- [ ] Compare deterministic Rust producer output to the fixture.
-- [ ] Drive criv-wasm state tests from the same fixture.
-- [ ] Drive Obsidian and VS Code state-model tests from the same fixture.
-- [ ] Verify every consumer consistently rejects a wrong schema.
-- [ ] Confirm `STATE_SCHEMA` and public optionality are unchanged.
-- [ ] Run Rust, Obsidian, VS Code, and vault verification commands.
-- [ ] Commit: `test(state): share a golden v0 contract across consumers`
+- [x] Add the complete canonical fixture under `fixtures/state/`.
+- [x] Compare deterministic Rust producer output to the fixture.
+- [x] Drive criv-wasm state tests from the same fixture.
+- [x] Drive Obsidian and VS Code state-model tests from the same fixture.
+- [x] Verify every consumer consistently rejects a wrong schema.
+- [x] Confirm `STATE_SCHEMA` and public optionality are unchanged.
+- [x] Run Rust, Obsidian, VS Code, and vault verification commands.
+- [x] Commit: `test(state): share a golden v0 contract across consumers`
 
 ## Phase 8: Serialize and build state once per rebuild
 
