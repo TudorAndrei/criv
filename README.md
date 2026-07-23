@@ -50,6 +50,27 @@ Install the Rust CLI from the repository:
 cargo install --git https://github.com/TudorAndrei/criv criv
 ```
 
+To pin criv in another repository with mise, add the following to that
+repository's `mise.toml`:
+
+```toml
+[tools."github:TudorAndrei/criv"]
+version = "0.7.0"
+
+[tools."github:TudorAndrei/criv".platforms]
+macos-arm64 = { asset_pattern = "criv-aarch64-apple-darwin.tar.gz" }
+linux-arm64 = { asset_pattern = "criv-aarch64-unknown-linux-gnu.tar.gz" }
+linux-x64 = { asset_pattern = "criv-x86_64-unknown-linux-gnu.tar.gz" }
+windows-x64 = { asset_pattern = "criv-x86_64-pc-windows-msvc.zip" }
+```
+
+Then install the pinned tool and initialize the repository:
+
+```sh
+mise install
+criv init
+```
+
 For local development in this repository, install the pinned project tools:
 
 ```sh
