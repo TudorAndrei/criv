@@ -149,58 +149,59 @@
 
 ## Phase 11: Refresh dependency advisory posture
 
-- [ ] Re-run the pinned local Cargo audit and record database date/advisory IDs.
-- [ ] Correct current fff-search/git2 dependency paths and versions.
-- [ ] Inspect and document reachability evidence for affected git2 APIs.
-- [ ] Distinguish vulnerabilities, unsound APIs, unmaintained crates, and
+- [x] Re-run the pinned local Cargo audit and record database date/advisory IDs.
+- [x] Correct current fff-search/git2 dependency paths and versions.
+- [x] Inspect and document reachability evidence for affected git2 APIs.
+- [x] Distinguish vulnerabilities, unsound APIs, unmaintained crates, and
   inactive optional lockfile entries.
-- [ ] Re-evaluate the monitor-only decision without adding an unapproved gate or
+- [x] Re-evaluate the monitor-only decision without adding an unapproved gate or
   dependency replacement.
-- [ ] Add a new ADR if the dependency policy decision changes.
-- [ ] Run inverse dependency trees, target/feature tree checks, audit, and
+- [x] Add a new ADR if the dependency policy decision changes (not needed: the
+  monitor-only policy is unchanged).
+- [x] Run inverse dependency trees, target/feature tree checks, audit, and
   `cargo run --quiet -- check`.
-- [ ] Commit: `docs(deps): refresh transitive advisory posture`
+- [x] Commit: `docs(deps): refresh transitive advisory posture`
 
 ## Verification
 
-- [ ] `mise run check` passes after every phase and at the final commit.
-- [ ] `cargo test --workspace` passes after every Rust phase.
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings` passes after the
+- [x] `mise run check` passes after every phase and at the final commit.
+- [x] `cargo test --workspace` passes after every Rust phase.
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` passes after the
   final core refactors.
-- [ ] `npm --prefix .obsidian/plugins/criv test` passes after the state-contract
+- [x] `npm --prefix .obsidian/plugins/criv test` passes after the state-contract
   fixture lands.
-- [ ] `npm --prefix extensions/vscode-criv test` passes after the state-contract
+- [x] `npm --prefix extensions/vscode-criv test` passes after the state-contract
   fixture lands.
-- [ ] `cargo run --quiet -- check` reports zero errors for this vault.
-- [ ] `cargo run --quiet -- enforce --stage ci` passes with accurate Git
+- [x] `cargo run --quiet -- check` reports zero errors for this vault.
+- [x] `cargo run --quiet -- enforce --stage ci` passes with accurate Git
   comparison diagnostics.
-- [ ] Manual smoke: `watch --once`, `check`, search, query, and enforce work on
+- [x] Manual smoke: `watch --once`, `check`, search, query, and enforce work on
   an initialized scratch vault.
-- [ ] Security smoke: symlinked architecture and `.criv` paths fail without
+- [x] Security smoke: symlinked architecture and `.criv` paths fail without
   modifying the external targets.
-- [ ] Git edge cases: first push, multiple commits, new/deleted refs, rename,
+- [x] Git edge cases: first push, multiple commits, new/deleted refs, rename,
   unusual filenames, missing Git, and shallow/missing comparison history.
-- [ ] Cache edge cases: same size/mtime, add/delete/rename, corrupt cache,
+- [x] Cache edge cases: same size/mtime, add/delete/rename, corrupt cache,
   wrong schema, and unchanged cache.
-- [ ] Policy edge cases: invalid scope/deny globs, overlapping scopes, empty
+- [x] Policy edge cases: invalid scope/deny globs, overlapping scopes, empty
   scopes, language mismatch, and changed-file intersections.
-- [ ] Parsing/search edge cases: CRLF frontmatter and `.jsx` filtering.
-- [ ] State fixture is consumed by Rust, WASM, Obsidian, and VS Code tests.
-- [ ] Long-running watcher handles note/source changes, burst events, failed
+- [x] Parsing/search edge cases: CRLF frontmatter and `.jsx` filtering.
+- [x] State fixture is consumed by Rust, WASM, Obsidian, and VS Code tests.
+- [x] Long-running watcher handles note/source changes, burst events, failed
   rebuild recovery, and clean termination.
-- [ ] `mise run perf` before/after results are recorded for graph, policy,
+- [x] `mise run perf` before/after results are recorded for graph, policy,
   state, and source-index phases.
-- [ ] `cargo audit --no-fetch` findings and limitations match
+- [x] `cargo audit --no-fetch` findings and limitations match
   `docs/dependency-evaluations.md`.
-- [ ] No accepted ADR was edited; any changed decision is captured in a new ADR.
-- [ ] `.criv/` remains ignored and no scratch fixtures are tracked.
+- [x] No accepted ADR was edited; any changed decision is captured in a new ADR.
+- [x] `.criv/` remains ignored and no scratch fixtures are tracked.
 
 ## Review
 
-- [ ] Code reviewed phase by phase.
-- [ ] `PLAN.md` updated if scope, APIs, or phase boundaries changed.
-- [ ] `TODO.md` checked only after the corresponding command or commit succeeds.
-- [ ] Every phase commit is clean and uses the exact drafted conventional
+- [x] Code reviewed phase by phase.
+- [x] `PLAN.md` updated if scope, APIs, or phase boundaries changed.
+- [x] `TODO.md` checked only after the corresponding command or commit succeeds.
+- [x] Every phase commit is clean and uses the exact drafted conventional
   commit message.
-- [ ] `plans/README.md` status for plan 017 is updated as work progresses.
-- [ ] All TODO items are checked off before plan 017 is marked DONE.
+- [x] `plans/README.md` status for plan 017 is updated as work progresses.
+- [x] All TODO items are checked off before plan 017 is marked DONE.

@@ -55,35 +55,80 @@ query modules.
 
 Reference: <https://docs.rs/camino>
 
-## Cargo Audit Snapshot, 2026-07-01
+## Cargo Audit Snapshot, 2026-07-23
 
 Decision: document and monitor; do not add a failing `cargo audit` gate yet.
 
-`cargo audit --no-fetch` loaded the local advisory database and reported four
-allowed warnings in `Cargo.lock`. The command also warned that it could not open
-the crates.io index cache lock, so this is useful dependency posture signal, not
-a clean hosted-audit baseline.
+The pinned `cargo-audit v0.22.2` command was run as `cargo audit --no-fetch`.
+It loaded 1,169 advisories from the local advisory database at commit
+`1abf7a8c1822223a38e99f652bc232071c44a86d` (2026-07-23 09:15:03 +02:00)
+and scanned 461 locked packages. It reported four allowed warnings, all listed
+below. None was classified as a vulnerability by this run.
 
-The actionable paths are currently transitive:
+This is a dated, local posture snapshot rather than a hosted-audit baseline:
+`--no-fetch` intentionally does not update the advisory database, and the
+command warned that it could not open the crates.io index cache lock. A future
+policy gate needs a reproducible advisory-database update path before it can be
+relied on in CI.
 
-- `git2 v0.20.4` reaches criv through `fff-search v0.9.6`; criv's direct
-  `git2` dependency is already `0.21`.
-- `bincode v1.3.3` reaches criv through `heed-types -> heed -> fff-search`.
-- `paste v1.0.15` is present in `Cargo.lock` through transitive/optional
-  dependency paths, including `macro_rules_attribute` and `tokenizers`; it does
-  not appear in the default `cargo tree` output.
+### Unsound APIs: `git2 v0.20.4`
+
+`RUSTSEC-2026-0183` reports potential undefined behavior when
+`Remote::list()` is called, and `RUSTSEC-2026-0184` reports potential undefined
+behavior for a `Signature` obtained from a buffer-created `BlameHunk`. Both
+affect `git2 v0.20.4`, which reaches criv only through
+`fff-search v0.10.1`:
+
+```text
+git2 v0.20.4 <- fff-search v0.10.1 <- criv
+```
+
+`criv` has no direct `git2` dependency; `cargo tree -i git2@0.21.0` finds no
+resolved package. The 0.9.6 version and direct-`git2` statement in the prior
+snapshot were stale.
+
+The locally installed `fff-search v0.10.1` source was inspected. Its git path
+uses `Repository::open`, status enumeration, `workdir`, and `status_file`; a
+source search found no invocation of `Remote::list`, `BlameHunk`, or blame APIs.
+That is evidence that the two advisory call paths are not reached by the
+currently inspected source, not proof that text search alone can rule out every
+runtime path or upstream behavior.
+
+### Unmaintained crates: `bincode` and `paste`
+
+`RUSTSEC-2025-0141` marks `bincode v1.3.3` unmaintained. Its active default
+dependency path is:
+
+```text
+bincode v1.3.3 <- heed-types v0.21.0 <- heed v0.22.1 <- fff-search v0.10.1 <- criv
+```
+
+`RUSTSEC-2024-0436` marks `paste v1.0.15` unmaintained. It is present in the
+lockfile but absent from the default and default-target dependency trees. The
+feature/target tree shows it becomes active only with criv's optional
+`embeddings` feature:
+
+```text
+paste <- macro_rules_attribute <- tokenizers <- fastembed <- criv[embeddings]
+```
+
+This distinguishes an inactive default-build lockfile entry from an absent
+dependency: embedding builds still use it and remain in the monitoring scope.
+
+### Policy conclusion
+
+The monitor-only decision is unchanged. The current findings are two
+unmaintained crates and two potentially unsound-but-unreached APIs, not a new
+vulnerability classification or demonstrated runtime exploit path. Do not add
+an audit ignore list or failing gate, and do not replace `fff-search`, without a
+separate approved decision. Because this policy did not change, no new ADR is
+needed and accepted ADRs remain unmodified.
 
 Evidence commands:
 
 ```sh
 cargo audit --no-fetch
 cargo tree -i git2@0.20.4
-cargo tree -i git2@0.21.0
-cargo tree -i bincode
+cargo tree -i bincode@1.3.3
+cargo tree --all-features --target all -e features -i paste@1.0.15
 ```
-
-Do not add an ignore list or CI gate until the team decides whether the
-`fff-search` and optional embeddings dependency trees are acceptable as-is,
-upgradable in place, or need a replacement/spike. A future audit gate should use
-a reproducible advisory database update path rather than relying on the local
-developer cache.
