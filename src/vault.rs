@@ -88,7 +88,7 @@ impl Note {
         self.id.as_deref().unwrap_or(&self.rel_path)
     }
 
-    pub(crate) fn filename_stem(&self) -> Option<String> {
+    fn filename_stem(&self) -> Option<String> {
         self.path
             .file_stem()
             .map(|stem| stem.to_string_lossy().to_string())

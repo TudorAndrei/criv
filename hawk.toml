@@ -1,0 +1,4 @@
+[[production]]
+package = "criv"
+bin = "criv"
+reason = "shipped criv CLI binary"

@@ -12,7 +12,7 @@ use crate::util::{write_atomic_if_changed_in, write_atomic_in};
 use crate::vault::{NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
 
-pub(crate) const STATE_SCHEMA: &str = "criv.state.v0";
+const STATE_SCHEMA: &str = "criv.state.v0";
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct State {
@@ -88,7 +88,7 @@ impl State {
         Self::build_incremental(root, vault, None, &[])
     }
 
-    pub(crate) fn build_incremental(
+    fn build_incremental(
         root: &Path,
         vault: &Vault,
         previous: Option<&State>,
@@ -388,7 +388,7 @@ impl State {
     }
 
     #[cfg(test)]
-    pub(crate) fn to_json(&self) -> Result<String> {
+    fn to_json(&self) -> Result<String> {
         Ok(self
             .serialize()?
             .published
@@ -398,7 +398,7 @@ impl State {
     }
 
     #[cfg(test)]
-    pub(crate) fn hash(&self) -> Result<String> {
+    fn hash(&self) -> Result<String> {
         Ok(self.serialize()?.hash)
     }
 
@@ -858,11 +858,11 @@ fn stable_hash(value: &str) -> String {
     blake3::hash(value.as_bytes()).to_hex().to_string()
 }
 
-pub(crate) fn note_node_id(id: &str) -> String {
+fn note_node_id(id: &str) -> String {
     format!("note:{id}")
 }
 
-pub(crate) fn code_node_id(path: &str) -> String {
+fn code_node_id(path: &str) -> String {
     format!("code:{path}")
 }
 

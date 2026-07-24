@@ -107,9 +107,9 @@ impl SearchOptions {
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub(crate) struct Row {
-    pub(crate) path: String,
-    pub(crate) line: Option<usize>,
-    pub(crate) text: String,
+    path: String,
+    line: Option<usize>,
+    text: String,
 }
 
 pub(crate) fn run(root: &Path, options: SearchOptions) -> Result<()> {

@@ -220,6 +220,7 @@ mise run pre-commit
 mise run pre-push
 mise run check
 mise run fix
+mise run hawk
 ```
 
 ## Obsidian Extension

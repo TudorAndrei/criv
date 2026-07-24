@@ -11,7 +11,7 @@ pub(crate) enum C4ArtifactFormat {
 }
 
 impl C4ArtifactFormat {
-    pub(crate) fn as_str(self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             Self::Mermaid => "mermaid",
             Self::Dot => "dot",
@@ -37,7 +37,7 @@ impl C4ArtifactLevel {
         }
     }
 
-    pub(crate) fn c4_level(self) -> Option<C4Level> {
+    fn c4_level(self) -> Option<C4Level> {
         match self {
             Self::Context => Some(C4Level::Context),
             Self::Container => Some(C4Level::Container),
@@ -77,12 +77,7 @@ pub(crate) fn parse_file(root: &Path, docs_path: &Path, path: &Path) -> Result<C
     Ok(parse_contents(root, docs_path, path, &contents))
 }
 
-pub(crate) fn parse_contents(
-    root: &Path,
-    docs_path: &Path,
-    path: &Path,
-    contents: &str,
-) -> C4Artifact {
+fn parse_contents(root: &Path, docs_path: &Path, path: &Path, contents: &str) -> C4Artifact {
     let rel_path = strip_prefix(path, root);
     let mut directives = Vec::new();
     let mut diagnostics = Vec::new();

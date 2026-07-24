@@ -29,7 +29,7 @@ Build plugin artifacts when the Obsidian plugin is part of the release:
 mise run plugin-build
 ```
 
-This wraps the plugin's `npm run build` script in `mise x rust@1.95.0` so
+This wraps the plugin's `npm run build` script in `mise x rust@1.97.1` so
 `wasm-pack` sees the mise-managed Rust and Cargo toolchain, including the
 installed `wasm32-unknown-unknown` target. If only the Rust CLI is being
 released and the generated plugin scaffold is unchanged, document that choice in

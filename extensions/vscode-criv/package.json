@@ -140,7 +140,7 @@
   },
   "scripts": {
     "build": "npm run check-types && node esbuild.config.mjs --production",
-    "build:wasm": "mise exec cargo:wasm-pack@0.15.0 rust@1.95.0 -- wasm-pack build ../../crates/criv-wasm --target nodejs --out-dir ../../extensions/vscode-criv/pkg",
+    "build:wasm": "mise exec cargo:wasm-pack@0.15.0 rust@1.97.1 -- wasm-pack build ../../crates/criv-wasm --target nodejs --out-dir ../../extensions/vscode-criv/pkg",
     "check-types": "tsc --noEmit",
     "compile": "npm run check-types && node esbuild.config.mjs",
     "compile:integration-tests": "esbuild test/integration/runner.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist-test/integration/runner.js",

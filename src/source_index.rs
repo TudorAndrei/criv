@@ -28,8 +28,8 @@ pub(crate) enum SourceGrepMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FileHit {
     pub(crate) path: String,
-    pub(crate) score: i32,
-    pub(crate) frecency: u32,
+    score: i32,
+    frecency: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

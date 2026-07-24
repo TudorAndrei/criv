@@ -34,11 +34,11 @@ pub enum CrivError {
 }
 
 impl CrivError {
-    pub fn new(message: impl Into<String>) -> Self {
+    fn new(message: impl Into<String>) -> Self {
         Self::Message(message.into())
     }
 
-    pub fn usage(message: impl Into<String>) -> Self {
+    fn usage(message: impl Into<String>) -> Self {
         Self::Usage(message.into())
     }
 

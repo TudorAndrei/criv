@@ -29,6 +29,18 @@ local cargo_test = new Step {
   check = "cargo test --workspace"
 }
 
+local hawk = new Step {
+  glob = List(
+    "Cargo.toml",
+    "Cargo.lock",
+    "hawk.toml",
+    "mise.toml",
+    "src/**/*.rs",
+    "crates/**/*.rs",
+  )
+  check = "mise run hawk"
+}
+
 local toml_fmt = (Builtins.taplo_format) {
   glob = List("**/*.toml", ".cargo/**/*.toml")
 }
@@ -164,6 +176,7 @@ hooks {
       ["actionlint"] = actionlint
       ["zizmor"] = zizmor
       ["cargo-test"] = cargo_test
+      ["hawk"] = hawk
       ["plugin-format-check"] = plugin_format_check
       ["plugin-lint"] = plugin_lint
       ["plugin-test"] = plugin_test

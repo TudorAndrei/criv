@@ -41,8 +41,8 @@ pub(crate) struct Symbol {
     pub(crate) name: String,
     pub(crate) kind: SymbolKind,
     pub(crate) parent: Option<String>,
-    pub(crate) exported: bool,
-    pub(crate) interface_signature: Option<InterfaceSignature>,
+    exported: bool,
+    interface_signature: Option<InterfaceSignature>,
     pub(crate) range: SymbolRange,
     pub(crate) calls: Vec<Call>,
 }
@@ -57,7 +57,7 @@ pub(crate) struct SymbolRange {
 pub(crate) struct SymbolId {
     pub(crate) path: String,
     pub(crate) name: String,
-    pub(crate) selector: String,
+    selector: String,
 }
 
 impl SymbolId {
@@ -80,7 +80,7 @@ pub(crate) enum SymbolKind {
 }
 
 impl SymbolKind {
-    pub(crate) fn as_str(self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             Self::Function => "function",
             Self::Method => "method",
@@ -101,7 +101,7 @@ pub(crate) enum Language {
 }
 
 impl Language {
-    pub(crate) fn as_str(self) -> &'static str {
+    fn as_str(self) -> &'static str {
         match self {
             Self::Rust => "rust",
             Self::TypeScript => "typescript",
@@ -115,26 +115,26 @@ impl Language {
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub(crate) struct InterfaceSignature {
-    pub(crate) language: Language,
-    pub(crate) symbol_kind: SymbolKind,
-    pub(crate) qualified_name: String,
-    pub(crate) visibility: Option<String>,
-    pub(crate) inputs: Vec<String>,
-    pub(crate) output: Option<String>,
-    pub(crate) fields: Vec<FieldSignature>,
-    pub(crate) variants: Vec<VariantSignature>,
+    language: Language,
+    symbol_kind: SymbolKind,
+    qualified_name: String,
+    visibility: Option<String>,
+    inputs: Vec<String>,
+    output: Option<String>,
+    fields: Vec<FieldSignature>,
+    variants: Vec<VariantSignature>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub(crate) struct FieldSignature {
-    pub(crate) name: String,
-    pub(crate) ty: Option<String>,
+    name: String,
+    ty: Option<String>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub(crate) struct VariantSignature {
-    pub(crate) name: String,
-    pub(crate) fields: Vec<FieldSignature>,
+    name: String,
+    fields: Vec<FieldSignature>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -176,7 +176,7 @@ fn graph_cache_path(root: &Path) -> std::path::PathBuf {
 }
 
 impl InterfaceSignature {
-    pub(crate) fn hash(&self) -> String {
+    fn hash(&self) -> String {
         blake3::hash(self.stable_text().as_bytes())
             .to_hex()
             .to_string()

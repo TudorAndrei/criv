@@ -47,16 +47,16 @@ pub(crate) struct C4Element {
     pub(crate) technology: Option<String>,
     pub(crate) description: Option<String>,
     pub(crate) source: Option<String>,
-    pub(crate) duplicate_source_lines: Vec<usize>,
+    duplicate_source_lines: Vec<usize>,
     pub(crate) line: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct C4Boundary {
-    pub(crate) alias: String,
-    pub(crate) kind: String,
-    pub(crate) label: String,
-    pub(crate) line: usize,
+    alias: String,
+    kind: String,
+    label: String,
+    line: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,7 +71,7 @@ pub(crate) struct C4Relationship {
 pub(crate) struct C4Diagram {
     pub(crate) level: C4Level,
     pub(crate) elements: Vec<C4Element>,
-    pub(crate) boundaries: Vec<C4Boundary>,
+    boundaries: Vec<C4Boundary>,
     pub(crate) relationships: Vec<C4Relationship>,
     pub(crate) invalid_source_placements: Vec<(usize, String)>,
     pub(crate) line: usize,

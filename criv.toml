@@ -16,6 +16,7 @@ roots = [
   "cog.toml",
   "criv.toml",
   "hk.pkl",
+  "hawk.toml",
   "mise.toml",
   "README.md",
   "assets/skills",

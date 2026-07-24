@@ -1,5 +1,5 @@
 [tools]
-rust = "1.95.0"
+rust = "1.97.1"
 node = "24"
 hk = "1.45.0"
 actionlint = "1.7.12"
@@ -10,6 +10,7 @@ cocogitto = "7.0.0"
 "cargo:cargo-release" = "1.1.2"
 "cargo:cargo-audit" = "0.22.2"
 taplo = "0.10.0"
+"github:astral-sh/hawk" = "0.1.9"
 
 [env]
 HK_MISE = "1"
@@ -25,6 +26,10 @@ run = "hk check --all"
 [tasks.fix]
 description = "Run hk fixes against modified files"
 run = "hk fix"
+
+[tasks.hawk]
+description = "Check Rust visibility against criv's shipped CLI surface"
+run = "cargo hawk check --manifest-path Cargo.toml --target-dir target/hawk --exclude-crate criv_wasm -D warnings"
 
 [tasks.release-plan]
 description = "Show the next SemVer version from conventional commits"

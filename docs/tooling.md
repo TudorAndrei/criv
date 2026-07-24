@@ -4,6 +4,8 @@ kind: doc
 title: Tooling and Git Hooks
 targets:
   symbols:
+    - criv.toml
+    - hawk.toml
     - mise.toml
     - hk.pkl
     - scripts/measure-performance.sh
@@ -12,7 +14,9 @@ targets:
 # Tooling and Git Hooks
 
 The repository uses `mise.toml` to install the project hook runner and
-`hk.pkl` to define the hook behavior. The decision record is [[0013-mise-managed-hk-hook-toolchain|ADR-0013]].
+`hk.pkl` to define the hook behavior. `criv.toml` also declares project-level
+tooling files, including Hawk's `hawk.toml`, as source roots. The decision
+record is [[0013-mise-managed-hk-hook-toolchain|ADR-0013]].
 
 Run the initial setup with:
 
@@ -21,13 +25,14 @@ mise install
 ```
 
 The mise postinstall hook runs `hk install --mise`, so Git hook execution goes
-through `mise x` and uses the pinned tool versions, including hk and
-actionlint. GitHub Actions security analysis is pinned here too: zizmor checks
-workflow, composite action, and Dependabot definitions for risky CI/CD patterns.
-Release tooling is also pinned here: Cocogitto calculates the next SemVer
-version from conventional commits, and cargo-release updates Cargo workspace
-versions. `HK_PKL_BACKEND=pklr` keeps hk self-contained by avoiding a separate
-`pkl` CLI requirement.
+through `mise x` and uses the pinned tool versions, including hk, Rust 1.97.1,
+and actionlint. GitHub Actions security analysis is pinned here too: zizmor
+checks workflow, composite action, and Dependabot definitions for risky CI/CD
+patterns. Hawk uses the same Rust toolchain to check whether public Rust APIs
+are required by the shipped `criv` binary. Release tooling is also pinned here:
+Cocogitto calculates the next SemVer version from conventional commits, and
+cargo-release updates Cargo workspace versions. `HK_PKL_BACKEND=pklr` keeps hk
+self-contained by avoiding a separate `pkl` CLI requirement.
 
 Workflow YAML under `.github/workflows/` is checked with actionlint in
 `pre-commit` and the full `check` hook. zizmor runs in offline mode in the same
@@ -42,6 +47,7 @@ mise run pre-commit
 mise run pre-push
 mise run check
 mise run fix
+mise run hawk
 mise run perf
 mise run plugin-build
 mise run vscode-build
@@ -67,7 +73,7 @@ or pattern matching behavior.
 
 `mise run plugin-build` builds the Obsidian companion plugin and its Rust WASM
 helper from the repository root. It wraps `.obsidian/plugins/criv`'s
-`npm run build` script in `mise x rust@1.95.0`, so `wasm-pack` uses the
+`npm run build` script in `mise x rust@1.97.1`, so `wasm-pack` uses the
 mise-managed Rust and Cargo toolchain instead of whichever Rust appears first in
 the shell environment.
 
@@ -105,3 +111,13 @@ desktop smoke tests.
 Use `hk validate` after editing `hk.pkl`. Prefer hk built-ins when one exists;
 the commit message hook uses `Builtins.check_conventional_commit` instead of a
 shell wrapper around `hk util check-conventional-commit`.
+
+`mise run hawk` runs Hawk with warnings denied against the shipped `criv` CLI.
+The `criv-wasm` crate is excluded because its exported functions are consumed by
+the separately built WASM artifacts, outside the CLI binary's Cargo graph. The
+full `mise run check` hook runs Hawk whenever Rust sources, Cargo metadata, or
+its configuration change. Hawk uses `target/hawk` for its instrumented Cargo
+artifacts so its compiler work stays isolated from the other parallel checks.
+This policy is captured in
+[[0043-hawk-visibility-analysis|ADR-0043]].
+[[0043-hawk-visibility-analysis|ADR-0043]].

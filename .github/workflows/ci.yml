@@ -62,7 +62,7 @@ jobs:
           cache: true
 
       - name: Install Rust components
-        run: rustup component add clippy rustfmt --toolchain 1.95.0
+        run: rustup component add clippy rustfmt --toolchain 1.97.1
 
       - name: Install plugin dependencies
         run: npm --prefix .obsidian/plugins/criv ci
