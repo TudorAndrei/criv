@@ -581,6 +581,51 @@ file.rs]]
 }
 
 #[test]
+fn check_fix_rewrites_fixable_markdown_in_the_docs_tree() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    let messy = root.join("docs/messy.md");
+    fs::write(
+        &messy,
+        "---\nid: messy\nkind: doc\ntitle: Messy\n---\n\n## Messy\n\nTrailing spaces here.   \n\n\n\nToo many blank lines above.\n",
+    )
+    .unwrap();
+
+    criv(root).args(["check", "--fix"]).assert().success();
+
+    let fixed = fs::read_to_string(&messy).unwrap();
+    assert!(
+        !fixed.contains("here.   \n"),
+        "trailing whitespace should be fixed: {fixed:?}"
+    );
+    assert!(
+        !fixed.contains("\n\n\n"),
+        "consecutive blank lines should be collapsed: {fixed:?}"
+    );
+}
+
+#[test]
+fn check_fix_leaves_already_clean_markdown_untouched() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    let clean = root.join("docs/clean.md");
+    let contents = "---\nid: clean\nkind: doc\ntitle: Clean\n---\n\n## Clean\n\nBody text.\n";
+    fs::write(&clean, contents).unwrap();
+
+    criv(root).args(["check", "--fix"]).assert().success();
+
+    assert_eq!(
+        fs::read_to_string(&clean).unwrap(),
+        contents,
+        "a file with nothing to fix must not be rewritten"
+    );
+}
+
+#[test]
 fn generated_plugin_bundle_is_excluded_from_source_graph() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

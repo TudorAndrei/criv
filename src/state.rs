@@ -1315,6 +1315,187 @@ Rel(cli, plugin, "writes state for")
         let _ = std::fs::remove_dir_all(root);
     }
 
+    const POLICY_ADR: &str = r#"---
+id: ADR-0001
+kind: decision
+title: No Println
+status: accepted
+date: 2026-07-25
+governs:
+  - src/**/*.rs
+policy:
+  patterns:
+    - id: no-println
+      language: rust
+      pattern: "println!($$$ARGS)"
+      message: Prefer structured diagnostics.
+---
+
+# No Println
+
+## Context
+
+Context.
+
+## Decision
+
+Decision.
+
+## Consequences
+
+Consequences.
+"#;
+
+    const PATTERN_ID: &str = "ADR-0001/no-println";
+
+    fn policy_vault(prefix: &str) -> PathBuf {
+        let root = unique_temp_dir(prefix);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("docs/adr")).unwrap();
+        std::fs::write(
+            root.join("criv.toml"),
+            "[vault]\ndocs = \"docs\"\nadr = \"adr\"\n\n[source]\nroots = [\"src\"]\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("docs/adr/0001-no-println.md"), POLICY_ADR).unwrap();
+        std::fs::write(
+            root.join("src/alpha.rs"),
+            "fn alpha() {\n    println!(\"alpha\");\n}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("src/beta.rs"),
+            "fn beta() {\n    println!(\"beta\");\n}\n",
+        )
+        .unwrap();
+        root
+    }
+
+    fn matched_files(state: &State) -> Vec<String> {
+        state
+            .patterns
+            .get(PATTERN_ID)
+            .map(|matches| matches.iter().map(|matched| matched.file.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn incremental_pattern_matches_reuse_unchanged_files() {
+        let root = policy_vault("criv-incremental-pattern-reuse");
+
+        let vault = Vault::load(&root).unwrap();
+        let (_, first) = write_state(&root, &vault).unwrap();
+        assert_eq!(
+            matched_files(&first),
+            vec!["src/alpha.rs".to_string(), "src/beta.rs".to_string()],
+            "both governed files should match before the edit"
+        );
+        let alpha_before = first
+            .patterns
+            .get(PATTERN_ID)
+            .unwrap()
+            .iter()
+            .find(|matched| matched.file == "src/alpha.rs")
+            .cloned()
+            .expect("alpha match");
+
+        std::fs::write(
+            root.join("src/beta.rs"),
+            "fn beta() {\n    // moved down\n    println!(\"beta changed\");\n}\n",
+        )
+        .unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+        let (_, second) = write_state_incremental(
+            &root,
+            &vault,
+            Some(&first),
+            std::slice::from_ref(&"src/beta.rs".to_string()),
+        )
+        .unwrap();
+
+        let second_matches = second.patterns.get(PATTERN_ID).unwrap();
+        let alpha_after = second_matches
+            .iter()
+            .find(|matched| matched.file == "src/alpha.rs")
+            .expect("alpha match survives an unrelated edit");
+        assert_eq!(
+            &alpha_before, alpha_after,
+            "an unchanged file's match must be carried forward byte-identically"
+        );
+
+        let beta_after = second_matches
+            .iter()
+            .find(|matched| matched.file == "src/beta.rs")
+            .expect("beta match is rescanned");
+        assert_ne!(
+            beta_after.range, alpha_before.range,
+            "the changed file's match should be rescanned at its new position"
+        );
+        assert_eq!(matched_files(&second).len(), 2);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn incremental_pattern_matches_skip_files_absent_from_the_changed_set() {
+        // Pins the reuse contract itself: a file the caller does not report as
+        // changed is carried forward from the previous state and is NOT
+        // rescanned. Editing alpha on disk while reporting only beta means a
+        // full rescan would drop alpha's match, while correct reuse keeps it.
+        let root = policy_vault("criv-incremental-pattern-scope");
+
+        let vault = Vault::load(&root).unwrap();
+        let (_, first) = write_state(&root, &vault).unwrap();
+        assert_eq!(matched_files(&first).len(), 2);
+
+        std::fs::write(root.join("src/alpha.rs"), "fn alpha() {}\n").unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+        let (_, second) = write_state_incremental(
+            &root,
+            &vault,
+            Some(&first),
+            std::slice::from_ref(&"src/beta.rs".to_string()),
+        )
+        .unwrap();
+
+        assert!(
+            matched_files(&second).contains(&"src/alpha.rs".to_string()),
+            "a file outside the changed set must be reused, not rescanned"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn incremental_pattern_matches_drop_deleted_files() {
+        let root = policy_vault("criv-incremental-pattern-delete");
+
+        let vault = Vault::load(&root).unwrap();
+        let (_, first) = write_state(&root, &vault).unwrap();
+        assert_eq!(matched_files(&first).len(), 2);
+
+        std::fs::remove_file(root.join("src/beta.rs")).unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+        let (_, second) = write_state_incremental(
+            &root,
+            &vault,
+            Some(&first),
+            std::slice::from_ref(&"src/beta.rs".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            matched_files(&second),
+            vec!["src/alpha.rs".to_string()],
+            "a deleted file's match must not survive into the next state"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
