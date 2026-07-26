@@ -54,3 +54,5 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0041-adr-owned-policy-patterns|ADR-0041]] - ADR-Owned Policy Patterns
 - [[0042-shared-source-index-lifecycle|ADR-0042]] - Shared Source Index Lifecycle
 - [[0043-hawk-visibility-analysis|ADR-0043]] - Hawk visibility analysis
+- [[0044-vault-write-confinement|ADR-0044]] - Vault write confinement
+- [[0045-note-line-identity-in-generated-state|ADR-0045]] - Note line identity in generated state

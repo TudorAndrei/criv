@@ -143,7 +143,27 @@ Check the vault before committing documentation or code changes:
 ```sh
 criv check
 criv check --fix
+criv check --format json
+criv check --format github
+criv check --filter broken-link
 ```
+
+`--fix` applies the Markdown formatting fixes rumdl can make automatically. It
+rewrites any Markdown file `criv check` lints, anywhere inside the repository
+root, so it is not limited to the vault docs directory. Which files are linted
+is controlled by the `include` and `exclude` lists in your rumdl configuration;
+excluding a directory there is how you keep `--fix` away from it. Writes are
+confined to the repository root and never follow symlinks, per
+[ADR-0044](docs/adr/0044-vault-write-confinement.md).
+
+`--format` selects the diagnostic output. `text` is the default, `json` emits one
+object per diagnostic for editors and scripts, and `github` emits workflow
+annotation commands so diagnostics appear inline on a pull request.
+
+`--filter` keeps only diagnostics whose text contains the given substring. It
+narrows the exit status as well as the output: `criv check --filter broken-link`
+exits zero when the only errors in the vault are of some other kind. Use it for
+focused local inspection, not as a gate.
 
 ADRs can enforce structural policy directly from their frontmatter:
 

@@ -38,6 +38,7 @@ issue 5 is now plan 012, issue 4 is settled as a documented decision in
 | 015 | Spike: CI-native diagnostics (annotations/SARIF) | P3 | M | 011 (recommended) | DONE |
 | 016 | Spike: editor-extension install path | P3 | S–M | — | DONE |
 | 017 | Core audit remediation (11 phases) | P1 | XL | internal phase order | DONE |
+| 018 | 2026-07-25 audit remediation (8 phases) | P1 | M-L | internal phase order | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
 REJECTED (with one-line rationale — finding fixed independently or approach
@@ -65,6 +66,10 @@ abandoned).
   policy matchers → CRLF → JSX → state contract → state performance → watch
   coverage → source-index consolidation → dependency documentation. Phase 7
   protects phase 8; phases 3 and 9 protect phase 10.
+- **Plan 018 internal order**: characterization tests → `check --fix` scope →
+  structural path scope → note line offsets → warm `watch --once` → watch lock
+  reclamation → lint-tool resolution → init write confinement. Phase 1 protects phase 2; phase 3 must
+  land before any later glob-compilation work (ISSUES.md issue 7).
 
 ## 2026-07-23 core audit
 
@@ -79,6 +84,27 @@ included stale graph reuse with same-size/restored-mtime content, generated
 architecture escaping through a symlink, first-push ADR history being missed,
 invalid policy globs failing open, valid CRLF frontmatter being rejected, and
 `.jsx` files being omitted by the JSX language filter.
+
+## 2026-07-25 audit
+
+Plan 018 covers eight findings from the audit recorded in `ISSUES.md` (audited
+at commit `d549a2b`), in:
+
+- `plans/018-audit-remediation/PLAN.md`
+- `plans/018-audit-remediation/TODO.md`
+
+The audit was standard-depth and hotspot-weighted. Three findings were
+reproduced end-to-end: structural search returning zero results without
+`--paths`, note diagnostics reporting body-relative line numbers, and
+`criv check --fix` aborting on Markdown outside `docs/`. The full finding list,
+including the nine not covered by plan 018, the Lower Priority items, and the
+rejected findings, is in `ISSUES.md` at the repository root.
+
+Planning produced two ADRs, both accepted 2026-07-25:
+[[0044-vault-write-confinement|ADR-0044]] and
+[[0045-note-line-identity-in-generated-state|ADR-0045]]. ADR-0044 governs
+`src/init.rs`, which is why issue 10 is in plan 018 rather than deferred — an
+accepted decision the code violates has to be fixed.
 
 ## Findings considered and rejected
 
