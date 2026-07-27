@@ -9,7 +9,9 @@ use std::process::{Command, ExitStatus};
 
 use clap::Args as ClapArgs;
 
-use crate::util::{append_line_if_missing, normalize_rel, write_atomic, write_new};
+use crate::util::{
+    append_line_if_missing_in, create_dir_in, normalize_rel, write_atomic_in, write_new_in,
+};
 use crate::{CrivError, Result};
 
 const VSCODE_EXTENSION_ID: &str = "criv.vscode-criv";
@@ -40,8 +42,8 @@ pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
         &mut created,
     )?;
 
-    fs::create_dir_all(root.join("docs/adr"))?;
-    fs::create_dir_all(root.join(".criv/snapshots"))?;
+    create_dir_in(root, Path::new("docs/adr"))?;
+    create_dir_in(root, Path::new(".criv/snapshots"))?;
 
     write_template(
         root,
@@ -76,7 +78,7 @@ pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
         write_vscode_extension_recommendation(root, &mut created)?;
     }
 
-    append_line_if_missing(&root.join(".gitignore"), ".criv/")?;
+    append_line_if_missing_in(root, Path::new("."), Path::new(".gitignore"), ".criv/")?;
 
     if !options.no_hooks {
         hook_messages = install_git_hooks(root, options.force_hooks)?;
@@ -106,7 +108,12 @@ fn write_vscode_extension_recommendation(
         let value = serde_json::json!({
             "recommendations": [VSCODE_EXTENSION_ID],
         });
-        write_atomic(&path, &json_pretty(&value, VSCODE_EXTENSIONS_JSON)?)?;
+        write_atomic_in(
+            root,
+            Path::new("."),
+            Path::new(VSCODE_EXTENSIONS_JSON),
+            &json_pretty(&value, VSCODE_EXTENSIONS_JSON)?,
+        )?;
         created.push(VSCODE_EXTENSIONS_JSON);
         return Ok(());
     }
@@ -142,7 +149,12 @@ fn write_vscode_extension_recommendation(
     }
 
     recommendations.push(serde_json::Value::String(VSCODE_EXTENSION_ID.to_string()));
-    write_atomic(&path, &json_pretty(&value, VSCODE_EXTENSIONS_JSON)?)?;
+    write_atomic_in(
+        root,
+        Path::new("."),
+        Path::new(VSCODE_EXTENSIONS_JSON),
+        &json_pretty(&value, VSCODE_EXTENSIONS_JSON)?,
+    )?;
     Ok(())
 }
 
@@ -169,17 +181,20 @@ fn install_git_hooks(root: &Path, force: bool) -> Result<Vec<String>> {
     let workdir = fs::canonicalize(workdir)?;
     let root = fs::canonicalize(root)?;
     let relative_root = repo_relative_root(&workdir, &root)?;
-    let hooks_dir = workdir.join(".githooks");
-    fs::create_dir_all(&hooks_dir)?;
+    // Hooks live in the Git worktree, which may sit above the criv root, so the
+    // worktree is the confinement root here; `.githooks` is the allowed scope.
+    create_dir_in(&workdir, Path::new(".githooks"))?;
 
     let messages = vec![
         write_hook(
-            &hooks_dir.join("pre-commit"),
+            &workdir,
+            "pre-commit",
             &templates::pre_commit_hook(&relative_root),
             force,
         )?,
         write_hook(
-            &hooks_dir.join("pre-push"),
+            &workdir,
+            "pre-push",
             &templates::pre_push_hook(&relative_root),
             force,
         )?,
@@ -244,19 +259,17 @@ fn repo_relative_root(workdir: &Path, root: &Path) -> Result<String> {
     Ok(normalize_rel(relative))
 }
 
-fn write_hook(path: &Path, contents: &str, force: bool) -> Result<String> {
-    let hook_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("hook");
+fn write_hook(workdir: &Path, hook_name: &str, contents: &str, force: bool) -> Result<String> {
+    let destination = PathBuf::from(".githooks").join(hook_name);
+    let path = workdir.join(&destination);
     if path.exists() && !force {
         return Ok(format!(
             "skipped Git hook .githooks/{hook_name}: already exists"
         ));
     }
     let existed = path.exists();
-    fs::write(path, contents)?;
-    set_executable(path)?;
+    write_atomic_in(workdir, Path::new(".githooks"), &destination, contents)?;
+    set_executable(&path)?;
     let action = if existed { "wrote" } else { "created" };
     Ok(format!("{action} Git hook .githooks/{hook_name}"))
 }
@@ -351,7 +364,10 @@ fn write_template(
     contents: &str,
     created: &mut Vec<&'static str>,
 ) -> Result<()> {
-    if write_new(&root.join(path), contents)? {
+    // Scaffolding lands all over the repository, so the scope is the root
+    // itself. Per ADR-0044 that still enforces root confinement, symlink
+    // rejection, and relative-path validation.
+    if write_new_in(root, Path::new("."), Path::new(path), contents)? {
         created.push(path);
     }
     Ok(())

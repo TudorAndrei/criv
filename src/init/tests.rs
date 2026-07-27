@@ -399,6 +399,77 @@ fn git(root: &Path, args: &[&str]) {
     );
 }
 
+/// Per ADR-0044, documentation that a project governs has to be versioned in the
+/// repository it governs. Scaffolding a vault through a symlinked `docs/` would
+/// write the governance graph somewhere Git never sees, so it is refused.
+#[cfg(unix)]
+#[test]
+fn init_refuses_to_scaffold_through_a_symlinked_docs_directory() {
+    let root = unique_temp_dir("criv-init-symlink-docs");
+    let outside = unique_temp_dir("criv-init-symlink-docs-target");
+    std::os::unix::fs::symlink(&outside, root.join("docs")).unwrap();
+
+    let error = run(
+        &root,
+        InitOptions {
+            no_obsidian: true,
+            no_vscode: true,
+            no_skills: true,
+            no_hooks: true,
+            force_hooks: false,
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("refusing to write through symlinked vault path component"),
+        "unexpected error: {error}"
+    );
+    assert!(
+        !outside.join("adr").exists(),
+        "nothing may be created outside the repository"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&outside);
+}
+
+#[cfg(unix)]
+#[test]
+fn init_refuses_to_write_a_template_through_a_symlinked_state_directory() {
+    let root = unique_temp_dir("criv-init-symlink-state");
+    let outside = unique_temp_dir("criv-init-symlink-state-target");
+    std::os::unix::fs::symlink(&outside, root.join(".criv")).unwrap();
+
+    let error = run(
+        &root,
+        InitOptions {
+            no_obsidian: true,
+            no_vscode: true,
+            no_skills: true,
+            no_hooks: true,
+            force_hooks: false,
+        },
+    )
+    .unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("refusing to write through symlinked vault path component"),
+        "unexpected error: {error}"
+    );
+    assert!(
+        !outside.join("state.json").exists(),
+        "nothing may be written outside the repository"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&outside);
+}
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

@@ -23,20 +23,54 @@ pub(crate) fn is_text_file(path: &Path) -> Result<bool> {
     Ok(content_inspector::inspect(&buffer).is_text())
 }
 
-pub(crate) fn write_new(path: &Path, contents: &str) -> Result<bool> {
+/// Create `destination` and its missing parents, under the same confinement
+/// rules as [`write_atomic_in`]. Directory creation gets the same treatment as
+/// file writes because a symlinked component would otherwise let scaffolding
+/// materialize outside the vault before anything is written into it.
+pub(crate) fn create_dir_in(root: &Path, destination: &Path) -> Result<()> {
+    validate_relative_path("directory destination", destination)?;
+    let root = fs::canonicalize(root).map_err(|err| {
+        CrivError::new(format!(
+            "failed to resolve vault root {} for confined write: {err}",
+            root.display()
+        ))
+    })?;
+    reject_symlink_components(&root, destination)?;
+    fs::create_dir_all(root.join(destination))?;
+    // Recheck: `create_dir_all` may have raced with a symlink being planted.
+    reject_symlink_components(&root, destination)
+}
+
+/// Write `destination` only if it does not already exist, under the same
+/// confinement rules as [`write_atomic_in`]. Returns whether the file was
+/// created.
+pub(crate) fn write_new_in(
+    root: &Path,
+    allowed_dir: &Path,
+    destination: &Path,
+    contents: &str,
+) -> Result<bool> {
+    // Resolve first so an existence check never follows a symlinked path out of
+    // the vault; `prepare_confined_write` rejects symlink components outright.
+    let path = prepare_confined_write(root, allowed_dir, destination)?;
     if path.exists() {
         return Ok(false);
     }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(path, contents)?;
+    write_atomic_ready(&path, contents)?;
     Ok(true)
 }
 
-pub(crate) fn append_line_if_missing(path: &Path, line: &str) -> Result<()> {
+/// Append `line` to `destination` unless it is already present, under the same
+/// confinement rules as [`write_atomic_in`].
+pub(crate) fn append_line_if_missing_in(
+    root: &Path,
+    allowed_dir: &Path,
+    destination: &Path,
+    line: &str,
+) -> Result<()> {
+    let path = prepare_confined_write(root, allowed_dir, destination)?;
     let mut contents = if path.exists() {
-        fs::read_to_string(path)?
+        fs::read_to_string(&path)?
     } else {
         String::new()
     };
@@ -47,18 +81,10 @@ pub(crate) fn append_line_if_missing(path: &Path, line: &str) -> Result<()> {
         }
         contents.push_str(line);
         contents.push('\n');
-        fs::write(path, contents)?;
+        write_atomic_ready(&path, &contents)?;
     }
 
     Ok(())
-}
-
-pub(crate) fn write_atomic(path: &Path, contents: &str) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    write_atomic_ready(path, contents)
 }
 
 /// Atomically write a vault-controlled file without following symlinks.
@@ -535,8 +561,20 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("state.json");
-        write_atomic(&path, "{\"old\":true}\n").unwrap();
-        write_atomic(&path, "{\"new\":true}\n").unwrap();
+        write_atomic_in(
+            &root,
+            Path::new("."),
+            Path::new("state.json"),
+            "{\"old\":true}\n",
+        )
+        .unwrap();
+        write_atomic_in(
+            &root,
+            Path::new("."),
+            Path::new("state.json"),
+            "{\"new\":true}\n",
+        )
+        .unwrap();
 
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"new\":true}\n");
         let leftovers = std::fs::read_dir(&root)
