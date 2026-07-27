@@ -38,7 +38,7 @@ issue 5 is now plan 012, issue 4 is settled as a documented decision in
 | 015 | Spike: CI-native diagnostics (annotations/SARIF) | P3 | M | 011 (recommended) | DONE |
 | 016 | Spike: editor-extension install path | P3 | S–M | — | DONE |
 | 017 | Core audit remediation (11 phases) | P1 | XL | internal phase order | DONE |
-| 018 | 2026-07-25 audit remediation (8 phases) | P1 | M-L | internal phase order | TODO |
+| 018 | 2026-07-25 audit remediation (8 phases) | P1 | M-L | internal phase order | DONE |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) |
 REJECTED (with one-line rationale — finding fixed independently or approach

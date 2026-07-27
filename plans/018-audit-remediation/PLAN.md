@@ -340,3 +340,45 @@ session; see below.
   respectively; the recorded decisions already describe the intended behavior.
 - Whether the structural `PathScope` type needs an ADR: no. It restores ADR-0005's
   stated intent and introduces no user-visible surface beyond fixing the bug.
+
+## Implementation notes (2026-07-27)
+
+Recorded where execution diverged from the plan as written.
+
+- **Phase 5** extracted a `run_once` helper in `src/watch.rs` rather than
+  inlining the cache load at the call site. `SourceGraph::changed_files` is
+  `#[serde(skip)]`, so the plan's "reports zero changed files" assertion is not
+  observable through the CLI; the helper lets a unit test observe it directly.
+  The CLI test that remains asserts the warm run produces the same snapshot as
+  the cold one — reuse must not change results.
+- **Phase 6** determines process liveness by invoking `ps -o lstart= -p <pid>`
+  rather than adding a direct `libc` dependency for `kill(pid, 0)`. One probe
+  returns both liveness and the start time used to detect PID reuse, and it
+  keeps the dependency set unchanged. On non-Unix platforms liveness cannot be
+  established, so a lock is treated as live and never reclaimed.
+  Two existing tests wrote placeholder lock contents (`"held"`, `"active"`) that
+  are now reclaimable-as-malformed; both were changed to record this live test
+  process, which is what they were actually asserting.
+- **Phase 8** added `util::create_dir_in` so `criv init`'s directory creation
+  gets the same symlink rejection as its file writes, and deleted the now-unused
+  unconfined `util::write_atomic`. `write_hook` takes the worktree root and a
+  hook name instead of a full path, so the confinement root and allowed
+  directory are explicit at the call site.
+
+### Phase 5 measurement
+
+Steady-state `criv watch --once` on this repository (108 source files, debug
+binary, three consecutive runs each):
+
+| Build | Warm `watch --once` (real) |
+|-------|----------------------------|
+| Before Phase 5 (`17ce52b`) | 1.55s, 1.49s |
+| After Phase 5 | 1.29s, 1.30s, 1.23s |
+
+Roughly a 15% reduction. `mise run perf` after the change reports
+`watch_once_cold` 1.34s vs `watch_once_warm` 1.23s in a single pass.
+
+### Verification not performed
+
+- No before/after `mise run perf` snapshot was committed to `plans/reports/`;
+  the numbers above were measured ad hoc against a temporary worktree.

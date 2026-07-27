@@ -2299,6 +2299,7 @@ digraph criv_code {
   "src/init.rs#fn:run" -> "src/init.rs#fn:write_template";
   "src/init.rs#fn:run" -> "src/init.rs#fn:write_templates";
   "src/init.rs#fn:run" -> "src/init.rs#fn:write_vscode_extension_recommendation";
+  "src/init.rs#fn:run" -> "src/lib.rs#type:CrivError";
   "src/init.rs#fn:run" -> "src/util.rs#fn:append_line_if_missing_in";
   "src/init.rs#fn:run" -> "src/util.rs#fn:create_dir_in";
   "src/init.rs#fn:write_hook" -> "src/init.rs#fn:set_executable";

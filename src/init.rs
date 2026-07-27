@@ -32,6 +32,16 @@ pub(crate) struct InitOptions {
 }
 
 pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
+    // Resolve once up front, the way `install_git_hooks` already does. Every
+    // confined write canonicalizes its root, so doing it here keeps scaffolding
+    // from repeating the syscall for each of the ~20 templates, and pins one
+    // resolved root for the whole run.
+    let root = &fs::canonicalize(root).map_err(|err| {
+        CrivError::new(format!(
+            "failed to resolve criv root {}: {err}",
+            root.display()
+        ))
+    })?;
     let mut created = Vec::new();
     let mut hook_messages = Vec::new();
 

@@ -46,7 +46,7 @@ Category: Correctness
 Effort: S
 Fix risk: MED
 Confidence: HIGH
-Status: Open
+Status: Fixed (plan 018)
 
 A `globset::GlobSet` built from zero globs matches nothing, so an empty `paths`
 slice skips every source file instead of scanning all of them.
@@ -101,7 +101,7 @@ Category: Correctness
 Effort: M
 Fix risk: LOW-MED
 Confidence: HIGH
-Status: Open
+Status: Fixed (plan 018)
 
 Wiki-link, heading, and Mermaid C4 line numbers are computed over the note body
 after frontmatter is stripped, and the frontmatter offset is never added back.
@@ -153,7 +153,7 @@ Category: Correctness
 Effort: S
 Fix risk: LOW
 Confidence: HIGH
-Status: Open
+Status: Fixed (plan 018)
 
 The markdown lint pass walks the whole repository root, but the fix pass can only
 write inside the configured vault docs directory, so any fixable Markdown file
@@ -212,7 +212,7 @@ Category: Performance
 Effort: S
 Fix risk: LOW
 Confidence: HIGH
-Status: Open
+Status: Fixed (plan 018)
 
 The `--once` path passes `previous_graph = None`, so the fingerprint-reuse branch
 can never hit and every indexed file is re-parsed.
@@ -260,7 +260,7 @@ Category: Correctness
 Effort: S-M
 Fix risk: LOW
 Confidence: HIGH
-Status: Open
+Status: Fixed (plan 018)
 
 The watch lock is released only in `Drop`, with no owner recorded and no
 staleness check, so an interrupted watcher blocks every later commit.
@@ -308,7 +308,7 @@ Category: Tech Debt / Enforcement
 Effort: S
 Fix risk: LOW
 Confidence: HIGH
-Status: Open
+Status: Fixed (plan 018)
 
 `criv enforce` looks up JavaScript and TypeScript lint tools by bare name only, so
 a package-local oxlint is never found and enforcement silently reports success.
@@ -504,7 +504,7 @@ Category: Security
 Effort: S-M
 Fix risk: LOW
 Confidence: HIGH
-Status: Open
+Status: Fixed (plan 018)
 
 `criv init` is the only remaining write path that does not go through the
 symlink-rejecting confinement helper the rest of the codebase uses.
@@ -854,7 +854,7 @@ Category: Test Coverage
 Effort: S
 Fix risk: LOW
 Confidence: HIGH
-Status: Open
+Status: Fixed (plan 018)
 
 `check --fix` and incremental pattern-match reuse both mutate durable artifacts
 and have no coverage.
