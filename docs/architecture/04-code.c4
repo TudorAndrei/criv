@@ -1204,6 +1204,12 @@ digraph criv_code {
   "src/vault.rs#type:index/member:source_graph" [label="source_graph\nsrc/vault.rs"];
   "src/vault.rs#type:index/member:source_index" [label="source_index\nsrc/vault.rs"];
   "src/watch.rs#fn:a_second_watch_once_reuses_the_cached_source_graph" [label="a_second_watch_once_reuses_the_cached_source_graph\nsrc/watch.rs"];
+  "src/watch.rs#fn:acquire_reclaims_a_lock_owned_by_a_dead_process" [label="acquire_reclaims_a_lock_owned_by_a_dead_process\nsrc/watch.rs"];
+  "src/watch.rs#fn:acquire_rejects_a_lock_held_by_this_live_process" [label="acquire_rejects_a_lock_held_by_this_live_process\nsrc/watch.rs"];
+  "src/watch.rs#fn:lock_owner_rejects_unparseable_contents" [label="lock_owner_rejects_unparseable_contents\nsrc/watch.rs"];
+  "src/watch.rs#fn:lock_owner_round_trips_through_the_lock_file_format" [label="lock_owner_round_trips_through_the_lock_file_format\nsrc/watch.rs"];
+  "src/watch.rs#fn:lock_owner_with_a_mismatched_start_time_is_not_alive" [label="lock_owner_with_a_mismatched_start_time_is_not_alive\nsrc/watch.rs"];
+  "src/watch.rs#fn:process_start_time" [label="process_start_time\nsrc/watch.rs"];
   "src/watch.rs#fn:rebuild" [label="rebuild\nsrc/watch.rs"];
   "src/watch.rs#fn:rebuild_includes_generated_code_architecture_in_same_run_state" [label="rebuild_includes_generated_code_architecture_in_same_run_state\nsrc/watch.rs"];
   "src/watch.rs#fn:rebuild_incremental" [label="rebuild_incremental\nsrc/watch.rs"];
@@ -1213,12 +1219,18 @@ digraph criv_code {
   "src/watch.rs#fn:watch_decisions_distinguish_docs_source_errors_and_shutdown" [label="watch_decisions_distinguish_docs_source_errors_and_shutdown\nsrc/watch.rs"];
   "src/watch.rs#fn:watch_once_reparses_a_source_file_that_changed_between_runs" [label="watch_once_reparses_a_source_file_that_changed_between_runs\nsrc/watch.rs"];
   "src/watch.rs#fn:write_watch_architecture_fixture" [label="write_watch_architecture_fixture\nsrc/watch.rs"];
+  "src/watch.rs#type:LockOwner" [label="LockOwner\nsrc/watch.rs"];
   "src/watch.rs#type:WatchDecision" [label="WatchDecision\nsrc/watch.rs"];
   "src/watch.rs#type:WatchLock" [label="WatchLock\nsrc/watch.rs"];
   "src/watch.rs#type:WatchLock/member:acquire" [label="acquire\nsrc/watch.rs"];
   "src/watch.rs#type:WatchLock/member:drop" [label="drop\nsrc/watch.rs"];
+  "src/watch.rs#type:WatchLock/member:try_create" [label="try_create\nsrc/watch.rs"];
   "src/watch.rs#type:WatchOptions" [label="WatchOptions\nsrc/watch.rs"];
   "src/watch.rs#type:WatchSignal" [label="WatchSignal\nsrc/watch.rs"];
+  "src/watch.rs#type:line/member:current" [label="current\nsrc/watch.rs"];
+  "src/watch.rs#type:line/member:is_alive" [label="is_alive\nsrc/watch.rs"];
+  "src/watch.rs#type:line/member:parse" [label="parse\nsrc/watch.rs"];
+  "src/watch.rs#type:line/member:serialize" [label="serialize\nsrc/watch.rs"];
   ".obsidian/plugins/criv/src/core.ts#fn:addTextTargets" -> ".obsidian/plugins/criv/src/core.ts#fn:addTarget";
   ".obsidian/plugins/criv/src/core.ts#fn:c4Directives" -> ".obsidian/plugins/criv/src/core.ts#fn:c4CommentText";
   ".obsidian/plugins/criv/src/core.ts#fn:c4FormatFromText" -> ".obsidian/plugins/criv/src/core.ts#fn:firstMeaningfulLine";
@@ -1234,6 +1246,7 @@ digraph criv_code {
   ".obsidian/plugins/criv/src/core.ts#fn:frontmatterPatternTargets" -> ".obsidian/plugins/criv/src/core.ts#fn:stringValue";
   ".obsidian/plugins/criv/src/core.ts#fn:generatedDirective" -> "src/structural.rs#fn:find";
   ".obsidian/plugins/criv/src/core.ts#fn:interpretState" -> ".obsidian/plugins/criv/src/core.ts#fn:errorMessage";
+  ".obsidian/plugins/criv/src/core.ts#fn:interpretState" -> "src/watch.rs#type:line/member:parse";
   ".obsidian/plugins/criv/src/core.ts#fn:linkedSourcesFromMarkdown" -> ".obsidian/plugins/criv/src/core.ts#fn:resolveSource";
   ".obsidian/plugins/criv/src/core.ts#fn:linkedSourcesFromMarkdown" -> ".obsidian/plugins/criv/test/stubs/codemirror-state.mjs#type:RangeSetBuilder/member:add";
   ".obsidian/plugins/criv/src/core.ts#fn:linkedSourcesFromMarkdown" -> "src/search.rs#type:SourceGrepMode/member:from";
@@ -1574,6 +1587,7 @@ digraph criv_code {
   ".obsidian/plugins/criv/src/wasm.ts#fn:summarizeState" -> ".obsidian/plugins/criv/src/wasm.ts#fn:loadWasm";
   ".obsidian/plugins/criv/src/wasm.ts#fn:summarizeState" -> ".obsidian/plugins/criv/src/wasm.ts#fn:uniqueSourcePaths";
   ".obsidian/plugins/criv/src/wasm.ts#fn:summarizeState" -> ".obsidian/plugins/criv/src/wasm.ts#member:summarize_state";
+  ".obsidian/plugins/criv/src/wasm.ts#fn:summarizeState" -> "src/watch.rs#type:line/member:parse";
   ".obsidian/plugins/criv/src/wasm.ts#fn:uniqueSourcePaths" -> ".obsidian/plugins/criv/test/stubs/codemirror-state.mjs#type:RangeSetBuilder/member:add";
   ".obsidian/plugins/criv/test/core.test.mjs#fn:fallbackPaths" -> ".obsidian/plugins/criv/src/core.ts#fn:sourceSuggestions";
   ".obsidian/plugins/criv/test/core.test.mjs#fn:wasmFilePaths" -> ".obsidian/plugins/criv/src/wasm.ts#member:suggest_source_selectors";
@@ -1660,12 +1674,14 @@ digraph criv_code {
   "extensions/vscode-criv/src/c4PreviewHtml.ts#fn:buildC4PreviewHtml" -> "extensions/vscode-criv/src/c4PreviewHtml.ts#fn:escapeScriptJson";
   "extensions/vscode-criv/src/checkDiagnosticModel.ts#fn:parseCheckDiagnostics" -> "extensions/vscode-criv/src/checkDiagnosticModel.ts#fn:numberValue";
   "extensions/vscode-criv/src/checkDiagnosticModel.ts#fn:parseCheckDiagnostics" -> "extensions/vscode-criv/src/checkDiagnosticModel.ts#fn:stringValue";
+  "extensions/vscode-criv/src/checkDiagnosticModel.ts#fn:parseCheckDiagnostics" -> "src/watch.rs#type:line/member:parse";
   "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics" -> ".obsidian/plugins/criv/src/core.ts#fn:safeVaultPath";
   "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics" -> "extensions/vscode-criv/src/checkDiagnosticModel.ts#fn:parseCheckDiagnostics";
   "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics" -> "extensions/vscode-criv/src/checkDiagnostics.ts#fn:diagnosticRange";
   "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics" -> "extensions/vscode-criv/src/checkDiagnostics.ts#fn:severityValue";
   "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics" -> "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:clear";
   "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics" -> "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:dispose";
+  "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics" -> "src/watch.rs#type:line/member:parse";
   "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:clear" -> "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:clear";
   "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:dispose" -> "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:dispose";
   "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:setFromJson" -> ".obsidian/plugins/criv/src/core.ts#fn:safeVaultPath";
@@ -1673,6 +1689,7 @@ digraph criv_code {
   "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:setFromJson" -> "extensions/vscode-criv/src/checkDiagnostics.ts#fn:diagnosticRange";
   "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:setFromJson" -> "extensions/vscode-criv/src/checkDiagnostics.ts#fn:severityValue";
   "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:setFromJson" -> "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:clear";
+  "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:setFromJson" -> "src/watch.rs#type:line/member:parse";
   "extensions/vscode-criv/src/commandRunner.ts#fn:runProcess" -> ".obsidian/plugins/criv/test/main.test.mjs#member:on";
   "extensions/vscode-criv/src/commandRunner.ts#fn:runProcess" -> "extensions/vscode-criv/src/commandRunner.ts#fn:captureOutput";
   "extensions/vscode-criv/src/commandRunner.ts#fn:runProcess" -> "extensions/vscode-criv/src/commandRunner.ts#fn:capturedText";
@@ -1752,8 +1769,10 @@ digraph criv_code {
   "extensions/vscode-criv/src/languageFeatures.ts#type:SourceDiagnostics/member:updateVisibleDocuments" -> "extensions/vscode-criv/src/languageFeatures.ts#type:SourceDiagnostics/member:update";
   "extensions/vscode-criv/src/languageFeatures.ts#type:SourceDocumentLinkProvider" -> "extensions/vscode-criv/src/languageFeatures.ts#fn:documentReferences";
   "extensions/vscode-criv/src/languageFeatures.ts#type:SourceDocumentLinkProvider" -> "extensions/vscode-criv/src/languageFeatures.ts#fn:rangeFromOffsets";
+  "extensions/vscode-criv/src/languageFeatures.ts#type:SourceDocumentLinkProvider" -> "src/watch.rs#type:line/member:parse";
   "extensions/vscode-criv/src/languageFeatures.ts#type:SourceDocumentLinkProvider/member:provideDocumentLinks" -> "extensions/vscode-criv/src/languageFeatures.ts#fn:documentReferences";
   "extensions/vscode-criv/src/languageFeatures.ts#type:SourceDocumentLinkProvider/member:provideDocumentLinks" -> "extensions/vscode-criv/src/languageFeatures.ts#fn:rangeFromOffsets";
+  "extensions/vscode-criv/src/languageFeatures.ts#type:SourceDocumentLinkProvider/member:provideDocumentLinks" -> "src/watch.rs#type:line/member:parse";
   "extensions/vscode-criv/src/languageFeatures.ts#type:SourceHoverProvider" -> "extensions/vscode-criv/src/languageFeatures.ts#fn:documentReferences";
   "extensions/vscode-criv/src/languageFeatures.ts#type:SourceHoverProvider" -> "extensions/vscode-criv/src/languageFeatures.ts#fn:rangeFromOffsets";
   "extensions/vscode-criv/src/languageFeatures.ts#type:SourceHoverProvider" -> "extensions/vscode-criv/src/sourceReferences.ts#fn:appendSourceHoverContents";
@@ -1786,6 +1805,7 @@ digraph criv_code {
   "extensions/vscode-criv/src/stateModel.ts#fn:c4Artifacts" -> "extensions/vscode-criv/src/stateModel.ts#fn:isC4Path";
   "extensions/vscode-criv/src/stateModel.ts#fn:parseStateEnvelope" -> "extensions/vscode-criv/src/stateModel.ts#fn:isRecord";
   "extensions/vscode-criv/src/stateModel.ts#fn:parseStateEnvelope" -> "extensions/vscode-criv/src/stateModel.ts#fn:stringValue";
+  "extensions/vscode-criv/src/stateModel.ts#fn:parseStateEnvelope" -> "src/watch.rs#type:line/member:parse";
   "extensions/vscode-criv/src/stateModel.ts#fn:registeredPatterns" -> "extensions/vscode-criv/src/stateModel.ts#fn:isRecord";
   "extensions/vscode-criv/src/stateStore.ts#fn:refresh" -> "extensions/vscode-criv/src/stateStore.ts#type:WorkspaceStateStore/member:refresh";
   "extensions/vscode-criv/src/stateStore.ts#type:WorkspaceStateStore" -> ".obsidian/plugins/criv/src/core.ts#fn:sourceEntries";
@@ -1856,6 +1876,7 @@ digraph criv_code {
   "extensions/vscode-criv/src/wasm.ts#fn:lookupGraphNode" -> "extensions/vscode-criv/src/wasm.ts#fn:loadWasm";
   "extensions/vscode-criv/src/wasm.ts#fn:lookupGraphNode" -> "extensions/vscode-criv/src/wasm.ts#member:lookup_graph_node";
   "extensions/vscode-criv/src/wasm.ts#fn:lookupGraphNode" -> "src/structural.rs#fn:find";
+  "extensions/vscode-criv/src/wasm.ts#fn:parseState" -> "src/watch.rs#type:line/member:parse";
   "extensions/vscode-criv/src/wasm.ts#fn:sourceEntries" -> "extensions/vscode-criv/src/wasm.ts#fn:fallbackSourceEntries";
   "extensions/vscode-criv/src/wasm.ts#fn:sourceEntries" -> "extensions/vscode-criv/src/wasm.ts#fn:loadWasm";
   "extensions/vscode-criv/src/wasm.ts#fn:sourceEntries" -> "extensions/vscode-criv/src/wasm.ts#member:source_entries";
@@ -2370,6 +2391,7 @@ digraph criv_code {
   "src/lib.rs#fn:usage_help_renders_root_and_subcommand_help" -> "src/lib.rs#fn:usage_help";
   "src/lib.rs#fn:usage_help_uses_options_language" -> "src/lib.rs#fn:usage_help";
   "src/lib.rs#fn:usage_spec" -> "src/lib.rs#type:Cli";
+  "src/lib.rs#fn:usage_spec" -> "src/watch.rs#type:line/member:parse";
   "src/lib.rs#fn:usage_spec_includes_criv_commands" -> "src/lib.rs#fn:write_usage_spec";
   "src/main.rs#fn:main" -> "src/lib.rs#type:CrivError/member:exit_code";
   "src/query.rs#fn:c4_elements" -> "src/lib.rs#type:CrivError";
@@ -2588,6 +2610,7 @@ digraph criv_code {
   "src/source_graph.rs#fn:parse_tree_sitter_file" -> "src/source_graph.rs#fn:collect_tree_sitter_nodes";
   "src/source_graph.rs#fn:parse_tree_sitter_file" -> "src/source_graph.rs#fn:tree_sitter_language";
   "src/source_graph.rs#fn:parse_tree_sitter_file" -> "src/source_graph.rs#type:Language";
+  "src/source_graph.rs#fn:parse_tree_sitter_file" -> "src/watch.rs#type:line/member:parse";
   "src/source_graph.rs#fn:rust_enum_variants" -> "src/source_graph.rs#fn:brace_contents";
   "src/source_graph.rs#fn:rust_fields" -> "src/source_graph.rs#fn:brace_contents";
   "src/source_graph.rs#fn:rust_fields" -> "src/source_graph.rs#fn:normalize_signature_text";
@@ -2677,6 +2700,7 @@ digraph criv_code {
   "src/source_index.rs#type:FffSourceIndex/member:fuzzy_files" -> "src/source_index.rs#type:scan_root/member:explicit_file_hits";
   "src/source_index.rs#type:FffSourceIndex/member:fuzzy_files" -> "src/source_index.rs#type:scan_root/member:indexed_path";
   "src/source_index.rs#type:FffSourceIndex/member:fuzzy_files" -> "src/source_index.rs#type:scan_root/member:with_picker";
+  "src/source_index.rs#type:FffSourceIndex/member:fuzzy_files" -> "src/watch.rs#type:line/member:parse";
   "src/source_index.rs#type:FffSourceIndex/member:grep" -> "src/check.rs#fn:relative_path";
   "src/source_index.rs#type:FffSourceIndex/member:grep" -> "src/source_index.rs#fn:path_allowed";
   "src/source_index.rs#type:FffSourceIndex/member:grep" -> "src/source_index.rs#fn:prefixed_path";
@@ -2873,6 +2897,7 @@ digraph criv_code {
   "src/structural.rs#fn:find_policy_pattern_entry" -> "src/structural.rs#fn:policy_source";
   "src/structural.rs#fn:find_policy_pattern_entry" -> "src/structural.rs#fn:validate_source";
   "src/structural.rs#fn:parse_language" -> "src/lib.rs#type:CrivError";
+  "src/structural.rs#fn:parse_language" -> "src/watch.rs#type:line/member:parse";
   "src/structural.rs#fn:path_scope_all_visits_every_source_file" -> "src/structural.rs#fn:find";
   "src/structural.rs#fn:path_scope_all_visits_every_source_file" -> "src/structural.rs#fn:policy_fixture";
   "src/structural.rs#fn:path_scope_all_visits_every_source_file" -> "src/structural.rs#type:PatternSource";
@@ -3005,6 +3030,9 @@ digraph criv_code {
   "src/vault.rs#type:index/member:source_files_matching_glob" -> "src/vault.rs#type:index/member:resolve_source_target";
   "src/vault.rs#type:index/member:source_glob_has_match" -> "src/util.rs#fn:glob_matches";
   "src/watch.rs#fn:a_second_watch_once_reuses_the_cached_source_graph" -> "src/watch.rs#fn:write_watch_architecture_fixture";
+  "src/watch.rs#fn:acquire_reclaims_a_lock_owned_by_a_dead_process" -> "src/watch.rs#type:WatchLock/member:drop";
+  "src/watch.rs#fn:acquire_rejects_a_lock_held_by_this_live_process" -> "src/watch.rs#type:line/member:serialize";
+  "src/watch.rs#fn:lock_owner_round_trips_through_the_lock_file_format" -> "src/watch.rs#type:line/member:serialize";
   "src/watch.rs#fn:rebuild" -> "src/check.rs#type:Diagnostic/member:is_error";
   "src/watch.rs#fn:rebuild" -> "src/check.rs#type:Diagnostic/member:is_warning";
   "src/watch.rs#fn:rebuild" -> "src/vault.rs#type:Vault";
@@ -3029,5 +3057,10 @@ digraph criv_code {
   "src/watch.rs#fn:run_once" -> "src/watch.rs#fn:rebuild";
   "src/watch.rs#fn:watch_once_reparses_a_source_file_that_changed_between_runs" -> "src/watch.rs#fn:write_watch_architecture_fixture";
   "src/watch.rs#type:WatchLock/member:acquire" -> "src/lib.rs#type:CrivError";
-  "src/watch.rs#type:WatchLock/member:acquire" -> "src/util.rs#fn:create_new_in";
+  "src/watch.rs#type:WatchLock/member:acquire" -> "src/watch.rs#type:LockOwner";
+  "src/watch.rs#type:WatchLock/member:try_create" -> "src/util.rs#fn:create_new_in";
+  "src/watch.rs#type:WatchLock/member:try_create" -> "src/watch.rs#type:LockOwner";
+  "src/watch.rs#type:WatchLock/member:try_create" -> "src/watch.rs#type:line/member:serialize";
+  "src/watch.rs#type:line/member:current" -> "src/watch.rs#fn:process_start_time";
+  "src/watch.rs#type:line/member:is_alive" -> "src/watch.rs#fn:process_start_time";
 }

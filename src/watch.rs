@@ -213,6 +213,7 @@ fn rebuild_incremental(
     Ok((vault, state))
 }
 
+#[derive(Debug)]
 struct WatchLock {
     path: PathBuf,
 }
@@ -220,24 +221,126 @@ struct WatchLock {
 impl WatchLock {
     fn acquire(root: &Path) -> Result<Self> {
         let requested_path = root.join(".criv/watch.lock");
-        let (path, _) = match create_new_in(root, Path::new(".criv"), Path::new(".criv/watch.lock"))
-        {
-            Ok(lock) => lock,
-            Err(CrivError::Io(err)) if err.kind() == std::io::ErrorKind::AlreadyExists => {
-                return Err(CrivError::new(format!(
-                    "failed to acquire watch lock at {}: an active watcher already owns state refresh; do not start another watch or run `criv watch --once` while it is active",
-                    requested_path.display()
-                )));
-            }
+        match Self::try_create(root) {
+            Ok(lock) => return Ok(lock),
+            Err(CrivError::Io(err)) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(err) => {
                 return Err(CrivError::new(format!(
                     "failed to acquire watch lock at {}: {err}",
                     requested_path.display()
                 )));
             }
-        };
+        }
+
+        // The lock outlives a crashed or killed watcher, so an existing file is
+        // not proof that a watcher is running. Reclaim it when its recorded
+        // owner is gone; an unreadable or malformed lock (including one written
+        // by an older criv) counts as abandoned rather than wedging the vault.
+        let owner = fs::read_to_string(&requested_path)
+            .ok()
+            .and_then(|contents| LockOwner::parse(&contents));
+        if owner.as_ref().is_some_and(LockOwner::is_alive) {
+            return Err(CrivError::new(format!(
+                "failed to acquire watch lock at {}: an active watcher already owns state refresh; do not start another watch or run `criv watch --once` while it is active",
+                requested_path.display()
+            )));
+        }
+
+        let _ = fs::remove_file(&requested_path);
+        Self::try_create(root).map_err(|err| {
+            CrivError::new(format!(
+                "failed to acquire watch lock at {}: {err}; if no watcher is running, delete that file and retry",
+                requested_path.display()
+            ))
+        })
+    }
+
+    fn try_create(root: &Path) -> Result<Self> {
+        use std::io::Write;
+
+        let (path, mut file) =
+            create_new_in(root, Path::new(".criv"), Path::new(".criv/watch.lock"))?;
+        let owner = LockOwner::current();
+        file.write_all(owner.serialize().as_bytes())?;
         Ok(Self { path })
     }
+}
+
+/// The process recorded as owning a watch lock. The start time distinguishes the
+/// original owner from an unrelated process that later reused its PID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LockOwner {
+    pid: u32,
+    start: Option<String>,
+}
+
+impl LockOwner {
+    fn current() -> Self {
+        let pid = std::process::id();
+        Self {
+            start: process_start_time(pid),
+            pid,
+        }
+    }
+
+    fn serialize(&self) -> String {
+        format!(
+            "pid {}\nstart {}\n",
+            self.pid,
+            self.start.as_deref().unwrap_or("")
+        )
+    }
+
+    fn parse(contents: &str) -> Option<Self> {
+        let mut pid = None;
+        let mut start = None;
+        for line in contents.lines() {
+            let (key, value) = line.split_once(' ')?;
+            match key {
+                "pid" => pid = value.trim().parse::<u32>().ok(),
+                "start" => {
+                    let value = value.trim();
+                    start = (!value.is_empty()).then(|| value.to_string());
+                }
+                _ => return None,
+            }
+        }
+        pid.map(|pid| Self { pid, start })
+    }
+
+    fn is_alive(&self) -> bool {
+        match process_start_time(self.pid) {
+            // The PID is gone, so the owner cannot still be running.
+            None => false,
+            // A recorded start time that no longer matches means the PID was
+            // reused by a different process; the original owner is gone.
+            Some(current) => self
+                .start
+                .as_deref()
+                .is_none_or(|recorded| recorded == current),
+        }
+    }
+}
+
+/// Best-effort process start time, which doubles as a liveness probe: `None`
+/// means the PID could not be observed as a running process.
+///
+/// `ps` keeps this dependency-free and works on both macOS and Linux. On any
+/// other platform liveness cannot be established, so callers must treat the
+/// lock as live rather than reclaiming a lock that may still be held.
+fn process_start_time(pid: u32) -> Option<String> {
+    if !cfg!(unix) {
+        return Some(String::new());
+    }
+    let output = std::process::Command::new("ps")
+        .args(["-o", "lstart=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let start = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!start.is_empty()).then_some(start)
 }
 
 impl Drop for WatchLock {
@@ -352,6 +455,84 @@ mod tests {
             &["src/lib.rs".to_string()],
             "reuse is keyed on content, so an edited file must still be reparsed"
         );
+    }
+
+    #[test]
+    fn lock_owner_round_trips_through_the_lock_file_format() {
+        let owner = super::LockOwner::current();
+
+        let parsed = super::LockOwner::parse(&owner.serialize()).unwrap();
+
+        assert_eq!(parsed, owner);
+        assert!(
+            parsed.is_alive(),
+            "the running test process must read alive"
+        );
+    }
+
+    #[test]
+    fn lock_owner_rejects_unparseable_contents() {
+        for contents in ["active", "pid notanumber\n", "owner 1\n", ""] {
+            assert!(
+                super::LockOwner::parse(contents).is_none(),
+                "{contents:?} must not parse as an owner"
+            );
+        }
+    }
+
+    #[test]
+    fn lock_owner_with_a_mismatched_start_time_is_not_alive() {
+        // A PID that has been reused by an unrelated process must not be
+        // mistaken for the original watcher.
+        let owner = super::LockOwner {
+            pid: std::process::id(),
+            start: Some("Mon Jan  1 00:00:00 2001".to_string()),
+        };
+
+        assert!(!owner.is_alive());
+    }
+
+    #[test]
+    fn acquire_rejects_a_lock_held_by_this_live_process() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join(".criv")).unwrap();
+        fs::write(
+            root.join(".criv/watch.lock"),
+            super::LockOwner::current().serialize(),
+        )
+        .unwrap();
+
+        let error = super::WatchLock::acquire(root).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("active watcher already owns state refresh"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn acquire_reclaims_a_lock_owned_by_a_dead_process() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join(".criv")).unwrap();
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let dead_pid = child.id();
+        child.wait().unwrap();
+        fs::write(
+            root.join(".criv/watch.lock"),
+            format!("pid {dead_pid}\nstart Mon Jan  1 00:00:00 2001\n"),
+        )
+        .unwrap();
+
+        let lock = super::WatchLock::acquire(root).expect("an abandoned lock must be reclaimable");
+
+        let contents = fs::read_to_string(root.join(".criv/watch.lock")).unwrap();
+        assert_eq!(contents, super::LockOwner::current().serialize());
+        drop(lock);
+        assert!(!root.join(".criv/watch.lock").exists());
     }
 
     fn write_watch_architecture_fixture(root: &Path) {

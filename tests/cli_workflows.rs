@@ -146,7 +146,8 @@ fn watch_once_does_not_rebuild_while_watch_lock_is_held() {
 
     criv(root).args(["watch", "--once"]).assert().success();
     let state_before = fs::read_to_string(root.join(".criv/state.json")).unwrap();
-    fs::write(root.join(".criv/watch.lock"), "active").unwrap();
+    // The test process is genuinely alive, so this lock must be honored.
+    fs::write(root.join(".criv/watch.lock"), live_pid_lock()).unwrap();
     fs::write(root.join("src/lib.rs"), "pub fn changed() {}\n").unwrap();
 
     criv(root)
@@ -160,6 +161,63 @@ fn watch_once_does_not_rebuild_while_watch_lock_is_held() {
 
     let state_after = fs::read_to_string(root.join(".criv/state.json")).unwrap();
     assert_eq!(state_after, state_before);
+}
+
+#[test]
+fn watch_once_reclaims_a_lock_left_behind_by_a_dead_watcher() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+
+    criv(root).args(["watch", "--once"]).assert().success();
+    let state_before = fs::read_to_string(root.join(".criv/state.json")).unwrap();
+
+    // A watcher that crashed leaves its lock behind; the PID it recorded is not
+    // running, so the next run must reclaim it instead of failing forever.
+    fs::write(root.join(".criv/watch.lock"), dead_pid_lock()).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn changed() {}\n").unwrap();
+
+    criv(root).args(["watch", "--once"]).assert().success();
+
+    let state_after = fs::read_to_string(root.join(".criv/state.json")).unwrap();
+    assert_ne!(state_after, state_before);
+    assert!(!root.join(".criv/watch.lock").exists());
+}
+
+#[test]
+fn watch_once_reclaims_a_malformed_lock() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+
+    // A lock written by an older criv carries no owner; it must not wedge the
+    // repository permanently.
+    fs::create_dir_all(root.join(".criv")).unwrap();
+    fs::write(root.join(".criv/watch.lock"), "active").unwrap();
+
+    criv(root).args(["watch", "--once"]).assert().success();
+
+    assert!(!root.join(".criv/watch.lock").exists());
+}
+
+/// A lock owned by this still-running test process.
+fn live_pid_lock() -> String {
+    format!("pid {}\nstart \n", std::process::id())
+}
+
+/// A PID that has exited: spawn a trivial process and wait for it, so the number
+/// is real and reachable-but-gone rather than an arbitrary guess.
+fn dead_pid_lock() -> String {
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let pid = child.id();
+    child.wait().unwrap();
+    format!("pid {pid}\nstart Mon Jan  1 00:00:00 2001\n")
 }
 
 #[test]
@@ -1417,7 +1475,9 @@ fn long_running_watch_takes_lock_before_startup_rebuild() {
     fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
     let state_path = root.join(".criv/state.json");
     fs::write(&state_path, "sentinel\n").unwrap();
-    fs::write(root.join(".criv/watch.lock"), "held\n").unwrap();
+    // A lock owned by a live process (this test) must be honored, so the
+    // watcher fails before it can overwrite the sentinel state.
+    fs::write(root.join(".criv/watch.lock"), live_pid_lock()).unwrap();
 
     criv(root)
         .arg("watch")
