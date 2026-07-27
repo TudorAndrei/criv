@@ -1203,12 +1203,15 @@ digraph criv_code {
   "src/vault.rs#type:index/member:source_glob_has_match" [label="source_glob_has_match\nsrc/vault.rs"];
   "src/vault.rs#type:index/member:source_graph" [label="source_graph\nsrc/vault.rs"];
   "src/vault.rs#type:index/member:source_index" [label="source_index\nsrc/vault.rs"];
+  "src/watch.rs#fn:a_second_watch_once_reuses_the_cached_source_graph" [label="a_second_watch_once_reuses_the_cached_source_graph\nsrc/watch.rs"];
   "src/watch.rs#fn:rebuild" [label="rebuild\nsrc/watch.rs"];
   "src/watch.rs#fn:rebuild_includes_generated_code_architecture_in_same_run_state" [label="rebuild_includes_generated_code_architecture_in_same_run_state\nsrc/watch.rs"];
   "src/watch.rs#fn:rebuild_incremental" [label="rebuild_incremental\nsrc/watch.rs"];
   "src/watch.rs#fn:run" [label="run\nsrc/watch.rs"];
+  "src/watch.rs#fn:run_once" [label="run_once\nsrc/watch.rs"];
   "src/watch.rs#fn:watch_decision" [label="watch_decision\nsrc/watch.rs"];
   "src/watch.rs#fn:watch_decisions_distinguish_docs_source_errors_and_shutdown" [label="watch_decisions_distinguish_docs_source_errors_and_shutdown\nsrc/watch.rs"];
+  "src/watch.rs#fn:watch_once_reparses_a_source_file_that_changed_between_runs" [label="watch_once_reparses_a_source_file_that_changed_between_runs\nsrc/watch.rs"];
   "src/watch.rs#fn:write_watch_architecture_fixture" [label="write_watch_architecture_fixture\nsrc/watch.rs"];
   "src/watch.rs#type:WatchDecision" [label="WatchDecision\nsrc/watch.rs"];
   "src/watch.rs#type:WatchLock" [label="WatchLock\nsrc/watch.rs"];
@@ -3001,6 +3004,7 @@ digraph criv_code {
   "src/vault.rs#type:index/member:source_files_matching_glob" -> "src/util.rs#fn:glob_matches";
   "src/vault.rs#type:index/member:source_files_matching_glob" -> "src/vault.rs#type:index/member:resolve_source_target";
   "src/vault.rs#type:index/member:source_glob_has_match" -> "src/util.rs#fn:glob_matches";
+  "src/watch.rs#fn:a_second_watch_once_reuses_the_cached_source_graph" -> "src/watch.rs#fn:write_watch_architecture_fixture";
   "src/watch.rs#fn:rebuild" -> "src/check.rs#type:Diagnostic/member:is_error";
   "src/watch.rs#fn:rebuild" -> "src/check.rs#type:Diagnostic/member:is_warning";
   "src/watch.rs#fn:rebuild" -> "src/vault.rs#type:Vault";
@@ -3019,8 +3023,11 @@ digraph criv_code {
   "src/watch.rs#fn:run" -> "src/vault.rs#type:index/member:source_graph";
   "src/watch.rs#fn:run" -> "src/watch.rs#fn:rebuild";
   "src/watch.rs#fn:run" -> "src/watch.rs#fn:rebuild_incremental";
+  "src/watch.rs#fn:run" -> "src/watch.rs#fn:run_once";
   "src/watch.rs#fn:run" -> "src/watch.rs#fn:watch_decision";
   "src/watch.rs#fn:run" -> "src/watch.rs#type:WatchLock";
+  "src/watch.rs#fn:run_once" -> "src/watch.rs#fn:rebuild";
+  "src/watch.rs#fn:watch_once_reparses_a_source_file_that_changed_between_runs" -> "src/watch.rs#fn:write_watch_architecture_fixture";
   "src/watch.rs#type:WatchLock/member:acquire" -> "src/lib.rs#type:CrivError";
   "src/watch.rs#type:WatchLock/member:acquire" -> "src/util.rs#fn:create_new_in";
 }

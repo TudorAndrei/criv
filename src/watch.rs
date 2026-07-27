@@ -26,9 +26,13 @@ pub(crate) struct WatchOptions {
 pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
     let _lock = WatchLock::acquire(root)?;
     if options.once {
-        rebuild(root, None, None)?;
+        run_once(root)?;
         return Ok(());
     }
+    // A cold start has no in-process graph to reuse, but the on-disk cache from
+    // the previous run is still valid: reuse is keyed on a blake3 content
+    // fingerprint, so unchanged files are skipped and changed ones reparsed.
+    let cached_graph = crate::source_graph::load_cached(root);
     let config = Config::load(root)?;
     let shared_source_index: Option<Arc<dyn SourceIndex>> = if config.source_index {
         Some(Arc::new(FffSourceIndex::new(
@@ -40,7 +44,7 @@ pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
     } else {
         None
     };
-    let (mut vault, mut state) = rebuild(root, None, shared_source_index.clone())?;
+    let (mut vault, mut state) = rebuild(root, cached_graph.as_ref(), shared_source_index.clone())?;
     let mut source_graph = vault.source_graph().clone();
 
     let docs_path = config.docs_path(root);
@@ -146,6 +150,13 @@ fn watch_decision(signal: WatchSignal, source_changed: bool) -> WatchDecision {
         },
         WatchSignal::Idle | WatchSignal::WatcherError => WatchDecision::Continue,
     }
+}
+
+/// A single `criv watch --once` rebuild, warmed by the on-disk source graph
+/// cache left behind by the previous run.
+fn run_once(root: &Path) -> Result<(Vault, State)> {
+    let cached_graph = crate::source_graph::load_cached(root);
+    rebuild(root, cached_graph.as_ref(), None)
 }
 
 fn rebuild(
@@ -301,6 +312,45 @@ mod tests {
         assert_eq!(
             watch_decision(WatchSignal::Disconnected, true),
             WatchDecision::Stop
+        );
+    }
+
+    #[test]
+    fn a_second_watch_once_reuses_the_cached_source_graph() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        write_watch_architecture_fixture(root);
+
+        let (first, _) = super::run_once(root).unwrap();
+        assert_eq!(
+            first.source_graph().changed_files(),
+            &["src/lib.rs".to_string()],
+            "the cold run has nothing to reuse and must parse the file"
+        );
+
+        let (second, _) = super::run_once(root).unwrap();
+
+        assert!(
+            second.source_graph().changed_files().is_empty(),
+            "the warm run must reuse every unchanged file from the on-disk cache"
+        );
+    }
+
+    #[test]
+    fn watch_once_reparses_a_source_file_that_changed_between_runs() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        write_watch_architecture_fixture(root);
+
+        super::run_once(root).unwrap();
+        fs::write(root.join("src/lib.rs"), "fn run() {}\nfn extra() {}\n").unwrap();
+
+        let (second, _) = super::run_once(root).unwrap();
+
+        assert_eq!(
+            second.source_graph().changed_files(),
+            &["src/lib.rs".to_string()],
+            "reuse is keyed on content, so an edited file must still be reparsed"
         );
     }
 

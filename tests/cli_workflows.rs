@@ -115,6 +115,27 @@ fn source_graph_cache_is_written_and_refreshed() {
 }
 
 #[test]
+fn consecutive_watch_once_runs_produce_the_same_snapshot() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    write_criv_config(root, vec!["src"], vec![], true);
+
+    // The second run reuses the on-disk source graph cache; reuse must not
+    // change what the run produces.
+    let first = criv(root).args(["watch", "--once"]).assert().success();
+    let second = criv(root).args(["watch", "--once"]).assert().success();
+
+    let snapshot = |assert: &assert_cmd::assert::Assert| {
+        String::from_utf8(assert.get_output().stdout.clone()).unwrap()
+    };
+    assert_eq!(snapshot(&first), snapshot(&second));
+}
+
+#[test]
 fn watch_once_does_not_rebuild_while_watch_lock_is_held() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
