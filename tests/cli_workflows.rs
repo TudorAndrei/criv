@@ -626,6 +626,72 @@ fn check_fix_leaves_already_clean_markdown_untouched() {
 }
 
 #[test]
+fn check_fix_rewrites_markdown_outside_the_docs_tree() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    let readme = root.join("README.md");
+    fs::write(&readme, "# Root\n\nTrailing spaces here.   \n").unwrap();
+
+    criv(root).args(["check", "--fix"]).assert().success();
+
+    assert_eq!(
+        fs::read_to_string(&readme).unwrap(),
+        "# Root\n\nTrailing spaces here.\n",
+        "ADR-0044: --fix rewrites every Markdown file check lints inside the root"
+    );
+}
+
+#[test]
+fn check_fix_honors_the_rumdl_exclude_list() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::write(
+        root.join(".rumdl.toml"),
+        "[global]\nexclude = [\"vendor/**\"]\n",
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("vendor")).unwrap();
+    let vendored = root.join("vendor/upstream.md");
+    let contents = "# Upstream\n\nTrailing spaces here.   \n";
+    fs::write(&vendored, contents).unwrap();
+
+    criv(root).args(["check", "--fix"]).assert().success();
+
+    assert_eq!(
+        fs::read_to_string(&vendored).unwrap(),
+        contents,
+        "the rumdl exclude list is the scope control for --fix"
+    );
+}
+
+#[test]
+fn check_fix_refuses_to_write_outside_the_repository_root() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let outside = TempDir::new().unwrap();
+
+    init(root);
+    let target = outside.path().join("secret.md");
+    let contents = "# Secret\n\nTrailing spaces here.   \n";
+    fs::write(&target, contents).unwrap();
+
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&target, root.join("ESCAPE.md")).unwrap();
+
+    criv(root).args(["check", "--fix"]).assert().success();
+
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        contents,
+        "no --fix write may reach a file outside the repository root"
+    );
+}
+
+#[test]
 fn generated_plugin_bundle_is_excluded_from_source_graph() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

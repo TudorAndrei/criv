@@ -254,12 +254,17 @@ fn apply_markdown_fixes(
                 path.display()
             ))
         })?;
-        write_atomic_in(
-            write_scope.root,
-            write_scope.docs_dir,
-            destination,
-            contents,
-        )?;
+        // Per ADR-0044, `check --fix` rewrites every Markdown file it lints
+        // inside the repository root, so the allowed directory tracks the file
+        // rather than always being the vault docs directory. Root confinement,
+        // symlink rejection, and relative-path validation still apply at `.`;
+        // only the docs-subdirectory narrowing is dropped.
+        let allowed_dir = if destination.starts_with(write_scope.docs_dir) {
+            write_scope.docs_dir
+        } else {
+            Path::new(".")
+        };
+        write_atomic_in(write_scope.root, allowed_dir, destination, contents)?;
     }
 
     if !result.converged {
