@@ -530,7 +530,12 @@ fn state_pattern_matches(
                 .iter()
                 .find(|policy| policy.id.as_deref() == Some(local_id))
         }) {
-            structural::find_policy_pattern_entry(root, vault, policy, &scoped_paths)?
+            structural::find_policy_pattern_entry(
+                root,
+                vault,
+                policy,
+                structural::PathScope::Globs(&scoped_paths),
+            )?
         } else if note.is_some() {
             Vec::new()
         } else if let Some(configured) = vault.config.pattern_defs.get(pattern_id) {
@@ -549,7 +554,7 @@ fn state_pattern_matches(
                     root,
                     vault,
                     source,
-                    &scoped_paths,
+                    structural::PathScope::Globs(&scoped_paths),
                     configured.language.as_deref(),
                 )?
             } else {
@@ -561,12 +566,18 @@ fn state_pattern_matches(
     } else if vault.config.pattern_defs.contains_key(pattern_id) {
         let pattern = &vault.config.pattern_defs[pattern_id];
         if paths.is_empty() {
-            structural::find_pattern_id(root, vault, pattern_id, &[])?
+            structural::find_pattern_id(root, vault, pattern_id, structural::PathScope::All)?
         } else if let Some(source) = structural::pattern_source(pattern) {
             let Some(paths) = configured_pattern_paths(paths, pattern.language.as_deref()) else {
                 return Ok(Vec::new());
             };
-            structural::find(root, vault, source, &paths, pattern.language.as_deref())?
+            structural::find(
+                root,
+                vault,
+                source,
+                structural::PathScope::Globs(&paths),
+                pattern.language.as_deref(),
+            )?
         } else {
             Vec::new()
         }
@@ -1463,6 +1474,44 @@ Consequences.
         assert!(
             matched_files(&second).contains(&"src/alpha.rs".to_string()),
             "a file outside the changed set must be reused, not rescanned"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn incremental_rescan_is_empty_when_no_changed_file_is_in_scope() {
+        // `README.md` is outside the ADR's `governs:` scope, so the scoped
+        // changed set is empty and an empty glob list must keep meaning "nothing
+        // in scope". Widening it to "no filter" would rescan the whole vault and
+        // pick up the println! added to alpha after the previous state was
+        // written — a file the caller never reported as changed.
+        let root = policy_vault("criv-incremental-pattern-out-of-scope");
+        std::fs::write(root.join("src/alpha.rs"), "fn alpha() {}\n").unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+        let (_, first) = write_state(&root, &vault).unwrap();
+        assert_eq!(matched_files(&first), vec!["src/beta.rs".to_string()]);
+
+        std::fs::write(
+            root.join("src/alpha.rs"),
+            "fn alpha() {\n    println!(\"alpha\");\n}\n",
+        )
+        .unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+        let (_, second) = write_state_incremental(
+            &root,
+            &vault,
+            Some(&first),
+            std::slice::from_ref(&"README.md".to_string()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            matched_files(&second),
+            vec!["src/beta.rs".to_string()],
+            "no governed file changed, so the rescan must contribute nothing"
         );
 
         let _ = std::fs::remove_dir_all(root);

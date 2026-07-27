@@ -18,6 +18,48 @@ pub(crate) enum PatternSource<'a> {
     Rule(&'a str),
 }
 
+/// Which source files a structural scan may visit.
+///
+/// An empty `GlobSet` matches nothing, so a caller that means "no filter" must
+/// say so explicitly rather than passing an empty glob list. `Globs(&[])` keeps
+/// the empty-means-nothing reading that the incremental state rebuild relies on.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum PathScope<'a> {
+    All,
+    Globs(&'a [String]),
+}
+
+impl<'a> PathScope<'a> {
+    pub(crate) fn from_paths(paths: &'a [String]) -> Self {
+        if paths.is_empty() {
+            Self::All
+        } else {
+            Self::Globs(paths)
+        }
+    }
+}
+
+enum CompiledPathScope {
+    All,
+    Globs(GlobMatcher),
+}
+
+impl CompiledPathScope {
+    fn compile(scope: PathScope<'_>) -> Result<Self> {
+        Ok(match scope {
+            PathScope::All => Self::All,
+            PathScope::Globs(paths) => Self::Globs(GlobMatcher::new(paths)?),
+        })
+    }
+
+    fn is_match(&self, path: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Globs(matcher) => matcher.is_match(path),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct StructuralMatch {
     pub(crate) path: String,
@@ -62,7 +104,7 @@ pub(crate) fn find(
     root: &Path,
     vault: &Vault,
     source: PatternSource<'_>,
-    paths: &[String],
+    scope: PathScope<'_>,
     language: Option<&str>,
 ) -> Result<Vec<StructuralMatch>> {
     let forced_language = language.map(parse_language).transpose()?;
@@ -73,7 +115,7 @@ pub(crate) fn find(
         .map(|language| compile(source, language))
         .transpose()?;
 
-    let path_matcher = GlobMatcher::new(paths)?;
+    let path_matcher = CompiledPathScope::compile(scope)?;
     for source_file in vault.source_files() {
         if !path_matcher.is_match(source_file) {
             continue;
@@ -207,7 +249,7 @@ pub(crate) fn find_pattern_id(
     root: &Path,
     vault: &Vault,
     pattern_id: &str,
-    paths: &[String],
+    scope: PathScope<'_>,
 ) -> Result<Vec<StructuralMatch>> {
     let Some(pattern) = vault.config.pattern_defs.get(pattern_id) else {
         return Err(CrivError::new(format!(
@@ -219,18 +261,18 @@ pub(crate) fn find_pattern_id(
             "registered pattern `{pattern_id}` has no ast-grep rule or pattern body"
         )));
     };
-    find(root, vault, source, paths, pattern.language.as_deref())
+    find(root, vault, source, scope, pattern.language.as_deref())
 }
 
 pub(crate) fn find_policy_pattern_entry(
     root: &Path,
     vault: &Vault,
     policy: &PolicyPattern,
-    paths: &[String],
+    scope: PathScope<'_>,
 ) -> Result<Vec<StructuralMatch>> {
     let (source, language) = policy_source(policy)?;
     validate_source(source, language)?;
-    find(root, vault, source, paths, Some(language))
+    find(root, vault, source, scope, Some(language))
 }
 
 pub(crate) fn policy_pattern_entry_is_valid(policy: &PolicyPattern) -> bool {
@@ -488,11 +530,23 @@ all:
 
         assert_eq!(
             batch.get(&0).unwrap(),
-            &find_policy_pattern_entry(temp.path(), &vault, &function_policy, &paths).unwrap()
+            &find_policy_pattern_entry(
+                temp.path(),
+                &vault,
+                &function_policy,
+                PathScope::Globs(&paths),
+            )
+            .unwrap()
         );
         assert_eq!(
             batch.get(&1).unwrap(),
-            &find_policy_pattern_entry(temp.path(), &vault, &struct_policy, &paths).unwrap()
+            &find_policy_pattern_entry(
+                temp.path(),
+                &vault,
+                &struct_policy,
+                PathScope::Globs(&paths),
+            )
+            .unwrap()
         );
     }
 
@@ -551,6 +605,41 @@ all:
         let batch = find_policies_batch(temp.path(), &vault, &requests).unwrap();
 
         assert!(batch.get(&0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn path_scope_all_visits_every_source_file() {
+        let (temp, vault) = policy_fixture();
+
+        let rows = find(
+            temp.path(),
+            &vault,
+            PatternSource::Pattern("fn $NAME() { $$$ }"),
+            PathScope::All,
+            Some("rust"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            rows.iter().map(|row| row.path.as_str()).collect::<Vec<_>>(),
+            vec!["src/left.rs", "src/right.rs"]
+        );
+    }
+
+    #[test]
+    fn path_scope_with_no_globs_visits_nothing() {
+        let (temp, vault) = policy_fixture();
+
+        let rows = find(
+            temp.path(),
+            &vault,
+            PatternSource::Pattern("fn $NAME() { $$$ }"),
+            PathScope::Globs(&[]),
+            Some("rust"),
+        )
+        .unwrap();
+
+        assert!(rows.is_empty());
     }
 
     fn policy(language: &str, pattern: &str) -> PolicyPattern {

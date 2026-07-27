@@ -4,7 +4,7 @@ use clap::{Args as ClapArgs, ValueEnum};
 use serde::Serialize;
 
 use crate::source_index::SourceGrepMode;
-use crate::structural::{self, PatternSource, StructuralMatch};
+use crate::structural::{self, PathScope, PatternSource, StructuralMatch};
 use crate::util::GlobMatcher;
 use crate::vault::Vault;
 use crate::{CrivError, Result};
@@ -128,7 +128,7 @@ pub(crate) fn run(root: &Path, options: SearchOptions) -> Result<()> {
             root,
             &vault,
             PatternSource::Pattern(&pattern),
-            &paths,
+            PathScope::from_paths(&paths),
             options.lang.as_deref(),
         )?),
         Mode::Rule(rule) => search_rule(root, &vault, &rule, &paths)?,
@@ -149,7 +149,8 @@ fn search_pattern_id(
             "registered pattern `{pattern_id}` does not resolve"
         )));
     }
-    structural::find_pattern_id(root, vault, pattern_id, paths).map(structural_rows)
+    structural::find_pattern_id(root, vault, pattern_id, PathScope::from_paths(paths))
+        .map(structural_rows)
 }
 
 fn search_rule(root: &Path, vault: &Vault, adr_id: &str, paths: &[String]) -> Result<Vec<Row>> {
@@ -166,7 +167,13 @@ fn search_rule(root: &Path, vault: &Vault, adr_id: &str, paths: &[String]) -> Re
     let mut rows = Vec::new();
     for pattern in &note.policy_patterns {
         rows.extend(structural_rows(structural::find_policy_pattern_entry(
-            root, vault, pattern, scopes,
+            root,
+            vault,
+            pattern,
+            // `search_rule` already substitutes the decision's governed scopes
+            // when no `--paths` filter is given, so an empty list here means
+            // "nothing in scope" and must keep matching nothing.
+            PathScope::Globs(scopes),
         )?));
     }
     rows.sort_by(|left, right| (&left.path, left.line).cmp(&(&right.path, right.line)));

@@ -267,6 +267,35 @@ fn file_search_honors_path_and_language_filters() {
 }
 
 #[test]
+fn structural_search_without_a_path_filter_scans_every_source_file() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("scripts")).unwrap();
+    fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+    fs::write(root.join("scripts/tool.rs"), "fn tool() {}\n").unwrap();
+    write_criv_config(root, vec!["src", "scripts"], vec![], true);
+
+    // No `--paths` and no `--lang`: the scan must cover the whole source index
+    // rather than compiling an empty glob set that matches nothing.
+    criv(root)
+        .args(["search", "fn $NAME() { $$$ }"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/main.rs"))
+        .stdout(predicate::str::contains("scripts/tool.rs"));
+
+    criv(root)
+        .args(["search", "fn $NAME() { $$$ }", "--paths", "src/**"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/main.rs"))
+        .stdout(predicate::str::contains("scripts/tool.rs").not());
+}
+
+#[test]
 fn file_search_matches_jsx_for_the_jsx_language_filter() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
