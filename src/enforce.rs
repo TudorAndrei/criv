@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::env;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use clap::{Args as ClapArgs, ValueEnum};
@@ -800,8 +800,8 @@ fn run_native_tools(root: &Path, files: &[String]) -> Result<usize> {
         .collect::<Vec<_>>();
 
     let mut failures = 0;
-    failures += run_optional_tool(root, "Oxlint", tool_on_path("oxlint"), &js_ts)?;
-    failures += run_optional_tool(root, "Ruff", tool_on_path("ruff"), &python)?;
+    failures += run_optional_tool(root, "Oxlint", resolve_tool(root, "oxlint"), &js_ts)?;
+    failures += run_optional_tool(root, "Ruff", resolve_tool(root, "ruff"), &python)?;
     Ok(failures)
 }
 
@@ -849,19 +849,36 @@ fn print_tool_output(bytes: &[u8]) {
     }
 }
 
-fn tool_on_path(name: &'static str) -> ToolCommand {
+/// Directories, relative to the vault root, where a JS/TS package may install
+/// its own lint binaries. Probed before falling back to a bare `PATH` lookup so
+/// a repo-pinned version wins over whatever happens to be installed globally.
+const PACKAGE_BIN_DIRS: [&str; 3] = [
+    "node_modules/.bin",
+    ".obsidian/plugins/criv/node_modules/.bin",
+    "extensions/vscode-criv/node_modules/.bin",
+];
+
+fn resolve_tool(root: &Path, name: &'static str) -> ToolCommand {
+    for dir in PACKAGE_BIN_DIRS {
+        let candidate = root.join(dir).join(name);
+        if candidate.is_file() {
+            return ToolCommand::Path(candidate);
+        }
+    }
     ToolCommand::Name(name)
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 enum ToolCommand {
     Name(&'static str),
+    Path(PathBuf),
 }
 
 impl ToolCommand {
     fn program(&self) -> &std::ffi::OsStr {
         match self {
             Self::Name(name) => std::ffi::OsStr::new(name),
+            Self::Path(path) => path.as_os_str(),
         }
     }
 }
@@ -1138,19 +1155,60 @@ mod tests {
     }
 
     #[test]
-    fn native_tool_commands_use_path_names_only() {
+    fn package_local_binaries_are_preferred_over_a_path_lookup() {
         let root = tempfile::TempDir::new().unwrap();
         let oxlint = root
             .path()
             .join(".obsidian/plugins/criv/node_modules/.bin/oxlint");
-        let ruff = root.path().join(".venv/bin/ruff");
         std::fs::create_dir_all(oxlint.parent().unwrap()).unwrap();
-        std::fs::create_dir_all(ruff.parent().unwrap()).unwrap();
         std::fs::write(&oxlint, "").unwrap();
+
+        assert_eq!(
+            resolve_tool(root.path(), "oxlint"),
+            ToolCommand::Path(oxlint)
+        );
+    }
+
+    #[test]
+    fn the_root_package_bin_dir_wins_over_nested_ones() {
+        let root = tempfile::TempDir::new().unwrap();
+        let nested = root
+            .path()
+            .join("extensions/vscode-criv/node_modules/.bin/oxlint");
+        let top = root.path().join("node_modules/.bin/oxlint");
+        for path in [&nested, &top] {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+
+        assert_eq!(resolve_tool(root.path(), "oxlint"), ToolCommand::Path(top));
+    }
+
+    #[test]
+    fn tools_without_a_package_local_binary_fall_back_to_the_path() {
+        let root = tempfile::TempDir::new().unwrap();
+        // A Python venv is not a node package dir, so `ruff` stays a PATH lookup.
+        let ruff = root.path().join(".venv/bin/ruff");
+        std::fs::create_dir_all(ruff.parent().unwrap()).unwrap();
         std::fs::write(&ruff, "").unwrap();
 
-        assert_eq!(tool_on_path("oxlint"), ToolCommand::Name("oxlint"));
-        assert_eq!(tool_on_path("ruff"), ToolCommand::Name("ruff"));
+        assert_eq!(resolve_tool(root.path(), "ruff"), ToolCommand::Name("ruff"));
+        assert_eq!(
+            resolve_tool(root.path(), "oxlint"),
+            ToolCommand::Name("oxlint")
+        );
+    }
+
+    #[test]
+    fn a_package_bin_directory_is_not_mistaken_for_a_binary() {
+        let root = tempfile::TempDir::new().unwrap();
+        // A directory named like the tool must not be executed as one.
+        std::fs::create_dir_all(root.path().join("node_modules/.bin/oxlint")).unwrap();
+
+        assert_eq!(
+            resolve_tool(root.path(), "oxlint"),
+            ToolCommand::Name("oxlint")
+        );
     }
 
     #[test]
