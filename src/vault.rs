@@ -455,8 +455,12 @@ impl SourceIndex for EmptySourceIndex {
 fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
     let contents = read_to_string(path)?;
     let rel_path = strip_prefix(path, root);
-    let (frontmatter, body) = split_frontmatter(&contents);
+    let (frontmatter, body, frontmatter_lines) = split_frontmatter(&contents);
     let doc_rel_path = strip_prefix(path, docs_path);
+    // Positions are file-relative (ADR-0045). The frontmatter offset applies to
+    // the parsed-note body only; the error branch below keeps the whole file as
+    // the body, so it needs no offset at all.
+    let mut line_offset = frontmatter_lines;
     let mut note = match parse_frontmatter(frontmatter, path.to_path_buf(), doc_rel_path, body) {
         Ok(note) => note,
         Err(err) => Note {
@@ -481,43 +485,56 @@ fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
             frontmatter_error: Some(err),
         },
     };
+    if note.frontmatter_error.is_some() {
+        line_offset = 0;
+    }
     note.wiki_links = find_wiki_links_with_lines(&note.body)
         .into_iter()
         .map(|(line, raw)| WikiLink {
             target: raw.split('|').next().unwrap_or(&raw).trim().to_string(),
             raw,
-            line,
+            line: line + line_offset,
         })
         .collect();
     note.headings = parse_markdown_headings(&note.body)
         .into_iter()
-        .map(|(level, text, line)| Heading { level, text, line })
+        .map(|(level, text, line)| Heading {
+            level,
+            text,
+            line: line + line_offset,
+        })
         .collect();
-    note.c4_diagrams = c4::parse_diagrams(&note.body);
+    note.c4_diagrams = c4::parse_diagrams(&note.body, line_offset);
     note.rel_path = rel_path;
     Ok(note)
 }
 
-fn split_frontmatter(contents: &str) -> (&str, String) {
+/// Splits a note into its frontmatter block and its body, plus the number of
+/// lines the frontmatter consumed — both `---` delimiters included. Callers add
+/// that count back to body-relative positions so every line they report is
+/// file-relative (see ADR-0045).
+fn split_frontmatter(contents: &str) -> (&str, String, usize) {
     let Some((opening, frontmatter_start)) = delimiter_line(contents, 0) else {
-        return ("", contents.to_string());
+        return ("", contents.to_string(), 0);
     };
     if opening != "---" {
-        return ("", contents.to_string());
+        return ("", contents.to_string(), 0);
     }
 
     let mut cursor = frontmatter_start;
     while let Some((line, next)) = delimiter_line(contents, cursor) {
         if line == "---" {
+            let consumed = contents[..next].matches('\n').count();
             return (
                 &contents[frontmatter_start..cursor],
                 contents[next..].to_string(),
+                consumed,
             );
         }
         cursor = next;
     }
 
-    ("", contents.to_string())
+    ("", contents.to_string(), 0)
 }
 
 /// Returns the line without its LF/CRLF terminator plus the next byte offset.
@@ -758,9 +775,10 @@ mod tests {
             "---\r\nid: doc\r\n---\r\n# Body\r\n",
             "---\r\nid: doc\n---\r\n# Body\n",
         ] {
-            let (frontmatter, body) = split_frontmatter(contents);
+            let (frontmatter, body, frontmatter_lines) = split_frontmatter(contents);
             assert!(frontmatter.contains("id: doc"));
             assert!(body.starts_with("# Body"));
+            assert_eq!(frontmatter_lines, 3, "both delimiters and the field line");
         }
     }
 
@@ -771,13 +789,16 @@ mod tests {
             "---\nid: doc\n# Body\n",
             "\u{feff}---\nid: doc\n---\n# Body\n",
         ] {
-            assert_eq!(split_frontmatter(contents), ("", contents.to_string()));
+            assert_eq!(split_frontmatter(contents), ("", contents.to_string(), 0));
         }
     }
 
     #[test]
     fn supports_empty_frontmatter() {
-        assert_eq!(split_frontmatter("---\n---\nbody\n"), ("", "body\n".into()));
+        assert_eq!(
+            split_frontmatter("---\n---\nbody\n"),
+            ("", "body\n".into(), 2)
+        );
     }
 
     #[test]
@@ -1000,6 +1021,84 @@ roots = ["src"]
         assert!(vault.source_graph().files.contains_key("src/lib.rs"));
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Returns the 1-based line of the first line whose content equals `needle`.
+    fn real_line(contents: &str, needle: &str) -> usize {
+        contents
+            .lines()
+            .position(|line| line.trim_end() == needle)
+            .expect("needle must appear in the fixture")
+            + 1
+    }
+
+    fn parsed_note(prefix: &str, contents: &str) -> Note {
+        let root = unique_temp_dir(prefix);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("note.md");
+        std::fs::write(&path, contents).unwrap();
+        let note = parse_note(&root, &root, &path).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        note
+    }
+
+    #[test]
+    fn note_positions_are_file_relative_with_frontmatter() {
+        let contents =
+            "---\nid: DOC-1\nkind: doc\ntitle: Doc\n---\n\n# Heading\n\nSee [[other-note]].\n";
+        let note = parsed_note("criv-note-lines-frontmatter", contents);
+
+        assert_eq!(note.headings[0].line, real_line(contents, "# Heading"));
+        assert_eq!(
+            note.wiki_links[0].line,
+            real_line(contents, "See [[other-note]].")
+        );
+    }
+
+    #[test]
+    fn note_positions_are_file_relative_without_frontmatter() {
+        let contents = "# Heading\n\nSee [[other-note]].\n";
+        let note = parsed_note("criv-note-lines-bare", contents);
+
+        assert_eq!(note.headings[0].line, real_line(contents, "# Heading"));
+        assert_eq!(
+            note.wiki_links[0].line,
+            real_line(contents, "See [[other-note]].")
+        );
+    }
+
+    #[test]
+    fn note_positions_are_file_relative_when_frontmatter_fails_to_parse() {
+        // The error branch keeps the whole file as the body, so no offset
+        // applies — adding one would push every position past its real line.
+        let contents = "---\nid: [unclosed\n---\n\n# Heading\n\nSee [[other-note]].\n";
+        let note = parsed_note("criv-note-lines-bad-frontmatter", contents);
+
+        assert!(note.frontmatter_error.is_some());
+        // The unparsed frontmatter stays in the body, so its closing `---` also
+        // reads as a setext heading here; pick the real ATX heading by text.
+        let heading = note
+            .headings
+            .iter()
+            .find(|heading| heading.text == "Heading")
+            .expect("the ATX heading must be parsed");
+        assert_eq!(heading.line, real_line(contents, "# Heading"));
+        assert_eq!(
+            note.wiki_links[0].line,
+            real_line(contents, "See [[other-note]].")
+        );
+    }
+
+    #[test]
+    fn c4_diagram_positions_are_file_relative() {
+        let contents = "---\nid: DOC-1\nkind: doc\ntitle: Doc\n---\n\n```mermaid\nC4Context\nPerson(user, \"User\")\n```\n";
+        let note = parsed_note("criv-note-lines-c4", contents);
+
+        assert_eq!(note.c4_diagrams.len(), 1);
+        assert_eq!(
+            note.c4_diagrams[0].elements[0].line,
+            real_line(contents, "Person(user, \"User\")")
+        );
     }
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {

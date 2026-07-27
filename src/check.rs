@@ -1530,6 +1530,44 @@ governs:
     }
 
     #[test]
+    fn broken_link_diagnostics_report_the_real_file_line() {
+        let root = unique_temp_dir("criv-broken-link-line");
+        fs::create_dir_all(root.join("docs")).unwrap();
+        let note = r#"---
+id: DOC-LINE
+kind: doc
+title: Line Check
+---
+
+# Line Check
+
+See [[does-not-exist]].
+"#;
+        fs::write(root.join("criv.toml"), "[source]\nindex = false\n").unwrap();
+        fs::write(root.join("docs/line-check.md"), note).unwrap();
+        let vault = Vault::load(&root).unwrap();
+
+        let diagnostics = validate(&vault);
+
+        let expected = note
+            .lines()
+            .position(|line| line.contains("[[does-not-exist]]"))
+            .unwrap()
+            + 1;
+        let broken = diagnostics
+            .iter()
+            .find(|diag| diag.code == "broken-link")
+            .expect("the dangling wiki link must be reported");
+        assert_eq!(
+            broken.line,
+            Some(expected),
+            "the diagnostic must point at the real file line, not a body-relative one"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn valid_c4_source_annotation_passes() {
         let vault = c4_vault(
             r#"

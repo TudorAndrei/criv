@@ -117,11 +117,15 @@ impl C4Diagram {
     }
 }
 
-pub(crate) fn parse_diagrams(markdown: &str) -> Vec<C4Diagram> {
+/// `line_offset` is the number of lines that precede `markdown` in the file it
+/// came from, so the reported diagram lines stay file-relative.
+pub(crate) fn parse_diagrams(markdown: &str, line_offset: usize) -> Vec<C4Diagram> {
     markdown_fenced_blocks(markdown)
         .into_iter()
         .filter(|(_, info, _)| info.as_deref() == Some("mermaid"))
-        .filter_map(|(start_line, _, contents)| parse_mermaid_diagram(start_line, &contents))
+        .filter_map(|(start_line, _, contents)| {
+            parse_mermaid_diagram(start_line + line_offset, &contents)
+        })
         .collect()
 }
 
@@ -396,6 +400,7 @@ C4Container
     }
 ```
 "#,
+            0,
         );
 
         assert_eq!(diagrams.len(), 1);
@@ -423,6 +428,7 @@ Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
 %% criv:source src/main.rs
 ```
 "#,
+            0,
         )
         .remove(0);
 
@@ -440,6 +446,7 @@ Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
 %% criv:source src/lib.rs
 ```
 "#,
+            0,
         )
         .remove(0);
 
@@ -457,6 +464,7 @@ Person_Ext(user, "Repository maintainer", "Uses the CLI")
 System_Ext(github, "GitHub", "Renders Mermaid diagrams")
 ```
 "#,
+            0,
         )
         .remove(0);
 
@@ -486,6 +494,7 @@ System_Boundary(system, "criv") {
 }
 ```
 "#,
+            0,
         )
         .remove(0);
 
@@ -506,6 +515,7 @@ flowchart TD
     a --> b
 ```
 "#,
+            0,
         );
 
         assert!(diagrams.is_empty());
@@ -522,6 +532,7 @@ UpdateElementStyle(cli, $bgColor="red")
 Contianer(oops, "typo")
 ```
 "#,
+            0,
         )
         .remove(0);
 
@@ -539,6 +550,7 @@ Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
 Container(cli, "Other CLI", "Rust", "Duplicates alias")
 ```
 "#,
+            0,
         )
         .remove(0);
 
@@ -555,6 +567,7 @@ Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
 Rel(cli, plugin, "writes state for")
 ```
 "#,
+            0,
         )
         .remove(0);
 
