@@ -1,0 +1,52 @@
+# criv
+
+> criv is an open-source Rust CLI that keeps repository documentation connected
+> to the code it describes. Docs point at real files, symbols, and decisions;
+> criv validates that those references still resolve before a change lands. It
+> runs entirely locally, with no server and no network access. MIT licensed.
+
+## Install
+
+```sh
+cargo install --git https://github.com/TudorAndrei/criv criv
+```
+
+Or pin a released binary with mise, in the target repository's `mise.toml`:
+
+```toml
+[tools."github:TudorAndrei/criv"]
+version = "0.7.0"
+```
+
+## Add criv to a codebase
+
+```sh
+criv init                    # create criv.toml, docs/, docs/adr/, Git hooks
+echo '.criv/' >> .gitignore  # generated state stays local
+criv watch --once            # build the graph
+criv check                   # validate it
+```
+
+`criv init` writes only what it needs and leaves existing Markdown alone.
+Existing Git hooks and a non-criv `core.hooksPath` are preserved unless
+`--force-hooks` is passed. Use `--no-hooks`, `--no-skills`, `--no-obsidian`, or
+`--no-vscode` to skip generated pieces.
+
+## Commands
+
+- `criv check` — validate Markdown formatting, note schema, ADR placement,
+  wiki-links, source targets, Mermaid C4 diagram references, policy pattern
+  references, and ADR supersession rules. `--fix` applies formatting fixes.
+- `criv watch --once` — write `.criv/state.json` and content-addressed snapshots.
+- `criv query ...` — ask the graph about coverage, citations, ADR governance,
+  callers, callees, C4 elements, and diffs.
+- `criv search ...` — search files, text, notes, and structural policy patterns.
+- `criv enforce --stage commit|push|ci` — run the stage-aware gate used by hooks
+  and CI.
+
+## Links
+
+- [Repository](https://github.com/TudorAndrei/criv): source, README, issues
+- [Query reference](https://github.com/TudorAndrei/criv/blob/main/docs/query-reference.md): every `criv query` subcommand
+- [Releases](https://github.com/TudorAndrei/criv/releases): prebuilt binaries
+- [Tooling policy](https://github.com/TudorAndrei/criv/blob/main/docs/tooling.md): hook behavior
