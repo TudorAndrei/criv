@@ -5,22 +5,28 @@
 > criv validates that those references still resolve before a change lands. It
 > runs entirely locally, with no server and no network access. MIT licensed.
 
-## Install
+## Install with mise
 
-```sh
-cargo install --git https://github.com/TudorAndrei/criv criv
-```
-
-Or pin a released binary with mise, in the target repository's `mise.toml`:
+Pin the released binary in the target repository's `mise.toml`:
 
 ```toml
 [tools."github:TudorAndrei/criv"]
 version = "0.7.0"
+
+[tools."github:TudorAndrei/criv".platforms]
+macos-arm64 = { asset_pattern = "criv-aarch64-apple-darwin.tar.gz" }
+linux-arm64 = { asset_pattern = "criv-aarch64-unknown-linux-gnu.tar.gz" }
+linux-x64   = { asset_pattern = "criv-x86_64-unknown-linux-gnu.tar.gz" }
+windows-x64 = { asset_pattern = "criv-x86_64-pc-windows-msvc.zip" }
 ```
+
+Then run `mise install`. Building from source with
+`cargo install --git https://github.com/TudorAndrei/criv criv` also works.
 
 ## Add criv to a codebase
 
 ```sh
+mise install
 criv init                    # create criv.toml, docs/, docs/adr/, Git hooks
 echo '.criv/' >> .gitignore  # generated state stays local
 criv watch --once            # build the graph

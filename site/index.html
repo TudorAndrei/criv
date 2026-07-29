@@ -3,37 +3,24 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-
-    <title>criv — a CLI that keeps code documentation in sync with the code</title>
+    <title>criv — keep code documentation in sync with the code</title>
     <meta
       name="description"
-      content="criv is an open-source Rust CLI that turns a repository's docs/ folder into a validated graph of notes, source references, and ADRs. Install it and run criv init to add it to any codebase."
+      content="criv is an open-source Rust CLI that validates that a repository's docs still point at real files, symbols, and decisions. Install it with mise, then run criv init."
     />
     <link rel="canonical" href="https://tudorandrei.github.io/criv/" />
-
-    <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://tudorandrei.github.io/criv/" />
-    <meta property="og:title" content="criv — a CLI that keeps code documentation in sync with the code" />
-    <meta
-      property="og:description"
-      content="Open-source Rust CLI. Validates that your docs still point at real files, symbols, and decisions. Add it to any repository with criv init."
-    />
-    <meta name="twitter:card" content="summary" />
-
     <style>
       body {
-        max-width: 72ch;
+        max-width: 68ch;
         margin: 0 auto;
-        padding: 2.5rem 1.25rem 5rem;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        font-size: 15px;
-        line-height: 1.6;
+        padding: 2.5rem 1.25rem 4rem;
+        font: 15px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
         color: #1c1c1c;
         background: #fff;
       }
-      h1, h2, h3 { font: inherit; font-weight: 700; margin: 2.5rem 0 0.75rem; }
+      h1, h2 { font: inherit; font-weight: 700; margin: 2rem 0 0.75rem; }
       h1 { margin-top: 0; }
-      p, ul { margin: 0 0 1rem; }
+      p { margin: 0 0 1rem; }
       pre {
         margin: 0 0 1rem;
         padding: 0.5rem 0 0.5rem 2ch;
@@ -42,70 +29,25 @@
         font: inherit;
       }
       a { color: inherit; }
-      footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #d8d8d8; color: #6a6a6a; }
       @media (prefers-color-scheme: dark) {
         body { color: #d8d8d8; background: #101010; }
-        pre, footer { border-color: #2e2e2e; }
-        footer { color: #8a8a8a; }
+        pre { border-color: #2e2e2e; }
       }
     </style>
-
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
-        "@graph": [
-          {
-            "@type": "SoftwareApplication",
-            "name": "criv",
-            "applicationCategory": "DeveloperApplication",
-            "operatingSystem": "macOS, Linux, Windows",
-            "description": "A local command-line tool that turns a repository's docs/ folder into a validated knowledge graph of notes, source references, architectural decision records, and policy patterns.",
-            "url": "https://tudorandrei.github.io/criv/",
-            "downloadUrl": "https://github.com/TudorAndrei/criv/releases",
-            "codeRepository": "https://github.com/TudorAndrei/criv",
-            "programmingLanguage": "Rust",
-            "softwareVersion": "0.7.0",
-            "license": "https://github.com/TudorAndrei/criv/blob/main/LICENSE",
-            "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
-            "author": { "@type": "Person", "name": "Tudor Andrei", "url": "https://github.com/TudorAndrei" }
-          },
-          {
-            "@type": "HowTo",
-            "name": "How to add criv to a codebase",
-            "description": "Install the criv CLI and initialize it in an existing repository.",
-            "step": [
-              { "@type": "HowToStep", "name": "Install the CLI", "text": "Run cargo install --git https://github.com/TudorAndrei/criv criv, or pin a released binary with mise." },
-              { "@type": "HowToStep", "name": "Initialize the repository", "text": "Run criv init in the repository root to create criv.toml, docs/, docs/adr/, and the Git hooks." },
-              { "@type": "HowToStep", "name": "Ignore generated state", "text": "Add .criv/ to .gitignore, since it is local rebuildable state." },
-              { "@type": "HowToStep", "name": "Build and validate the graph", "text": "Run criv watch --once to write the state, then criv check to validate the vault." }
-            ]
-          },
-          {
-            "@type": "FAQPage",
-            "mainEntity": [
-              {
-                "@type": "Question",
-                "name": "What is criv?",
-                "acceptedAnswer": { "@type": "Answer", "text": "criv is an open-source Rust CLI that keeps repository documentation connected to the code it describes. Docs point at real files, symbols, and patterns, and criv validates that those references still resolve before a change lands." }
-              },
-              {
-                "@type": "Question",
-                "name": "How do I install criv?",
-                "acceptedAnswer": { "@type": "Answer", "text": "Run cargo install --git https://github.com/TudorAndrei/criv criv, or pin a released binary in mise.toml with the github:TudorAndrei/criv backend." }
-              },
-              {
-                "@type": "Question",
-                "name": "Does criv work with an existing docs folder?",
-                "acceptedAnswer": { "@type": "Answer", "text": "Yes. criv init only adds the files it needs and leaves existing Markdown in place. Existing Git hooks and a non-criv core.hooksPath are preserved unless you pass --force-hooks." }
-              },
-              {
-                "@type": "Question",
-                "name": "Does criv send anything over the network?",
-                "acceptedAnswer": { "@type": "Answer", "text": "No. criv runs entirely locally. Generated state lives in .criv/ inside the repository and is meant to stay out of version control." }
-              }
-            ]
-          }
-        ]
+        "@type": "SoftwareApplication",
+        "name": "criv",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "macOS, Linux, Windows",
+        "description": "A local Rust CLI that turns a repository's docs/ folder into a validated graph of notes, source references, and architectural decision records.",
+        "url": "https://tudorandrei.github.io/criv/",
+        "codeRepository": "https://github.com/TudorAndrei/criv",
+        "programmingLanguage": "Rust",
+        "softwareVersion": "0.7.0",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "author": { "@type": "Person", "name": "Tudor Andrei", "url": "https://github.com/TudorAndrei" }
       }
     </script>
   </head>
@@ -117,80 +59,33 @@
       <p>
         criv is an open-source Rust CLI that keeps repository documentation
         connected to the code it describes. Docs point at real files, symbols,
-        and decisions; criv checks that those references still resolve before a
-        change lands. It runs locally, with no server and no network access.
+        and decisions; <code>criv check</code> fails when those references stop
+        resolving. It runs locally, with no server and no network access.
       </p>
 
-      <h2>Install criv</h2>
+      <h2>Install with mise</h2>
 
-      <p>With a Rust toolchain:</p>
-      <pre><code>cargo install --git https://github.com/TudorAndrei/criv criv</code></pre>
-
-      <p>
-        Or pin a released binary with <a href="https://mise.jdx.dev">mise</a>,
-        so the whole project runs one version. In <code>mise.toml</code>:
-      </p>
+      <p>Add to the repository's <code>mise.toml</code>:</p>
       <pre><code>[tools."github:TudorAndrei/criv"]
-version = "0.7.0"</code></pre>
-      <pre><code>mise install</code></pre>
+version = "0.7.0"
 
-      <h2>Add criv to a new codebase</h2>
+[tools."github:TudorAndrei/criv".platforms]
+macos-arm64 = { asset_pattern = "criv-aarch64-apple-darwin.tar.gz" }
+linux-arm64 = { asset_pattern = "criv-aarch64-unknown-linux-gnu.tar.gz" }
+linux-x64   = { asset_pattern = "criv-x86_64-unknown-linux-gnu.tar.gz" }
+windows-x64 = { asset_pattern = "criv-x86_64-pc-windows-msvc.zip" }</code></pre>
 
-      <p>Four commands, from the root of the repository you want to document:</p>
-      <pre><code>criv init                    # create criv.toml, docs/, docs/adr/, Git hooks
+      <p>Then, from the repository root:</p>
+      <pre><code>mise install
+criv init                    # create criv.toml, docs/, docs/adr/, Git hooks
 echo '.criv/' &gt;&gt; .gitignore   # generated state stays local
-criv watch --once            # build the graph
-criv check                   # validate it</code></pre>
+criv check                   # validate</code></pre>
 
       <p>
-        <code>criv init</code> writes only what it needs and leaves existing
-        Markdown alone. It also installs <code>pre-commit</code> and
-        <code>pre-push</code> hooks; existing hooks are preserved unless you
-        pass <code>--force-hooks</code>. Skip parts with
-        <code>--no-hooks</code>, <code>--no-skills</code>,
-        <code>--no-obsidian</code>, or <code>--no-vscode</code>.
+        <a href="https://github.com/TudorAndrei/criv">GitHub</a> ·
+        <a href="/criv/llms.txt">llms.txt</a> · MIT ·
+        <time datetime="2026-07-29">29 July 2026</time>
       </p>
-
-      <h2>Everyday commands</h2>
-      <pre><code>criv check --fix                   # apply Markdown fixes
-criv query coverage                # what is documented, what is not
-criv query governing src/main.rs   # which ADRs govern this file
-criv search --grep "watch --once"  # search code and notes
-criv enforce --stage ci            # same gate the hooks run</code></pre>
-
-      <h2>Questions</h2>
-
-      <h3>Does criv replace my linter or my docs site?</h3>
-      <p>
-        No. criv validates the relationship between docs and code. Linters,
-        source control, and your editor keep doing their jobs.
-      </p>
-
-      <h3>Does it send anything over the network?</h3>
-      <p>
-        No. Everything runs locally. Generated state lives in
-        <code>.criv/</code> and is meant to stay out of version control.
-      </p>
-
-      <h3>What does <code>criv check</code> actually validate?</h3>
-      <p>
-        Markdown formatting, note schema, ADR placement, wiki-links, source
-        targets, Mermaid C4 diagram references, policy pattern references, and
-        ADR supersession rules.
-      </p>
-
-      <footer>
-        <p>
-          <a href="https://github.com/TudorAndrei/criv">GitHub</a> ·
-          <a href="https://github.com/TudorAndrei/criv/blob/main/docs/query-reference.md">Query reference</a> ·
-          <a href="https://github.com/TudorAndrei/criv/releases">Releases</a>
-        </p>
-        <p>
-          MIT licensed. Built by
-          <a href="https://github.com/TudorAndrei">Tudor Andrei</a>. Version
-          0.7.0, last updated <time datetime="2026-07-29">29 July 2026</time>.
-        </p>
-      </footer>
     </main>
   </body>
 </html>
