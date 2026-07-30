@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::env;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
 
 use clap::{Args as ClapArgs, ValueEnum};
@@ -71,9 +71,6 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
             .map(|changes| changes.entries.as_slice()),
         |entry| is_allowed_adr_link_migration(root, changed_entries.as_ref(), entry),
     );
-    let tool_files = enforcement_files(&vault, changed_files.as_ref());
-    let tool_errors = run_native_tools(root, &tool_files)?;
-
     match options.stage {
         Stage::Commit => {
             println!(
@@ -134,13 +131,6 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
     if errors > 0 {
         return Err(CrivError::new("enforcement failed"));
     }
-    if tool_errors > 0 {
-        return Err(CrivError::new(format!(
-            "{} native enforcement tool(s) failed",
-            tool_errors
-        )));
-    }
-
     println!("enforcement passed");
     Ok(())
 }
@@ -778,118 +768,6 @@ fn is_adr_file(docs_dir: &str, adr_dir: &str, path: &str) -> bool {
             .is_some_and(|extension| extension == "md")
 }
 
-fn enforcement_files(vault: &Vault, changed_files: Option<&Vec<String>>) -> Vec<String> {
-    vault
-        .source_files()
-        .iter()
-        .filter(|path| changed_files.is_none_or(|files| files.contains(path)))
-        .cloned()
-        .collect()
-}
-
-fn run_native_tools(root: &Path, files: &[String]) -> Result<usize> {
-    let js_ts = files
-        .iter()
-        .filter(|path| matches_extension(path, &["js", "jsx", "ts", "tsx", "mjs", "cjs"]))
-        .cloned()
-        .collect::<Vec<_>>();
-    let python = files
-        .iter()
-        .filter(|path| matches_extension(path, &["py"]))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    let mut failures = 0;
-    failures += run_optional_tool(root, "Oxlint", resolve_tool(root, "oxlint"), &js_ts)?;
-    failures += run_optional_tool(root, "Ruff", resolve_tool(root, "ruff"), &python)?;
-    Ok(failures)
-}
-
-fn run_optional_tool(
-    root: &Path,
-    label: &str,
-    command: ToolCommand,
-    files: &[String],
-) -> Result<usize> {
-    if files.is_empty() {
-        return Ok(0);
-    }
-
-    let mut process = Command::new(command.program());
-    process.current_dir(root);
-    if label == "Ruff" {
-        process.arg("check");
-    }
-    process.arg("--");
-    process.args(files);
-
-    match process.output() {
-        Ok(output) if output.status.success() => {
-            println!("{label}: checked {} file(s)", files.len());
-            Ok(0)
-        }
-        Ok(output) => {
-            println!("{label}: failed");
-            print_tool_output(&output.stdout);
-            print_tool_output(&output.stderr);
-            Ok(1)
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            println!("{label}: skipped {} file(s); tool not found", files.len());
-            Ok(0)
-        }
-        Err(err) => Err(CrivError::new(format!("failed to run {label}: {err}"))),
-    }
-}
-
-fn print_tool_output(bytes: &[u8]) {
-    let output = String::from_utf8_lossy(bytes);
-    for line in output.lines().filter(|line| !line.trim().is_empty()) {
-        println!("{line}");
-    }
-}
-
-/// Directories, relative to the vault root, where a JS/TS package may install
-/// its own lint binaries. Probed before falling back to a bare `PATH` lookup so
-/// a repo-pinned version wins over whatever happens to be installed globally.
-const PACKAGE_BIN_DIRS: [&str; 3] = [
-    "node_modules/.bin",
-    ".obsidian/plugins/criv/node_modules/.bin",
-    "extensions/vscode-criv/node_modules/.bin",
-];
-
-fn resolve_tool(root: &Path, name: &'static str) -> ToolCommand {
-    for dir in PACKAGE_BIN_DIRS {
-        let candidate = root.join(dir).join(name);
-        if candidate.is_file() {
-            return ToolCommand::Path(candidate);
-        }
-    }
-    ToolCommand::Name(name)
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-enum ToolCommand {
-    Name(&'static str),
-    Path(PathBuf),
-}
-
-impl ToolCommand {
-    fn program(&self) -> &std::ffi::OsStr {
-        match self {
-            Self::Name(name) => std::ffi::OsStr::new(name),
-            Self::Path(path) => path.as_os_str(),
-        }
-    }
-}
-
-fn matches_extension(path: &str, extensions: &[&str]) -> bool {
-    Path::new(path)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extensions.contains(&extension))
-}
-
 fn import_matches(pattern: &str, matcher: Option<&crate::util::GlobMatcher>, module: &str) -> bool {
     if let Some(matcher) = matcher {
         let normalized = module.replace("::", "/");
@@ -1152,63 +1030,6 @@ mod tests {
         let violations = adr_immutability_violations("docs", "adr", Some(&entries), |_| true);
 
         assert!(violations.is_empty());
-    }
-
-    #[test]
-    fn package_local_binaries_are_preferred_over_a_path_lookup() {
-        let root = tempfile::TempDir::new().unwrap();
-        let oxlint = root
-            .path()
-            .join(".obsidian/plugins/criv/node_modules/.bin/oxlint");
-        std::fs::create_dir_all(oxlint.parent().unwrap()).unwrap();
-        std::fs::write(&oxlint, "").unwrap();
-
-        assert_eq!(
-            resolve_tool(root.path(), "oxlint"),
-            ToolCommand::Path(oxlint)
-        );
-    }
-
-    #[test]
-    fn the_root_package_bin_dir_wins_over_nested_ones() {
-        let root = tempfile::TempDir::new().unwrap();
-        let nested = root
-            .path()
-            .join("extensions/vscode-criv/node_modules/.bin/oxlint");
-        let top = root.path().join("node_modules/.bin/oxlint");
-        for path in [&nested, &top] {
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, "").unwrap();
-        }
-
-        assert_eq!(resolve_tool(root.path(), "oxlint"), ToolCommand::Path(top));
-    }
-
-    #[test]
-    fn tools_without_a_package_local_binary_fall_back_to_the_path() {
-        let root = tempfile::TempDir::new().unwrap();
-        // A Python venv is not a node package dir, so `ruff` stays a PATH lookup.
-        let ruff = root.path().join(".venv/bin/ruff");
-        std::fs::create_dir_all(ruff.parent().unwrap()).unwrap();
-        std::fs::write(&ruff, "").unwrap();
-
-        assert_eq!(resolve_tool(root.path(), "ruff"), ToolCommand::Name("ruff"));
-        assert_eq!(
-            resolve_tool(root.path(), "oxlint"),
-            ToolCommand::Name("oxlint")
-        );
-    }
-
-    #[test]
-    fn a_package_bin_directory_is_not_mistaken_for_a_binary() {
-        let root = tempfile::TempDir::new().unwrap();
-        // A directory named like the tool must not be executed as one.
-        std::fs::create_dir_all(root.path().join("node_modules/.bin/oxlint")).unwrap();
-
-        assert_eq!(
-            resolve_tool(root.path(), "oxlint"),
-            ToolCommand::Name("oxlint")
-        );
     }
 
     #[test]

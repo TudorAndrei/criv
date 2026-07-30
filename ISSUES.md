@@ -7,6 +7,11 @@ This file records vetted findings from a read-only improvement audit. It is an
 issue index, not an implementation plan. Convert a finding into a focused plan
 before editing production code.
 
+Issues 18 through 21 were added on 2026-07-30 at commit `f135bb3`. Issues 18 and
+19 came from a targeted investigation of the vendored agent skills; issues 20 and
+21 were reported directly by the maintainer and verified. All four are outside
+the 2026-07-25 audit scope recorded below.
+
 The previous audit (2026-06-21, commit `56e1bce`) is in git history. All of its
 issues are resolved: issues 1, 2, and 6 were fixed directly, issue 3 became
 plan 003, issue 5 became plan 012, and issue 4 was settled as a documented
@@ -33,12 +38,15 @@ other findings were confirmed by reading the cited lines.
   is what makes the fix verifiable.
 - Issue 1 should land before issue 7. Both touch glob matching at the same call
   sites; fixing the empty-set semantics first avoids redoing the matcher hoist.
-- Issue 6 should land before issue 9. Once oxlint actually resolves it may
-  surface real findings; landing an audit gate at the same time would deliver
-  two unrelated failures together.
 - Issue 12 should land before the CI-annotation direction item, because a clap
   subcommand set regenerates `docs/query-reference.md` from `--usage`.
-- Issues 2, 4, 5, 8, 10, and 11 are independent of everything else.
+- Issue 18 should land before issues 8 and 19. Until `criv init` can refresh an
+  existing skill file, re-syncing this repository's copy fixes one checkout and
+  rewriting the skill content reaches only new vaults.
+- Issue 21 should land before issue 18. A refresh mechanism that compares an
+  installed file against the shipped template needs the generated form to be
+  stable under the formatter the repository already runs.
+- Issues 2, 4, 5, 10, and 11 are independent of everything else.
 
 ## Issue 1: Match All Source Files When No Path Filter Is Given
 
@@ -308,7 +316,12 @@ Category: Tech Debt / Enforcement
 Effort: S
 Fix risk: LOW
 Confidence: HIGH
-Status: Fixed (plan 018)
+Status: Retired (ADR-0046)
+
+Fixed in plan 018, then retired: ADR-0046 removed native linting from
+`criv enforce` entirely, so the resolution path this issue describes no longer
+exists. Kept for the record because the ADR-0024 drift it documents is part of
+why ADR-0046 was written.
 
 `criv enforce` looks up JavaScript and TypeScript lint tools by bare name only, so
 a package-local oxlint is never found and enforcement silently reports success.
@@ -905,6 +918,250 @@ Verification:
 - Run `cargo test --workspace`.
 - Confirm the new `check --fix` tests fail against the current code, per issue 3.
 
+## Issue 18: Give Installed Agent Skills An Upgrade Path
+
+Category: DX / Correctness
+Effort: S-M
+Fix risk: LOW-MED
+Confidence: HIGH
+Status: Open
+
+`criv init` writes the agent runtime skills create-only, so a vault that already
+has them can never receive a corrected or extended skill from a newer criv.
+
+Evidence:
+
+- `src/init.rs:71-73` writes both skill sets through `write_templates`.
+- `src/init.rs:371-383` — `write_template` calls `write_new_in`, which returns
+  `false` and skips the write whenever the destination already exists.
+- The twelve destinations are fixed paths embedded at build time:
+  `src/init/templates.rs:426-434` (`include_str!`, per ADR-0011) and
+  `src/init/templates.rs:436-488`.
+- `criv init --no-skills` opts out of writing them, but there is no opt-in
+  refresh. Hooks already have the equivalent escape hatch, `--force-hooks`
+  (`README.md:127-137`).
+- `docs/adr/0010-criv-init-installs-agent-runtime-skills.md:29-31` states the
+  create-only behavior as a deliberate consequence, and its closing paragraph
+  says future skill changes "should be made in the initializer template and then
+  generated through `criv init`" — which the create-only rule prevents.
+
+Impact:
+
+Every skill fix ships to new vaults only. A vault initialized on an older criv
+keeps instructing its agents with the older text indefinitely, and nothing warns
+about it. Issue 8 is the local instance of this failure; downstream vaults have
+the same drift with no `diff` to notice it. Coupled with issue 19, the concrete
+effect is agents in existing vaults being told to write link forms and policy
+layouts that the current `criv check` and `criv enforce` reject.
+
+Fix sketch:
+
+Add `--force-skills`, mirroring `--force-hooks`, that rewrites a skill
+destination whose contents differ from the shipped template and reports which
+files changed. The stronger version records the shipped content hash alongside
+the vault state so `init` can distinguish an unmodified older version, which is
+safe to update silently, from a user-edited one, which needs the flag. ADR-0010
+is accepted and therefore immutable under ADR-0012, so relaxing "only creates
+missing files" needs a superseding or amending ADR rather than an edit.
+
+Verification:
+
+- Add a `src/init/tests.rs` case writing an outdated `SKILL.md`, running `init`,
+  and asserting it is untouched; then running with the new flag and asserting it
+  matches the embedded template.
+- Add a case asserting a user-edited skill survives a run without the flag.
+- Run `cargo test --workspace`.
+- Run `criv init` twice in a scratch repository, the second time with the flag.
+
+## Issue 19: Refresh The Embedded Skill Templates Against The 0.7.0 CLI
+
+Category: Docs / DX
+Effort: S-M
+Fix risk: LOW
+Confidence: HIGH
+Status: Open
+
+The six embedded skills total 213 lines and document roughly a third of the
+command surface they exist to teach, including omitting the one query an agent
+needs to follow the skill it is reading.
+
+Evidence:
+
+- `assets/skills/writing-decisions/SKILL.md:10-16` lists `id` as a required ADR
+  field. `grep -rn "next-adr-id" assets/skills/` returns nothing, so the skill
+  never mentions `criv query next-adr-id` (`README.md:193`), the command that
+  answers it.
+- `assets/skills/c4-authoring/SKILL.md` is the longest skill at 89 lines and
+  names only `criv check`, at line 14. It never mentions `criv query
+  c4-elements`, `c4-relationships`, or `c4-code` (`README.md:196-198`).
+- No skill mentions `criv check --fix`, `--filter`, or `--format github`
+  (`README.md:144-148`), nor `criv query governs`, `governing`, or `diff`
+  (`README.md:194-199`).
+- No skill mentions `criv search` `--grep-mode plain|regex|fuzzy`, `--semantic`,
+  `--paths`, or `--lang`; `assets/skills/checking-drift/SKILL.md:13` covers only
+  `--rule`.
+- No skill points at `docs/query-reference.md`, which `README.md:202-203`
+  presents as the complete query reference.
+
+Impact:
+
+The skills are the tool's agent-facing interface, and `AGENTS.md:7-9` scopes them
+to agents using criv in another repository, where the README is not what gets
+loaded into context. An agent following `writing-decisions` has to guess or scan
+`docs/adr/` by hand for the next free ADR number, which is exactly the kind of
+manual step the query exists to remove. The C4 gap is worse in proportion: the
+skill teaches authoring a diagram type the CLI can generate and cross-check, and
+never says so.
+
+Fix sketch:
+
+Pass over all six `assets/skills/*/SKILL.md` against `criv --help` output per
+subcommand and `docs/query-reference.md`, adding the missing commands where the
+skill already covers the surrounding task rather than restating the reference.
+Add `criv query next-adr-id` to `writing-decisions`, the three `c4-*` queries to
+`c4-authoring`, `check --fix` and `--filter` to `checking-drift`, and a
+`docs/query-reference.md` pointer to the `criv` skill. Keep each skill short;
+the current brevity is a feature. Consider generating a coverage assertion from
+the Usage spec once issue 12 makes query names a real subcommand set, so the
+next surface addition surfaces the gap automatically.
+
+Verification:
+
+- Run `cargo run --quiet -- check` and `mise run check`.
+- `diff -rq assets/skills .agents/skills` and `diff -rq assets/skills
+  .claude/skills` report no differences, per issues 8 and 18.
+- Exercise each newly documented command once in this vault and confirm the
+  skill text matches actual output.
+
+## Issue 20: Stop Running Ruff From `criv enforce`
+
+Category: Scope / Tech Debt
+Effort: S
+Fix risk: LOW
+Confidence: HIGH
+Status: Fixed (ADR-0046)
+
+Resolved more broadly than reported. ADR-0046 supersedes ADR-0024 and removes all
+native linting from `criv enforce` — oxlint as well as ruff — on the grounds that
+linting a project's source is not criv's job. This also retires issue 6, whose
+subject was the oxlint resolution path that no longer exists.
+
+`criv enforce` shells out to `ruff` for Python files. No ADR ever decided that,
+this repository has no Python, and running a downstream project's linter is not
+criv's job.
+
+Evidence:
+
+- `src/enforce.rs:789-805` — `run_native_tools` filters source files to `.py` and
+  calls `run_optional_tool(root, "Ruff", resolve_tool(root, "ruff"), &python)`.
+- `src/enforce.rs:815-817` special-cases the string label `"Ruff"` to insert a
+  `check` argument. That label comparison is the only reason `run_optional_tool`
+  builds a tool-dependent argv at all.
+- `git ls-files '*.py'` returns zero files, so this path never executes in this
+  repository.
+- No ADR mentions ruff. `grep -rln "ruff" docs/adr/` returns nothing.
+  ADR-0024 governs `src/enforce.rs` and settles the JavaScript and TypeScript
+  tool question, but ruff was never subject to an equivalent decision.
+- `docs/adr/0024-oxlint-only-javascript-typescript-enforcement.md:26-29` gives the
+  governing rationale: keeping a linter criv does not actually use "makes the
+  repository policy look ambiguous and produces misleading skipped-tool output".
+- The coverage is arbitrary. `src/source_graph.rs:92-101` indexes Rust,
+  TypeScript, JavaScript, Python, and Go; enforcement lints two of the five and
+  never lints Rust, this repository's primary language.
+
+Impact:
+
+In this repository the Python branch is dead code that still costs a
+label-dependent argv special case. In a downstream Python vault it is worse: criv
+silently runs `ruff check` from the vault root over its own file list, ignoring
+whatever invocation the project actually uses — per-package configuration,
+selected rule sets, `--fix` — and folds the result into criv's enforcement exit
+code, which gates commits and pushes through the generated hooks. It also
+inherits the failure mode in issue 6, where a missing binary reports success.
+
+This is scope creep. criv is a docs-to-code graph validator; lint orchestration
+is already owned by hk, `mise run check`, and CI (`hk.pkl`).
+
+Fix sketch:
+
+Delete the Python filter and the ruff invocation from `run_native_tools`, along
+with the `label == "Ruff"` special case at `src/enforce.rs:815-817`, which then
+lets `run_optional_tool` take a plain argv. Drop the ruff resolution test at
+`src/enforce.rs:1188-1196`. If native linting should survive at all, the honest
+form is config-driven — an explicit `[enforce] tools` table in `criv.toml` — so
+the vault declares its own toolchain rather than criv guessing two languages.
+This needs a new ADR: ADR-0024 governs `src/enforce.rs`, and removing a native
+tool is the same class of decision it already made for ESLint. Decide oxlint's
+fate in the same ADR rather than separately.
+
+Verification:
+
+- Run `cargo run --quiet -- enforce --stage ci` in a scratch vault containing a
+  `.py` file and confirm no `Ruff:` line appears.
+- Run `cargo test --workspace`.
+- Run `mise run check`.
+
+## Issue 21: Emit Taplo-Canonical TOML From `criv init`
+
+Category: DX
+Effort: S
+Fix risk: LOW
+Confidence: HIGH
+Status: Open
+
+The generated `criv.toml` is serialized in a style no TOML formatter produces, so
+the first format run in a new vault rewrites a file criv just wrote.
+
+Evidence:
+
+- `src/init/templates.rs:34-41` — `default_config` builds the file with
+  `toml::to_string_pretty`, which expands every array to one element per line
+  with four-space indentation regardless of length.
+- `hk.pkl:44-45` defines `toml_fmt` as `Builtins.taplo_format` over
+  `**/*.toml`, wired into the `check`, `pre-commit`, and `fix` hooks at
+  `hk.pkl:152`, `hk.pkl:174`, and `hk.pkl:197`. That glob covers `criv.toml`.
+- No `.taplo.toml` exists anywhere in the repository, so taplo's defaults apply:
+  80-column width, two-space indentation, and arrays collapsed onto one line when
+  they fit.
+- Reproduced in a scratch repository: after `criv init`, `taplo format --diff
+  criv.toml` rewrites `roots`, `exclude`, and `stages` from four-space multi-line
+  arrays to single-line arrays.
+- This repository's own committed `criv.toml:18-24` carries the taplo form —
+  two-space indent, multi-line only where the array exceeds 80 columns — so the
+  generated file was reformatted at some point after generation.
+
+Impact:
+
+Every new vault starts with a `criv.toml` that is already dirty for any project
+running taplo, which includes criv's own repository and the hk setup criv
+documents. The first `mise run fix` or pre-commit run produces a formatting-only
+change to generated content, which is noise in the initial commit and teaches
+users that criv's output is not canonical.
+
+It also blocks issue 18. A refresh mechanism that decides whether an installed
+file still matches the shipped template has to compare contents, and right now the
+shipped form and the on-disk form differ by formatting alone in every taplo vault.
+
+Fix sketch:
+
+Emit the canonical form directly. `toml::to_string_pretty` exposes no control over
+array collapsing or indent width, so configuring the serializer is not available;
+the narrow fix is to make the default `criv.toml` a static template literal in
+taplo style, matching how `pre_commit_hook` and the other templates are already
+written, keeping `DefaultConfig` only as the type a test asserts the literal
+against. Pair it with a checked-in `.taplo.toml` pinning `column_width` and indent
+so the target format is declared rather than inherited from taplo's defaults and
+cannot shift under a taplo upgrade.
+
+Verification:
+
+- Add a `src/init/tests.rs` case asserting the generated `criv.toml` is
+  byte-identical to a checked-in expected fixture in taplo form.
+- Run `criv init` in a scratch repository, then `taplo format --diff criv.toml`,
+  and confirm it reports no changes.
+- Run `cargo test --workspace`.
+- Run `mise run check`.
+
 ## Lower Priority
 
 These are confirmed but were judged not worth planning in this round:
@@ -945,8 +1202,7 @@ These are confirmed but were judged not worth planning in this round:
 ## Not Audited
 
 This was a standard-depth, hotspot-weighted audit. It did not cover manual
-Obsidian or VS Code UI behavior, the content of the embedded agent-skill
-templates beyond the drift in issue 8, GitHub Actions supply-chain posture beyond
+Obsidian or VS Code UI behavior, GitHub Actions supply-chain posture beyond
 the existing zizmor gate, or runtime profiling. Performance findings are
 read-derived; issues 4, 7, and 13 each require before-and-after measurement with
 `mise run perf`.
