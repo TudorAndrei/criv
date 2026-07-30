@@ -1,0 +1,23 @@
+# Gitignored paths that `wt step copy-ignored` clones into a new worktree.
+# A file must be BOTH gitignored and matched here to be copied.
+#
+# These are reflink copies on APFS/btrfs: blocks are shared with the primary
+# worktree until something rewrites them, so a 14 GB tree costs seconds and
+# almost no disk. Cold-starting them instead means a full Rust build plus two
+# npm installs plus a ~300 MB VS Code download in every worktree.
+
+# Rust build artifacts. The single biggest cold-start cost in this repo.
+target/
+
+# Node dependencies for the two companion packages.
+.obsidian/plugins/criv/node_modules/
+extensions/vscode-criv/node_modules/
+
+# Downloaded VS Code builds used by the extension integration test.
+extensions/vscode-criv/.vscode-test/
+
+# Deliberately NOT copied:
+#   .criv/        generated vault state; rebuilt per worktree by `criv watch --once`
+#   *.vsix        packaging output, cheap to regenerate
+#   PLAN.md       local scratch planning files
+#   TODO.md
