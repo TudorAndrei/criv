@@ -217,6 +217,36 @@ criv search --notes "Obsidian"
 criv search --rule ADR-0005
 ```
 
+### Semantic note search (optional)
+
+`criv search --notes <query> --semantic` matches notes by meaning rather than by
+substring. It is off by default and requires two independent gates:
+
+```sh
+cargo install --features embeddings --git https://github.com/TudorAndrei/criv criv
+```
+
+```toml
+[index]
+embeddings = true
+```
+
+Released binaries are built without the feature, so `--semantic` always fails on
+them even when `criv.toml` enables it. This is deliberate, per
+[ADR-0047](docs/adr/0047-semantic-note-search-stays-source-only.md): enabling
+embeddings grows the binary from roughly 12 MB to roughly 30 MB, against a
+release profile tuned for size.
+
+The backend is not fully local. The first `--semantic` run downloads model
+weights from the Hugging Face Hub and a prebuilt ONNX Runtime shared library,
+populating a cache of roughly 97 MB under `.criv/embeddings`. The download is
+silent. Later runs reuse the cache and need no network. With an empty cache and
+no network, the command fails with an error retrieving `model.onnx`.
+
+Every other criv command runs offline, which is what makes them safe inside git
+hooks and CI. Semantic search is the one exception; keep it out of automated
+gates unless the cache is known to be warm.
+
 Run the same enforcement path used by hooks and CI:
 
 ```sh
