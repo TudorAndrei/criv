@@ -27,7 +27,26 @@ repository.
 - Files under `docs/` are vault notes; include frontmatter and keep
   `criv check` passing.
 - Accepted ADRs are immutable per ADR-0012; add a new ADR for new decisions.
-- Implementation plans live under `plans/`.
+- Open findings live in GitHub Issues; settled decisions belong in `docs/adr/`.
+  Do not add a findings file to the repository — there is one tracker.
+
+## Agent skills
+
+### Issue tracker
+
+Agent skills file and read tickets in GitHub Issues on `TudorAndrei/criv` via the
+`gh` CLI. It is the only tracker. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical roles map to identically-named GitHub labels; only `wontfix`
+exists so far. Closing an issue as done or `wontfix` requires an ADR when it
+settles how criv behaves. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `docs/adr/` is the primary domain record, with no `CONTEXT.md`
+yet. See `docs/agents/domain.md`.
 
 ## Pointers
 
