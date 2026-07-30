@@ -26,7 +26,7 @@ does not require a separate `rumdl` executable.
 Build plugin artifacts when the Obsidian plugin is part of the release:
 
 ```sh
-mise run plugin-build
+npm --prefix .obsidian/plugins/criv run build
 ```
 
 This wraps the plugin's `npm run build` script in `mise x rust@1.97.1` so

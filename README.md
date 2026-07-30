@@ -270,8 +270,11 @@ mise run pre-commit
 mise run pre-push
 mise run check
 mise run fix
-mise run hawk
 ```
+
+Checks and tests are defined in `hk.pkl`, not as mise tasks. Run one on its own
+with `hk check --all --step <name>`, for example `hk check --all --step hawk` or
+`hk check --all --step vscode-test`. `hk check --all --plan` lists every step.
 
 ## Obsidian Extension
 
@@ -285,7 +288,7 @@ Build the plugin when working on its templates or WASM helper:
 
 ```sh
 npm --prefix .obsidian/plugins/criv ci
-mise run plugin-build
+npm --prefix .obsidian/plugins/criv run build
 ```
 
 Then run `criv watch --once` from the repository root so Obsidian has fresh
