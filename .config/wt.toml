@@ -1,0 +1,60 @@
+# worktrunk lifecycle for criv — https://worktrunk.dev
+#
+# Goal: a worktree is disposable. One command creates it ready to work in, one
+# command removes it with nothing left behind.
+#
+# criv is a CLI with no dev server, no database, and no containers, so there is
+# nothing to allocate a port for and nothing to tear down outside the worktree
+# directory itself. The cost here is cold start, not collision.
+
+[pre-start]
+# mise refuses an untrusted config, and every tool in this repo is pinned there.
+# Tools resolve from mise's global, version-keyed store
+# (~/.local/share/mise/installs/<tool>/<version>) and from the committed
+# mise.lock, so a new worktree reuses what is already downloaded.
+mise = "mise trust --quiet {{ worktree_path }}"
+
+# Detached tmux session named after the branch. Detached so creating a worktree
+# never steals the terminal — this composes with `wt switch --create -x claude`.
+tmux = "bash .config/wt-tmux.sh start {{ branch }} {{ worktree_path }} {{ repo }}"
+
+[[post-start]]
+# Reflink-clone the heavy gitignored trees listed in .worktreeinclude: target/,
+# both node_modules, and the .vscode-test VS Code downloads. Blocks are shared
+# with the primary worktree until modified, so this is seconds and near-zero
+# disk rather than a full rebuild. Background, so it never blocks creation.
+copy = "wt step copy-ignored"
+
+[[post-start]]
+# No-op when the pinned versions are already installed; this is here so a
+# worktree created after a mise.toml change still converges.
+tools = "mise install"
+
+[pre-commit]
+# Same fixers hk runs on a normal commit.
+fix = "mise run fix"
+
+[pre-merge]
+# The full gate: clippy, hawk, Rust tests, extension tests, criv check,
+# criv enforce --stage ci. What CI runs.
+check = "mise run check"
+
+[pre-remove]
+# Kill the branch's tmux session before the worktree disappears. Refuses to kill
+# the session it is being called from.
+#
+# Guarded: a worktree branched from a commit predating this script would other-
+# wise fail here, and a failing pre-remove blocks `wt remove` outright — leaving
+# the exact stale worktree this config exists to prevent. Teardown never blocks.
+tmux = "test -f .config/wt-tmux.sh && bash .config/wt-tmux.sh stop {{ branch }} {{ repo }} || true"
+
+# Reclaim the Rust build artifacts explicitly rather than relying on the
+# directory removal. target/ is gitignored, and git will not remove a worktree
+# with untracked content unless forced; clearing it first keeps `wt remove`
+# clean and fast, and makes the reclamation visible in the log.
+#
+# This is scoped to {{ worktree_path }} on purpose. Never `cargo clean` here:
+# with no CARGO_TARGET_DIR set, cargo resolves the target directory from the
+# workspace it is invoked in, so a bare `cargo clean` from the primary worktree
+# would delete the primary's build cache instead of this branch's.
+cargo = "rm -rf {{ worktree_path }}/target"
