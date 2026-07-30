@@ -27,10 +27,6 @@ run = "hk check --all"
 description = "Run hk fixes against modified files"
 run = "hk fix"
 
-[tasks.hawk]
-description = "Check Rust visibility against criv's shipped CLI surface"
-run = "cargo hawk check --manifest-path Cargo.toml --target-dir target/hawk --exclude-crate criv_wasm -D warnings"
-
 [tasks.release-plan]
 description = "Show the next SemVer version from conventional commits"
 run = "cog bump --dry-run --auto"
@@ -43,45 +39,13 @@ run = "bash scripts/release-auto.sh"
 description = "Measure criv local performance on this or another vault"
 run = "bash scripts/measure-performance.sh"
 
-[tasks.plugin-build]
-description = "Build the Obsidian plugin bundle and WASM helper"
-run = "npm --prefix .obsidian/plugins/criv run build"
-
-[tasks.plugin-lint]
-description = "Lint the Obsidian plugin source"
-run = "npm --prefix .obsidian/plugins/criv run lint"
-
-[tasks.plugin-format-check]
-description = "Check Obsidian plugin formatting"
-run = "npm --prefix .obsidian/plugins/criv run format:check"
-
-[tasks.plugin-test]
-description = "Run Obsidian plugin tests"
-run = "npm --prefix .obsidian/plugins/criv test"
-
 [tasks.vscode-build]
 description = "Build the VS Code-compatible companion extension"
 run = "npm --prefix extensions/vscode-criv run build"
 
-[tasks.vscode-lint]
-description = "Lint the VS Code-compatible companion extension source"
-run = "npm --prefix extensions/vscode-criv run lint"
-
-[tasks.vscode-format-check]
-description = "Check VS Code-compatible companion extension formatting"
-run = "npm --prefix extensions/vscode-criv run format:check"
-
 [tasks.vscode-package]
 description = "Package the VS Code-compatible companion extension as a local VSIX"
 run = "npm --prefix extensions/vscode-criv run package"
-
-[tasks.vscode-test]
-description = "Run VS Code-compatible companion extension tests"
-run = "npm --prefix extensions/vscode-criv test"
-
-[tasks.vscode-json-diagnostics]
-description = "Run VS Code JSON diagnostics for extension manifest/config files"
-run = "npm --prefix extensions/vscode-criv run test:integration"
 
 [tasks.pre-commit]
 description = "Run the hk pre-commit hook"

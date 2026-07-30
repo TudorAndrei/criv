@@ -37,8 +37,9 @@ local hawk = new Step {
     "mise.toml",
     "src/**/*.rs",
     "crates/**/*.rs",
+    "hk.pkl",
   )
-  check = "mise run hawk"
+  check = "cargo hawk check --manifest-path Cargo.toml --target-dir target/hawk --exclude-crate criv_wasm -D warnings"
 }
 
 local toml_fmt = (Builtins.taplo_format) {
@@ -55,26 +56,27 @@ local plugin_files = List(
   ".obsidian/plugins/criv/fixtures/**/*.json",
   "crates/criv-wasm/**",
   "mise.toml",
+  "hk.pkl",
 )
 
 local plugin_format_check = new Step {
   glob = plugin_files
-  check = "mise run plugin-format-check"
+  check = "npm --prefix .obsidian/plugins/criv run format:check"
 }
 
 local plugin_lint = new Step {
   glob = plugin_files
-  check = "mise run plugin-lint"
+  check = "npm --prefix .obsidian/plugins/criv run lint"
 }
 
 local plugin_test = new Step {
   glob = plugin_files
-  check = "mise run plugin-test"
+  check = "npm --prefix .obsidian/plugins/criv test"
 }
 
 local plugin_build = new Step {
   glob = plugin_files
-  check = "mise run plugin-build"
+  check = "npm --prefix .obsidian/plugins/criv run build"
 }
 
 local vscode_files = List(
@@ -88,21 +90,22 @@ local vscode_files = List(
   "extensions/vscode-criv/scripts/**/*.mjs",
   "crates/criv-wasm/**",
   "mise.toml",
+  "hk.pkl",
 )
 
 local vscode_lint = new Step {
   glob = vscode_files
-  check = "mise run vscode-lint"
+  check = "npm --prefix extensions/vscode-criv run lint"
 }
 
 local vscode_test = new Step {
   glob = vscode_files
-  check = "mise run vscode-test"
+  check = "npm --prefix extensions/vscode-criv test"
 }
 
 local vscode_format_check = new Step {
   glob = vscode_files
-  check = "mise run vscode-format-check"
+  check = "npm --prefix extensions/vscode-criv run format:check"
 }
 
 local vscode_json_diagnostics = new Step {
@@ -112,8 +115,9 @@ local vscode_json_diagnostics = new Step {
     "extensions/vscode-criv/test/integration/runner.ts",
     "extensions/vscode-criv/test/run-integration.mjs",
     "mise.toml",
+    "hk.pkl",
   )
-  check = "mise run vscode-json-diagnostics"
+  check = "npm --prefix extensions/vscode-criv run test:integration"
 }
 
 local enforce_ci = new Step {
