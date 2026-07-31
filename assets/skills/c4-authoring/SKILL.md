@@ -87,3 +87,7 @@ Before finishing:
 - Source anchors point at real implementation symbols when the diagram claims to
   describe existing code.
 - The artifact remains useful as text without opening a visual renderer.
+
+Inspect existing diagrams with `criv query c4-elements <note-id>` and `criv
+query c4-relationships <note-id>`. Generate a focused code diagram with `criv
+query c4-code <path-glob>` when it would clarify an implementation boundary.

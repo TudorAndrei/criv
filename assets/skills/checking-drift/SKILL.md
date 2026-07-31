@@ -6,6 +6,8 @@ description: Use when validating whether criv documentation, ADR metadata, wiki-
 # Checking drift
 
 Run `criv check` after editing documentation.
+Use `criv check --fix` to apply safe Markdown fixes, and `criv check --filter
+<text>` to focus diagnostics while investigating a failure.
 
 Run `criv watch --once` after changing code or docs to refresh `.criv/state.json`.
 
