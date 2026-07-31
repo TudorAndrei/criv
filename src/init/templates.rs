@@ -64,6 +64,71 @@ pub(crate) fn claude_skills() -> &'static [StaticTemplate] {
     CLAUDE_SKILLS
 }
 
+/// A stable, compact identity for the source of a generated skill.
+pub(crate) fn template_hash(contents: &str) -> String {
+    blake3::hash(contents.as_bytes()).to_hex()[..16].to_string()
+}
+
+/// Add (or replace) criv's generated-artifact marker in a skill frontmatter
+/// block. The embedded templates remain unmarked so their hashes describe the
+/// actual shipped skill content.
+pub(crate) fn stamped_skill(contents: &str) -> String {
+    if skill_marker(contents).is_some() {
+        return contents.to_string();
+    }
+    let marker = format!("criv-template: blake3:{}", template_hash(contents));
+    let Some(rest) = contents.strip_prefix("---\n") else {
+        return contents.to_string();
+    };
+    let Some((frontmatter, body)) = rest.split_once("---\n") else {
+        return contents.to_string();
+    };
+
+    let mut lines: Vec<String> = frontmatter.lines().map(str::to_string).collect();
+    if let Some(index) = lines
+        .iter()
+        .position(|line| line.trim_start() == "metadata:")
+    {
+        let insert_at = lines[index + 1..]
+            .iter()
+            .position(|line| !line.starts_with(' ') && !line.starts_with('\t'))
+            .map_or(lines.len(), |offset| index + 1 + offset);
+        let marker_line = (index + 1..insert_at)
+            .find(|&line| lines[line].trim_start().starts_with("criv-template:"));
+        if let Some(marker_line) = marker_line {
+            lines[marker_line] = format!("  {marker}");
+        } else {
+            lines.insert(index + 1, format!("  {marker}"));
+        }
+    } else {
+        lines.push("metadata:".to_string());
+        lines.push(format!("  {marker}"));
+    }
+
+    format!("---\n{}\n---\n{}", lines.join("\n"), body)
+}
+
+pub(crate) fn skill_marker(contents: &str) -> Option<&str> {
+    let rest = contents.strip_prefix("---\n")?;
+    let (frontmatter, _) = rest.split_once("---\n")?;
+    let mut in_metadata = false;
+    for line in frontmatter.lines() {
+        if line.trim_start() == "metadata:" {
+            in_metadata = true;
+            continue;
+        }
+        if !line.starts_with(' ') && !line.starts_with('\t') {
+            in_metadata = false;
+        }
+        if in_metadata {
+            if let Some(value) = line.trim().strip_prefix("criv-template:") {
+                return Some(value.trim());
+            }
+        }
+    }
+    None
+}
+
 pub(crate) fn pre_commit_hook(repo_relative_root: &str) -> String {
     format!(
         r#"#!/bin/sh
@@ -509,3 +574,32 @@ if (!Object.values(versions).includes(minAppVersion)) {
   writeFileSync("versions.json", JSON.stringify(versions, null, "\t"));
 }
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SKILL: &str = "---\nname: example\ndescription: Example\n---\n\n# Example\n";
+
+    #[test]
+    fn template_hash_is_stable_and_content_sensitive() {
+        assert_eq!(template_hash(SKILL), template_hash(SKILL));
+        assert_ne!(template_hash(SKILL), template_hash("x"));
+    }
+
+    #[test]
+    fn stamped_skill_has_valid_yaml_and_is_idempotent() {
+        let stamped = stamped_skill(SKILL);
+        let frontmatter = stamped
+            .strip_prefix("---\n")
+            .and_then(|value| value.split_once("---\n"))
+            .map(|(frontmatter, _)| frontmatter)
+            .unwrap();
+        serde_norway::from_str::<serde_norway::Value>(frontmatter).unwrap();
+        assert_eq!(stamped_skill(&stamped), stamped);
+        assert_eq!(
+            skill_marker(&stamped),
+            Some(format!("blake3:{}", template_hash(SKILL)).as_str())
+        );
+    }
+}
