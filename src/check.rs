@@ -101,10 +101,10 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
         });
     }
 
-    let stale_skills = outdated_skills(root)?;
     match options.format {
         Format::Text => {
             print_text(&diagnostics);
+            let stale_skills = outdated_skills(root);
             if !stale_skills.is_empty() {
                 println!(
                     "note: {} agent skills are out of date; run `criv init --force-skills`",
@@ -123,7 +123,10 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
     Ok(())
 }
 
-fn outdated_skills(root: &Path) -> Result<Vec<&'static str>> {
+/// This is deliberately best-effort. A stale skill is an advisory note, so it
+/// must never turn a successful check into an error or contaminate a
+/// machine-readable output format.
+fn outdated_skills(root: &Path) -> Vec<&'static str> {
     let templates = crate::init::templates::agent_skills()
         .iter()
         .chain(crate::init::templates::claude_skills());
@@ -133,16 +136,20 @@ fn outdated_skills(root: &Path) -> Result<Vec<&'static str>> {
         if !path.exists() {
             continue;
         }
-        let contents = fs::read_to_string(&path)?;
+        let Ok(contents) = fs::read_to_string(&path) else {
+            continue;
+        };
         let expected = format!(
             "blake3:{}",
-            crate::init::templates::template_hash(template.contents)
+            crate::init::templates::template_hash(&crate::init::templates::unstamped_skill(
+                template.contents,
+            ))
         );
         if crate::init::templates::skill_marker(&contents) != Some(expected.as_str()) {
             stale.push(template.path);
         }
     }
-    Ok(stale)
+    stale
 }
 
 fn validate_markdown_format(root: &Path, fix: bool) -> Result<Vec<Diagnostic>> {
@@ -1370,16 +1377,16 @@ mod tests {
         let root = root.parent().unwrap().join("skills-root");
         fs::create_dir_all(&root).unwrap();
 
-        assert!(outdated_skills(&root).unwrap().is_empty());
+        assert!(outdated_skills(&root).is_empty());
 
         let template = &crate::init::templates::agent_skills()[0];
         let path = root.join(template.path);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "not frontmatter\n").unwrap();
-        assert_eq!(outdated_skills(&root).unwrap(), vec![template.path]);
+        assert_eq!(outdated_skills(&root), vec![template.path]);
 
         fs::write(&path, "---\nmetadata: [not valid\n---\n").unwrap();
-        assert_eq!(outdated_skills(&root).unwrap(), vec![template.path]);
+        assert_eq!(outdated_skills(&root), vec![template.path]);
 
         let _ = fs::remove_dir_all(root.parent().unwrap());
     }

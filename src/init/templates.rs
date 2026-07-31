@@ -73,10 +73,8 @@ pub(crate) fn template_hash(contents: &str) -> String {
 /// block. The embedded templates remain unmarked so their hashes describe the
 /// actual shipped skill content.
 pub(crate) fn stamped_skill(contents: &str) -> String {
-    if skill_marker(contents).is_some() {
-        return contents.to_string();
-    }
-    let marker = format!("criv-template: blake3:{}", template_hash(contents));
+    let contents = unstamped_skill(contents);
+    let marker = format!("criv-template: blake3:{}", template_hash(&contents));
     let Some(rest) = contents.strip_prefix("---\n") else {
         return contents.to_string();
     };
@@ -103,6 +101,45 @@ pub(crate) fn stamped_skill(contents: &str) -> String {
     } else {
         lines.push("metadata:".to_string());
         lines.push(format!("  {marker}"));
+    }
+
+    format!("---\n{}\n---\n{}", lines.join("\n"), body)
+}
+
+/// Return the source template form of a skill, removing criv's generated
+/// marker and its otherwise-empty `metadata` map. This makes refresh robust if
+/// a marked skill is ever accidentally supplied as a template.
+pub(crate) fn unstamped_skill(contents: &str) -> String {
+    let Some(rest) = contents.strip_prefix("---\n") else {
+        return contents.to_string();
+    };
+    let Some((frontmatter, body)) = rest.split_once("---\n") else {
+        return contents.to_string();
+    };
+
+    let mut lines: Vec<String> = frontmatter.lines().map(str::to_string).collect();
+    let Some(metadata) = lines
+        .iter()
+        .position(|line| line.trim_start() == "metadata:")
+    else {
+        return contents.to_string();
+    };
+    let end = lines[metadata + 1..]
+        .iter()
+        .position(|line| !line.starts_with(' ') && !line.starts_with('\t'))
+        .map_or(lines.len(), |offset| metadata + 1 + offset);
+    let marker_lines: Vec<usize> = (metadata + 1..end)
+        .filter(|&index| lines[index].trim_start().starts_with("criv-template:"))
+        .collect();
+    let has_metadata_child =
+        (metadata + 1..end).any(|index| !lines[index].trim_start().starts_with("criv-template:"));
+    for index in marker_lines.into_iter().rev() {
+        lines.remove(index);
+    }
+
+    // Remove the metadata key if it was used solely for criv's marker.
+    if !has_metadata_child {
+        lines.remove(metadata);
     }
 
     format!("---\n{}\n---\n{}", lines.join("\n"), body)
@@ -599,5 +636,12 @@ mod tests {
             skill_marker(&stamped),
             Some(format!("blake3:{}", template_hash(SKILL)).as_str())
         );
+    }
+
+    #[test]
+    fn stamping_recovers_a_template_that_accidentally_has_a_marker() {
+        let marked_template = stamped_skill(SKILL);
+        assert_eq!(stamped_skill(&marked_template), marked_template);
+        assert_eq!(unstamped_skill(&marked_template), SKILL);
     }
 }

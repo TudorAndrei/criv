@@ -367,6 +367,32 @@ fn init_force_skills_respects_no_skills() {
 }
 
 #[test]
+fn init_force_skills_isolates_refresh_from_other_scaffolding() {
+    let root = unique_temp_dir("criv-init-force-skills-isolated");
+    let mut options = fast_options();
+    options.force_skills = true;
+    options.no_skills = false;
+    options.no_hooks = false;
+    options.no_obsidian = false;
+    options.no_vscode = false;
+    run(&root, options).unwrap();
+
+    assert!(root.join(".agents/skills/criv/SKILL.md").exists());
+    assert!(root.join(".claude/skills/criv/SKILL.md").exists());
+    for path in [
+        "criv.toml",
+        ".gitignore",
+        ".githooks",
+        ".obsidian",
+        ".vscode/extensions.json",
+    ] {
+        assert!(!root.join(path).exists(), "force-skills created {path}");
+    }
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn repository_skill_copies_match_shipped_templates() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for templates in [templates::agent_skills(), templates::claude_skills()] {

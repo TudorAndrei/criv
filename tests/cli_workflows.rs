@@ -81,12 +81,71 @@ fn check_nudges_only_text_output_for_stale_skills() {
 fn check_is_silent_about_deliberately_absent_skills() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    init(root);
+    criv(root)
+        .args([
+            "init",
+            "--no-hooks",
+            "--no-obsidian",
+            "--no-vscode",
+            "--no-skills",
+        ])
+        .assert()
+        .success();
     criv(root)
         .arg("check")
         .assert()
         .success()
         .stdout(predicate::str::contains("out of date").not());
+}
+
+#[test]
+fn force_skills_cli_refresh_creates_only_skills() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    criv(root)
+        .args([
+            "init",
+            "--no-hooks",
+            "--no-obsidian",
+            "--no-vscode",
+            "--no-skills",
+        ])
+        .assert()
+        .success();
+
+    criv(root)
+        .args(["init", "--force-skills"])
+        .assert()
+        .success();
+
+    assert!(root.join(".agents/skills/criv/SKILL.md").exists());
+    assert!(root.join(".claude/skills/criv/SKILL.md").exists());
+    assert!(!root.join(".obsidian").exists());
+    assert!(!root.join(".vscode/extensions.json").exists());
+    assert!(!root.join(".githooks").exists());
+}
+
+#[test]
+fn unreadable_skill_content_never_breaks_check_or_machine_formats() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    init_with_skills(root);
+    fs::write(root.join(".agents/skills/criv/SKILL.md"), [0xff, 0xfe]).unwrap();
+
+    criv(root).arg("check").assert().success();
+    let json = criv(root)
+        .args(["check", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice::<Vec<serde_json::Value>>(&json).unwrap();
+    criv(root)
+        .args(["check", "--format", "github"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
 }
 
 #[test]

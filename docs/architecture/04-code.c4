@@ -697,6 +697,7 @@ digraph criv_code {
   "src/init.rs#fn:git_output" [label="git_output\nsrc/init.rs"];
   "src/init.rs#fn:install_git_hooks" [label="install_git_hooks\nsrc/init.rs"];
   "src/init.rs#fn:json_pretty" [label="json_pretty\nsrc/init.rs"];
+  "src/init.rs#fn:print_init_result" [label="print_init_result\nsrc/init.rs"];
   "src/init.rs#fn:repo_relative_root" [label="repo_relative_root\nsrc/init.rs"];
   "src/init.rs#fn:run" [label="run\nsrc/init.rs"];
   "src/init.rs#fn:set_executable" [label="set_executable\nsrc/init.rs"];
@@ -725,8 +726,10 @@ digraph criv_code {
   "src/init/templates.rs#fn:skill_marker" [label="skill_marker\nsrc/init/templates.rs"];
   "src/init/templates.rs#fn:stamped_skill" [label="stamped_skill\nsrc/init/templates.rs"];
   "src/init/templates.rs#fn:stamped_skill_has_valid_yaml_and_is_idempotent" [label="stamped_skill_has_valid_yaml_and_is_idempotent\nsrc/init/templates.rs"];
+  "src/init/templates.rs#fn:stamping_recovers_a_template_that_accidentally_has_a_marker" [label="stamping_recovers_a_template_that_accidentally_has_a_marker\nsrc/init/templates.rs"];
   "src/init/templates.rs#fn:template_hash" [label="template_hash\nsrc/init/templates.rs"];
   "src/init/templates.rs#fn:template_hash_is_stable_and_content_sensitive" [label="template_hash_is_stable_and_content_sensitive\nsrc/init/templates.rs"];
+  "src/init/templates.rs#fn:unstamped_skill" [label="unstamped_skill\nsrc/init/templates.rs"];
   "src/init/templates.rs#type:AdrReadmeFrontmatter" [label="AdrReadmeFrontmatter\nsrc/init/templates.rs"];
   "src/init/templates.rs#type:AdrReadmeFrontmatter/member:default" [label="default\nsrc/init/templates.rs"];
   "src/init/templates.rs#type:CompilerOptions" [label="CompilerOptions\nsrc/init/templates.rs"];
@@ -758,6 +761,7 @@ digraph criv_code {
   "src/init/tests.rs#fn:init_bare_git_repo_skips_hooks_without_failing" [label="init_bare_git_repo_skips_hooks_without_failing\nsrc/init/tests.rs"];
   "src/init/tests.rs#fn:init_creates_vscode_extension_recommendation_by_default" [label="init_creates_vscode_extension_recommendation_by_default\nsrc/init/tests.rs"];
   "src/init/tests.rs#fn:init_force_hooks_overwrites_hooks_and_hookspath" [label="init_force_hooks_overwrites_hooks_and_hookspath\nsrc/init/tests.rs"];
+  "src/init/tests.rs#fn:init_force_skills_isolates_refresh_from_other_scaffolding" [label="init_force_skills_isolates_refresh_from_other_scaffolding\nsrc/init/tests.rs"];
   "src/init/tests.rs#fn:init_force_skills_refreshes_existing_skills_but_plain_init_preserves_them" [label="init_force_skills_refreshes_existing_skills_but_plain_init_preserves_them\nsrc/init/tests.rs"];
   "src/init/tests.rs#fn:init_force_skills_refuses_symlinked_destination" [label="init_force_skills_refuses_symlinked_destination\nsrc/init/tests.rs"];
   "src/init/tests.rs#fn:init_force_skills_respects_no_skills" [label="init_force_skills_respects_no_skills\nsrc/init/tests.rs"];
@@ -2286,6 +2290,7 @@ digraph criv_code {
   "src/init.rs#fn:repo_relative_root" -> "src/util.rs#fn:normalize_rel";
   "src/init.rs#fn:repo_relative_root" -> "src/util.rs#fn:strip_prefix";
   "src/init.rs#fn:run" -> "src/init.rs#fn:install_git_hooks";
+  "src/init.rs#fn:run" -> "src/init.rs#fn:print_init_result";
   "src/init.rs#fn:run" -> "src/init.rs#fn:write_template";
   "src/init.rs#fn:run" -> "src/init.rs#fn:write_templates";
   "src/init.rs#fn:run" -> "src/init.rs#fn:write_vscode_extension_recommendation";
@@ -2309,11 +2314,13 @@ digraph criv_code {
   "src/init/templates.rs#fn:default_state" -> "src/init/templates.rs#type:DefaultState";
   "src/init/templates.rs#fn:json_pretty" -> "src/lib.rs#type:CrivError";
   "src/init/templates.rs#fn:skill_marker" -> "src/util.rs#fn:strip_prefix";
-  "src/init/templates.rs#fn:stamped_skill" -> "src/init/templates.rs#fn:skill_marker";
+  "src/init/templates.rs#fn:stamped_skill" -> "src/init/templates.rs#fn:unstamped_skill";
   "src/init/templates.rs#fn:stamped_skill" -> "src/structural.rs#fn:find";
   "src/init/templates.rs#fn:stamped_skill" -> "src/util.rs#fn:strip_prefix";
   "src/init/templates.rs#fn:stamped_skill_has_valid_yaml_and_is_idempotent" -> "src/init/templates.rs#fn:stamped_skill";
   "src/init/templates.rs#fn:stamped_skill_has_valid_yaml_and_is_idempotent" -> "src/util.rs#fn:strip_prefix";
+  "src/init/templates.rs#fn:stamping_recovers_a_template_that_accidentally_has_a_marker" -> "src/init/templates.rs#fn:stamped_skill";
+  "src/init/templates.rs#fn:unstamped_skill" -> "src/util.rs#fn:strip_prefix";
   "src/init/templates.rs#type:DefaultState/member:default" -> "src/init/templates.rs#type:EmptyGraph";
   "src/init/tests.rs#fn:assert_executable" -> "src/search.rs#type:SearchOptions/member:mode";
   "src/init/tests.rs#fn:git" -> "src/lib.rs#type:Command";
@@ -2338,6 +2345,9 @@ digraph criv_code {
   "src/init/tests.rs#fn:init_force_hooks_overwrites_hooks_and_hookspath" -> "src/init/tests.rs#fn:git_config_set";
   "src/init/tests.rs#fn:init_force_hooks_overwrites_hooks_and_hookspath" -> "src/init/tests.rs#fn:git_init";
   "src/init/tests.rs#fn:init_force_hooks_overwrites_hooks_and_hookspath" -> "src/init/tests.rs#fn:unique_temp_dir";
+  "src/init/tests.rs#fn:init_force_skills_isolates_refresh_from_other_scaffolding" -> "extensions/vscode-criv/test/integration/runner.ts#fn:run";
+  "src/init/tests.rs#fn:init_force_skills_isolates_refresh_from_other_scaffolding" -> "src/init/tests.rs#fn:fast_options";
+  "src/init/tests.rs#fn:init_force_skills_isolates_refresh_from_other_scaffolding" -> "src/init/tests.rs#fn:unique_temp_dir";
   "src/init/tests.rs#fn:init_force_skills_refreshes_existing_skills_but_plain_init_preserves_them" -> "extensions/vscode-criv/test/integration/runner.ts#fn:run";
   "src/init/tests.rs#fn:init_force_skills_refreshes_existing_skills_but_plain_init_preserves_them" -> "src/init/tests.rs#fn:fast_options";
   "src/init/tests.rs#fn:init_force_skills_refreshes_existing_skills_but_plain_init_preserves_them" -> "src/init/tests.rs#fn:unique_temp_dir";

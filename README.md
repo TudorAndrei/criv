@@ -138,6 +138,12 @@ Existing hook files and non-criv `core.hooksPath` settings are preserved by
 default. Use `--force-hooks` to replace `.githooks/pre-commit`,
 `.githooks/pre-push`, and an existing `core.hooksPath` value.
 
+`criv check` may report that installed agent skills are out of date. Refresh
+only those criv-owned generated files with `criv init --force-skills`; it does
+not create or change hooks, editor scaffolding, vault configuration, or
+`.gitignore`. Refreshing deliberately replaces any local edits to those skill
+files. JSON and GitHub check output never include this advisory note.
+
 Check the vault before committing documentation or code changes:
 
 ```sh

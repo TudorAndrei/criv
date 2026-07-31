@@ -48,6 +48,30 @@ pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
     let mut refreshed = Vec::new();
     let mut hook_messages = Vec::new();
 
+    // The stale-skill nudge points here. Keep that remediation narrow: a vault
+    // that deliberately declined hooks or editor scaffolding must not acquire
+    // unrelated files merely by refreshing criv-owned skills.
+    if options.force_skills {
+        if !options.no_skills {
+            write_templates(
+                root,
+                templates::agent_skills(),
+                true,
+                &mut created,
+                &mut refreshed,
+            )?;
+            write_templates(
+                root,
+                templates::claude_skills(),
+                true,
+                &mut created,
+                &mut refreshed,
+            )?;
+        }
+        print_init_result(created, refreshed, hook_messages);
+        return Ok(());
+    }
+
     write_template(
         root,
         "criv.toml",
@@ -109,6 +133,16 @@ pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
         hook_messages = install_git_hooks(root, options.force_hooks)?;
     }
 
+    print_init_result(created, refreshed, hook_messages);
+
+    Ok(())
+}
+
+fn print_init_result(
+    created: Vec<&'static str>,
+    refreshed: Vec<&'static str>,
+    hook_messages: Vec<String>,
+) {
     if created.is_empty() && refreshed.is_empty() {
         println!("criv vault already initialized");
     } else {
@@ -123,8 +157,6 @@ pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
     for message in hook_messages {
         println!("{message}");
     }
-
-    Ok(())
 }
 
 fn write_vscode_extension_recommendation(
