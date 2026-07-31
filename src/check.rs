@@ -106,8 +106,15 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
             print_text(&diagnostics);
             let stale_skills = outdated_skills(root);
             if !stale_skills.is_empty() {
+                // Refreshing one skill is the common case after a single
+                // template edit, so the singular is the message people see most.
+                let subject = if stale_skills.len() == 1 {
+                    "skill is"
+                } else {
+                    "skills are"
+                };
                 println!(
-                    "note: {} agent skills are out of date; run `criv init --force-skills`",
+                    "note: {} agent {subject} out of date; run `criv init --force-skills`",
                     stale_skills.len()
                 );
             }

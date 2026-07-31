@@ -52,14 +52,14 @@ fn check_nudges_only_text_output_for_stale_skills() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "note: 1 agent skills are out of date; run `criv init --force-skills`",
+            "note: 1 agent skill is out of date; run `criv init --force-skills`",
         ));
     criv(root)
         .args(["check", "--filter", "does-not-match"])
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "note: 1 agent skills are out of date; run `criv init --force-skills`",
+            "note: 1 agent skill is out of date; run `criv init --force-skills`",
         ));
 
     let json = criv(root)
