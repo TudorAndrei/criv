@@ -66,14 +66,19 @@ pub(crate) fn claude_skills_fallback() -> &'static [StaticTemplate] {
 
 /// A stable, compact identity for the source of a generated skill.
 pub(crate) fn template_hash(contents: &str) -> String {
-    blake3::hash(contents.as_bytes()).to_hex()[..16].to_string()
+    blake3::hash(normalize_newlines(contents).as_bytes()).to_hex()[..16].to_string()
+}
+
+/// Governed by ADR-0053.
+fn normalize_newlines(contents: &str) -> String {
+    contents.replace("\r\n", "\n")
 }
 
 /// Add (or replace) criv's generated-artifact marker in a skill frontmatter
 /// block. The embedded templates remain unmarked so their hashes describe the
 /// actual shipped skill content.
 pub(crate) fn stamped_skill(contents: &str) -> String {
-    let contents = unstamped_skill(contents);
+    let contents = unstamped_skill(&normalize_newlines(contents));
     let marker = format!("criv-template: blake3:{}", template_hash(&contents));
     let Some(rest) = contents.strip_prefix("---\n") else {
         return contents.to_string();
@@ -110,6 +115,8 @@ pub(crate) fn stamped_skill(contents: &str) -> String {
 /// marker and its otherwise-empty `metadata` map. This makes refresh robust if
 /// a marked skill is ever accidentally supplied as a template.
 pub(crate) fn unstamped_skill(contents: &str) -> String {
+    let normalized = normalize_newlines(contents);
+    let contents = normalized.as_str();
     let Some(rest) = contents.strip_prefix("---\n") else {
         return contents.to_string();
     };
@@ -145,8 +152,9 @@ pub(crate) fn unstamped_skill(contents: &str) -> String {
     format!("---\n{}\n---\n{}", lines.join("\n"), body)
 }
 
-pub(crate) fn skill_marker(contents: &str) -> Option<&str> {
-    let rest = contents.strip_prefix("---\n")?;
+pub(crate) fn skill_marker(contents: &str) -> Option<String> {
+    let normalized = normalize_newlines(contents);
+    let rest = normalized.strip_prefix("---\n")?;
     let (frontmatter, _) = rest.split_once("---\n")?;
     let mut in_metadata = false;
     for line in frontmatter.lines() {
@@ -158,7 +166,7 @@ pub(crate) fn skill_marker(contents: &str) -> Option<&str> {
             in_metadata = false;
         }
         if in_metadata && let Some(value) = line.trim().strip_prefix("criv-template:") {
-            return Some(value.trim());
+            return Some(value.trim().to_string());
         }
     }
     None
@@ -634,7 +642,7 @@ mod tests {
         assert_eq!(stamped_skill(&stamped), stamped);
         assert_eq!(
             skill_marker(&stamped),
-            Some(format!("blake3:{}", template_hash(SKILL)).as_str())
+            Some(format!("blake3:{}", template_hash(SKILL)))
         );
     }
 
@@ -643,5 +651,29 @@ mod tests {
         let marked_template = stamped_skill(SKILL);
         assert_eq!(stamped_skill(&marked_template), marked_template);
         assert_eq!(unstamped_skill(&marked_template), SKILL);
+    }
+}
+
+#[cfg(test)]
+mod crlf_tests {
+    use super::*;
+
+    #[test]
+    fn markers_survive_crlf_checkouts() {
+        let lf = "---\nname: criv\ndescription: d\n---\n\n# criv\n";
+        let crlf = lf.replace('\n', "\r\n");
+
+        assert_eq!(
+            template_hash(lf),
+            template_hash(&crlf),
+            "hash must not depend on line endings"
+        );
+
+        let stamped = stamped_skill(&crlf);
+        assert!(
+            skill_marker(&stamped).is_some(),
+            "a CRLF checkout must still receive a marker"
+        );
+        assert_eq!(stamped, stamped_skill(lf));
     }
 }

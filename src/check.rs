@@ -155,7 +155,7 @@ fn outdated_skills(root: &Path) -> Vec<&'static str> {
                 template.contents,
             ))
         );
-        if crate::init::templates::skill_marker(&contents) != Some(expected.as_str()) {
+        if crate::init::templates::skill_marker(&contents).as_deref() != Some(expected.as_str()) {
             stale.push(template.path);
         }
     }

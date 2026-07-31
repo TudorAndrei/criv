@@ -715,6 +715,8 @@ digraph criv_code {
   "src/init/templates.rs#fn:default_config" [label="default_config\nsrc/init/templates.rs"];
   "src/init/templates.rs#fn:default_state" [label="default_state\nsrc/init/templates.rs"];
   "src/init/templates.rs#fn:json_pretty" [label="json_pretty\nsrc/init/templates.rs"];
+  "src/init/templates.rs#fn:markers_survive_crlf_checkouts" [label="markers_survive_crlf_checkouts\nsrc/init/templates.rs"];
+  "src/init/templates.rs#fn:normalize_newlines" [label="normalize_newlines\nsrc/init/templates.rs"];
   "src/init/templates.rs#fn:obsidian_app_config" [label="obsidian_app_config\nsrc/init/templates.rs"];
   "src/init/templates.rs#fn:obsidian_plugin" [label="obsidian_plugin\nsrc/init/templates.rs"];
   "src/init/templates.rs#fn:plugin_manifest" [label="plugin_manifest\nsrc/init/templates.rs"];
@@ -2323,13 +2325,19 @@ digraph criv_code {
   "src/init/templates.rs#fn:default_state" -> "src/init/templates.rs#fn:json_pretty";
   "src/init/templates.rs#fn:default_state" -> "src/init/templates.rs#type:DefaultState";
   "src/init/templates.rs#fn:json_pretty" -> "src/lib.rs#type:CrivError";
+  "src/init/templates.rs#fn:markers_survive_crlf_checkouts" -> "src/init/templates.rs#fn:stamped_skill";
+  "src/init/templates.rs#fn:skill_marker" -> "src/init/templates.rs#fn:normalize_newlines";
   "src/init/templates.rs#fn:skill_marker" -> "src/util.rs#fn:strip_prefix";
+  "src/init/templates.rs#fn:stamped_skill" -> "src/init/templates.rs#fn:normalize_newlines";
   "src/init/templates.rs#fn:stamped_skill" -> "src/init/templates.rs#fn:unstamped_skill";
   "src/init/templates.rs#fn:stamped_skill" -> "src/structural.rs#fn:find";
   "src/init/templates.rs#fn:stamped_skill" -> "src/util.rs#fn:strip_prefix";
   "src/init/templates.rs#fn:stamped_skill_has_valid_yaml_and_is_idempotent" -> "src/init/templates.rs#fn:stamped_skill";
   "src/init/templates.rs#fn:stamped_skill_has_valid_yaml_and_is_idempotent" -> "src/util.rs#fn:strip_prefix";
   "src/init/templates.rs#fn:stamping_recovers_a_template_that_accidentally_has_a_marker" -> "src/init/templates.rs#fn:stamped_skill";
+  "src/init/templates.rs#fn:template_hash" -> "src/init/templates.rs#fn:normalize_newlines";
+  "src/init/templates.rs#fn:unstamped_skill" -> "src/c4.rs#type:C4Level/member:as_str";
+  "src/init/templates.rs#fn:unstamped_skill" -> "src/init/templates.rs#fn:normalize_newlines";
   "src/init/templates.rs#fn:unstamped_skill" -> "src/util.rs#fn:strip_prefix";
   "src/init/templates.rs#type:DefaultState/member:default" -> "src/init/templates.rs#type:EmptyGraph";
   "src/init/tests.rs#fn:assert_executable" -> "src/search.rs#type:SearchOptions/member:mode";
