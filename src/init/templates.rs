@@ -120,10 +120,10 @@ pub(crate) fn skill_marker(contents: &str) -> Option<&str> {
         if !line.starts_with(' ') && !line.starts_with('\t') {
             in_metadata = false;
         }
-        if in_metadata {
-            if let Some(value) = line.trim().strip_prefix("criv-template:") {
-                return Some(value.trim());
-            }
+        if in_metadata
+            && let Some(value) = line.trim().strip_prefix("criv-template:")
+        {
+            return Some(value.trim());
         }
     }
     None

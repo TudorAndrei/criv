@@ -1362,6 +1362,26 @@ mod tests {
     use crate::vault::WikiLink;
 
     #[test]
+    fn outdated_skills_handles_missing_and_malformed_frontmatter() {
+        let root = unique_temp_file("criv-outdated-skills", "root");
+        let root = root.parent().unwrap().join("skills-root");
+        fs::create_dir_all(&root).unwrap();
+
+        assert!(outdated_skills(&root).unwrap().is_empty());
+
+        let template = &crate::init::templates::agent_skills()[0];
+        let path = root.join(template.path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "not frontmatter\n").unwrap();
+        assert_eq!(outdated_skills(&root).unwrap(), vec![template.path]);
+
+        fs::write(&path, "---\nmetadata: [not valid\n---\n").unwrap();
+        assert_eq!(outdated_skills(&root).unwrap(), vec![template.path]);
+
+        let _ = fs::remove_dir_all(root.parent().unwrap());
+    }
+
+    #[test]
     fn github_annotation_escapes_workflow_command_data() {
         let diag = Diagnostic {
             severity: Severity::Error,
