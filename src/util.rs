@@ -91,15 +91,27 @@ pub(crate) fn link_dir_in(
                 return Ok(LinkOutcome::DirectoryInTheWay);
             }
             fs::remove_dir_all(&link_path)?;
-            return finish_link(&root, destination, &relative_target, &target_path)
-                .map(|created| if created { LinkOutcome::Replaced } else { LinkOutcome::Unsupported });
+            return finish_link(&root, destination, &relative_target, &target_path).map(
+                |created| {
+                    if created {
+                        LinkOutcome::Replaced
+                    } else {
+                        LinkOutcome::Unsupported
+                    }
+                },
+            );
         }
         Ok(_) => fs::remove_file(&link_path)?,
         Err(_) => {}
     }
 
-    finish_link(&root, destination, &relative_target, &target_path)
-        .map(|created| if created { LinkOutcome::Created } else { LinkOutcome::Unsupported })
+    finish_link(&root, destination, &relative_target, &target_path).map(|created| {
+        if created {
+            LinkOutcome::Created
+        } else {
+            LinkOutcome::Unsupported
+        }
+    })
 }
 
 /// Returns false when the platform refuses to create the link.
@@ -121,7 +133,9 @@ fn finish_link(
     #[cfg(windows)]
     let result = junction::create(absolute_target, &link_path);
     #[cfg(not(any(unix, windows)))]
-    let result = Err(std::io::Error::other("links are unsupported on this platform"));
+    let result = Err(std::io::Error::other(
+        "links are unsupported on this platform",
+    ));
 
     #[cfg(not(windows))]
     let _ = absolute_target;
