@@ -403,6 +403,11 @@ fn is_ci_environment() -> bool {
 fn git_output(root: &Path, args: &[&str]) -> Result<Output> {
     let output = Command::new("git")
         .current_dir(root)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_PREFIX")
         .args(args)
         .output()
         .map_err(|err| CrivError::new(format!("failed to run `git {}`: {err}", args.join(" "))))?;
@@ -1066,6 +1071,11 @@ roots = ["src"]
     fn git(root: &Path, args: &[&str]) {
         let output = Command::new("git")
             .current_dir(root)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_COMMON_DIR")
+            .env_remove("GIT_PREFIX")
             .args(args)
             .output()
             .expect("git command should run");
@@ -1081,6 +1091,11 @@ roots = ["src"]
     fn git_stdout(root: &Path, args: &[&str]) -> String {
         let output = Command::new("git")
             .current_dir(root)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .env_remove("GIT_COMMON_DIR")
+            .env_remove("GIT_PREFIX")
             .args(args)
             .output()
             .expect("git command should run");
