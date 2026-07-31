@@ -16,7 +16,7 @@ mise = "mise trust --quiet {{ worktree_path }}"
 
 # Detached tmux session named after the branch. Detached so creating a worktree
 # never steals the terminal — this composes with `wt switch --create -x claude`.
-tmux = "bash {{ primary_worktree_path }}/.config/wt-tmux.sh start {{ branch }} {{ worktree_path }} {{ repo }}"
+tmux = "bash {{ repo_path }}/.config/wt-tmux.sh start {{ branch }} {{ worktree_path }} {{ repo }}"
 
 [[post-start]]
 # Reflink-clone the heavy gitignored trees listed in .worktreeinclude: target/,
@@ -46,7 +46,7 @@ check = "mise run check"
 # Guarded: a worktree branched from a commit predating this script would other-
 # wise fail here, and a failing pre-remove blocks `wt remove` outright — leaving
 # the exact stale worktree this config exists to prevent. Teardown never blocks.
-tmux = "test -f {{ primary_worktree_path }}/.config/wt-tmux.sh && bash {{ primary_worktree_path }}/.config/wt-tmux.sh stop {{ branch }} {{ repo }} || true"
+tmux = "test -f {{ repo_path }}/.config/wt-tmux.sh && bash {{ repo_path }}/.config/wt-tmux.sh stop {{ branch }} {{ repo }} || true"
 
 # Reclaim the Rust build artifacts explicitly rather than relying on the
 # directory removal. target/ is gitignored, and git will not remove a worktree
