@@ -29,6 +29,11 @@ repository.
 - Accepted ADRs are immutable per ADR-0012; add a new ADR for new decisions.
 - Open findings live in GitHub Issues; settled decisions belong in `docs/adr/`.
   Do not add a findings file to the repository — there is one tracker.
+- Create worktrees with `wt`, which tears down its own. A worktree made with
+  `git worktree add` is invisible to `wt list` and survives every `wt` cleanup,
+  so remove it yourself with `git worktree remove`. `git worktree list` — not
+  `wt list` — is the authoritative inventory; check it before assuming a
+  checkout is clean. Each stray costs the full build tree, roughly 7 GB here.
 
 ## Agent skills
 
