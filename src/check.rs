@@ -101,8 +101,17 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
         });
     }
 
+    let stale_skills = outdated_skills(root)?;
     match options.format {
-        Format::Text => print_text(&diagnostics),
+        Format::Text => {
+            print_text(&diagnostics);
+            if !stale_skills.is_empty() {
+                println!(
+                    "note: {} agent skills are out of date; run `criv init --force-skills`",
+                    stale_skills.len()
+                );
+            }
+        }
         Format::Json => print_json(&diagnostics)?,
         Format::Github => print_github(&diagnostics),
     }
@@ -112,6 +121,25 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn outdated_skills(root: &Path) -> Result<Vec<&'static str>> {
+    let templates = crate::init::templates::agent_skills()
+        .iter()
+        .chain(crate::init::templates::claude_skills());
+    let mut stale = Vec::new();
+    for template in templates {
+        let path = root.join(template.path);
+        if !path.exists() {
+            continue;
+        }
+        let contents = fs::read_to_string(&path)?;
+        let expected = format!("blake3:{}", crate::init::templates::template_hash(template.contents));
+        if crate::init::templates::skill_marker(&contents) != Some(expected.as_str()) {
+            stale.push(template.path);
+        }
+    }
+    Ok(stale)
 }
 
 fn validate_markdown_format(root: &Path, fix: bool) -> Result<Vec<Diagnostic>> {

@@ -27,6 +27,57 @@ fn init(root: &Path) {
         .success();
 }
 
+fn init_with_skills(root: &Path) {
+    criv(root)
+        .args(["init", "--no-hooks", "--no-obsidian"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_nudges_only_text_output_for_stale_skills() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    init_with_skills(root);
+    let stale = root.join(".agents/skills/criv/SKILL.md");
+    let contents = fs::read_to_string(&stale).unwrap();
+    fs::write(&stale, contents.replace("criv-template: blake3:", "criv-template: blake3:stale-")).unwrap();
+
+    criv(root)
+        .arg("check")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "note: 1 agent skills are out of date; run `criv init --force-skills`",
+        ));
+
+    let json = criv(root)
+        .args(["check", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice::<Vec<serde_json::Value>>(&json).unwrap();
+    criv(root)
+        .args(["check", "--format", "github"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn check_is_silent_about_deliberately_absent_skills() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    init(root);
+    criv(root)
+        .arg("check")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("out of date").not());
+}
+
 #[test]
 fn init_check_watch_query_search_and_enforce_workflow() {
     let temp = TempDir::new().unwrap();
