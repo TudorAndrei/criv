@@ -553,6 +553,7 @@ digraph criv_code {
   "src/check.rs#fn:missing_c4_metadata_is_reported_as_warnings" [label="missing_c4_metadata_is_reported_as_warnings\nsrc/check.rs"];
   "src/check.rs#fn:missing_c4_source_target_is_reported" [label="missing_c4_source_target_is_reported\nsrc/check.rs"];
   "src/check.rs#fn:outdated_skills" [label="outdated_skills\nsrc/check.rs"];
+  "src/check.rs#fn:outdated_skills_handles_missing_and_malformed_frontmatter" [label="outdated_skills_handles_missing_and_malformed_frontmatter\nsrc/check.rs"];
   "src/check.rs#fn:policy_scope_files" [label="policy_scope_files\nsrc/check.rs"];
   "src/check.rs#fn:policy_violations" [label="policy_violations\nsrc/check.rs"];
   "src/check.rs#fn:previous_c4_interface_hashes" [label="previous_c4_interface_hashes\nsrc/check.rs"];
@@ -2062,6 +2063,7 @@ digraph criv_code {
   "src/check.rs#fn:missing_c4_source_target_is_reported" -> "src/check.rs#fn:c4_vault";
   "src/check.rs#fn:missing_c4_source_target_is_reported" -> "src/check.rs#fn:validate";
   "src/check.rs#fn:outdated_skills" -> "src/c4.rs#type:C4Level/member:as_str";
+  "src/check.rs#fn:outdated_skills_handles_missing_and_malformed_frontmatter" -> "src/check.rs#fn:unique_temp_file";
   "src/check.rs#fn:policy_scope_files" -> "src/vault.rs#type:index/member:source_files_matching_glob";
   "src/check.rs#fn:policy_violations" -> "src/check.rs#fn:policy_scope_files";
   "src/check.rs#fn:policy_violations" -> "src/vault.rs#type:index/member:effective_governs";
