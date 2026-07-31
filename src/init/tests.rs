@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use super::*;
 
@@ -13,8 +12,7 @@ fn init_writes_parseable_structured_templates() {
             no_obsidian: false,
             no_vscode: false,
             no_skills: true,
-            no_hooks: false,
-            force_hooks: false,
+            force_skills: false,
         },
     )
     .unwrap();
@@ -156,155 +154,13 @@ fn init_no_vscode_skips_extension_recommendation() {
 }
 
 #[test]
-fn init_installs_git_hooks_by_default() {
-    let root = unique_temp_dir("criv-init-hooks");
-    git_init(&root);
-
-    run(&root, fast_options()).unwrap();
-
-    assert_eq!(git_config(&root, "core.hooksPath").unwrap(), ".githooks");
-
-    let pre_commit = std::fs::read_to_string(root.join(".githooks/pre-commit")).unwrap();
-    assert!(pre_commit.contains("cd '.'"));
-    assert!(pre_commit.contains("CRIV_BIN=\"$(command -v criv)\""));
-    assert!(pre_commit.contains("CRIV_BIN=\"./target/debug/criv\""));
-    assert!(pre_commit.contains("\"$CRIV_BIN\" watch --once"));
-    assert!(pre_commit.contains("\"$CRIV_BIN\" check"));
-    assert!(pre_commit.contains("\"$CRIV_BIN\" enforce --stage commit"));
-
-    let pre_push = std::fs::read_to_string(root.join(".githooks/pre-push")).unwrap();
-    assert!(pre_push.contains("cd '.'"));
-    assert!(pre_push.contains("CRIV_BIN=\"$(command -v criv)\""));
-    assert!(pre_push.contains(
-        "\"$CRIV_BIN\" enforce --stage push --pre-push --remote-name \"$1\" --remote-url \"$2\""
-    ));
-
-    assert_executable(root.join(".githooks/pre-commit"));
-    assert_executable(root.join(".githooks/pre-push"));
-
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn init_hooks_cd_to_nested_criv_root() {
-    let root = unique_temp_dir("criv-init-hooks-nested");
-    git_init(&root);
-    let vault = root.join("docs-vault");
-    std::fs::create_dir_all(&vault).unwrap();
-
-    run(&vault, fast_options()).unwrap();
-
-    let pre_commit = std::fs::read_to_string(root.join(".githooks/pre-commit")).unwrap();
-    assert!(pre_commit.contains("cd 'docs-vault'"));
-    assert!(vault.join("criv.toml").exists());
-
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn init_hooks_are_idempotent_without_force() {
-    let root = unique_temp_dir("criv-init-hooks-idempotent");
-    git_init(&root);
-
-    run(&root, fast_options()).unwrap();
-    let hook = root.join(".githooks/pre-commit");
-    std::fs::write(&hook, "#!/bin/sh\necho custom\n").unwrap();
-
-    run(&root, fast_options()).unwrap();
-
-    assert_eq!(
-        std::fs::read_to_string(&hook).unwrap(),
-        "#!/bin/sh\necho custom\n"
-    );
-
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn init_force_hooks_overwrites_hooks_and_hookspath() {
-    let root = unique_temp_dir("criv-init-hooks-force");
-    git_init(&root);
-    git_config_set(&root, "core.hooksPath", "custom-hooks");
-    std::fs::create_dir_all(root.join(".githooks")).unwrap();
-    std::fs::write(root.join(".githooks/pre-push"), "#!/bin/sh\necho custom\n").unwrap();
-
-    let mut options = fast_options();
-    options.force_hooks = true;
-    run(&root, options).unwrap();
-
-    assert_eq!(git_config(&root, "core.hooksPath").unwrap(), ".githooks");
-    assert!(
-        std::fs::read_to_string(root.join(".githooks/pre-push"))
-            .unwrap()
-            .contains("\"$CRIV_BIN\" enforce --stage push --pre-push")
-    );
-
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn init_preserves_existing_non_criv_hookspath_without_force() {
-    let root = unique_temp_dir("criv-init-hooks-existing-hookspath");
-    git_init(&root);
-    git_config_set(&root, "core.hooksPath", "custom-hooks");
-
-    run(&root, fast_options()).unwrap();
-
-    assert_eq!(git_config(&root, "core.hooksPath").unwrap(), "custom-hooks");
-    assert!(root.join(".githooks/pre-commit").exists());
-
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn init_no_hooks_skips_hook_installation() {
-    let root = unique_temp_dir("criv-init-hooks-disabled");
-    git_init(&root);
-    let mut options = fast_options();
-    options.no_hooks = true;
-
-    run(&root, options).unwrap();
-
-    assert!(!root.join(".githooks").exists());
-    assert!(git_config(&root, "core.hooksPath").is_none());
-
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn init_outside_git_repo_skips_hooks_without_failing() {
-    let root = unique_temp_dir("criv-init-hooks-no-git");
-
-    run(&root, fast_options()).unwrap();
-
-    assert!(root.join("criv.toml").exists());
-    assert!(!root.join(".githooks").exists());
-
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn init_bare_git_repo_skips_hooks_without_failing() {
-    let root = unique_temp_dir("criv-init-hooks-bare");
-    git_init_bare(&root);
-
-    run(&root, fast_options()).unwrap();
-
-    assert!(root.join("criv.toml").exists());
-    assert!(!root.join(".githooks").exists());
-
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
 fn init_installs_c4_authoring_skill() {
     let root = unique_temp_dir("criv-init-c4-authoring-skill");
     let options = InitOptions {
         no_obsidian: true,
         no_vscode: true,
         no_skills: false,
-        no_hooks: true,
-        force_hooks: false,
+        force_skills: false,
     };
 
     run(&root, options).unwrap();
@@ -322,24 +178,130 @@ fn init_installs_c4_authoring_skill() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+#[test]
+fn init_force_skills_refreshes_existing_skills_but_plain_init_preserves_them() {
+    let root = unique_temp_dir("criv-init-force-skills");
+    let mut options = fast_options();
+    options.no_skills = false;
+    run(&root, options).unwrap();
+
+    let path = root.join(".agents/skills/criv/SKILL.md");
+    std::fs::write(&path, "locally stale\n").unwrap();
+    let mut plain = fast_options();
+    plain.no_skills = false;
+    run(&root, plain).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "locally stale\n");
+
+    let mut forced = fast_options();
+    forced.no_skills = false;
+    forced.force_skills = true;
+    run(&root, forced).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        templates::stamped_skill(templates::agent_skills()[0].contents)
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn init_force_skills_respects_no_skills() {
+    let root = unique_temp_dir("criv-init-force-no-skills");
+    let mut options = fast_options();
+    options.force_skills = true;
+    run(&root, options).unwrap();
+    assert!(!root.join(".agents/skills").exists());
+    assert!(!root.join(".claude/skills").exists());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn init_force_skills_isolates_refresh_from_other_scaffolding() {
+    let root = unique_temp_dir("criv-init-force-skills-isolated");
+    let mut options = fast_options();
+    options.force_skills = true;
+    options.no_skills = false;
+    options.no_obsidian = false;
+    options.no_vscode = false;
+    run(&root, options).unwrap();
+
+    assert!(root.join(".agents/skills/criv/SKILL.md").exists());
+    assert!(root.join(".claude/skills/criv/SKILL.md").exists());
+    for path in [
+        "criv.toml",
+        ".gitignore",
+        ".obsidian",
+        ".vscode/extensions.json",
+    ] {
+        assert!(!root.join(path).exists(), "force-skills created {path}");
+    }
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn repository_skill_copies_match_shipped_templates() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for template in templates::agent_skills() {
+        assert_eq!(
+            std::fs::read_to_string(root.join(template.path)).unwrap(),
+            templates::stamped_skill(template.contents),
+            "{} is not synchronized with its shipped template",
+            template.path
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn repository_claude_skills_is_a_link_to_the_agent_skills() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let claude = root.join(".claude/skills");
+
+    let metadata = std::fs::symlink_metadata(&claude).unwrap();
+    assert!(
+        metadata.file_type().is_symlink(),
+        ".claude/skills must be a link, not a second copy"
+    );
+    assert_eq!(
+        std::fs::canonicalize(&claude).unwrap(),
+        std::fs::canonicalize(root.join(".agents/skills")).unwrap(),
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn init_force_skills_refuses_symlinked_destination() {
+    let root = unique_temp_dir("criv-init-force-skills-symlink");
+    let outside = unique_temp_dir("criv-init-force-skills-target");
+    std::fs::create_dir_all(root.join(".agents/skills/criv")).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join(".agents/skills/criv/SKILL.md")).unwrap();
+    let mut options = fast_options();
+    options.no_skills = false;
+    options.force_skills = true;
+    let error = run(&root, options).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("refusing to write through symlinked vault path component")
+    );
+    assert!(!outside.join("SKILL.md").exists());
+
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(outside);
+}
+
 fn fast_options() -> InitOptions {
     InitOptions {
         no_obsidian: true,
         no_vscode: false,
         no_skills: true,
-        no_hooks: false,
-        force_hooks: false,
+        force_skills: false,
     }
 }
 
 #[cfg(unix)]
-fn assert_executable(path: PathBuf) {
-    use std::os::unix::fs::PermissionsExt;
-
-    let mode = std::fs::metadata(path).unwrap().permissions().mode();
-    assert_ne!(mode & 0o111, 0);
-}
-
 #[cfg(not(unix))]
 fn assert_executable(_path: PathBuf) {}
 
@@ -355,48 +317,6 @@ fn vscode_recommendations(root: &std::path::Path) -> Vec<String> {
 fn vscode_extensions_json(root: &std::path::Path) -> serde_json::Value {
     serde_json::from_str(&std::fs::read_to_string(root.join(".vscode/extensions.json")).unwrap())
         .unwrap()
-}
-
-fn git_init(root: &Path) {
-    git(root, &["init"]);
-}
-
-fn git_init_bare(root: &Path) {
-    git(root, &["init", "--bare"]);
-}
-
-fn git_config(root: &Path, key: &str) -> Option<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["config", key])
-        .output()
-        .unwrap();
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-fn git_config_set(root: &Path, key: &str, value: &str) {
-    git(root, &["config", key, value]);
-}
-
-fn git(root: &Path, args: &[&str]) {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "git -C {} {} failed: {}{}",
-        root.display(),
-        args.join(" "),
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
 }
 
 /// Per ADR-0044, documentation that a project governs has to be versioned in the
@@ -415,8 +335,7 @@ fn init_refuses_to_scaffold_through_a_symlinked_docs_directory() {
             no_obsidian: true,
             no_vscode: true,
             no_skills: true,
-            no_hooks: true,
-            force_hooks: false,
+            force_skills: false,
         },
     )
     .unwrap_err();
@@ -449,8 +368,7 @@ fn init_refuses_to_write_a_template_through_a_symlinked_state_directory() {
             no_obsidian: true,
             no_vscode: true,
             no_skills: true,
-            no_hooks: true,
-            force_hooks: false,
+            force_skills: false,
         },
     )
     .unwrap_err();
@@ -478,4 +396,52 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("{prefix}-{unique}"));
     std::fs::create_dir_all(&path).unwrap();
     path
+}
+
+#[cfg(unix)]
+#[test]
+fn init_links_claude_skills_and_leaves_copies_alone_without_the_flag() {
+    let root = unique_temp_dir("criv-init-link-claude");
+    let mut options = fast_options();
+    options.no_skills = false;
+    run(&root, options).unwrap();
+
+    let link = root.join(".claude/skills");
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        std::fs::canonicalize(&link).unwrap(),
+        std::fs::canonicalize(root.join(".agents/skills")).unwrap(),
+    );
+
+    std::fs::remove_file(&link).unwrap();
+    std::fs::create_dir_all(link.join("criv")).unwrap();
+    std::fs::write(link.join("criv/SKILL.md"), "local copy\n").unwrap();
+
+    let mut options = fast_options();
+    options.no_skills = false;
+    run(&root, options).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(link.join("criv/SKILL.md")).unwrap(),
+        "local copy\n",
+        "plain init must not delete copied skills"
+    );
+
+    let mut forced = fast_options();
+    forced.no_skills = false;
+    forced.force_skills = true;
+    run(&root, forced).unwrap();
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "--force-skills must collapse the directory into a link"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
 }

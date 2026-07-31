@@ -111,12 +111,12 @@ docs/
 .obsidian/plugins/criv/
 ```
 
-When run inside a non-bare Git repository, `criv init` also creates
-`.githooks/pre-commit` and `.githooks/pre-push`, then sets the local Git config
-`core.hooksPath` to `.githooks`. The generated hooks run `criv watch --once`,
-`criv check`, and stage-specific `criv enforce` commands during normal Git
-workflows. They use `criv` from `PATH`, falling back to `./target/debug/criv`
-in development checkouts when that binary exists.
+`criv init` does not create Git hooks and does not touch `core.hooksPath`.
+Setting that config replaces the hook directory wholesale, which would silently
+disable whichever hook runner the repository already uses. Wire criv into your
+own runner instead — see
+[docs/tooling.md](docs/tooling.md) for hk and lefthook configuration, per
+[ADR-0054](docs/adr/0054-criv-does-not-install-git-hooks.md).
 
 `criv init` recommends the VS Code-compatible companion extension through
 `.vscode/extensions.json` using the stable extension ID `criv.vscode-criv`. It
@@ -124,19 +124,20 @@ does not install the extension into VS Code, Cursor, or any other editor by
 default. A future explicit install path can shell out to a selected editor CLI
 such as `code` or `cursor` with a published extension ID or local `.vsix`.
 
-Use `--no-skills`, `--no-obsidian`, `--no-vscode`, or `--no-hooks` if you do
-not want those generated templates, editor recommendations, or hooks:
+Use `--no-skills`, `--no-obsidian`, or `--no-vscode` if you do not want those
+generated templates or editor recommendations:
 
 ```sh
 criv init --no-skills
 criv init --no-obsidian
 criv init --no-vscode
-criv init --no-hooks
 ```
 
-Existing hook files and non-criv `core.hooksPath` settings are preserved by
-default. Use `--force-hooks` to replace `.githooks/pre-commit`,
-`.githooks/pre-push`, and an existing `core.hooksPath` value.
+`criv check` may report that installed agent skills are out of date. Refresh
+only those criv-owned generated files with `criv init --force-skills`; it does
+not create or change hooks, editor scaffolding, vault configuration, or
+`.gitignore`. Refreshing deliberately replaces any local edits to those skill
+files. JSON and GitHub check output never include this advisory note.
 
 Check the vault before committing documentation or code changes:
 

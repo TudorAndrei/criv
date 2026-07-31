@@ -1,6 +1,8 @@
 ---
 name: criv-me
 description: Use when the user wants to develop a plan, make architectural or product decisions, stress-test a proposal against existing criv docs/ADRs/code, and capture settled rationale in the criv documentation graph.
+metadata:
+  criv-template: blake3:c6b36cf69a3bb7a2
 ---
 
 # criv-me

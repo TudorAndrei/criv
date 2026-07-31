@@ -61,6 +61,9 @@ tree-sitter-rust = "0.24"
 tree-sitter-typescript = "0.23"
 usage = { package = "usage-lib", version = "3.5.3", features = ["clap"] }
 
+[target.'cfg(windows)'.dependencies]
+junction = "2"
+
 [dev-dependencies]
 assert_cmd = "2"
 predicates = "3"

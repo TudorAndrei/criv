@@ -1,11 +1,15 @@
 ---
 name: criv
 description: Use when working in a criv vault to keep docs, ADRs, source references, checks, state, and enforcement in sync with code changes.
+metadata:
+  criv-template: blake3:327af014c057bef3
 ---
 
 # criv
 
 Use `criv` to keep repository documentation connected to source code.
+
+For the full query surface, see `docs/query-reference.md`.
 
 Core workflow:
 

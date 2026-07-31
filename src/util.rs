@@ -41,6 +41,125 @@ pub(crate) fn create_dir_in(root: &Path, destination: &Path) -> Result<()> {
     reject_symlink_components(&root, destination)
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum LinkOutcome {
+    Unchanged,
+    Created,
+    Replaced,
+    DirectoryInTheWay,
+    Unsupported,
+}
+
+/// Point `destination` at `target`, both vault-relative. Governed by ADR-0053.
+pub(crate) fn link_dir_in(
+    root: &Path,
+    destination: &Path,
+    target: &Path,
+    replace_directory: bool,
+) -> Result<LinkOutcome> {
+    validate_relative_path("link destination", destination)?;
+    validate_relative_path("link target", target)?;
+    let root = fs::canonicalize(root).map_err(|err| {
+        CrivError::new(format!(
+            "failed to resolve vault root {} for confined link: {err}",
+            root.display()
+        ))
+    })?;
+
+    if let Some(parent) = destination.parent() {
+        reject_symlink_components(&root, parent)?;
+    }
+
+    let link_path = root.join(destination);
+    let target_path = root.join(target);
+    let relative_target = relative_link_target(destination, target);
+
+    match fs::symlink_metadata(&link_path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let current = fs::read_link(&link_path).unwrap_or_default();
+            let resolves_to_target = fs::canonicalize(&link_path)
+                .ok()
+                .zip(fs::canonicalize(&target_path).ok())
+                .is_some_and(|(link, target)| link == target);
+            if current == relative_target || resolves_to_target {
+                return Ok(LinkOutcome::Unchanged);
+            }
+            fs::remove_file(&link_path)?;
+        }
+        Ok(metadata) if metadata.is_dir() => {
+            if !replace_directory {
+                return Ok(LinkOutcome::DirectoryInTheWay);
+            }
+            fs::remove_dir_all(&link_path)?;
+            return finish_link(&root, destination, &relative_target, &target_path).map(
+                |created| {
+                    if created {
+                        LinkOutcome::Replaced
+                    } else {
+                        LinkOutcome::Unsupported
+                    }
+                },
+            );
+        }
+        Ok(_) => fs::remove_file(&link_path)?,
+        Err(_) => {}
+    }
+
+    finish_link(&root, destination, &relative_target, &target_path).map(|created| {
+        if created {
+            LinkOutcome::Created
+        } else {
+            LinkOutcome::Unsupported
+        }
+    })
+}
+
+/// Returns false when the platform refuses to create the link.
+fn finish_link(
+    root: &Path,
+    destination: &Path,
+    relative_target: &Path,
+    absolute_target: &Path,
+) -> Result<bool> {
+    if let Some(parent) = destination.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        create_dir_in(root, parent)?;
+    }
+    let link_path = root.join(destination);
+
+    #[cfg(unix)]
+    let result = std::os::unix::fs::symlink(relative_target, &link_path);
+    #[cfg(windows)]
+    let result = junction::create(absolute_target, &link_path);
+    #[cfg(not(any(unix, windows)))]
+    let result = Err(std::io::Error::other(
+        "links are unsupported on this platform",
+    ));
+
+    #[cfg(not(windows))]
+    let _ = absolute_target;
+
+    match result {
+        Ok(()) => Ok(true),
+        Err(_) => Ok(false),
+    }
+}
+
+/// Path from the link's directory to the target.
+fn relative_link_target(destination: &Path, target: &Path) -> PathBuf {
+    let depth = destination
+        .parent()
+        .map(|parent| parent.components().count())
+        .unwrap_or(0);
+    let mut relative = PathBuf::new();
+    for _ in 0..depth {
+        relative.push("..");
+    }
+    relative.push(target);
+    relative
+}
+
 /// Write `destination` only if it does not already exist, under the same
 /// confinement rules as [`write_atomic_in`]. Returns whether the file was
 /// created.

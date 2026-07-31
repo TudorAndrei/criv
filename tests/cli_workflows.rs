@@ -22,9 +22,118 @@ fn criv(root: &Path) -> Command {
 
 fn init(root: &Path) {
     criv(root)
-        .args(["init", "--no-hooks", "--no-obsidian", "--no-skills"])
+        .args(["init", "--no-obsidian", "--no-skills"])
         .assert()
         .success();
+}
+
+fn init_with_skills(root: &Path) {
+    criv(root)
+        .args(["init", "--no-obsidian"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_nudges_only_text_output_for_stale_skills() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    init_with_skills(root);
+    let stale = root.join(".agents/skills/criv/SKILL.md");
+    let contents = fs::read_to_string(&stale).unwrap();
+    fs::write(
+        &stale,
+        contents.replace("criv-template: blake3:", "criv-template: blake3:stale-"),
+    )
+    .unwrap();
+
+    criv(root)
+        .arg("check")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "note: 1 agent skill is out of date; run `criv init --force-skills`",
+        ));
+    criv(root)
+        .args(["check", "--filter", "does-not-match"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "note: 1 agent skill is out of date; run `criv init --force-skills`",
+        ));
+
+    let json = criv(root)
+        .args(["check", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice::<Vec<serde_json::Value>>(&json).unwrap();
+    criv(root)
+        .args(["check", "--format", "github"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn check_is_silent_about_deliberately_absent_skills() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    criv(root)
+        .args(["init", "--no-obsidian", "--no-vscode", "--no-skills"])
+        .assert()
+        .success();
+    criv(root)
+        .arg("check")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("out of date").not());
+}
+
+#[test]
+fn force_skills_cli_refresh_creates_only_skills() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    criv(root)
+        .args(["init", "--no-obsidian", "--no-vscode", "--no-skills"])
+        .assert()
+        .success();
+
+    criv(root)
+        .args(["init", "--force-skills"])
+        .assert()
+        .success();
+
+    assert!(root.join(".agents/skills/criv/SKILL.md").exists());
+    assert!(root.join(".claude/skills/criv/SKILL.md").exists());
+    assert!(!root.join(".obsidian").exists());
+    assert!(!root.join(".vscode/extensions.json").exists());
+    assert!(!root.join(".githooks").exists());
+}
+
+#[test]
+fn unreadable_skill_content_never_breaks_check_or_machine_formats() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    init_with_skills(root);
+    fs::write(root.join(".agents/skills/criv/SKILL.md"), [0xff, 0xfe]).unwrap();
+
+    criv(root).arg("check").assert().success();
+    let json = criv(root)
+        .args(["check", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    serde_json::from_slice::<Vec<serde_json::Value>>(&json).unwrap();
+    criv(root)
+        .args(["check", "--format", "github"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
 }
 
 #[test]
@@ -1759,6 +1868,11 @@ title: Orphan
 fn git(root: &Path, args: &[&str]) {
     let output = std::process::Command::new("git")
         .current_dir(root)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_PREFIX")
         .args(args)
         .output()
         .expect("git command should run");

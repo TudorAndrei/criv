@@ -56,3 +56,5 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0043-hawk-visibility-analysis|ADR-0043]] - Hawk visibility analysis
 - [[0044-vault-write-confinement|ADR-0044]] - Vault write confinement
 - [[0045-note-line-identity-in-generated-state|ADR-0045]] - Note line identity in generated state
+- [[0051-refresh-generated-agent-skills|ADR-0051]] - Refresh generated agent skills explicitly
+- [[0052-harden-generated-skill-refresh|ADR-0052]] - Harden generated skill refresh

@@ -72,3 +72,38 @@ jobs:
 
       - name: Run repository checks
         run: xvfb-run -a mise run check
+
+  windows:
+    name: Windows build and tests
+    runs-on: windows-2025
+    # Reports without blocking until #27 and #28 are fixed. Those are
+    # pre-existing Windows failures unrelated to any current change; this job is
+    # the first time criv has been built or tested on Windows. Remove once they
+    # are closed, so the job becomes a real gate.
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Cache Cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Install Rust
+        run: rustup toolchain install 1.97.1 --profile minimal --no-self-update
+
+      - name: Build
+        run: cargo +1.97.1 build --workspace
+
+      - name: Test
+        run: cargo +1.97.1 test --workspace

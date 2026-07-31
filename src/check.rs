@@ -102,7 +102,21 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
     }
 
     match options.format {
-        Format::Text => print_text(&diagnostics),
+        Format::Text => {
+            print_text(&diagnostics);
+            let stale_skills = outdated_skills(root);
+            if !stale_skills.is_empty() {
+                let subject = if stale_skills.len() == 1 {
+                    "skill is"
+                } else {
+                    "skills are"
+                };
+                println!(
+                    "note: {} agent {subject} out of date; run `criv init --force-skills`",
+                    stale_skills.len()
+                );
+            }
+        }
         Format::Json => print_json(&diagnostics)?,
         Format::Github => print_github(&diagnostics),
     }
@@ -112,6 +126,40 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Advisory only. Governed by ADR-0053.
+fn outdated_skills(root: &Path) -> Vec<&'static str> {
+    let templates = crate::init::templates::agent_skills().iter();
+    let mut stale = Vec::new();
+
+    let claude_skills = root.join(".claude/skills");
+    if let Ok(metadata) = fs::symlink_metadata(&claude_skills)
+        && metadata.is_dir()
+        && !metadata.file_type().is_symlink()
+    {
+        stale.push(".claude/skills");
+    }
+
+    for template in templates {
+        let path = root.join(template.path);
+        if !path.exists() {
+            continue;
+        }
+        let Ok(contents) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let expected = format!(
+            "blake3:{}",
+            crate::init::templates::template_hash(&crate::init::templates::unstamped_skill(
+                template.contents,
+            ))
+        );
+        if crate::init::templates::skill_marker(&contents).as_deref() != Some(expected.as_str()) {
+            stale.push(template.path);
+        }
+    }
+    stale
 }
 
 fn validate_markdown_format(root: &Path, fix: bool) -> Result<Vec<Diagnostic>> {
@@ -1332,6 +1380,26 @@ fn warning(
 mod tests {
     use super::*;
     use crate::vault::WikiLink;
+
+    #[test]
+    fn outdated_skills_handles_missing_and_malformed_frontmatter() {
+        let root = unique_temp_file("criv-outdated-skills", "root");
+        let root = root.parent().unwrap().join("skills-root");
+        fs::create_dir_all(&root).unwrap();
+
+        assert!(outdated_skills(&root).is_empty());
+
+        let template = &crate::init::templates::agent_skills()[0];
+        let path = root.join(template.path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "not frontmatter\n").unwrap();
+        assert_eq!(outdated_skills(&root), vec![template.path]);
+
+        fs::write(&path, "---\nmetadata: [not valid\n---\n").unwrap();
+        assert_eq!(outdated_skills(&root), vec![template.path]);
+
+        let _ = fs::remove_dir_all(root.parent().unwrap());
+    }
 
     #[test]
     fn github_annotation_escapes_workflow_command_data() {

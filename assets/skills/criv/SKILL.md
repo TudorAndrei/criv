@@ -7,6 +7,8 @@ description: Use when working in a criv vault to keep docs, ADRs, source referen
 
 Use `criv` to keep repository documentation connected to source code.
 
+For the full query surface, see `docs/query-reference.md`.
+
 Core workflow:
 
 - Run `criv watch --once` after code or docs changes to refresh `.criv/state.json`.
