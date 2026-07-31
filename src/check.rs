@@ -134,7 +134,10 @@ fn outdated_skills(root: &Path) -> Result<Vec<&'static str>> {
             continue;
         }
         let contents = fs::read_to_string(&path)?;
-        let expected = format!("blake3:{}", crate::init::templates::template_hash(template.contents));
+        let expected = format!(
+            "blake3:{}",
+            crate::init::templates::template_hash(template.contents)
+        );
         if crate::init::templates::skill_marker(&contents) != Some(expected.as_str()) {
             stale.push(template.path);
         }

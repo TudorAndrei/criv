@@ -41,10 +41,21 @@ fn check_nudges_only_text_output_for_stale_skills() {
     init_with_skills(root);
     let stale = root.join(".agents/skills/criv/SKILL.md");
     let contents = fs::read_to_string(&stale).unwrap();
-    fs::write(&stale, contents.replace("criv-template: blake3:", "criv-template: blake3:stale-")).unwrap();
+    fs::write(
+        &stale,
+        contents.replace("criv-template: blake3:", "criv-template: blake3:stale-"),
+    )
+    .unwrap();
 
     criv(root)
         .arg("check")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "note: 1 agent skills are out of date; run `criv init --force-skills`",
+        ));
+    criv(root)
+        .args(["check", "--filter", "does-not-match"])
         .assert()
         .success()
         .stdout(predicate::str::contains(

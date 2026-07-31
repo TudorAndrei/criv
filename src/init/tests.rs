@@ -393,9 +393,11 @@ fn init_force_skills_refuses_symlinked_destination() {
     options.no_hooks = true;
     options.force_skills = true;
     let error = run(&root, options).unwrap_err();
-    assert!(error
-        .to_string()
-        .contains("refusing to write through symlinked vault path component"));
+    assert!(
+        error
+            .to_string()
+            .contains("refusing to write through symlinked vault path component")
+    );
     assert!(!outside.join("SKILL.md").exists());
 
     let _ = std::fs::remove_dir_all(root);
