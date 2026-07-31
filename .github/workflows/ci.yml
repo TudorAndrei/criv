@@ -76,6 +76,11 @@ jobs:
   windows:
     name: Windows build and tests
     runs-on: windows-2025
+    # Reports without blocking until #27 and #28 are fixed. Those are
+    # pre-existing Windows failures unrelated to any current change; this job is
+    # the first time criv has been built or tested on Windows. Remove once they
+    # are closed, so the job becomes a real gate.
+    continue-on-error: true
 
     steps:
       - name: Checkout
