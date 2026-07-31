@@ -60,7 +60,7 @@ pub(crate) fn agent_skills() -> &'static [StaticTemplate] {
     AGENT_SKILLS
 }
 
-pub(crate) fn claude_skills() -> &'static [StaticTemplate] {
+pub(crate) fn claude_skills_fallback() -> &'static [StaticTemplate] {
     CLAUDE_SKILLS
 }
 

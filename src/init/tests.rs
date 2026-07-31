@@ -395,16 +395,31 @@ fn init_force_skills_isolates_refresh_from_other_scaffolding() {
 #[test]
 fn repository_skill_copies_match_shipped_templates() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    for templates in [templates::agent_skills(), templates::claude_skills()] {
-        for template in templates {
-            assert_eq!(
-                std::fs::read_to_string(root.join(template.path)).unwrap(),
-                templates::stamped_skill(template.contents),
-                "{} is not synchronized with its shipped template",
-                template.path
-            );
-        }
+    for template in templates::agent_skills() {
+        assert_eq!(
+            std::fs::read_to_string(root.join(template.path)).unwrap(),
+            templates::stamped_skill(template.contents),
+            "{} is not synchronized with its shipped template",
+            template.path
+        );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn repository_claude_skills_is_a_link_to_the_agent_skills() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let claude = root.join(".claude/skills");
+
+    let metadata = std::fs::symlink_metadata(&claude).unwrap();
+    assert!(
+        metadata.file_type().is_symlink(),
+        ".claude/skills must be a link, not a second copy"
+    );
+    assert_eq!(
+        std::fs::canonicalize(&claude).unwrap(),
+        std::fs::canonicalize(root.join(".agents/skills")).unwrap(),
+    );
 }
 
 #[cfg(unix)]
@@ -589,4 +604,52 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("{prefix}-{unique}"));
     std::fs::create_dir_all(&path).unwrap();
     path
+}
+
+#[cfg(unix)]
+#[test]
+fn init_links_claude_skills_and_leaves_copies_alone_without_the_flag() {
+    let root = unique_temp_dir("criv-init-link-claude");
+    let mut options = fast_options();
+    options.no_skills = false;
+    run(&root, options).unwrap();
+
+    let link = root.join(".claude/skills");
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        std::fs::canonicalize(&link).unwrap(),
+        std::fs::canonicalize(root.join(".agents/skills")).unwrap(),
+    );
+
+    std::fs::remove_file(&link).unwrap();
+    std::fs::create_dir_all(link.join("criv")).unwrap();
+    std::fs::write(link.join("criv/SKILL.md"), "local copy\n").unwrap();
+
+    let mut options = fast_options();
+    options.no_skills = false;
+    run(&root, options).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(link.join("criv/SKILL.md")).unwrap(),
+        "local copy\n",
+        "plain init must not delete copied skills"
+    );
+
+    let mut forced = fast_options();
+    forced.no_skills = false;
+    forced.force_skills = true;
+    run(&root, forced).unwrap();
+    assert!(
+        std::fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "--force-skills must collapse the directory into a link"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
 }

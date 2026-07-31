@@ -106,8 +106,6 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
             print_text(&diagnostics);
             let stale_skills = outdated_skills(root);
             if !stale_skills.is_empty() {
-                // Refreshing one skill is the common case after a single
-                // template edit, so the singular is the message people see most.
                 let subject = if stale_skills.len() == 1 {
                     "skill is"
                 } else {
@@ -130,14 +128,19 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
     Ok(())
 }
 
-/// This is deliberately best-effort. A stale skill is an advisory note, so it
-/// must never turn a successful check into an error or contaminate a
-/// machine-readable output format.
+/// Advisory only. Governed by ADR-0053.
 fn outdated_skills(root: &Path) -> Vec<&'static str> {
-    let templates = crate::init::templates::agent_skills()
-        .iter()
-        .chain(crate::init::templates::claude_skills());
+    let templates = crate::init::templates::agent_skills().iter();
     let mut stale = Vec::new();
+
+    let claude_skills = root.join(".claude/skills");
+    if let Ok(metadata) = fs::symlink_metadata(&claude_skills)
+        && metadata.is_dir()
+        && !metadata.file_type().is_symlink()
+    {
+        stale.push(".claude/skills");
+    }
+
     for template in templates {
         let path = root.join(template.path);
         if !path.exists() {

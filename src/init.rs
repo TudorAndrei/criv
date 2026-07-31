@@ -10,9 +10,13 @@ use std::process::{Command, ExitStatus};
 use clap::Args as ClapArgs;
 
 use crate::util::{
-    append_line_if_missing_in, create_dir_in, normalize_rel, write_atomic_in, write_new_in,
+    LinkOutcome, append_line_if_missing_in, create_dir_in, link_dir_in, normalize_rel,
+    write_atomic_in, write_new_in,
 };
 use crate::{CrivError, Result};
+
+const AGENT_SKILLS_DIR: &str = ".agents/skills";
+const CLAUDE_SKILLS_DIR: &str = ".claude/skills";
 
 const VSCODE_EXTENSION_ID: &str = "criv.vscode-criv";
 const VSCODE_EXTENSIONS_JSON: &str = ".vscode/extensions.json";
@@ -48,9 +52,6 @@ pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
     let mut refreshed = Vec::new();
     let mut hook_messages = Vec::new();
 
-    // The stale-skill nudge points here. Keep that remediation narrow: a vault
-    // that deliberately declined hooks or editor scaffolding must not acquire
-    // unrelated files merely by refreshing criv-owned skills.
     if options.force_skills {
         if !options.no_skills {
             write_templates(
@@ -60,13 +61,7 @@ pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
                 &mut created,
                 &mut refreshed,
             )?;
-            write_templates(
-                root,
-                templates::claude_skills(),
-                true,
-                &mut created,
-                &mut refreshed,
-            )?;
+            hook_messages.push(link_claude_skills(root, true)?);
         }
         print_init_result(created, refreshed, hook_messages);
         return Ok(());
@@ -103,13 +98,7 @@ pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
             &mut created,
             &mut refreshed,
         )?;
-        write_templates(
-            root,
-            templates::claude_skills(),
-            options.force_skills,
-            &mut created,
-            &mut refreshed,
-        )?;
+        hook_messages.push(link_claude_skills(root, options.force_skills)?);
     }
 
     if !options.no_obsidian {
@@ -405,6 +394,40 @@ fn git_command_error(context: &str, result: &GitResult) -> CrivError {
     } else {
         CrivError::new(format!("{context}: {detail}"))
     }
+}
+
+/// Point `.claude/skills` at `.agents/skills`. Governed by ADR-0053.
+fn link_claude_skills(root: &Path, replace_directory: bool) -> Result<String> {
+    let outcome = link_dir_in(
+        root,
+        Path::new(CLAUDE_SKILLS_DIR),
+        Path::new(AGENT_SKILLS_DIR),
+        replace_directory,
+    )?;
+    Ok(match outcome {
+        LinkOutcome::Unchanged => {
+            format!("skipped {CLAUDE_SKILLS_DIR}: already linked to {AGENT_SKILLS_DIR}")
+        }
+        LinkOutcome::Created => format!("linked {CLAUDE_SKILLS_DIR} to {AGENT_SKILLS_DIR}"),
+        LinkOutcome::Replaced => {
+            format!("replaced copied {CLAUDE_SKILLS_DIR} with a link to {AGENT_SKILLS_DIR}")
+        }
+        LinkOutcome::DirectoryInTheWay => format!(
+            "skipped {CLAUDE_SKILLS_DIR}: holds copied files; run `criv init --force-skills` to replace them with a link"
+        ),
+        LinkOutcome::Unsupported => {
+            let mut created = Vec::new();
+            let mut refreshed = Vec::new();
+            write_templates(
+                root,
+                templates::claude_skills_fallback(),
+                replace_directory,
+                &mut created,
+                &mut refreshed,
+            )?;
+            format!("copied {CLAUDE_SKILLS_DIR}: this platform does not support directory links")
+        }
+    })
 }
 
 fn write_templates(
