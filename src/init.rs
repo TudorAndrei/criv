@@ -1,4 +1,4 @@
-mod templates;
+pub(crate) mod templates;
 
 #[cfg(test)]
 mod tests;
@@ -29,6 +29,8 @@ pub(crate) struct InitOptions {
     no_hooks: bool,
     #[arg(long)]
     force_hooks: bool,
+    #[arg(long)]
+    force_skills: bool,
 }
 
 pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
@@ -43,6 +45,7 @@ pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
         ))
     })?;
     let mut created = Vec::new();
+    let mut refreshed = Vec::new();
     let mut hook_messages = Vec::new();
 
     write_template(
@@ -69,8 +72,20 @@ pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
     )?;
 
     if !options.no_skills {
-        write_templates(root, templates::agent_skills(), &mut created)?;
-        write_templates(root, templates::claude_skills(), &mut created)?;
+        write_templates(
+            root,
+            templates::agent_skills(),
+            options.force_skills,
+            &mut created,
+            &mut refreshed,
+        )?;
+        write_templates(
+            root,
+            templates::claude_skills(),
+            options.force_skills,
+            &mut created,
+            &mut refreshed,
+        )?;
     }
 
     if !options.no_obsidian {
@@ -94,12 +109,15 @@ pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
         hook_messages = install_git_hooks(root, options.force_hooks)?;
     }
 
-    if created.is_empty() {
+    if created.is_empty() && refreshed.is_empty() {
         println!("criv vault already initialized");
     } else {
         println!("initialized criv vault");
         for path in created {
             println!("created {path}");
+        }
+        for path in refreshed {
+            println!("refreshed {path}");
         }
     }
     for message in hook_messages {
@@ -360,10 +378,20 @@ fn git_command_error(context: &str, result: &GitResult) -> CrivError {
 fn write_templates(
     root: &Path,
     templates: &[templates::StaticTemplate],
+    force: bool,
     created: &mut Vec<&'static str>,
+    refreshed: &mut Vec<&'static str>,
 ) -> Result<()> {
     for template in templates {
-        write_template(root, template.path, template.contents, created)?;
+        let contents = templates::stamped_skill(template.contents);
+        if force && root.join(template.path).exists() {
+            // Keep the same confined, symlink-safe path as create-only
+            // scaffolding; only the publication mode changes.
+            write_atomic_in(root, Path::new("."), Path::new(template.path), &contents)?;
+            refreshed.push(template.path);
+        } else if write_new_in(root, Path::new("."), Path::new(template.path), &contents)? {
+            created.push(template.path);
+        }
     }
     Ok(())
 }

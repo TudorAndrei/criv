@@ -15,6 +15,7 @@ fn init_writes_parseable_structured_templates() {
             no_skills: true,
             no_hooks: false,
             force_hooks: false,
+            force_skills: false,
         },
     )
     .unwrap();
@@ -305,6 +306,7 @@ fn init_installs_c4_authoring_skill() {
         no_skills: false,
         no_hooks: true,
         force_hooks: false,
+        force_skills: false,
     };
 
     run(&root, options).unwrap();
@@ -322,6 +324,84 @@ fn init_installs_c4_authoring_skill() {
     let _ = std::fs::remove_dir_all(root);
 }
 
+#[test]
+fn init_force_skills_refreshes_existing_skills_but_plain_init_preserves_them() {
+    let root = unique_temp_dir("criv-init-force-skills");
+    let mut options = fast_options();
+    options.no_skills = false;
+    options.no_hooks = true;
+    run(&root, options).unwrap();
+
+    let path = root.join(".agents/skills/criv/SKILL.md");
+    std::fs::write(&path, "locally stale\n").unwrap();
+    let mut plain = fast_options();
+    plain.no_skills = false;
+    plain.no_hooks = true;
+    run(&root, plain).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "locally stale\n");
+
+    let mut forced = fast_options();
+    forced.no_skills = false;
+    forced.no_hooks = true;
+    forced.force_skills = true;
+    run(&root, forced).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        templates::stamped_skill(templates::agent_skills()[0].contents)
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn init_force_skills_respects_no_skills() {
+    let root = unique_temp_dir("criv-init-force-no-skills");
+    let mut options = fast_options();
+    options.no_hooks = true;
+    options.force_skills = true;
+    run(&root, options).unwrap();
+    assert!(!root.join(".agents/skills").exists());
+    assert!(!root.join(".claude/skills").exists());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn repository_skill_copies_match_shipped_templates() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for templates in [templates::agent_skills(), templates::claude_skills()] {
+        for template in templates {
+            assert_eq!(
+                std::fs::read_to_string(root.join(template.path)).unwrap(),
+                templates::stamped_skill(template.contents),
+                "{} is not synchronized with its shipped template",
+                template.path
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn init_force_skills_refuses_symlinked_destination() {
+    let root = unique_temp_dir("criv-init-force-skills-symlink");
+    let outside = unique_temp_dir("criv-init-force-skills-target");
+    std::fs::create_dir_all(root.join(".agents/skills/criv")).unwrap();
+    std::os::unix::fs::symlink(&outside, root.join(".agents/skills/criv/SKILL.md")).unwrap();
+    let mut options = fast_options();
+    options.no_skills = false;
+    options.no_hooks = true;
+    options.force_skills = true;
+    let error = run(&root, options).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("refusing to write through symlinked vault path component"));
+    assert!(!outside.join("SKILL.md").exists());
+
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(outside);
+}
+
 fn fast_options() -> InitOptions {
     InitOptions {
         no_obsidian: true,
@@ -329,6 +409,7 @@ fn fast_options() -> InitOptions {
         no_skills: true,
         no_hooks: false,
         force_hooks: false,
+        force_skills: false,
     }
 }
 
@@ -417,6 +498,7 @@ fn init_refuses_to_scaffold_through_a_symlinked_docs_directory() {
             no_skills: true,
             no_hooks: true,
             force_hooks: false,
+            force_skills: false,
         },
     )
     .unwrap_err();
@@ -451,6 +533,7 @@ fn init_refuses_to_write_a_template_through_a_symlinked_state_directory() {
             no_skills: true,
             no_hooks: true,
             force_hooks: false,
+            force_skills: false,
         },
     )
     .unwrap_err();
