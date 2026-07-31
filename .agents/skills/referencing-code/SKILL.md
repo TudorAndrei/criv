@@ -1,6 +1,8 @@
 ---
 name: referencing-code
 description: Use when adding criv wiki-links from docs or ADRs to source files, symbols, line ranges, patterns, and notes.
+metadata:
+  criv-template: blake3:0a07d759a1b2706c
 ---
 
 # Referencing code

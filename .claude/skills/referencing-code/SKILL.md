@@ -1,6 +1,8 @@
 ---
 name: referencing-code
 description: Use when adding criv wiki-links from docs or ADRs to source files, symbols, line ranges, patterns, and notes.
+metadata:
+  criv-template: blake3:0a07d759a1b2706c
 ---
 
 # Referencing code
@@ -11,6 +13,6 @@ Use wiki-links for code, pattern, and note references.
 - Source symbol: `[[src/auth/verify.rs#verify_token]]`
 - Source lines: `[[src/auth/verify.rs#L42-L67]]`
 - Pattern: `[[match:ADR-0007/no-block-on-in-handler]]`
-- Note: `[[ADR-0007]]`
+- Note: `[[0007-content-addressed-state-and-diffing|ADR-0007]]`
 
 Partial source paths are allowed, but `criv check` warns when they are ambiguous.

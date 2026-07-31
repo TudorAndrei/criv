@@ -1,6 +1,8 @@
 ---
 name: c4-authoring
 description: Use when authoring or reviewing criv C4 architecture artifacts, including Mermaid C4 blocks, standalone .c4 files, source anchors, and implementation drift expectations.
+metadata:
+  criv-template: blake3:0e8c167dd42491e5
 ---
 
 # C4 authoring
@@ -87,3 +89,7 @@ Before finishing:
 - Source anchors point at real implementation symbols when the diagram claims to
   describe existing code.
 - The artifact remains useful as text without opening a visual renderer.
+
+Inspect existing diagrams with `criv query c4-elements <note-id>` and `criv
+query c4-relationships <note-id>`. Generate a focused code diagram with `criv
+query c4-code <path-glob>` when it would clarify an implementation boundary.

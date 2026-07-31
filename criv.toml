@@ -21,6 +21,7 @@ roots = [
   "README.md",
   "assets/skills",
   ".agents/skills",
+  ".claude/skills",
 ]
 exclude = [
   "**/target/**",

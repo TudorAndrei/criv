@@ -1,11 +1,14 @@
 ---
 name: writing-decisions
 description: Use when creating or updating criv ADRs under docs/adr with required metadata, governs scopes, and policy patterns.
+metadata:
+  criv-template: blake3:f1375495f974319f
 ---
 
 # Writing decisions
 
 Decision notes use `kind: decision`, an ID like `ADR-0001`, and live under `docs/adr/`.
+Get the next available ID with `criv query next-adr-id`; do not guess it.
 
 Required fields:
 
