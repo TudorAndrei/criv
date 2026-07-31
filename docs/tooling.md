@@ -39,6 +39,70 @@ Workflow YAML under `.github/workflows/` is checked with actionlint in
 hooks so local validation does not require a GitHub token or network access.
 This follow-up hook decision is [[0018-offline-zizmor-actions-security-check|ADR-0018]].
 
+## Running criv from a hook runner
+
+criv does not install Git hooks and does not set `core.hooksPath`, per
+[[0054-criv-does-not-install-git-hooks|ADR-0054]]. Setting that config replaces
+the hook directory wholesale, which silently disables whichever runner the
+repository already uses. Wire criv into your own runner instead.
+
+The commands are stable:
+
+| Stage | Commands |
+|-------|----------|
+| commit | `criv watch --once`, `criv check`, `criv enforce --stage commit` |
+| push | `criv enforce --stage push` |
+
+`watch --once` refreshes `.criv/state.json` so the `check` that follows validates
+current state. Run them in that order.
+
+With hk, as this repository does in `hk.pkl`:
+
+```pkl
+local criv_check = new Step {
+  glob = List("**/*.md", "criv.toml")
+  check_first = true
+  check = "criv check"
+  fix = "criv check --fix"
+}
+
+local criv_enforce_commit = new Step {
+  check = "criv enforce --stage commit"
+}
+
+hooks {
+  ["pre-commit"] {
+    fix = true
+    steps {
+      ["criv-check"] = criv_check
+      ["criv-enforce"] = criv_enforce_commit
+    }
+  }
+}
+```
+
+With [lefthook](https://lefthook.dev), in `lefthook.yml`:
+
+```yaml
+pre-commit:
+  parallel: false
+  commands:
+    criv-watch:
+      run: criv watch --once
+    criv-check:
+      run: criv check
+    criv-enforce:
+      run: criv enforce --stage commit
+
+pre-push:
+  commands:
+    criv-enforce:
+      run: criv enforce --stage push
+```
+
+Keep `parallel: false` for the commit stage: `check` reads the state `watch`
+writes, so they must not overlap.
+
 Manual task entry points are:
 
 ```sh

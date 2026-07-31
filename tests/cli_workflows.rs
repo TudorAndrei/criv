@@ -22,14 +22,14 @@ fn criv(root: &Path) -> Command {
 
 fn init(root: &Path) {
     criv(root)
-        .args(["init", "--no-hooks", "--no-obsidian", "--no-skills"])
+        .args(["init", "--no-obsidian", "--no-skills"])
         .assert()
         .success();
 }
 
 fn init_with_skills(root: &Path) {
     criv(root)
-        .args(["init", "--no-hooks", "--no-obsidian"])
+        .args(["init", "--no-obsidian"])
         .assert()
         .success();
 }
@@ -82,13 +82,7 @@ fn check_is_silent_about_deliberately_absent_skills() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     criv(root)
-        .args([
-            "init",
-            "--no-hooks",
-            "--no-obsidian",
-            "--no-vscode",
-            "--no-skills",
-        ])
+        .args(["init", "--no-obsidian", "--no-vscode", "--no-skills"])
         .assert()
         .success();
     criv(root)
@@ -103,13 +97,7 @@ fn force_skills_cli_refresh_creates_only_skills() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     criv(root)
-        .args([
-            "init",
-            "--no-hooks",
-            "--no-obsidian",
-            "--no-vscode",
-            "--no-skills",
-        ])
+        .args(["init", "--no-obsidian", "--no-vscode", "--no-skills"])
         .assert()
         .success();
 

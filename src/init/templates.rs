@@ -172,46 +172,6 @@ pub(crate) fn skill_marker(contents: &str) -> Option<String> {
     None
 }
 
-pub(crate) fn pre_commit_hook(repo_relative_root: &str) -> String {
-    format!(
-        r#"#!/bin/sh
-set -eu
-cd {}
-if command -v criv >/dev/null 2>&1; then
-  CRIV_BIN="$(command -v criv)"
-elif [ -x ./target/debug/criv ]; then
-  CRIV_BIN="./target/debug/criv"
-else
-  echo "criv hook failed: criv is not on PATH" >&2
-  exit 127
-fi
-"$CRIV_BIN" watch --once
-"$CRIV_BIN" check
-"$CRIV_BIN" enforce --stage commit
-"#,
-        shell_quote(repo_relative_root)
-    )
-}
-
-pub(crate) fn pre_push_hook(repo_relative_root: &str) -> String {
-    format!(
-        r#"#!/bin/sh
-set -eu
-cd {}
-if command -v criv >/dev/null 2>&1; then
-  CRIV_BIN="$(command -v criv)"
-elif [ -x ./target/debug/criv ]; then
-  CRIV_BIN="./target/debug/criv"
-else
-  echo "criv hook failed: criv is not on PATH" >&2
-  exit 127
-fi
-"$CRIV_BIN" enforce --stage push --pre-push --remote-name "$1" --remote-url "$2"
-"#,
-        shell_quote(repo_relative_root)
-    )
-}
-
 pub(crate) fn obsidian_plugin() -> Result<Vec<TemplateFile>> {
     Ok(vec![
         TemplateFile::generated(
@@ -252,10 +212,6 @@ pub(crate) fn obsidian_plugin() -> Result<Vec<TemplateFile>> {
             PLUGIN_CORE_TEST,
         ),
     ])
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn json_pretty(value: &impl Serialize, label: &str) -> Result<String> {
