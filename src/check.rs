@@ -13,7 +13,7 @@ use serde::Serialize;
 use crate::c4::{C4ElementCategory, C4Level};
 use crate::c4_artifact::C4ArtifactFormat;
 use crate::state::{self, State};
-use crate::util::{is_adr_id, kebab, write_atomic_in};
+use crate::util::{GlobMatcher, is_adr_id, kebab, write_atomic_in};
 use crate::vault::{
     Note, NoteKind, PolicyPattern, ResolvedLink, SourceTargetResolution, Vault,
     is_typed_source_target, source_target_body,
@@ -239,6 +239,9 @@ fn load_rumdl_config(root: &Path) -> Result<RumdlConfig> {
 }
 
 fn markdown_files(root: &Path, config: &RumdlConfig) -> Vec<String> {
+    let includes = (!config.global.include.is_empty())
+        .then(|| GlobMatcher::from_valid_patterns(&config.global.include));
+    let excludes = GlobMatcher::from_valid_patterns(&config.global.exclude);
     let mut files = WalkBuilder::new(root)
         .git_ignore(config.global.respect_gitignore)
         .git_global(config.global.respect_gitignore)
@@ -255,20 +258,11 @@ fn markdown_files(root: &Path, config: &RumdlConfig) -> Vec<String> {
             is_markdown_file(&path).then(|| relative_path(root, &path))
         })
         .filter(|path| {
-            config.global.include.is_empty()
-                || config
-                    .global
-                    .include
-                    .iter()
-                    .any(|pattern| crate::util::glob_matches(pattern, path))
+            includes
+                .as_ref()
+                .is_none_or(|matcher| matcher.is_match(path))
         })
-        .filter(|path| {
-            !config
-                .global
-                .exclude
-                .iter()
-                .any(|pattern| crate::util::glob_matches(pattern, path))
-        })
+        .filter(|path| !excludes.is_match(path))
         .collect::<Vec<_>>();
     files.sort();
     files
@@ -442,12 +436,7 @@ fn policy_violations(root: &Path, vault: &Vault) -> Result<Vec<PolicyViolation>>
 }
 
 fn policy_scope_files(vault: &Vault, scopes: &[String]) -> Vec<String> {
-    scopes
-        .iter()
-        .flat_map(|scope| vault.source_files_matching_glob(scope))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
+    vault.source_files_matching_globs(scopes)
 }
 
 pub(crate) fn validate(vault: &Vault) -> Vec<Diagnostic> {

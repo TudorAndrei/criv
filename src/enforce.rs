@@ -226,12 +226,7 @@ fn policy_scan_files(
 }
 
 fn policy_scope_files(vault: &Vault, scopes: &[String]) -> Vec<String> {
-    scopes
-        .iter()
-        .flat_map(|scope| vault.source_files_matching_glob(scope))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
+    vault.source_files_matching_globs(scopes)
 }
 
 fn import_policy_violations(vault: &Vault, changed_files: Option<&Vec<String>>) -> Vec<String> {

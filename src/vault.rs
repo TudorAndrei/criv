@@ -9,7 +9,7 @@ use crate::config::Config;
 use crate::source_graph::SourceGraph;
 use crate::source_index::{FffSourceIndex, SourceIndex};
 use crate::util::{
-    find_wiki_links_with_lines, glob_matches, kebab, markdown_headings as parse_markdown_headings,
+    GlobMatcher, find_wiki_links_with_lines, kebab, markdown_headings as parse_markdown_headings,
     read_to_string, strip_prefix, walk_files,
 };
 use crate::{c4, c4_artifact};
@@ -336,30 +336,40 @@ impl Vault {
     }
 
     pub(crate) fn source_glob_has_match(&self, pattern: &str) -> bool {
-        self.source_files
-            .iter()
-            .any(|source_file| glob_matches(pattern, source_file))
-            || matches!(
-                self.resolve_source_target(pattern),
-                SourceTargetResolution::Resolved { .. }
-            )
+        !self.source_files_matching_glob(pattern).is_empty()
     }
 
     pub(crate) fn source_files_matching_glob(&self, pattern: &str) -> Vec<String> {
-        let matches = self
-            .source_files
+        self.source_files_matching_globs(&[pattern.to_string()])
+    }
+
+    pub(crate) fn source_files_matching_globs(&self, patterns: &[String]) -> Vec<String> {
+        let matcher = GlobMatcher::from_valid_patterns(patterns);
+        let mut matched_patterns = vec![false; patterns.len()];
+        let mut matched_files = BTreeSet::new();
+        let mut indices = Vec::new();
+        for source_file in &self.source_files {
+            matcher.matching_pattern_indices_into(source_file, &mut indices);
+            if !indices.is_empty() {
+                matched_files.insert(source_file.clone());
+                for index in &indices {
+                    matched_patterns[*index] = true;
+                }
+            }
+        }
+        for (index, pattern) in patterns.iter().enumerate() {
+            if !matched_patterns[index]
+                && let SourceTargetResolution::Resolved { path, .. } =
+                    self.resolve_source_target(pattern)
+            {
+                matched_files.insert(path);
+            }
+        }
+        self.source_files
             .iter()
-            .filter(|source_file| glob_matches(pattern, source_file))
+            .filter(|path| matched_files.contains(*path))
             .cloned()
-            .collect::<Vec<_>>();
-        if !matches.is_empty() {
-            return matches;
-        }
-        match self.resolve_source_target(pattern) {
-            SourceTargetResolution::Resolved { path, .. } => vec![path],
-            SourceTargetResolution::MissingFile
-            | SourceTargetResolution::MissingFragment { .. } => Vec::new(),
-        }
+            .collect()
     }
 
     pub(crate) fn source_files(&self) -> &[String] {
@@ -1019,6 +1029,30 @@ roots = ["src"]
 
         assert_eq!(vault.source_files(), expected);
         assert!(vault.source_graph().files.contains_key("src/lib.rs"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn batch_source_globs_preserve_order_fallbacks_and_invalid_patterns() {
+        let root = unique_temp_dir("criv-batch-source-globs");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("criv.toml"), "[source]\nroots = [\"src\"]\n").unwrap();
+        std::fs::write(root.join("src/a.rs"), "pub fn a() {}\n").unwrap();
+        std::fs::write(root.join("src/z.rs"), "pub fn run() {}\n").unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+        let patterns = vec![
+            "src/*.rs".into(),
+            "src/a.rs".into(),
+            "src/z.rs#run".into(),
+            "[".into(),
+        ];
+
+        assert_eq!(
+            vault.source_files_matching_globs(&patterns),
+            vec!["src/a.rs", "src/z.rs"]
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }

@@ -575,6 +575,7 @@ pub(crate) fn markdown_headings(markdown: &str) -> Vec<(usize, String, usize)> {
     headings
 }
 
+#[cfg(test)]
 pub(crate) fn glob_matches(pattern: &str, value: &str) -> bool {
     let patterns = [pattern.to_string()];
     GlobMatcher::new(&patterns).is_ok_and(|matcher| matcher.is_match(value))
@@ -583,6 +584,7 @@ pub(crate) fn glob_matches(pattern: &str, value: &str) -> bool {
 #[derive(Debug, Clone)]
 pub(crate) struct GlobMatcher {
     set: GlobSet,
+    pattern_indices: Vec<usize>,
 }
 
 impl GlobMatcher {
@@ -596,15 +598,48 @@ impl GlobMatcher {
                 .map_err(|err| CrivError::new(format!("invalid glob `{pattern}`: {err}")))?;
             builder.add(glob);
         }
+        Self::from_builder(builder, (0..patterns.len()).collect())
+    }
+
+    /// Compiles every valid pattern and preserves its original index. This is
+    /// for legacy matching paths where an invalid glob has always meant
+    /// "does not match", rather than a validation error.
+    pub(crate) fn from_valid_patterns(patterns: &[String]) -> Self {
+        let mut builder = GlobSetBuilder::new();
+        let mut pattern_indices = Vec::new();
+        for (index, pattern) in patterns.iter().enumerate() {
+            let Ok(glob) = GlobBuilder::new(pattern)
+                .literal_separator(true)
+                .backslash_escape(true)
+                .build()
+            else {
+                continue;
+            };
+            builder.add(glob);
+            pattern_indices.push(index);
+        }
+        // An empty builder is valid and matches nothing.
+        Self::from_builder(builder, pattern_indices).expect("empty glob set builds")
+    }
+
+    fn from_builder(builder: GlobSetBuilder, pattern_indices: Vec<usize>) -> Result<Self> {
         Ok(Self {
             set: builder
                 .build()
                 .map_err(|err| CrivError::new(format!("failed to compile globs: {err}")))?,
+            pattern_indices,
         })
     }
 
     pub(crate) fn is_match(&self, value: &str) -> bool {
         self.set.is_match(value)
+    }
+
+    pub(crate) fn matching_pattern_indices_into(&self, value: &str, into: &mut Vec<usize>) {
+        self.set.matches_into(value, into);
+        for index in into.iter_mut() {
+            *index = self.pattern_indices[*index];
+        }
     }
 }
 
