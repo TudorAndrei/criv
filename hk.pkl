@@ -124,6 +124,18 @@ local enforce_ci = new Step {
   check = "cargo run --quiet -- enforce --stage ci"
 }
 
+local cargo_audit = new Step {
+  check = "cargo audit --no-fetch || { criv_audit_exit=$?; echo \"cargo audit is monitor-only (exit $criv_audit_exit)\"; true; }"
+}
+
+local obsidian_npm_audit = new Step {
+  check = "npm --prefix .obsidian/plugins/criv audit --audit-level=high"
+}
+
+local vscode_npm_audit = new Step {
+  check = "npm --prefix extensions/vscode-criv audit --audit-level=high"
+}
+
 local actionlint = new Step {
   glob = List(".github/workflows/*.yml", ".github/workflows/*.yaml")
   check = "actionlint"
@@ -181,6 +193,9 @@ hooks {
       ["zizmor"] = zizmor
       ["cargo-test"] = cargo_test
       ["hawk"] = hawk
+      ["cargo-audit"] = cargo_audit
+      ["obsidian-npm-audit"] = obsidian_npm_audit
+      ["vscode-npm-audit"] = vscode_npm_audit
       ["plugin-format-check"] = plugin_format_check
       ["plugin-lint"] = plugin_lint
       ["plugin-test"] = plugin_test

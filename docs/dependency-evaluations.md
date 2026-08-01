@@ -124,6 +124,10 @@ an audit ignore list or failing gate, and do not replace `fff-search`, without a
 separate approved decision. Because this policy did not change, no new ADR is
 needed and accepted ADRs remain unmodified.
 
+[[0055-dependency-auditing-in-hk-checks|ADR-0055]] subsequently runs this same
+command as a visible, non-blocking hk monitor. It does not change this Rust
+decision or make `cargo audit` a failing gate.
+
 Evidence commands:
 
 ```sh
