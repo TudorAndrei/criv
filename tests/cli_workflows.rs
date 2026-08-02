@@ -2095,6 +2095,61 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
         .stderr(predicate::str::contains("unrelated changes"));
 }
 
+#[test]
+fn adr_reconcile_renames_a_same_path_branch_local_adr() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "target"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    init(root);
+    write_criv_config(root, vec!["src"], vec![], true);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn base() {}\n").unwrap();
+    fs::write(
+        root.join("docs/adr/0001-base.md"),
+        adr("0001", "Base", "base"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base"]);
+
+    git(root, &["checkout", "-b", "topic"]);
+    fs::write(
+        root.join("docs/adr/0002-shared.md"),
+        adr("0002", "Topic", "topic"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "topic adr"]);
+
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0002-shared.md"),
+        adr("0002", "Target", "target"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "target adr"]);
+    git(root, &["checkout", "topic"]);
+
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR-0002 -> ADR-0003"));
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target"])
+        .assert()
+        .success();
+    assert!(!root.join("docs/adr/0002-shared.md").exists());
+    assert!(
+        fs::read_to_string(root.join("docs/adr/0003-shared.md"))
+            .unwrap()
+            .contains("title: Topic")
+    );
+}
+
 fn adr(id: &str, title: &str, slug: &str) -> String {
     format!(
         "---\nid: ADR-{id}\nkind: decision\ntitle: {title}\nstatus: accepted\ndate: 2026-08-02\n---\n\n## {title}\n\n{slug}\n"
