@@ -13,11 +13,23 @@ use tempfile::TempDir;
 fn criv(root: &Path) -> Command {
     let mut command = Command::cargo_bin("criv").expect("criv binary");
     command.current_dir(root);
+    // Git exports these while running hooks. Every fixture owns its repository
+    // context through `current_dir`, so inherited values must never redirect a
+    // spawned CLI to the checkout that invoked the test suite.
+    command.env_remove("GIT_DIR");
+    command.env_remove("GIT_WORK_TREE");
+    command.env_remove("GIT_INDEX_FILE");
+    command.env_remove("GIT_COMMON_DIR");
+    command.env_remove("GIT_PREFIX");
     command.env_remove("CI");
     command.env_remove("GITHUB_ACTIONS");
     command.env_remove("CRIV_BASE_REF");
     command.env_remove("GITHUB_BASE_REF");
     command
+}
+
+fn normalize_newlines(contents: &str) -> String {
+    contents.replace("\r\n", "\n")
 }
 
 fn init(root: &Path) {
@@ -508,6 +520,9 @@ fn file_search_matches_jsx_for_the_jsx_language_filter() {
         .stdout("src/component.jsx\n");
 }
 
+// Windows cannot represent the quote, tab, and newline characters used in the
+// filename fixture. JSON escaping remains covered there by the search test.
+#[cfg(not(windows))]
 #[test]
 fn query_json_output_is_valid_for_special_characters() {
     let temp = TempDir::new().unwrap();
@@ -696,6 +711,110 @@ fn query_diff_compares_snapshots_and_reports_errors() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("does not resolve"));
+}
+
+#[test]
+fn query_diff_reads_state_from_a_git_ref() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    query_fixture(root);
+    git(root, &["init"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    git(root, &["add", "-f", ".criv/state.json"]);
+    git(root, &["commit", "-m", "record state"]);
+
+    criv(root)
+        .args(["query", "diff", "HEAD", "HEAD"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("node_added").not())
+        .stdout(predicate::str::contains("node_removed").not());
+}
+
+#[test]
+fn query_diff_uses_the_requested_root_despite_inherited_git_context() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    query_fixture(root);
+    git(root, &["init"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    git(root, &["add", "-f", ".criv/state.json"]);
+    git(root, &["commit", "-m", "record state"]);
+
+    let outer = TempDir::new().unwrap();
+    git(outer.path(), &["init"]);
+
+    criv(root)
+        .env("GIT_DIR", outer.path().join(".git"))
+        .env("GIT_WORK_TREE", outer.path())
+        .args(["query", "diff", "HEAD", "HEAD"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn query_diff_reads_a_git_ref_without_a_git_executable() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    query_fixture(root);
+    git(root, &["init"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    git(root, &["add", "-f", ".criv/state.json"]);
+    git(root, &["commit", "-m", "record state"]);
+
+    let empty_path = TempDir::new().unwrap();
+    criv(root)
+        .env("PATH", empty_path.path())
+        .args(["query", "diff", "HEAD", "HEAD"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("node_added").not())
+        .stdout(predicate::str::contains("node_removed").not());
+}
+
+#[test]
+fn query_diff_reads_a_git_ref_from_a_linked_worktree() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    query_fixture(root);
+    git(root, &["init"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    git(root, &["add", "criv.toml", "src", "docs"]);
+    git(root, &["add", "-f", ".criv/state.json"]);
+    git(root, &["commit", "-m", "record vault and state"]);
+
+    let linked = root.join("linked-worktree");
+    git(root, &["worktree", "add", linked.to_str().unwrap(), "HEAD"]);
+
+    criv(&linked)
+        .env("PATH", TempDir::new().unwrap().path())
+        .args(["query", "diff", "HEAD", "HEAD"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn query_diff_rejects_non_utf8_state_from_a_git_ref() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    query_fixture(root);
+    git(root, &["init"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    fs::write(root.join(".criv/state.json"), [0xff, 0xfe]).unwrap();
+    git(root, &["add", "-f", ".criv/state.json"]);
+    git(root, &["commit", "-m", "record invalid state"]);
+
+    criv(root)
+        .args(["query", "diff", "HEAD", "HEAD"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("non-UTF-8 .criv/state.json"));
 }
 
 #[test]
@@ -1573,6 +1692,77 @@ policy:
 }
 
 #[test]
+fn commit_enforcement_uses_the_requested_root_despite_inherited_git_context() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    git(root, &["init"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    fs::write(root.join("tracked.txt"), "before\n").unwrap();
+    git(root, &["add", "tracked.txt"]);
+    git(root, &["commit", "-m", "initial"]);
+    fs::write(root.join("tracked.txt"), "after\n").unwrap();
+    git(root, &["add", "tracked.txt"]);
+
+    let outer = TempDir::new().unwrap();
+    git(outer.path(), &["init"]);
+
+    criv(root)
+        .env("GIT_DIR", outer.path().join(".git"))
+        .env("GIT_WORK_TREE", outer.path())
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 staged files"));
+}
+
+#[test]
+fn commit_enforcement_handles_an_unborn_head_without_a_git_executable() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    git(root, &["init"]);
+    fs::write(root.join("tracked.txt"), "staged before the first commit\n").unwrap();
+    git(root, &["add", "tracked.txt"]);
+
+    let empty_path = TempDir::new().unwrap();
+    criv(root)
+        .env("PATH", empty_path.path())
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 staged files"));
+}
+
+#[test]
+fn manual_push_enforcement_runs_without_a_git_executable() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    git(root, &["init"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    fs::write(root.join("tracked.txt"), "before\n").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "initial"]);
+    fs::write(root.join("tracked.txt"), "after\n").unwrap();
+    git(root, &["add", "tracked.txt"]);
+    git(root, &["commit", "-m", "change"]);
+
+    let empty_path = TempDir::new().unwrap();
+    criv(root)
+        .env("PATH", empty_path.path())
+        .args(["enforce", "--stage", "push"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 changed files"));
+}
+
+#[test]
 fn commit_enforcement_respects_selector_governed_policy_files() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
@@ -1986,6 +2176,7 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
     git(root, &["init", "-b", "target"]);
     git(root, &["config", "user.email", "criv@example.com"]);
     git(root, &["config", "user.name", "criv"]);
+    git(root, &["config", "core.autocrlf", "true"]);
     init(root);
     write_criv_config(root, vec!["src"], vec![], true);
     fs::write(
@@ -2102,12 +2293,11 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
             .contains("[[0003-topic|ADR-0003]]")
     );
     assert!(
-        fs::read_to_string(root.join("src/comment.rs"))
-            .unwrap()
+        normalize_newlines(&fs::read_to_string(root.join("src/comment.rs")).unwrap())
             .contains("// target-owned\n// ADR-0003")
     );
     assert_eq!(
-        fs::read_to_string(root.join("src/no-reference.rs")).unwrap(),
+        normalize_newlines(&fs::read_to_string(root.join("src/no-reference.rs")).unwrap()),
         shared_boilerplate
     );
     #[cfg(unix)]
@@ -2139,7 +2329,7 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
     git(root, &["add", "-A"]);
     assert_eq!(
         git_stdout(root, &["show", ":docs/adr/0003-topic.md"]),
-        fs::read_to_string(root.join("docs/adr/0003-topic.md")).unwrap()
+        normalize_newlines(&fs::read_to_string(root.join("docs/adr/0003-topic.md")).unwrap())
     );
     git(root, &["config", "diff.renames", "false"]);
     let receipt_path = root.join(".criv/adr-reconcile.json");
@@ -2623,6 +2813,7 @@ fn adr_reconcile_rejects_a_short_reference_carried_by_a_low_similarity_move() {
     git(root, &["init", "-b", "target"]);
     git(root, &["config", "user.email", "criv@example.com"]);
     git(root, &["config", "user.name", "criv"]);
+    git(root, &["config", "core.autocrlf", "true"]);
     init(root);
     write_criv_config(root, vec!["src"], vec![], true);
     fs::create_dir_all(root.join("src")).unwrap();
@@ -2676,7 +2867,7 @@ fn adr_reconcile_rejects_a_short_reference_carried_by_a_low_similarity_move() {
             "refusing to rewrite target-owned reference",
         ));
     assert_eq!(
-        fs::read_to_string(root.join("src/moved.rs")).unwrap(),
+        normalize_newlines(&fs::read_to_string(root.join("src/moved.rs")).unwrap()),
         moved
     );
     assert!(root.join("docs/adr/0002-topic.md").exists());
@@ -2690,6 +2881,7 @@ fn adr_reconcile_proves_an_overlapping_mapping_transaction() {
     git(root, &["init", "-b", "target"]);
     git(root, &["config", "user.email", "criv@example.com"]);
     git(root, &["config", "user.name", "criv"]);
+    git(root, &["config", "core.autocrlf", "true"]);
     init(root);
     write_criv_config(root, vec!["src"], vec![], true);
     fs::write(
@@ -2737,6 +2929,108 @@ fn adr_reconcile_proves_an_overlapping_mapping_transaction() {
         .args(["enforce", "--stage", "commit"])
         .assert()
         .success();
+}
+
+#[test]
+fn adr_reconcile_uses_the_requested_root_despite_inherited_git_context() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "target"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    init(root);
+    fs::write(
+        root.join("docs/adr/0001-base.md"),
+        adr("0001", "Base", "base"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base"]);
+
+    git(root, &["checkout", "-b", "topic"]);
+    fs::write(
+        root.join("docs/adr/0002-topic.md"),
+        adr("0002", "Topic", "topic"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "topic adr"]);
+
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0002-target.md"),
+        adr("0002", "Target", "target"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "target adr"]);
+    git(root, &["checkout", "topic"]);
+
+    let outer = TempDir::new().unwrap();
+    git(outer.path(), &["init"]);
+    let outer_git = outer.path().join(".git");
+    criv(root)
+        .env("GIT_DIR", &outer_git)
+        .env("GIT_WORK_TREE", outer.path())
+        .env("GIT_INDEX_FILE", outer_git.join("index"))
+        .env("GIT_COMMON_DIR", &outer_git)
+        .env("GIT_PREFIX", "outer")
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR-0002 -> ADR-0003"));
+}
+
+#[test]
+fn adr_reconcile_detects_a_collision_from_a_linked_worktree() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "target"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    init(root);
+    fs::write(
+        root.join("docs/adr/0001-base.md"),
+        adr("0001", "Base", "base"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base"]);
+
+    git(root, &["checkout", "-b", "topic"]);
+    fs::write(
+        root.join("docs/adr/0002-topic.md"),
+        adr("0002", "Topic", "topic"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "topic adr"]);
+
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0002-target.md"),
+        adr("0002", "Target", "target"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "target adr"]);
+
+    let linked = root.join("linked-worktree");
+    git(
+        root,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            linked.to_str().unwrap(),
+            "topic",
+        ],
+    );
+    criv(&linked)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR-0002 -> ADR-0003"));
 }
 
 fn adr(id: &str, title: &str, slug: &str) -> String {

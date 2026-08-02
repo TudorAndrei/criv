@@ -40,4 +40,5 @@ criv query nodes --kind decision --format json
 
 `diff` resolves `latest` through `.criv/latest`, hex-like values through
 `.criv/snapshots/<hash>.json`, and any other value through
-`git show <ref>:.criv/state.json`.
+an embedded lookup of `.criv/state.json` in the requested repository ref. It
+does not invoke the `git` executable.

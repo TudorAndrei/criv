@@ -103,3 +103,9 @@ are stripped, size optimization is enabled, LTO runs at link time, codegen uses
 one unit, and release panics abort. This keeps downloadable artifacts smaller
 without requiring nightly Rust or post-build binary packing. The profile
 decision is captured in [[0015-size-optimized-release-profile|ADR-0015]].
+
+The CLI embeds local Git repository access through its Rust dependency graph;
+the release artifact does not require a `git` executable for query-diff or
+enforcement repository reads. Release verification should keep a PATH-without-
+Git smoke test alongside the normal `mise run check` gate. The backend scope and
+dependency evidence are recorded by the embedded-repository-access ADR.

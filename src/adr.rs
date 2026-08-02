@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
@@ -775,7 +776,7 @@ fn apply_plan(root: &Path, plan: &ReconcilePlan) -> Result<()> {
             before_hash: git::blob(root, &plan.head_sha, path)
                 .ok()
                 .map(|before| hash(&before)),
-            after_hash: hash(contents),
+            after_hash: hash(&git::worktree_blob(root, path)?),
             before_mode: git::file_mode(root, &plan.head_sha, path)?,
             after_mode: worktree_file_mode(root, path)?,
         });
@@ -874,7 +875,7 @@ fn materialized_receipt(root: &Path) -> Result<Receipt> {
                     .flatten()
                     .as_deref()
                     != file.before_mode.as_deref()
-                || fs::read_to_string(root.join(&file.path))
+                || git::worktree_blob(root, &file.path)
                     .map(|contents| hash(&contents) != file.after_hash)
                     .unwrap_or(true)
                 || worktree_file_mode(root, &file.path)
@@ -1078,7 +1079,7 @@ fn inherited_reference_sources(
         for line in contents.split_inclusive('\n') {
             if contains_reference(line.as_bytes(), mappings) {
                 evidence
-                    .entry(line.to_owned())
+                    .entry(git_comparison_line(line).into_owned())
                     .or_default()
                     .insert(candidate.clone());
             }
@@ -1096,7 +1097,10 @@ fn inherited_reference_source(
     let sources = contents
         .split_inclusive('\n')
         .filter(|line| contains_reference(line.as_bytes(), mappings))
-        .filter_map(|line| evidence.get(line))
+        .filter_map(|line| {
+            let line = git_comparison_line(line);
+            evidence.get(line.as_ref())
+        })
         .flatten()
         .filter(|candidate| candidate.as_str() != path)
         .cloned()
@@ -1107,6 +1111,13 @@ fn inherited_reference_source(
         )));
     }
     Ok(sources.into_iter().next())
+}
+
+fn git_comparison_line(line: &str) -> Cow<'_, str> {
+    line.strip_suffix("\r\n").map_or_else(
+        || Cow::Borrowed(line),
+        |line| Cow::Owned(format!("{line}\n")),
+    )
 }
 
 fn rewrite_owned_lines(

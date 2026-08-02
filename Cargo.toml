@@ -40,6 +40,7 @@ fastembed = { version = "5", optional = true, default-features = false, features
   "ort-download-binaries-rustls-tls",
 ] }
 fff-search = "0.10.1"
+git2 = { version = "0.21.0", default-features = false }
 globset = "0.4"
 ignore = "0.4"
 mime_guess = "2"

@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 
 use clap::{Args as ClapArgs, ValueEnum};
 
@@ -485,30 +484,17 @@ fn is_snapshot_hash(value: &str) -> bool {
 }
 
 fn load_git_state(root: &Path, id: &str) -> Result<String> {
-    let spec = format!("{id}:.criv/state.json");
-    let output = Command::new("git")
-        .current_dir(root)
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_PREFIX")
-        .args(["show", &spec])
-        .output()
-        .map_err(|err| CrivError::new(format!("failed to invoke git for `{id}`: {err}")))?;
-    if output.status.success() {
-        String::from_utf8(output.stdout).map_err(|err| {
+    let bytes =
+        crate::git::read_file_at_ref(root, id, Path::new(".criv/state.json")).map_err(|error| {
             CrivError::new(format!(
-                "git ref `{id}` produced non-UTF-8 .criv/state.json: {err}"
+                "snapshot or git ref `{id}` does not resolve: {error}"
             ))
-        })
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(CrivError::new(format!(
-            "snapshot or git ref `{id}` does not resolve: {}",
-            stderr.trim()
-        )))
-    }
+        })?;
+    String::from_utf8(bytes).map_err(|err| {
+        CrivError::new(format!(
+            "git ref `{id}` produced non-UTF-8 .criv/state.json: {err}"
+        ))
+    })
 }
 
 fn json_string_set(value: &serde_json::Value, pointer: &str, field: &str) -> BTreeSet<String> {
