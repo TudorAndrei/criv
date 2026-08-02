@@ -1712,6 +1712,25 @@ fn commit_enforcement_uses_the_requested_root_despite_inherited_git_context() {
 }
 
 #[test]
+fn commit_enforcement_handles_an_unborn_head_without_a_git_executable() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    git(root, &["init"]);
+    fs::write(root.join("tracked.txt"), "staged before the first commit\n").unwrap();
+    git(root, &["add", "tracked.txt"]);
+
+    let empty_path = TempDir::new().unwrap();
+    criv(root)
+        .env("PATH", empty_path.path())
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 staged files"));
+}
+
+#[test]
 fn commit_enforcement_respects_selector_governed_policy_files() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

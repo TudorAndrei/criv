@@ -7,6 +7,7 @@ use std::process::{Command, Output};
 use clap::{Args as ClapArgs, ValueEnum};
 
 use crate::check;
+use crate::git::{ChangeStatus, ChangedEntry, ChangedSet, ChangedSetComparison, GitRepository};
 use crate::vault::Vault;
 use crate::{CrivError, Result};
 
@@ -266,43 +267,13 @@ fn import_policy_violations(vault: &Vault, changed_files: Option<&Vec<String>>) 
     violations
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
-struct ChangedSet {
-    entries: Vec<ChangedEntry>,
-    old_ref: Option<String>,
-    new_ref: Option<String>,
-    basis: String,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-struct ChangedEntry {
-    status: ChangeStatus,
-    path: String,
-    previous_path: Option<String>,
-    old_ref: Option<String>,
-    new_ref: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum ChangeStatus {
-    Added,
-    Modified,
-    Deleted,
-    Renamed,
-    Copied,
-    Other,
-}
-
 fn changed_entries(root: &Path, options: &EnforceOptions) -> Result<Option<ChangedSet>> {
+    let repository = GitRepository::discover(root)?;
     match options.stage {
-        Stage::Commit if !is_git_repository(root)? => Ok(None),
-        Stage::Commit => git_changed_set(
-            root,
-            &["diff", "--name-status", "-z", "--cached"],
-            Some("HEAD"),
-            Some(":"),
-        )
-        .map(Some),
+        Stage::Commit => repository
+            .as_ref()
+            .map(|repository| repository.changed_set(ChangedSetComparison::Staged))
+            .transpose(),
         Stage::Push if options.pre_push => pre_push_changed_entries(
             root,
             options
@@ -314,62 +285,59 @@ fn changed_entries(root: &Path, options: &EnforceOptions) -> Result<Option<Chang
         .map(Some),
         // Manual invocations retain the documented best-effort upstream/last
         // commit fallback. Generated hooks always use the complete stdin mode.
-        Stage::Push if !is_git_repository(root)? => Ok(None),
-        Stage::Push => git_changed_set(
-            root,
-            &["diff", "--name-status", "-z", "@{upstream}...HEAD"],
-            Some("@{upstream}"),
-            Some("HEAD"),
-        )
-        .or_else(|_| {
-            git_changed_set(
-                root,
-                &["diff", "--name-status", "-z", "HEAD~1..HEAD"],
-                Some("HEAD~1"),
-                Some("HEAD"),
-            )
-        })
-        .map(Some),
-        Stage::Ci => ci_changed_entries(root),
+        Stage::Push => repository
+            .as_ref()
+            .map(|repository| {
+                repository
+                    .changed_set(ChangedSetComparison::ThreeDot {
+                        upstream_ref: "@{upstream}",
+                        head_ref: "HEAD",
+                    })
+                    .or_else(|_| {
+                        repository.changed_set(ChangedSetComparison::Trees {
+                            old_ref: "HEAD~1",
+                            new_ref: "HEAD",
+                        })
+                    })
+            })
+            .transpose(),
+        Stage::Ci => ci_changed_entries(repository.as_ref()),
     }
 }
 
-fn ci_changed_entries(root: &Path) -> Result<Option<ChangedSet>> {
-    ci_changed_entries_with_env(root, env_string, is_ci_environment())
+fn ci_changed_entries(repository: Option<&GitRepository>) -> Result<Option<ChangedSet>> {
+    ci_changed_entries_with_env(repository, env_string, is_ci_environment())
 }
 
 fn ci_changed_entries_with_env(
-    root: &Path,
+    repository: Option<&GitRepository>,
     env_value: impl Fn(&str) -> Option<String>,
     ci_environment: bool,
 ) -> Result<Option<ChangedSet>> {
     if let Some(base_ref) = env_value("CRIV_BASE_REF") {
-        return git_changed_set(
-            root,
-            &["diff", "--name-status", "-z", &base_ref, "HEAD"],
-            Some(&base_ref),
-            Some("HEAD"),
-        )
-        .map(Some);
+        return required_repository(repository)?
+            .changed_set(ChangedSetComparison::Trees {
+                old_ref: &base_ref,
+                new_ref: "HEAD",
+            })
+            .map(Some);
     }
 
     if let Some(base_ref) = env_value("GITHUB_BASE_REF") {
         let origin_ref = format!("origin/{base_ref}");
-        if let Ok(changes) = git_changed_set(
-            root,
-            &["diff", "--name-status", "-z", &origin_ref, "HEAD"],
-            Some(&origin_ref),
-            Some("HEAD"),
-        ) {
-            return Ok(Some(changes));
-        }
-        if let Ok(changes) = git_changed_set(
-            root,
-            &["diff", "--name-status", "-z", &base_ref, "HEAD"],
-            Some(&base_ref),
-            Some("HEAD"),
-        ) {
-            return Ok(Some(changes));
+        if let Some(repository) = repository {
+            if let Ok(changes) = repository.changed_set(ChangedSetComparison::Trees {
+                old_ref: &origin_ref,
+                new_ref: "HEAD",
+            }) {
+                return Ok(Some(changes));
+            }
+            if let Ok(changes) = repository.changed_set(ChangedSetComparison::Trees {
+                old_ref: &base_ref,
+                new_ref: "HEAD",
+            }) {
+                return Ok(Some(changes));
+            }
         }
     }
 
@@ -379,16 +347,15 @@ fn ci_changed_entries_with_env(
         ));
     }
 
-    if !is_git_repository(root)? {
-        return Ok(None);
-    }
-    git_changed_set(
-        root,
-        &["diff", "--name-status", "-z", "HEAD"],
-        Some("HEAD"),
-        None,
-    )
-    .map(Some)
+    repository
+        .map(|repository| {
+            repository.changed_set(ChangedSetComparison::TreeToWorktree { old_ref: "HEAD" })
+        })
+        .transpose()
+}
+
+fn required_repository(repository: Option<&GitRepository>) -> Result<&GitRepository> {
+    repository.ok_or_else(|| CrivError::new("git diff failed: not inside a Git worktree"))
 }
 
 fn env_string(name: &str) -> Option<String> {
@@ -416,18 +383,6 @@ fn git_output(root: &Path, args: &[&str]) -> Result<Output> {
     )))
 }
 
-fn is_git_repository(root: &Path) -> Result<bool> {
-    let output = git_command(root)
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .output()
-        .map_err(|err| {
-            CrivError::new(format!(
-                "failed to run `git rev-parse --is-inside-work-tree`: {err}"
-            ))
-        })?;
-    Ok(output.status.success() && output.stdout == b"true\n")
-}
-
 /// Builds a Git command rooted in the requested vault, independent of any
 /// repository context inherited from a Git hook.
 fn git_command(root: &Path) -> Command {
@@ -440,31 +395,6 @@ fn git_command(root: &Path) -> Command {
         .env_remove("GIT_COMMON_DIR")
         .env_remove("GIT_PREFIX");
     command
-}
-
-fn git_changed_set(
-    root: &Path,
-    args: &[&str],
-    old_ref: Option<&str>,
-    new_ref: Option<&str>,
-) -> Result<ChangedSet> {
-    let output = git_output(root, args)?;
-    let mut entries = parse_changed_entries(&output.stdout)?;
-    for entry in &mut entries {
-        entry.old_ref = old_ref.map(str::to_string);
-        entry.new_ref = new_ref.map(str::to_string);
-    }
-    Ok(ChangedSet {
-        entries,
-        old_ref: old_ref.map(str::to_string),
-        new_ref: new_ref.map(str::to_string),
-        basis: match (old_ref, new_ref) {
-            (Some(old), Some(new)) => format!("Git comparison {old}..{new}"),
-            (Some(old), None) => format!("Git comparison {old}..worktree"),
-            (None, Some(new)) => format!("Git comparison ..{new}"),
-            (None, None) => "Git comparison".into(),
-        },
-    })
 }
 
 fn parse_changed_entries(stdout: &[u8]) -> Result<Vec<ChangedEntry>> {
@@ -896,8 +826,7 @@ mod tests {
 
     #[test]
     fn ci_changed_entries_fails_closed_without_base_in_ci() {
-        let root = tempfile::TempDir::new().unwrap();
-        let error = ci_changed_entries_with_env(root.path(), |_| None, true)
+        let error = ci_changed_entries_with_env(None, |_| None, true)
             .expect_err("ci without a base ref should fail");
 
         assert!(error.to_string().contains("CRIV_BASE_REF"));
@@ -917,8 +846,9 @@ mod tests {
         git(root.path(), &["add", "tracked.txt"]);
         git(root.path(), &["commit", "-m", "change"]);
 
+        let repository = GitRepository::discover(root.path()).unwrap();
         let changes = ci_changed_entries_with_env(
-            root.path(),
+            repository.as_ref(),
             |name| (name == "CRIV_BASE_REF").then(|| base.clone()),
             true,
         )
@@ -935,8 +865,9 @@ mod tests {
     fn ci_changed_entries_reports_the_failed_explicit_comparison() {
         let root = tempfile::TempDir::new().unwrap();
         git(root.path(), &["init"]);
+        let repository = GitRepository::discover(root.path()).unwrap();
         let error = ci_changed_entries_with_env(
-            root.path(),
+            repository.as_ref(),
             |name| (name == "CRIV_BASE_REF").then(|| "missing-base".into()),
             true,
         )
