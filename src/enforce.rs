@@ -275,7 +275,7 @@ fn changed_entries(root: &Path, options: &EnforceOptions) -> Result<Option<Chang
             .map(|repository| repository.changed_set(ChangedSetComparison::Staged))
             .transpose(),
         Stage::Push if options.pre_push => pre_push_changed_entries(
-            root,
+            required_repository(repository.as_ref())?,
             options
                 .remote_name
                 .as_deref()
@@ -487,7 +487,7 @@ fn parse_pre_push_updates(input: &str) -> Result<Vec<PrePushUpdate>> {
 }
 
 fn pre_push_changed_entries(
-    root: &Path,
+    repository: &GitRepository,
     remote_name: &str,
     updates: Vec<PrePushUpdate>,
 ) -> Result<ChangedSet> {
@@ -496,25 +496,10 @@ fn pre_push_changed_entries(
         if is_zero_oid(&update.local_oid) {
             continue;
         }
-        for commit in outgoing_commits(root, remote_name, &update)? {
-            let output = git_output(
-                root,
-                &[
-                    "diff-tree",
-                    "--root",
-                    "--no-commit-id",
-                    "--name-status",
-                    "-z",
-                    "-r",
-                    &commit,
-                ],
-            )?;
-            let old_ref = git_first_parent(root, &commit)?;
-            for mut entry in parse_changed_entries(&output.stdout)? {
-                entry.old_ref = old_ref.clone();
-                entry.new_ref = Some(commit.clone());
-                entries.push(entry);
-            }
+        for commit in
+            repository.outgoing_commits(remote_name, &update.local_oid, &update.remote_oid)?
+        {
+            entries.extend(repository.changed_set_for_commit(&commit)?.entries);
         }
     }
     Ok(ChangedSet {
@@ -523,45 +508,6 @@ fn pre_push_changed_entries(
         new_ref: None,
         basis: format!("pre-push ref updates for remote {remote_name}"),
     })
-}
-
-fn outgoing_commits(root: &Path, remote_name: &str, update: &PrePushUpdate) -> Result<Vec<String>> {
-    let range = if is_zero_oid(&update.remote_oid) {
-        None
-    } else {
-        Some(format!("{}..{}", update.remote_oid, update.local_oid))
-    };
-    let remote_arg = format!("--remotes={remote_name}");
-    let args = match &range {
-        Some(range) => vec!["rev-list", "--reverse", range],
-        None => vec![
-            "rev-list",
-            "--reverse",
-            &update.local_oid,
-            "--not",
-            &remote_arg,
-        ],
-    };
-    let output = git_output(root, &args)?;
-    String::from_utf8(output.stdout)
-        .map_err(|_| CrivError::new("Git rev-list output is not valid UTF-8"))
-        .map(|stdout| stdout.lines().map(str::to_string).collect())
-}
-
-fn git_first_parent(root: &Path, commit: &str) -> Result<Option<String>> {
-    let output = Command::new("git")
-        .current_dir(root)
-        .args(["rev-parse", "--verify", &format!("{commit}^")])
-        .output()
-        .map_err(|err| {
-            CrivError::new(format!("failed to run git rev-parse for {commit}: {err}"))
-        })?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    String::from_utf8(output.stdout)
-        .map_err(|_| CrivError::new("Git parent object ID is not valid UTF-8"))
-        .map(|stdout| Some(stdout.trim().to_string()))
 }
 
 fn is_zero_oid(oid: &str) -> bool {
@@ -633,21 +579,13 @@ fn read_changed_content(root: &Path, git_ref: Option<&str>, path: &str) -> Optio
     let Some(git_ref) = git_ref else {
         return std::fs::read_to_string(root.join(path)).ok();
     };
-    let object = if git_ref == ":" {
-        format!(":{path}")
+    let repository = GitRepository::discover(root).ok()??;
+    let content = if git_ref == ":" {
+        repository.read_file_at_index(Path::new(path)).ok()?
     } else {
-        format!("{git_ref}:{path}")
+        repository.read_file_at_ref(git_ref, Path::new(path)).ok()?
     };
-    let output = Command::new("git")
-        .current_dir(root)
-        .args(["show", &object])
-        .output()
-        .ok()?;
-    output
-        .status
-        .success()
-        .then(|| String::from_utf8(output.stdout).ok())
-        .flatten()
+    String::from_utf8(content).ok()
 }
 
 fn is_mechanical_wikilink_portability_migration(old: &str, new: &str) -> bool {
@@ -804,8 +742,9 @@ mod tests {
         git(root.path(), &["commit", "-m", "modify adr"]);
         let head = git_stdout(root.path(), &["rev-parse", "HEAD"]);
 
+        let repository = GitRepository::discover(root.path()).unwrap();
         let changes = pre_push_changed_entries(
-            root.path(),
+            repository.as_ref().unwrap(),
             "origin",
             vec![PrePushUpdate {
                 local_ref: "refs/heads/main".into(),

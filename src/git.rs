@@ -158,6 +158,117 @@ impl GitRepository {
         }
     }
 
+    /// Returns outgoing commits in oldest-first order for the supported SHA-1
+    /// pre-push input, matching `git rev-list --reverse` on the covered matrix.
+    pub(crate) fn outgoing_commits(
+        &self,
+        remote_name: &str,
+        local_oid: &str,
+        remote_oid: &str,
+    ) -> Result<Vec<String>> {
+        let local_oid = parse_oid(local_oid, "local pre-push object ID")?;
+        let mut walk = self
+            .repository
+            .revwalk()
+            .map_err(|error| CrivError::new(format!("Git revision walk failed: {error}")))?;
+        walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)
+            .map_err(|error| CrivError::new(format!("Git revision walk failed: {error}")))?;
+        walk.push(local_oid)
+            .map_err(|error| CrivError::new(format!("Git revision walk failed: {error}")))?;
+
+        if is_zero_oid(remote_oid) {
+            let prefix = format!("refs/remotes/{remote_name}/");
+            for reference in self
+                .repository
+                .references()
+                .map_err(|error| CrivError::new(format!("Git reference lookup failed: {error}")))?
+            {
+                let reference = reference.map_err(|error| {
+                    CrivError::new(format!("Git reference lookup failed: {error}"))
+                })?;
+                if reference
+                    .name()
+                    .ok()
+                    .is_some_and(|name| name.starts_with(&prefix))
+                    && let Some(target) = reference.target()
+                {
+                    walk.hide(target).map_err(|error| {
+                        CrivError::new(format!("Git revision walk failed: {error}"))
+                    })?;
+                }
+            }
+        } else {
+            walk.hide(parse_oid(remote_oid, "remote pre-push object ID")?)
+                .map_err(|error| CrivError::new(format!("Git revision walk failed: {error}")))?;
+        }
+
+        let mut commits = walk
+            .map(|oid| {
+                oid.map(|oid| oid.to_string())
+                    .map_err(|error| CrivError::new(format!("Git revision walk failed: {error}")))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        commits.reverse();
+        Ok(commits)
+    }
+
+    /// Returns one commit's changed entries, tagging each with its first
+    /// parent (or no old ref for a root commit) and the commit itself.
+    pub(crate) fn changed_set_for_commit(&self, commit_id: &str) -> Result<ChangedSet> {
+        let commit = self
+            .repository
+            .find_commit(parse_oid(commit_id, "commit object ID")?)
+            .map_err(|error| {
+                CrivError::new(format!(
+                    "Git commit `{commit_id}` does not resolve: {error}"
+                ))
+            })?;
+        let old_ref = commit.parent_id(0).ok().map(|oid| oid.to_string());
+        let old_tree = commit.parent(0).ok().and_then(|parent| parent.tree().ok());
+        let new_tree = commit.tree().map_err(|error| {
+            CrivError::new(format!("Git commit `{commit_id}` has no tree: {error}"))
+        })?;
+        let diff = self
+            .repository
+            .diff_tree_to_tree(old_tree.as_ref(), Some(&new_tree), None)
+            .map_err(|error| {
+                CrivError::new(format!("Git commit diff `{commit_id}` failed: {error}"))
+            })?;
+        self.changed_set_from_diff(diff, old_ref.as_deref(), Some(commit_id))
+    }
+
+    pub(crate) fn read_file_at_ref(&self, reference: &str, path: &Path) -> Result<Vec<u8>> {
+        let object = self
+            .repository
+            .revparse_single(reference)
+            .map_err(|error| {
+                CrivError::new(format!("git ref `{reference}` does not resolve: {error}"))
+            })?;
+        let tree = object.peel_to_tree().map_err(|error| {
+            CrivError::new(format!(
+                "git ref `{reference}` does not resolve to a tree: {error}"
+            ))
+        })?;
+        let entry = tree.get_path(path).map_err(|error| {
+            CrivError::new(format!(
+                "git ref `{reference}` does not contain `{}`: {error}",
+                path.display()
+            ))
+        })?;
+        self.read_blob(entry.id(), reference, path)
+    }
+
+    pub(crate) fn read_file_at_index(&self, path: &Path) -> Result<Vec<u8>> {
+        let index = self
+            .repository
+            .index()
+            .map_err(|error| CrivError::new(format!("Git index could not be read: {error}")))?;
+        let entry = index.get_path(path, 0).ok_or_else(|| {
+            CrivError::new(format!("Git index does not contain `{}`", path.display()))
+        })?;
+        self.read_blob(entry.id, "index", path)
+    }
+
     fn head_tree(&self) -> Option<git2::Tree<'_>> {
         self.repository
             .head()
@@ -236,6 +347,18 @@ impl GitRepository {
             },
         })
     }
+
+    fn read_blob(&self, oid: git2::Oid, source: &str, path: &Path) -> Result<Vec<u8>> {
+        self.repository
+            .find_blob(oid)
+            .map(|blob| blob.content().to_vec())
+            .map_err(|error| {
+                CrivError::new(format!(
+                    "Git {source} does not contain blob `{}`: {error}",
+                    path.display()
+                ))
+            })
+    }
 }
 
 fn path_from_bytes(path: Option<&[u8]>) -> Result<String> {
@@ -245,38 +368,23 @@ fn path_from_bytes(path: Option<&[u8]>) -> Result<String> {
     })
 }
 
+fn parse_oid(value: &str, context: &str) -> Result<git2::Oid> {
+    git2::Oid::from_str(value)
+        .map_err(|error| CrivError::new(format!("invalid {context} `{value}`: {error}")))
+}
+
+fn is_zero_oid(oid: &str) -> bool {
+    oid.bytes().all(|byte| byte == b'0')
+}
+
 /// Reads a file from the tree selected by `reference` in the repository
 /// discovered from `root`.
 pub(crate) fn read_file_at_ref(root: &Path, reference: &str, path: &Path) -> Result<Vec<u8>> {
-    let repository = git2::Repository::discover(root).map_err(|error| {
+    let repository = GitRepository::discover(root)?.ok_or_else(|| {
         CrivError::new(format!(
-            "failed to open repository from `{}`: {error}",
+            "failed to open repository from `{}`",
             root.display()
         ))
     })?;
-    let object = repository.revparse_single(reference).map_err(|error| {
-        CrivError::new(format!("git ref `{reference}` does not resolve: {error}"))
-    })?;
-    let tree = object.peel_to_tree().map_err(|error| {
-        CrivError::new(format!(
-            "git ref `{reference}` does not resolve to a tree: {error}"
-        ))
-    })?;
-    let entry = tree.get_path(path).map_err(|error| {
-        CrivError::new(format!(
-            "git ref `{reference}` does not contain `{}`: {error}",
-            path.display()
-        ))
-    })?;
-    let blob = entry
-        .to_object(&repository)
-        .and_then(|object| object.peel_to_blob())
-        .map_err(|error| {
-            CrivError::new(format!(
-                "git ref `{reference}` does not contain blob `{}`: {error}",
-                path.display()
-            ))
-        })?;
-
-    Ok(blob.content().to_vec())
+    repository.read_file_at_ref(reference, path)
 }
