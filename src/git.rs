@@ -314,17 +314,19 @@ pub(crate) fn added_lines(
     parse_added_lines(&output.stdout, path)
 }
 
-/// Zero-context line ownership where the old and new paths differ because Git
-/// identified a rename or copy. Supplying both pathspecs also works when the
-/// similarity score later falls below Git's rename threshold: only the new
-/// file contributes added ranges.
-pub(crate) fn added_lines_between_paths(
+/// Zero-context line ownership between two committed blobs whose paths differ.
+/// Comparing blob specifications directly also handles a modified copy whose
+/// source path remains present in the new tree and a low-similarity move that
+/// Git reports as deletion/addition.
+pub(crate) fn added_lines_between_blobs(
     root: &Path,
     old: &str,
     old_path: &str,
     new: &str,
     new_path: &str,
 ) -> Result<Vec<Range<usize>>> {
+    let old_blob = format!("{old}:{old_path}");
+    let new_blob = format!("{new}:{new_path}");
     let output = output(
         root,
         &[
@@ -332,14 +334,8 @@ pub(crate) fn added_lines_between_paths(
             "--no-ext-diff",
             "--unified=0",
             "--no-color",
-            "--find-renames=50%",
-            "--find-copies=100%",
-            "--find-copies-harder",
-            old,
-            new,
-            "--",
-            old_path,
-            new_path,
+            &old_blob,
+            &new_blob,
         ],
     )?;
     parse_added_lines(&output.stdout, new_path)

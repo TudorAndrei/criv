@@ -1999,7 +1999,12 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
     )
     .unwrap();
     fs::create_dir_all(root.join("src")).unwrap();
-    fs::write(root.join("src/base.rs"), "// target-owned\n").unwrap();
+    let shared_boilerplate = "// this long boilerplate line is shared but has no ADR reference\n";
+    fs::write(
+        root.join("src/base.rs"),
+        format!("// target-owned\n{shared_boilerplate}"),
+    )
+    .unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "base"]);
 
@@ -2015,7 +2020,7 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
         "---\nid: guide\nkind: doc\ntitle: Guide\n---\n\n## Guide\n\nSee [[0002-topic|ADR-0002]].\n",
     )
     .unwrap();
-    fs::copy(root.join("src/base.rs"), root.join("src/comment.rs")).unwrap();
+    fs::write(root.join("src/no-reference.rs"), shared_boilerplate).unwrap();
     fs::write(
         root.join("src/comment.rs"),
         "// target-owned\n// ADR-0002\npub fn topic() {}\n",
@@ -2091,6 +2096,10 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
         fs::read_to_string(root.join("src/comment.rs"))
             .unwrap()
             .contains("// target-owned\n// ADR-0003")
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("src/no-reference.rs")).unwrap(),
+        shared_boilerplate
     );
     assert!(root.join(".criv/adr-reconcile.json").exists());
     git(root, &["add", "-A"]);
@@ -2446,6 +2455,73 @@ fn adr_reconcile_rejects_a_renamed_published_adr() {
         .stderr(predicate::str::contains(
             "appears to carry published content",
         ));
+}
+
+#[test]
+fn adr_reconcile_rejects_a_short_reference_carried_by_a_low_similarity_move() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "target"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    init(root);
+    write_criv_config(root, vec!["src"], vec![], true);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("docs/adr/0001-base.md"),
+        adr("0001", "Base", "base"),
+    )
+    .unwrap();
+    let inherited = format!(
+        "ADR-0002\n{}",
+        (0..100)
+            .map(|index| format!("old inherited line {index}\n"))
+            .collect::<String>()
+    );
+    fs::write(root.join("src/original.rs"), inherited).unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base"]);
+
+    git(root, &["checkout", "-b", "topic"]);
+    fs::write(
+        root.join("docs/adr/0002-topic.md"),
+        adr("0002", "Topic", "topic"),
+    )
+    .unwrap();
+    git(root, &["mv", "src/original.rs", "src/moved.rs"]);
+    let moved = format!(
+        "ADR-0002\n{}",
+        (0..100)
+            .map(|index| format!("new branch line {index}\n"))
+            .collect::<String>()
+    );
+    fs::write(root.join("src/moved.rs"), &moved).unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "topic"]);
+
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0002-target.md"),
+        adr("0002", "Target", "target"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "target"]);
+    git(root, &["checkout", "topic"]);
+
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "refusing to rewrite target-owned reference",
+        ));
+    assert_eq!(
+        fs::read_to_string(root.join("src/moved.rs")).unwrap(),
+        moved
+    );
+    assert!(root.join("docs/adr/0002-topic.md").exists());
+    assert!(!root.join("docs/adr/0003-topic.md").exists());
 }
 
 #[test]

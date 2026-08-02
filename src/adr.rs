@@ -540,43 +540,73 @@ fn ensure_proven_new_adr(
     Ok(())
 }
 
-/// Ignore generic vault metadata but require a distinctive carried line. This
-/// deliberately fails closed for a repeated title or a substantive body line;
-/// those are evidence that an apparent addition may be a rewritten copy.
+/// Compare ADR meaning rather than its standard template. Identity and
+/// governance metadata, the rendered title, and conventional section headings
+/// are scaffolding shared by independent decisions and cannot prove copying.
 fn plausible_carried_content(first: &str, second: &str) -> bool {
     if hash(first) == hash(second) {
         return true;
     }
-    let first = significant_lines(first);
-    let second = significant_lines(second);
-    first.iter().any(|line| {
-        second.contains(line)
-            && (line.starts_with("title:") || line.len() >= 16 || line.starts_with("## "))
-    })
+    let first = adr_semantic_content(first);
+    let second = adr_semantic_content(second);
+    let shared_body = first.body.intersection(&second.body).collect::<Vec<_>>();
+
+    if first.title.is_some() && first.title == second.title && !shared_body.is_empty() {
+        return true;
+    }
+    if first.body == second.body && !first.body.is_empty() {
+        return first.body.len() > 1 || first.body.iter().any(|line| line.len() >= 24);
+    }
+    shared_body.len() > 1 || shared_body.iter().map(|line| line.len()).sum::<usize>() >= 80
 }
 
-fn significant_lines(contents: &str) -> BTreeSet<&str> {
+#[derive(Debug, Eq, PartialEq)]
+struct AdrSemanticContent {
+    title: Option<String>,
+    body: BTreeSet<String>,
+}
+
+fn adr_semantic_content(contents: &str) -> AdrSemanticContent {
     let mut in_frontmatter = false;
-    contents
-        .lines()
-        .filter_map(|line| {
-            if line == "---" {
-                in_frontmatter = !in_frontmatter;
-                return None;
+    let mut title = None;
+    let mut body = BTreeSet::new();
+    for line in contents.lines() {
+        let line = line.trim();
+        if line == "---" {
+            in_frontmatter = !in_frontmatter;
+            continue;
+        }
+        if in_frontmatter {
+            if let Some(value) = line.strip_prefix("title:") {
+                title = Some(value.trim().trim_matches(['\'', '"']).to_owned());
             }
-            let line = line.trim();
-            if line.is_empty()
-                || (in_frontmatter
-                    && matches!(
-                        line.split_once(':').map(|(key, _)| key),
-                        Some("id" | "kind" | "status" | "date")
-                    ))
-            {
-                return None;
-            }
-            Some(line)
-        })
-        .collect()
+            continue;
+        }
+        if line.is_empty()
+            || line.starts_with("# ")
+            || line
+                .strip_prefix("## ")
+                .is_some_and(is_standard_adr_heading)
+        {
+            continue;
+        }
+        body.insert(line.to_owned());
+    }
+    AdrSemanticContent { title, body }
+}
+
+fn is_standard_adr_heading(heading: &str) -> bool {
+    matches!(
+        heading.trim().to_ascii_lowercase().as_str(),
+        "context"
+            | "status"
+            | "decision"
+            | "consequences"
+            | "decision drivers"
+            | "considered options"
+            | "pros and cons of the options"
+            | "links"
+    )
 }
 
 fn allocation_mappings(
@@ -908,6 +938,7 @@ fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<Stri
         }
     }
     let mut rewrites = BTreeMap::new();
+    let mut inherited_references = None;
     for path in paths {
         if path == ".criv/adr-reconcile.json" || path.starts_with(".git/") {
             continue;
@@ -935,16 +966,33 @@ fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<Stri
         } else {
             match changed_paths.get(&path) {
                 Some(entry) if entry.status == git::ChangeStatus::Added => {
-                    match inherited_source(root, &path, &contents, &plan.merge_base)? {
-                        Some(source) => rewrite_owned_lines(
-                            root,
-                            &contents,
-                            &plan.merge_base,
-                            &source,
+                    if reference_edits(&contents, &plan.mappings)?.is_empty() {
+                        contents.clone()
+                    } else {
+                        let evidence = match &inherited_references {
+                            Some(evidence) => evidence,
+                            None => inherited_references.insert(inherited_reference_sources(
+                                root,
+                                &plan.merge_base,
+                                &plan.mappings,
+                            )?),
+                        };
+                        match inherited_reference_source(
                             &path,
+                            &contents,
+                            evidence,
                             &plan.mappings,
-                        )?,
-                        None => rewrite_text(&contents, &plan.mappings)?,
+                        )? {
+                            Some(source) => rewrite_owned_lines(
+                                root,
+                                &contents,
+                                &plan.merge_base,
+                                &source,
+                                &path,
+                                &plan.mappings,
+                            )?,
+                            None => rewrite_text(&contents, &plan.mappings)?,
+                        }
                     }
                 }
                 Some(entry)
@@ -1002,30 +1050,50 @@ fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<Stri
     Ok(rewrites)
 }
 
-/// Resolve a plausible merge-base source for an apparent addition. Reference
-/// rewriting then uses line ownership against that source instead of granting
-/// blanket ownership merely because Git reported `A`.
-fn inherited_source(
+/// Index exact reference-bearing lines from the merge base once. Only those
+/// lines are relevant to rewrite ownership; unrelated copied text is not.
+fn inherited_reference_sources(
     root: &Path,
-    path: &str,
-    contents: &str,
     merge_base: &str,
-) -> Result<Option<String>> {
-    let mut inherited = None;
+    mappings: &[Mapping],
+) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let mut evidence = BTreeMap::<String, BTreeSet<String>>::new();
     for candidate in git::tree_paths(root, merge_base, ".")? {
-        if candidate == path {
+        let Ok(contents) = git::blob(root, merge_base, &candidate) else {
             continue;
-        }
-        if let Ok(candidate_contents) = git::blob(root, merge_base, &candidate)
-            && plausible_carried_content(contents, &candidate_contents)
-            && inherited.replace(candidate).is_some()
-        {
-            return Err(CrivError::new(format!(
-                "file `{path}` has ambiguous inherited provenance; cannot prove its ADR references are branch-owned"
-            )));
+        };
+        for line in contents.split_inclusive('\n') {
+            if contains_reference(line.as_bytes(), mappings) {
+                evidence
+                    .entry(line.to_owned())
+                    .or_default()
+                    .insert(candidate.clone());
+            }
         }
     }
-    Ok(inherited)
+    Ok(evidence)
+}
+
+fn inherited_reference_source(
+    path: &str,
+    contents: &str,
+    evidence: &BTreeMap<String, BTreeSet<String>>,
+    mappings: &[Mapping],
+) -> Result<Option<String>> {
+    let sources = contents
+        .split_inclusive('\n')
+        .filter(|line| contains_reference(line.as_bytes(), mappings))
+        .filter_map(|line| evidence.get(line))
+        .flatten()
+        .filter(|candidate| candidate.as_str() != path)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if sources.len() > 1 {
+        return Err(CrivError::new(format!(
+            "file `{path}` has ambiguous inherited provenance; cannot prove its ADR references are branch-owned"
+        )));
+    }
+    Ok(sources.into_iter().next())
 }
 
 fn rewrite_owned_lines(
@@ -1039,7 +1107,7 @@ fn rewrite_owned_lines(
     let ranges = if original_path == path {
         git::added_lines(root, merge_base, "HEAD", path)?
     } else {
-        git::added_lines_between_paths(root, merge_base, original_path, "HEAD", path)?
+        git::added_lines_between_blobs(root, merge_base, original_path, "HEAD", path)?
     };
     let mut output = String::new();
     for (index, line) in contents.split_inclusive('\n').enumerate() {
@@ -1341,6 +1409,14 @@ mod tests {
         assert!(!plausible_carried_content(
             "---\nid: ADR-0002\nkind: decision\ntitle: Topic\nstatus: accepted\ndate: 2026-08-02\n---\n\n## Topic\n\ntopic\n",
             "---\nid: ADR-0001\nkind: decision\ntitle: Base\nstatus: accepted\ndate: 2026-08-02\n---\n\n## Base\n\nbase\n",
+        ));
+        assert!(!plausible_carried_content(
+            "---\nid: ADR-0002\nkind: decision\ntitle: Topic\nstatus: accepted\n---\n\n# Topic\n\n## Context\n\nA new topic.\n\n## Decision\n\nChoose topic.\n\n## Consequences\n\nTopic follows.\n",
+            "---\nid: ADR-0001\nkind: decision\ntitle: Base\nstatus: accepted\n---\n\n# Base\n\n## Context\n\nAn existing base.\n\n## Decision\n\nChoose base.\n\n## Consequences\n\nBase follows.\n",
+        ));
+        assert!(plausible_carried_content(
+            "---\nid: ADR-0002\nkind: decision\ntitle: Shared\nstatus: accepted\n---\n\n# Shared\n\n## Context\n\nThe same substantive context is retained.\n\n## Decision\n\nA changed conclusion.\n",
+            "---\nid: ADR-0001\nkind: decision\ntitle: Shared\nstatus: accepted\n---\n\n# Shared\n\n## Context\n\nThe same substantive context is retained.\n\n## Decision\n\nThe original conclusion.\n",
         ));
     }
 
