@@ -2272,6 +2272,62 @@ fn adr_reconcile_rejects_a_renamed_published_adr() {
         ));
 }
 
+#[test]
+fn adr_reconcile_proves_an_overlapping_mapping_transaction() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "target"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    init(root);
+    write_criv_config(root, vec!["src"], vec![], true);
+    fs::write(
+        root.join("docs/adr/0001-base.md"),
+        adr("0001", "Base", "base"),
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn base() {}\n").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base"]);
+
+    git(root, &["checkout", "-b", "topic"]);
+    fs::write(
+        root.join("docs/adr/0005-first.md"),
+        adr("0005", "First", "first"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("docs/adr/0007-second.md"),
+        adr("0007", "Second", "second"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "topic adrs"]);
+
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0006-target.md"),
+        adr("0006", "Target", "target"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "target adr"]);
+    git(root, &["checkout", "topic"]);
+
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target"])
+        .assert()
+        .success();
+    assert!(root.join("docs/adr/0007-first.md").exists());
+    assert!(root.join("docs/adr/0008-second.md").exists());
+    git(root, &["add", "-A"]);
+    criv(root)
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .success();
+}
+
 fn adr(id: &str, title: &str, slug: &str) -> String {
     format!(
         "---\nid: ADR-{id}\nkind: decision\ntitle: {title}\nstatus: accepted\ndate: 2026-08-02\n---\n\n## {title}\n\n{slug}\n"

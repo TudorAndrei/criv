@@ -486,15 +486,23 @@ fn print_mapping(mappings: &[Mapping]) {
 
 fn apply_plan(root: &Path, plan: &ReconcilePlan) -> Result<()> {
     let rewrite_paths = rewrite_candidates(root, plan)?;
+    let before_hashes = rewrite_paths
+        .keys()
+        .map(|path| {
+            (
+                path.clone(),
+                fs::read_to_string(root.join(path))
+                    .ok()
+                    .map(|before| hash(&before)),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     let mut receipt_files = Vec::new();
     for (path, contents) in &rewrite_paths {
-        let before_hash = fs::read_to_string(root.join(path))
-            .ok()
-            .map(|before| hash(&before));
         write_atomic_in(root, Path::new("."), Path::new(path), contents)?;
         receipt_files.push(ReceiptFile {
             path: path.clone(),
-            before_hash,
+            before_hash: before_hashes.get(path).cloned().flatten(),
             after_hash: hash(contents),
         });
     }
