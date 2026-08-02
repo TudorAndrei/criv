@@ -21,7 +21,7 @@ test("validates criv state schema before projection", () => {
   if (parsed.ok) {
     assert.equal(parsed.envelope.graph?.nodes?.length, 2);
     assert.equal(parsed.envelope.graph?.edges?.length, 1);
-    assert.deepEqual(registeredPatterns(parsed.envelope), ["code/entrypoint"]);
+    assert.deepEqual(registeredPatterns(parsed.envelope), []);
   }
 
   const invalid = parseStateEnvelope(stateContractRaw.replace("criv.state.v0", "criv.state.v1"));

@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+#[cfg(test)]
+use std::{cell::Cell, thread_local};
+
 use ast_grep_config::{DeserializeEnv, SerializableRuleCore};
 use ast_grep_core::meta_var::MetaVariable;
 use ast_grep_core::{Doc, Matcher, NodeMatch, Pattern};
@@ -85,6 +88,21 @@ struct CompiledPolicyRequest<'a> {
     language: SupportLang,
     matcher: CompiledMatcher,
     paths: &'a BTreeSet<String>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static BATCH_PARSE_COUNT: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_batch_parse_count() {
+    BATCH_PARSE_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn batch_parse_count() -> usize {
+    BATCH_PARSE_COUNT.with(Cell::get)
 }
 
 pub(crate) fn pattern_source(config: &PatternConfig) -> Option<PatternSource<'_>> {
@@ -204,6 +222,8 @@ pub(crate) fn find_policies_batch(
         }
 
         let contents = read_source_to_string(root, source_file)?;
+        #[cfg(test)]
+        BATCH_PARSE_COUNT.with(|count| count.set(count.get() + 1));
         let ast = language.ast_grep(&contents);
         let root = ast.root();
         for request in requests {

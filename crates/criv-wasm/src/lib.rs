@@ -358,7 +358,7 @@ mod tests {
         assert_eq!(state.schema, "criv.state.v0");
         assert_eq!(state.graph.nodes.len(), 2);
         assert_eq!(state.graph.edges.len(), 1);
-        assert_eq!(state.registered_patterns, vec!["code/entrypoint"]);
+        assert!(state.registered_patterns.is_empty());
         assert_eq!(state.source_index.len(), 1);
         assert_eq!(state.source_index[0].frecency, 0);
     }

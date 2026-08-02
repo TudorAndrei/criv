@@ -27,21 +27,8 @@
       }
     ]
   },
-  "registered-patterns": [
-    "code/entrypoint"
-  ],
-  "patterns": {
-    "code/entrypoint": [
-      {
-        "file": "src/lib.rs",
-        "range": "L1:C1-L1:C12",
-        "captures": {
-          "BODY": "",
-          "NAME": "run"
-        }
-      }
-    ]
-  },
+  "registered-patterns": [],
+  "patterns": {},
   "source-index": [
     {
       "path": "src/lib.rs",

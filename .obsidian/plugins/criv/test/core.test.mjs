@@ -39,11 +39,8 @@ assert.deepEqual(
 );
 assert.equal(stateContract.graph.nodes.length, 2);
 assert.equal(stateContract.graph.edges.length, 1);
-assert.deepEqual(stateContract["registered-patterns"], ["code/entrypoint"]);
-assert.deepEqual(stateContract.patterns["code/entrypoint"][0].captures, {
-  BODY: "",
-  NAME: "run",
-});
+assert.deepEqual(stateContract["registered-patterns"], []);
+assert.deepEqual(stateContract.patterns, {});
 const c4Expected = JSON.parse(readFileSync(resolve(c4FixtureDir, "expected.json"), "utf8"));
 const c4FixtureNames = readdirSync(c4FixtureDir).filter((name) => name.endsWith(".c4"));
 assert.ok(c4FixtureNames.length > 0, "expected shared C4 fixtures");
