@@ -13,6 +13,14 @@ use tempfile::TempDir;
 fn criv(root: &Path) -> Command {
     let mut command = Command::cargo_bin("criv").expect("criv binary");
     command.current_dir(root);
+    // Git exports these while running hooks. Every fixture owns its repository
+    // context through `current_dir`, so inherited values must never redirect a
+    // spawned CLI to the checkout that invoked the test suite.
+    command.env_remove("GIT_DIR");
+    command.env_remove("GIT_WORK_TREE");
+    command.env_remove("GIT_INDEX_FILE");
+    command.env_remove("GIT_COMMON_DIR");
+    command.env_remove("GIT_PREFIX");
     command.env_remove("CI");
     command.env_remove("GITHUB_ACTIONS");
     command.env_remove("CRIV_BASE_REF");
@@ -696,6 +704,48 @@ fn query_diff_compares_snapshots_and_reports_errors() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("does not resolve"));
+}
+
+#[test]
+fn query_diff_reads_state_from_a_git_ref() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    query_fixture(root);
+    git(root, &["init"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    git(root, &["add", "-f", ".criv/state.json"]);
+    git(root, &["commit", "-m", "record state"]);
+
+    criv(root)
+        .args(["query", "diff", "HEAD", "HEAD"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("node_added").not())
+        .stdout(predicate::str::contains("node_removed").not());
+}
+
+#[test]
+fn query_diff_uses_the_requested_root_despite_inherited_git_context() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    query_fixture(root);
+    git(root, &["init"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    git(root, &["add", "-f", ".criv/state.json"]);
+    git(root, &["commit", "-m", "record state"]);
+
+    let outer = TempDir::new().unwrap();
+    git(outer.path(), &["init"]);
+
+    criv(root)
+        .env("GIT_DIR", outer.path().join(".git"))
+        .env("GIT_WORK_TREE", outer.path())
+        .args(["query", "diff", "HEAD", "HEAD"])
+        .assert()
+        .success();
 }
 
 #[test]
@@ -1570,6 +1620,33 @@ policy:
         .failure()
         .stdout(predicate::str::contains("ADR-0993 policy"))
         .stdout(predicate::str::contains("src/clean.rs"));
+}
+
+#[test]
+fn commit_enforcement_uses_the_requested_root_despite_inherited_git_context() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    git(root, &["init"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    fs::write(root.join("tracked.txt"), "before\n").unwrap();
+    git(root, &["add", "tracked.txt"]);
+    git(root, &["commit", "-m", "initial"]);
+    fs::write(root.join("tracked.txt"), "after\n").unwrap();
+    git(root, &["add", "tracked.txt"]);
+
+    let outer = TempDir::new().unwrap();
+    git(outer.path(), &["init"]);
+
+    criv(root)
+        .env("GIT_DIR", outer.path().join(".git"))
+        .env("GIT_WORK_TREE", outer.path())
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 staged files"));
 }
 
 #[test]

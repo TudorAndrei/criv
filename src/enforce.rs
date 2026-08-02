@@ -822,18 +822,24 @@ mod tests {
     #[test]
     fn parses_git_name_status_entries() {
         let entries = parse_changed_entries(
-            b"A\0docs/adr/0012-new.md\0M\0src/enforce.rs\0R100\0docs/adr/0001-old.md\0docs/adr/0001-renamed.md\0",
+            b"A\0docs/adr/0012-new.md\0T\0src/enforce.rs\0D\0deleted.rs\0R100\0docs/adr/0001-old.md\0docs/adr/0001-renamed.md\0C100\0src/original.rs\0src/copied.rs\0X\0other.rs\0",
         )
         .unwrap();
 
         assert_eq!(entries[0].status, ChangeStatus::Added);
         assert_eq!(entries[0].path, "docs/adr/0012-new.md");
-        assert_eq!(entries[2].status, ChangeStatus::Renamed);
+        assert_eq!(entries[3].status, ChangeStatus::Renamed);
         assert_eq!(
-            entries[2].previous_path.as_deref(),
+            entries[3].previous_path.as_deref(),
             Some("docs/adr/0001-old.md")
         );
-        assert_eq!(entries[2].path, "docs/adr/0001-renamed.md");
+        assert_eq!(entries[3].path, "docs/adr/0001-renamed.md");
+        assert_eq!(entries[1].status, ChangeStatus::Modified);
+        assert_eq!(entries[2].status, ChangeStatus::Deleted);
+        assert_eq!(entries[4].status, ChangeStatus::Copied);
+        assert_eq!(entries[4].previous_path.as_deref(), Some("src/original.rs"));
+        assert_eq!(entries[4].path, "src/copied.rs");
+        assert_eq!(entries[5].status, ChangeStatus::Other);
     }
 
     #[test]
