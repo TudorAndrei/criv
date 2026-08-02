@@ -1,11 +1,10 @@
-//! Small, fail-closed wrappers around the Git CLI.
+//! The embedded Git boundary for production repository access.
 //!
-//! Keeping these calls in one module prevents hook environment variables from
-//! changing the repository a command inspects.
+//! Callers use criv values and errors only. `git2` objects stay in this module
+//! so a runtime subprocess alternative cannot grow beside the embedded backend.
 
 use std::ops::Range;
 use std::path::Path;
-use std::process::{Command, Output};
 
 use crate::{CrivError, Result};
 
@@ -36,298 +35,534 @@ pub(crate) enum ChangeStatus {
     Other,
 }
 
-/// Builds a Git command rooted in the requested vault, independent of any
-/// repository context inherited from a Git hook.
-fn command(root: &Path) -> Command {
-    let mut command = Command::new("git");
-    command
-        .current_dir(root)
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_PREFIX");
-    command
+/// A repository opened from an explicit vault root. Its `git2` handle remains
+/// private so callers cannot depend on backend-specific values.
+pub(crate) struct GitRepository {
+    repository: git2::Repository,
 }
 
-pub(crate) fn output(root: &Path, args: &[&str]) -> Result<Output> {
-    let output = command(root)
-        .args(args)
-        .output()
-        .map_err(|err| CrivError::new(format!("failed to run `git {}`: {err}", args.join(" "))))?;
-    if output.status.success() {
-        return Ok(output);
+pub(crate) enum ChangedSetComparison<'a> {
+    Staged,
+    Trees {
+        old_ref: &'a str,
+        new_ref: &'a str,
+    },
+    ThreeDot {
+        upstream_ref: &'a str,
+        head_ref: &'a str,
+    },
+    TreeToWorktree {
+        old_ref: &'a str,
+    },
+}
+
+impl GitRepository {
+    /// Discovers the repository from `root`, treating bare repositories as not
+    /// being inside a worktree to match `git rev-parse --is-inside-work-tree`.
+    pub(crate) fn discover(root: &Path) -> Result<Option<Self>> {
+        match git2::Repository::discover(root) {
+            Ok(repository) if repository.workdir().is_some() => Ok(Some(Self { repository })),
+            Ok(_) => Ok(None),
+            Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
+            Err(error) => Err(CrivError::new(format!(
+                "failed to open repository from `{}`: {error}",
+                root.display()
+            ))),
+        }
     }
-    Err(CrivError::new(format!(
-        "`git {}` failed with {}: {}",
-        args.join(" "),
-        output.status,
-        String::from_utf8_lossy(&output.stderr).trim()
-    )))
-}
 
-pub(crate) fn is_repository(root: &Path) -> Result<bool> {
-    let output = command(root)
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .output()
-        .map_err(|err| {
+    pub(crate) fn changed_set(&self, comparison: ChangedSetComparison<'_>) -> Result<ChangedSet> {
+        match comparison {
+            ChangedSetComparison::Staged => {
+                let old_tree = self.head_tree();
+                let mut options = similarity_diff_options();
+                let diff = self
+                    .repository
+                    .diff_tree_to_index(old_tree.as_ref(), None, Some(&mut options))
+                    .map_err(|error| {
+                        CrivError::new(format!("git diff --cached failed: {error}"))
+                    })?;
+                self.changed_set_from_diff(diff, Some("HEAD"), Some(":"))
+            }
+            ChangedSetComparison::Trees { old_ref, new_ref } => {
+                let old_tree = self.tree_at(old_ref).map_err(|error| {
+                    CrivError::new(format!("git diff {old_ref} {new_ref} failed: {error}"))
+                })?;
+                let new_tree = self.tree_at(new_ref).map_err(|error| {
+                    CrivError::new(format!("git diff {old_ref} {new_ref} failed: {error}"))
+                })?;
+                let mut options = similarity_diff_options();
+                let diff = self
+                    .repository
+                    .diff_tree_to_tree(Some(&old_tree), Some(&new_tree), Some(&mut options))
+                    .map_err(|error| {
+                        CrivError::new(format!("git diff {old_ref} {new_ref} failed: {error}"))
+                    })?;
+                self.changed_set_from_diff(diff, Some(old_ref), Some(new_ref))
+            }
+            ChangedSetComparison::ThreeDot {
+                upstream_ref,
+                head_ref,
+            } => {
+                let upstream = self.commit_at(upstream_ref).map_err(|error| {
+                    CrivError::new(format!(
+                        "git diff {upstream_ref}...{head_ref} failed: {error}"
+                    ))
+                })?;
+                let head = self.commit_at(head_ref).map_err(|error| {
+                    CrivError::new(format!(
+                        "git diff {upstream_ref}...{head_ref} failed: {error}"
+                    ))
+                })?;
+                let merge_base = self
+                    .repository
+                    .merge_base(upstream.id(), head.id())
+                    .map_err(|error| {
+                        CrivError::new(format!(
+                            "git diff {upstream_ref}...{head_ref} failed: {error}"
+                        ))
+                    })?;
+                let base_tree = self
+                    .repository
+                    .find_commit(merge_base)
+                    .and_then(|commit| commit.tree())
+                    .map_err(|error| {
+                        CrivError::new(format!(
+                            "git diff {upstream_ref}...{head_ref} failed: {error}"
+                        ))
+                    })?;
+                let head_tree = head.tree().map_err(|error| {
+                    CrivError::new(format!(
+                        "git diff {upstream_ref}...{head_ref} failed: {error}"
+                    ))
+                })?;
+                let mut options = similarity_diff_options();
+                let diff = self
+                    .repository
+                    .diff_tree_to_tree(Some(&base_tree), Some(&head_tree), Some(&mut options))
+                    .map_err(|error| {
+                        CrivError::new(format!(
+                            "git diff {upstream_ref}...{head_ref} failed: {error}"
+                        ))
+                    })?;
+                self.changed_set_from_diff(diff, Some(upstream_ref), Some(head_ref))
+            }
+            ChangedSetComparison::TreeToWorktree { old_ref } => {
+                let old_tree = self.tree_at(old_ref).map_err(|error| {
+                    CrivError::new(format!("git diff {old_ref} failed: {error}"))
+                })?;
+                let mut options = similarity_diff_options();
+                let diff = self
+                    .repository
+                    .diff_tree_to_workdir_with_index(Some(&old_tree), Some(&mut options))
+                    .map_err(|error| {
+                        CrivError::new(format!("git diff {old_ref} failed: {error}"))
+                    })?;
+                self.changed_set_from_diff(diff, Some(old_ref), None)
+            }
+        }
+    }
+
+    /// Returns outgoing commits in oldest-first order for the supported SHA-1
+    /// pre-push input, matching `git rev-list --reverse` on the covered matrix.
+    pub(crate) fn outgoing_commits(
+        &self,
+        remote_name: &str,
+        local_oid: &str,
+        remote_oid: &str,
+    ) -> Result<Vec<String>> {
+        let local_oid = parse_oid(local_oid, "local pre-push object ID")?;
+        let mut walk = self
+            .repository
+            .revwalk()
+            .map_err(|error| CrivError::new(format!("Git revision walk failed: {error}")))?;
+        walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)
+            .map_err(|error| CrivError::new(format!("Git revision walk failed: {error}")))?;
+        walk.push(local_oid)
+            .map_err(|error| CrivError::new(format!("Git revision walk failed: {error}")))?;
+
+        if is_zero_oid(remote_oid) {
+            let prefix = format!("refs/remotes/{remote_name}/");
+            for reference in self
+                .repository
+                .references()
+                .map_err(|error| CrivError::new(format!("Git reference lookup failed: {error}")))?
+            {
+                let reference = reference.map_err(|error| {
+                    CrivError::new(format!("Git reference lookup failed: {error}"))
+                })?;
+                if reference
+                    .name()
+                    .ok()
+                    .is_some_and(|name| name.starts_with(&prefix))
+                    && let Some(target) = reference.target()
+                {
+                    walk.hide(target).map_err(|error| {
+                        CrivError::new(format!("Git revision walk failed: {error}"))
+                    })?;
+                }
+            }
+        } else {
+            walk.hide(parse_oid(remote_oid, "remote pre-push object ID")?)
+                .map_err(|error| CrivError::new(format!("Git revision walk failed: {error}")))?;
+        }
+
+        let mut commits = walk
+            .map(|oid| {
+                oid.map(|oid| oid.to_string())
+                    .map_err(|error| CrivError::new(format!("Git revision walk failed: {error}")))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        commits.reverse();
+        Ok(commits)
+    }
+
+    /// Returns one commit's changed entries, tagging each with its first
+    /// parent (or no old ref for a root commit) and the commit itself.
+    pub(crate) fn changed_set_for_commit(&self, commit_id: &str) -> Result<ChangedSet> {
+        let commit = self
+            .repository
+            .find_commit(parse_oid(commit_id, "commit object ID")?)
+            .map_err(|error| {
+                CrivError::new(format!(
+                    "Git commit `{commit_id}` does not resolve: {error}"
+                ))
+            })?;
+        let old_ref = commit.parent_id(0).ok().map(|oid| oid.to_string());
+        let old_tree = commit.parent(0).ok().and_then(|parent| parent.tree().ok());
+        let new_tree = commit.tree().map_err(|error| {
+            CrivError::new(format!("Git commit `{commit_id}` has no tree: {error}"))
+        })?;
+        let diff = self
+            .repository
+            .diff_tree_to_tree(old_tree.as_ref(), Some(&new_tree), None)
+            .map_err(|error| {
+                CrivError::new(format!("Git commit diff `{commit_id}` failed: {error}"))
+            })?;
+        self.changed_set_from_diff(diff, old_ref.as_deref(), Some(commit_id))
+    }
+
+    pub(crate) fn read_file_at_ref(&self, reference: &str, path: &Path) -> Result<Vec<u8>> {
+        let object = self
+            .repository
+            .revparse_single(reference)
+            .map_err(|error| {
+                CrivError::new(format!("git ref `{reference}` does not resolve: {error}"))
+            })?;
+        let tree = object.peel_to_tree().map_err(|error| {
             CrivError::new(format!(
-                "failed to run `git rev-parse --is-inside-work-tree`: {err}"
+                "git ref `{reference}` does not resolve to a tree: {error}"
             ))
         })?;
-    Ok(output.status.success() && output.stdout == b"true\n")
+        let entry = tree.get_path(path).map_err(|error| {
+            CrivError::new(format!(
+                "git ref `{reference}` does not contain `{}`: {error}",
+                path.display()
+            ))
+        })?;
+        self.read_blob(entry.id(), reference, path)
+    }
+
+    pub(crate) fn read_file_at_index(&self, path: &Path) -> Result<Vec<u8>> {
+        let index = self
+            .repository
+            .index()
+            .map_err(|error| CrivError::new(format!("Git index could not be read: {error}")))?;
+        let entry = index.get_path(path, 0).ok_or_else(|| {
+            CrivError::new(format!("Git index does not contain `{}`", path.display()))
+        })?;
+        self.read_blob(entry.id, "index", path)
+    }
+
+    fn head_tree(&self) -> Option<git2::Tree<'_>> {
+        self.repository
+            .head()
+            .ok()
+            .and_then(|head| head.peel_to_tree().ok())
+    }
+
+    fn tree_at(&self, reference: &str) -> Result<git2::Tree<'_>> {
+        self.repository
+            .revparse_single(reference)
+            .and_then(|object| object.peel_to_tree())
+            .map_err(|error| {
+                CrivError::new(format!(
+                    "git ref `{reference}` does not resolve to a tree: {error}"
+                ))
+            })
+    }
+
+    fn commit_at(&self, reference: &str) -> Result<git2::Commit<'_>> {
+        self.repository
+            .revparse_single(reference)
+            .and_then(|object| object.peel_to_commit())
+            .map_err(|error| {
+                CrivError::new(format!(
+                    "git ref `{reference}` does not resolve to a commit: {error}"
+                ))
+            })
+    }
+
+    fn changed_set_from_diff(
+        &self,
+        mut diff: git2::Diff<'_>,
+        old_ref: Option<&str>,
+        new_ref: Option<&str>,
+    ) -> Result<ChangedSet> {
+        let mut similarity = git2::DiffFindOptions::new();
+        similarity
+            .renames(true)
+            .copies(true)
+            .copies_from_unmodified(true)
+            .remove_unmodified(true)
+            .rename_threshold(50)
+            .copy_threshold(100);
+        diff.find_similar(Some(&mut similarity))
+            .map_err(|error| CrivError::new(format!("git similarity detection failed: {error}")))?;
+
+        let mut entries = Vec::new();
+        for delta in diff.deltas() {
+            let status = match delta.status() {
+                git2::Delta::Added => ChangeStatus::Added,
+                git2::Delta::Modified | git2::Delta::Typechange => ChangeStatus::Modified,
+                git2::Delta::Deleted => ChangeStatus::Deleted,
+                git2::Delta::Renamed => ChangeStatus::Renamed,
+                git2::Delta::Copied => ChangeStatus::Copied,
+                _ => ChangeStatus::Other,
+            };
+            let old_path = path_from_bytes(delta.old_file().path_bytes())?;
+            let new_path = path_from_bytes(delta.new_file().path_bytes())?;
+            let (path, previous_path) = match status {
+                ChangeStatus::Deleted => (old_path, None),
+                ChangeStatus::Renamed | ChangeStatus::Copied => (new_path, Some(old_path)),
+                _ => (new_path, None),
+            };
+            entries.push(ChangedEntry {
+                status,
+                path,
+                previous_path,
+                old_ref: old_ref.map(str::to_string),
+                new_ref: new_ref.map(str::to_string),
+            });
+        }
+
+        Ok(ChangedSet {
+            entries,
+            old_ref: old_ref.map(str::to_string),
+            new_ref: new_ref.map(str::to_string),
+            basis: match (old_ref, new_ref) {
+                (Some(old), Some(new)) => format!("Git comparison {old}..{new}"),
+                (Some(old), None) => format!("Git comparison {old}..worktree"),
+                (None, Some(new)) => format!("Git comparison ..{new}"),
+                (None, None) => "Git comparison".into(),
+            },
+        })
+    }
+
+    fn read_blob(&self, oid: git2::Oid, source: &str, path: &Path) -> Result<Vec<u8>> {
+        self.repository
+            .find_blob(oid)
+            .map(|blob| blob.content().to_vec())
+            .map_err(|error| {
+                CrivError::new(format!(
+                    "Git {source} does not contain blob `{}`: {error}",
+                    path.display()
+                ))
+            })
+    }
 }
 
-pub(crate) fn changed_set(
-    root: &Path,
-    args: &[&str],
-    old_ref: Option<&str>,
-    new_ref: Option<&str>,
-) -> Result<ChangedSet> {
-    let output = output(root, args)?;
-    let mut entries = parse_changed_entries(&output.stdout)?;
-    for entry in &mut entries {
-        entry.old_ref = old_ref.map(str::to_string);
-        entry.new_ref = new_ref.map(str::to_string);
-    }
-    Ok(ChangedSet {
-        entries,
-        old_ref: old_ref.map(str::to_string),
-        new_ref: new_ref.map(str::to_string),
-        basis: match (old_ref, new_ref) {
-            (Some(old), Some(new)) => format!("Git comparison {old}..{new}"),
-            (Some(old), None) => format!("Git comparison {old}..worktree"),
-            (None, Some(new)) => format!("Git comparison ..{new}"),
-            (None, None) => "Git comparison".into(),
-        },
+fn path_from_bytes(path: Option<&[u8]>) -> Result<String> {
+    let path = path.ok_or_else(|| CrivError::new("Git changed entry did not contain a path"))?;
+    String::from_utf8(path.to_vec()).map_err(|_| {
+        CrivError::new("Git changed path is not valid UTF-8; criv cannot represent it")
     })
 }
 
-/// Compares two committed revisions with explicit rename and copy detection.
-/// This deliberately ignores user-level `diff.renames` settings because
-/// ownership proofs must be reproducible in hooks and CI.
+fn parse_oid(value: &str, context: &str) -> Result<git2::Oid> {
+    git2::Oid::from_str(value)
+        .map_err(|error| CrivError::new(format!("invalid {context} `{value}`: {error}")))
+}
+
+fn is_zero_oid(oid: &str) -> bool {
+    oid.bytes().all(|byte| byte == b'0')
+}
+
+fn similarity_diff_options() -> git2::DiffOptions {
+    let mut options = git2::DiffOptions::new();
+    options.include_unmodified(true);
+    options
+}
+
+/// Reads a file from the tree selected by `reference` in the repository
+/// discovered from `root`.
+pub(crate) fn read_file_at_ref(root: &Path, reference: &str, path: &Path) -> Result<Vec<u8>> {
+    let repository = GitRepository::discover(root)?.ok_or_else(|| {
+        CrivError::new(format!(
+            "failed to open repository from `{}`",
+            root.display()
+        ))
+    })?;
+    repository.read_file_at_ref(reference, path)
+}
+
+/// Resolves a reference to a commit ID without consulting inherited hook
+/// environment. `Repository::discover` anchors all operations at `root`.
+pub(crate) fn resolve_commit(root: &Path, reference: &str) -> Result<String> {
+    let repository = required_repository(root)?;
+    repository
+        .commit_at(reference)
+        .map(|commit| commit.id().to_string())
+        .map_err(|_| CrivError::new(format!(
+            "cannot resolve base ref `{reference}` to a commit; fetch complete history and retry"
+        )))
+}
+
+pub(crate) fn is_repository(root: &Path) -> Result<bool> {
+    Ok(GitRepository::discover(root)?.is_some())
+}
+
 pub(crate) fn changes_between(root: &Path, old: &str, new: &str) -> Result<ChangedSet> {
     changes_between_paths(root, old, new, &[])
 }
 
-/// Like [`changes_between`], but restricts Git's traversal to relevant paths.
-/// Callers proving ADR identity use this to avoid treating unrelated repository
-/// changes as allocation evidence.
 pub(crate) fn changes_between_paths(
     root: &Path,
     old: &str,
     new: &str,
     paths: &[&str],
 ) -> Result<ChangedSet> {
-    let mut args = vec![
-        "diff",
-        "--name-status",
-        "-z",
-        "--find-renames=50%",
-        "--find-copies=100%",
-        "--find-copies-harder",
-        old,
-        new,
-    ];
-    if !paths.is_empty() {
-        args.push("--");
-        args.extend_from_slice(paths);
+    let repository = required_repository(root)?;
+    let old_tree = repository.tree_at(old)?;
+    let new_tree = repository.tree_at(new)?;
+    let mut options = similarity_diff_options();
+    for path in paths {
+        options.pathspec(*path);
     }
-    changed_set(root, &args, Some(old), Some(new))
+    let diff = repository
+        .repository
+        .diff_tree_to_tree(Some(&old_tree), Some(&new_tree), Some(&mut options))
+        .map_err(|error| CrivError::new(format!("git diff {old} {new} failed: {error}")))?;
+    repository.changed_set_from_diff(diff, Some(old), Some(new))
 }
 
-/// Compares HEAD with the index and working tree using the same explicit move
-/// detection as committed comparisons. This is evidence of the current input,
-/// not a substitute for the merge-base ownership proof.
 pub(crate) fn worktree_changes_in(root: &Path, paths: &[&str]) -> Result<ChangedSet> {
-    let mut args = vec![
-        "diff",
-        "--name-status",
-        "-z",
-        "--find-renames=50%",
-        "--find-copies=100%",
-        "--find-copies-harder",
-        "HEAD",
-    ];
-    if !paths.is_empty() {
-        args.push("--");
-        args.extend_from_slice(paths);
+    let repository = required_repository(root)?;
+    let old_tree = repository.tree_at("HEAD")?;
+    let mut options = similarity_diff_options();
+    for path in paths {
+        options.pathspec(*path);
     }
-    changed_set(root, &args, Some("HEAD"), None)
-}
-
-pub(crate) fn parse_changed_entries(stdout: &[u8]) -> Result<Vec<ChangedEntry>> {
-    let mut entries = Vec::new();
-    let mut fields = stdout
-        .split(|byte| *byte == b'\0')
-        .filter(|field| !field.is_empty());
-    while let Some(status_field) = fields.next() {
-        let status = status_field.first().copied().ok_or_else(|| {
-            CrivError::new("Git name-status output contained an empty status field")
-        })? as char;
-        let status = match status {
-            'A' => ChangeStatus::Added,
-            'M' | 'T' => ChangeStatus::Modified,
-            'D' => ChangeStatus::Deleted,
-            'R' => ChangeStatus::Renamed,
-            'C' => ChangeStatus::Copied,
-            _ => ChangeStatus::Other,
-        };
-        let (path, previous_path) = match status {
-            ChangeStatus::Renamed | ChangeStatus::Copied => {
-                let previous_path = next_path(&mut fields)?;
-                let path = next_path(&mut fields)?;
-                (path, Some(previous_path))
-            }
-            _ => (next_path(&mut fields)?, None),
-        };
-        entries.push(ChangedEntry {
-            status,
-            path,
-            previous_path,
-            old_ref: None,
-            new_ref: None,
-        });
-    }
-    Ok(entries)
-}
-
-fn next_path<'a>(fields: &mut impl Iterator<Item = &'a [u8]>) -> Result<String> {
-    let value = fields
-        .next()
-        .ok_or_else(|| CrivError::new("Git name-status output ended before a path field"))?;
-    String::from_utf8(value.to_vec()).map_err(|_| {
-        CrivError::new("Git changed path is not valid UTF-8; criv cannot represent it")
-    })
-}
-
-/// Resolve an arbitrary ref once and return the complete commit object ID.
-pub(crate) fn resolve_commit(root: &Path, git_ref: &str) -> Result<String> {
-    let object = format!("{git_ref}^{{commit}}");
-    let output = output(root, &["rev-parse", "--verify", &object]).map_err(|_| {
-        CrivError::new(format!(
-            "cannot resolve base ref `{git_ref}` to a commit; fetch complete history and retry"
-        ))
-    })?;
-    let sha = String::from_utf8(output.stdout)
-        .map_err(|_| CrivError::new("Git commit object ID is not valid UTF-8"))?;
-    let sha = sha.trim();
-    if sha.len() != 40 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(CrivError::new(format!(
-            "Git resolved `{git_ref}` to an invalid commit ID"
-        )));
-    }
-    Ok(sha.to_owned())
+    let diff = repository
+        .repository
+        .diff_tree_to_workdir_with_index(Some(&old_tree), Some(&mut options))
+        .map_err(|error| CrivError::new(format!("git diff HEAD failed: {error}")))?;
+    repository.changed_set_from_diff(diff, Some("HEAD"), None)
 }
 
 pub(crate) fn merge_base(root: &Path, first: &str, second: &str) -> Result<String> {
-    let output = output(root, &["merge-base", first, second]).map_err(|_| {
-        CrivError::new(format!("cannot find a merge base for `{first}` and `{second}`; fetch complete history and retry"))
-    })?;
-    let sha = String::from_utf8(output.stdout)
-        .map_err(|_| CrivError::new("Git merge-base output is not valid UTF-8"))?;
-    let sha = sha.trim();
-    if sha.len() != 40 || !sha.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(CrivError::new(
-            "Git merge-base returned an invalid commit ID",
-        ));
-    }
-    Ok(sha.to_owned())
+    let repository = required_repository(root)?;
+    let first_ref = first;
+    let second_ref = second;
+    let first = repository.commit_at(first).map_err(|_| CrivError::new(format!(
+        "cannot find a merge base for `{first_ref}` and `{second_ref}`; fetch complete history and retry"
+    )))?;
+    let second = repository.commit_at(second).map_err(|_| CrivError::new(format!(
+        "cannot find a merge base for `{first_ref}` and `{second_ref}`; fetch complete history and retry"
+    )))?;
+    repository.repository.merge_base(first.id(), second.id())
+        .map(|oid| oid.to_string())
+        .map_err(|_| CrivError::new(format!(
+            "cannot find a merge base for `{first_ref}` and `{second_ref}`; fetch complete history and retry"
+        )))
 }
 
-pub(crate) fn tree_paths(root: &Path, commit: &str, prefix: &str) -> Result<Vec<String>> {
-    let output = output(
-        root,
-        &["ls-tree", "-r", "-z", "--name-only", commit, "--", prefix],
-    )?;
-    output
-        .stdout
-        .split(|byte| *byte == b'\0')
-        .filter(|field| !field.is_empty())
-        .map(|field| {
-            String::from_utf8(field.to_vec()).map_err(|_| {
-                CrivError::new("Git tree path is not valid UTF-8; criv cannot represent it")
-            })
-        })
-        .collect()
-}
-
-pub(crate) fn blob(root: &Path, git_ref: &str, path: &str) -> Result<String> {
-    let object = if git_ref == ":" {
-        format!(":{path}")
-    } else {
-        format!("{git_ref}:{path}")
-    };
-    let output = output(root, &["show", &object])?;
-    String::from_utf8(output.stdout).map_err(|_| {
-        CrivError::new(format!(
-            "Git blob `{object}` is not valid UTF-8; reconciliation only supports text files"
-        ))
+pub(crate) fn tree_paths(root: &Path, reference: &str, prefix: &str) -> Result<Vec<String>> {
+    let repository = required_repository(root)?;
+    let tree = repository.tree_at(reference)?;
+    let prefix = prefix.trim_start_matches("./").trim_end_matches('/');
+    let mut paths = Vec::new();
+    tree.walk(git2::TreeWalkMode::PreOrder, |parent, entry| {
+        let name = entry.name_bytes();
+        let mut candidate = parent.as_bytes().to_vec();
+        candidate.extend_from_slice(name);
+        let Ok(candidate) = String::from_utf8(candidate) else {
+            return -1;
+        };
+        if (prefix == "."
+            || prefix.is_empty()
+            || candidate == prefix
+            || candidate.starts_with(&format!("{prefix}/")))
+            && entry.kind() != Some(git2::ObjectType::Tree)
+        {
+            paths.push(candidate);
+        }
+        0
     })
+    .map_err(|error| {
+        CrivError::new(format!(
+            "Git tree path is not valid UTF-8; criv cannot represent it: {error}"
+        ))
+    })?;
+    Ok(paths)
 }
 
-/// Reads a file from a committed tree for callers that consume raw snapshot
-/// bytes. This compatibility entry point predates ADR reconciliation.
-pub(crate) fn read_file_at_ref(root: &Path, git_ref: &str, path: &Path) -> Result<Vec<u8>> {
-    let path = path
-        .to_str()
-        .ok_or_else(|| CrivError::new("Git blob path is not valid UTF-8"))?;
-    let object = format!("{git_ref}:{path}");
-    output(root, &["show", &object]).map(|output| output.stdout)
-}
-
-pub(crate) fn file_mode(root: &Path, git_ref: &str, path: &str) -> Result<Option<String>> {
-    let output = if git_ref == ":" {
-        output(root, &["ls-files", "-s", "-z", "--", path])?
+pub(crate) fn blob(root: &Path, reference: &str, path: &str) -> Result<String> {
+    let bytes = if reference == ":" {
+        required_repository(root)?.read_file_at_index(Path::new(path))?
     } else {
-        output(root, &["ls-tree", "-z", git_ref, "--", path])?
+        read_file_at_ref(root, reference, Path::new(path))?
     };
-    let Some(record) = output.stdout.split(|byte| *byte == b'\0').next() else {
-        return Ok(None);
-    };
-    if record.is_empty() {
-        return Ok(None);
-    }
-    let mode = record
-        .split(|byte| *byte == b' ')
-        .next()
-        .ok_or_else(|| CrivError::new("Git mode output was malformed"))?;
-    let mode = String::from_utf8(mode.to_vec())
-        .map_err(|_| CrivError::new("Git mode output is not valid UTF-8"))?;
-    (mode.len() == 6 && mode.bytes().all(|byte| byte.is_ascii_digit()))
-        .then_some(mode)
-        .map(Some)
-        .ok_or_else(|| CrivError::new("Git mode output was malformed"))
+    String::from_utf8(bytes).map_err(|_| CrivError::new(format!(
+        "Git blob `{reference}:{path}` is not valid UTF-8; reconciliation only supports text files"
+    )))
 }
 
-/// Zero-context line ownership for content newly added between two revisions.
+pub(crate) fn file_mode(root: &Path, reference: &str, path: &str) -> Result<Option<String>> {
+    let repository = required_repository(root)?;
+    let mode = if reference == ":" {
+        repository
+            .repository
+            .index()
+            .map_err(|error| CrivError::new(format!("Git index could not be read: {error}")))?
+            .get_path(Path::new(path), 0)
+            .map(|entry| entry.mode)
+    } else {
+        repository
+            .tree_at(reference)?
+            .get_path(Path::new(path))
+            .ok()
+            .map(|entry| entry.filemode() as u32)
+    };
+    Ok(mode.map(|mode| format!("{mode:06o}")))
+}
+
 pub(crate) fn added_lines(
     root: &Path,
     old: &str,
     new: &str,
     path: &str,
 ) -> Result<Vec<Range<usize>>> {
-    let output = output(
-        root,
-        &[
-            "diff",
-            "--no-ext-diff",
-            "--no-renames",
-            "--unified=0",
-            "--no-color",
-            old,
-            new,
-            "--",
-            path,
-        ],
-    )?;
-    parse_added_lines(&output.stdout, path)
+    let repository = required_repository(root)?;
+    let old_tree = repository.tree_at(old)?;
+    let new_tree = repository.tree_at(new)?;
+    let old_blob = old_tree
+        .get_path(Path::new(path))
+        .ok()
+        .and_then(|entry| repository.repository.find_blob(entry.id()).ok());
+    let new_blob = new_tree
+        .get_path(Path::new(path))
+        .ok()
+        .and_then(|entry| repository.repository.find_blob(entry.id()).ok());
+    added_lines_for_blobs(
+        &repository.repository,
+        old_blob.as_ref(),
+        path,
+        new_blob.as_ref(),
+        path,
+    )
 }
 
-/// Zero-context line ownership between two committed blobs whose paths differ.
-/// Comparing blob specifications directly also handles a modified copy whose
-/// source path remains present in the new tree and a low-similarity move that
-/// Git reports as deletion/addition.
 pub(crate) fn added_lines_between_blobs(
     root: &Path,
     old: &str,
@@ -335,83 +570,114 @@ pub(crate) fn added_lines_between_blobs(
     new: &str,
     new_path: &str,
 ) -> Result<Vec<Range<usize>>> {
-    let old_blob = format!("{old}:{old_path}");
-    let new_blob = format!("{new}:{new_path}");
-    let output = output(
-        root,
-        &[
-            "diff",
-            "--no-ext-diff",
-            "--unified=0",
-            "--no-color",
-            &old_blob,
-            &new_blob,
-        ],
-    )?;
-    parse_added_lines(&output.stdout, new_path)
+    let repository = required_repository(root)?;
+    let old_blob = repository
+        .tree_at(old)?
+        .get_path(Path::new(old_path))
+        .ok()
+        .and_then(|entry| repository.repository.find_blob(entry.id()).ok());
+    let new_blob = repository
+        .tree_at(new)?
+        .get_path(Path::new(new_path))
+        .ok()
+        .and_then(|entry| repository.repository.find_blob(entry.id()).ok());
+    added_lines_for_blobs(
+        &repository.repository,
+        old_blob.as_ref(),
+        old_path,
+        new_blob.as_ref(),
+        new_path,
+    )
 }
 
-fn parse_added_lines(stdout: &[u8], path: &str) -> Result<Vec<Range<usize>>> {
-    let text = String::from_utf8(stdout.to_vec())
-        .map_err(|_| CrivError::new("Git diff output is not valid UTF-8"))?;
+fn added_lines_for_blobs(
+    repository: &git2::Repository,
+    old: Option<&git2::Blob<'_>>,
+    old_path: &str,
+    new: Option<&git2::Blob<'_>>,
+    new_path: &str,
+) -> Result<Vec<Range<usize>>> {
     let mut ranges = Vec::new();
-    for line in text.lines() {
-        if !line.starts_with("@@ ") {
-            continue;
-        }
-        let plus = line
-            .split_whitespace()
-            .find(|part| part.starts_with('+'))
-            .ok_or_else(|| {
-                CrivError::new(format!(
-                    "cannot parse Git diff hunk while proving ownership of `{path}`"
-                ))
-            })?;
-        let span = &plus[1..];
-        let (start, length) = match span.split_once(',') {
-            Some((start, length)) => (start, length),
-            None => (span, "1"),
+    let mut line_callback =
+        |_: git2::DiffDelta<'_>, _: Option<git2::DiffHunk<'_>>, line: git2::DiffLine<'_>| {
+            if line.origin() == '+' && line.new_lineno().is_some_and(|line_no| line_no > 0) {
+                let line_no = line.new_lineno().unwrap() as usize;
+                ranges.push(line_no..line_no + 1);
+            }
+            true
         };
-        let start = start.parse::<usize>().map_err(|_| {
-            CrivError::new(format!(
-                "cannot parse Git diff hunk while proving ownership of `{path}`"
-            ))
+    repository
+        .diff_blobs(
+            old,
+            Some(old_path),
+            new,
+            Some(new_path),
+            None,
+            None,
+            None,
+            None,
+            Some(&mut line_callback),
+        )
+        .map_err(|error| {
+            CrivError::new(format!("cannot diff Git blobs for `{new_path}`: {error}"))
         })?;
-        let length = length.parse::<usize>().map_err(|_| {
-            CrivError::new(format!(
-                "cannot parse Git diff hunk while proving ownership of `{path}`"
-            ))
-        })?;
-        if length > 0 {
-            ranges.push(start..start + length);
+    Ok(coalesce_ranges(ranges))
+}
+
+fn coalesce_ranges(ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
+    let mut result: Vec<Range<usize>> = Vec::new();
+    for range in ranges {
+        if let Some(previous) = result.last_mut()
+            && previous.end == range.start
+        {
+            previous.end = range.end;
+        } else {
+            result.push(range);
         }
     }
-    Ok(ranges)
+    result
 }
 
 pub(crate) fn dirty_paths(root: &Path) -> Result<Vec<String>> {
-    let output = output(root, &["status", "--porcelain=v1", "-z"])?;
-    let mut fields = output
-        .stdout
-        .split(|byte| *byte == b'\0')
-        .filter(|field| !field.is_empty());
+    let repository = required_repository(root)?;
+    let mut options = git2::StatusOptions::new();
+    options
+        .include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .renames_head_to_index(true)
+        .renames_index_to_workdir(true);
+    let statuses = repository
+        .repository
+        .statuses(Some(&mut options))
+        .map_err(|error| CrivError::new(format!("Git status failed: {error}")))?;
     let mut paths = Vec::new();
-    while let Some(field) = fields.next() {
-        if field.len() < 4 || field[2] != b' ' {
-            return Err(CrivError::new("Git status output was malformed"));
+    for status in statuses.iter() {
+        if let Ok(path) = status.path() {
+            paths.push(path.to_string());
         }
-        let renamed_or_copied = matches!(field[0], b'R' | b'C') || matches!(field[1], b'R' | b'C');
-        let path = String::from_utf8(field[3..].to_vec()).map_err(|_| {
-            CrivError::new("Git status path is not valid UTF-8; criv cannot represent it")
-        })?;
-        paths.push(path);
-        if renamed_or_copied {
-            let previous = fields
-                .next()
-                .ok_or_else(|| CrivError::new("Git status rename output was malformed"))?;
-            paths.push(String::from_utf8(previous.to_vec()).map_err(|_| {
-                CrivError::new("Git status path is not valid UTF-8; criv cannot represent it")
-            })?);
+        if let Some(path) = status
+            .head_to_index()
+            .and_then(|delta| delta.old_file().path())
+        {
+            paths.push(path.to_string_lossy().to_string());
+        }
+        if let Some(path) = status
+            .head_to_index()
+            .and_then(|delta| delta.new_file().path())
+        {
+            paths.push(path.to_string_lossy().to_string());
+        }
+        if let Some(path) = status
+            .index_to_workdir()
+            .and_then(|delta| delta.old_file().path())
+        {
+            paths.push(path.to_string_lossy().to_string());
+        }
+        if let Some(path) = status
+            .index_to_workdir()
+            .and_then(|delta| delta.new_file().path())
+        {
+            paths.push(path.to_string_lossy().to_string());
         }
     }
     paths.sort();
@@ -419,51 +685,38 @@ pub(crate) fn dirty_paths(root: &Path) -> Result<Vec<String>> {
     Ok(paths)
 }
 
-/// Restore only the named paths in the index to HEAD. Callers use this for a
-/// receipt they have already proved complete; it never touches worktree data.
 pub(crate) fn reset_index_paths(root: &Path, paths: &[String]) -> Result<()> {
     if paths.is_empty() {
         return Ok(());
     }
-    let mut args = vec!["reset", "--quiet", "HEAD", "--"];
-    args.extend(paths.iter().map(String::as_str));
-    output(root, &args).map(|_| ())
+    let repository = required_repository(root)?;
+    let target = repository
+        .repository
+        .head()
+        .and_then(|head| head.peel_to_commit())
+        .map(|commit| commit.into_object())
+        .map_err(|error| CrivError::new(format!("Git HEAD could not be read: {error}")))?;
+    repository
+        .repository
+        .reset_default(Some(&target), paths.iter().map(Path::new))
+        .map_err(|error| CrivError::new(format!("Git index reset failed: {error}")))
 }
 
-pub(crate) fn ref_is_stable(root: &Path, git_ref: &str, expected_sha: &str) -> Result<bool> {
-    Ok(resolve_commit(root, git_ref)? == expected_sha)
+pub(crate) fn ref_is_stable(root: &Path, reference: &str, expected: &str) -> Result<bool> {
+    Ok(resolve_commit(root, reference)? == expected)
 }
 
 pub(crate) fn first_parent(root: &Path, commit: &str) -> Result<Option<String>> {
-    let output = command(root)
-        .args(["rev-parse", "--verify", &format!("{commit}^")])
-        .output()
-        .map_err(|err| {
-            CrivError::new(format!("failed to run git rev-parse for {commit}: {err}"))
-        })?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    String::from_utf8(output.stdout)
-        .map_err(|_| CrivError::new("Git parent object ID is not valid UTF-8"))
-        .map(|stdout| Some(stdout.trim().to_string()))
+    let repository = required_repository(root)?;
+    let commit = repository.commit_at(commit)?;
+    Ok(commit.parent_id(0).ok().map(|oid| oid.to_string()))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_nul_delimited_rename_and_copy_entries() {
-        let entries =
-            parse_changed_entries(b"R100\0old.md\0new.md\0C100\0one.md\0two.md\0").unwrap();
-        assert_eq!(entries[0].status, ChangeStatus::Renamed);
-        assert_eq!(entries[0].previous_path.as_deref(), Some("old.md"));
-        assert_eq!(entries[1].status, ChangeStatus::Copied);
-    }
-
-    #[test]
-    fn rejects_non_utf8_name_status_path() {
-        assert!(parse_changed_entries(b"M\0bad-\xff\0").is_err());
-    }
+fn required_repository(root: &Path) -> Result<GitRepository> {
+    GitRepository::discover(root)?.ok_or_else(|| {
+        CrivError::new(format!(
+            "failed to open repository from `{}`",
+            root.display()
+        ))
+    })
 }

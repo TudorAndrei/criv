@@ -2922,6 +2922,108 @@ fn adr_reconcile_proves_an_overlapping_mapping_transaction() {
         .success();
 }
 
+#[test]
+fn adr_reconcile_uses_the_requested_root_despite_inherited_git_context() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "target"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    init(root);
+    fs::write(
+        root.join("docs/adr/0001-base.md"),
+        adr("0001", "Base", "base"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base"]);
+
+    git(root, &["checkout", "-b", "topic"]);
+    fs::write(
+        root.join("docs/adr/0002-topic.md"),
+        adr("0002", "Topic", "topic"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "topic adr"]);
+
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0002-target.md"),
+        adr("0002", "Target", "target"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "target adr"]);
+    git(root, &["checkout", "topic"]);
+
+    let outer = TempDir::new().unwrap();
+    git(outer.path(), &["init"]);
+    let outer_git = outer.path().join(".git");
+    criv(root)
+        .env("GIT_DIR", &outer_git)
+        .env("GIT_WORK_TREE", outer.path())
+        .env("GIT_INDEX_FILE", outer_git.join("index"))
+        .env("GIT_COMMON_DIR", &outer_git)
+        .env("GIT_PREFIX", "outer")
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR-0002 -> ADR-0003"));
+}
+
+#[test]
+fn adr_reconcile_detects_a_collision_from_a_linked_worktree() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "target"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    init(root);
+    fs::write(
+        root.join("docs/adr/0001-base.md"),
+        adr("0001", "Base", "base"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base"]);
+
+    git(root, &["checkout", "-b", "topic"]);
+    fs::write(
+        root.join("docs/adr/0002-topic.md"),
+        adr("0002", "Topic", "topic"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "topic adr"]);
+
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0002-target.md"),
+        adr("0002", "Target", "target"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "target adr"]);
+
+    let linked = root.join("linked-worktree");
+    git(
+        root,
+        &[
+            "worktree",
+            "add",
+            "--detach",
+            linked.to_str().unwrap(),
+            "topic",
+        ],
+    );
+    criv(&linked)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR-0002 -> ADR-0003"));
+}
+
 fn adr(id: &str, title: &str, slug: &str) -> String {
     format!(
         "---\nid: ADR-{id}\nkind: decision\ntitle: {title}\nstatus: accepted\ndate: 2026-08-02\n---\n\n## {title}\n\n{slug}\n"
