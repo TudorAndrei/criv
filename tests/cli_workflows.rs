@@ -2768,9 +2768,20 @@ fn git(root: &Path, args: &[&str]) {
 fn git_stdout(root: &Path, args: &[&str]) -> String {
     let output = std::process::Command::new("git")
         .current_dir(root)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_PREFIX")
         .args(args)
         .output()
         .expect("git command should run");
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "git {:?} failed: {}{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     String::from_utf8(output.stdout).unwrap()
 }
