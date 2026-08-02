@@ -147,6 +147,35 @@ pub(crate) fn receipt_allows_change(root: &Path, entry: &git::ChangedEntry) -> b
     }
 }
 
+/// A receipt is relevant only to the exact commit from which reconciliation
+/// started. A later commit leaves the ignored receipt behind harmlessly.
+pub(crate) fn receipt_is_current(root: &Path) -> bool {
+    let Ok(receipt) = read_receipt(root) else {
+        return false;
+    };
+    receipt.schema == "criv.adr-reconcile/2"
+        && git::resolve_commit(root, "HEAD").ok().as_deref() == Some(receipt.head_sha.as_str())
+}
+
+/// Reject partial staging even when Git has no deletion entry left to send
+/// through the per-ADR immutability gate (for example, after a source ADR is
+/// recreated at its former path).
+pub(crate) fn receipt_allows_transaction(root: &Path, entries: &[git::ChangedEntry]) -> bool {
+    let Ok(receipt) = read_receipt(root) else {
+        return false;
+    };
+    if !receipt_is_current(root) {
+        return false;
+    }
+    receipt.deletions.iter().all(|deleted| {
+        entries.iter().any(|entry| {
+            entry.status == git::ChangeStatus::Deleted && entry.path == *deleted
+                || entry.status == git::ChangeStatus::Renamed
+                    && entry.previous_path.as_deref() == Some(deleted)
+        })
+    })
+}
+
 fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
     if !git::is_repository(root)? {
         return Err(CrivError::new(

@@ -69,17 +69,27 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
     };
     let violations = policy_violations(root, &vault, changed_files.as_ref())?;
     let import_violations = import_policy_violations(&vault, changed_files.as_ref());
-    let adr_violations = adr_immutability_violations(
+    let receipt_is_current = crate::adr::receipt_is_current(root);
+    let receipt_allows_transaction = changed_entries
+        .as_ref()
+        .is_some_and(|changes| crate::adr::receipt_allows_transaction(root, &changes.entries));
+    let mut adr_violations = adr_immutability_violations(
         &vault.config.docs_dir,
         &vault.config.adr_dir,
         changed_entries
             .as_ref()
             .map(|changes| changes.entries.as_slice()),
         |entry| {
-            is_allowed_adr_change(root, changed_entries.as_ref(), entry)
+            (receipt_allows_transaction
+                && is_allowed_adr_change(root, changed_entries.as_ref(), entry))
                 || (options.stage == Stage::Ci && is_branch_local_ci_change(root, entry))
         },
     );
+    if receipt_is_current && !receipt_allows_transaction {
+        adr_violations.push(
+            "ADR reconciliation receipt does not prove the complete staged transaction".into(),
+        );
+    }
     match options.stage {
         Stage::Commit => {
             println!(

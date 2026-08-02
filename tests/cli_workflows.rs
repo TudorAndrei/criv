@@ -2125,6 +2125,19 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
         .failure()
         .stdout(predicate::str::contains("ADR files are immutable"));
     fs::write(&receipt_path, receipt).unwrap();
+    fs::write(
+        root.join("docs/adr/0002-topic.md"),
+        adr("0002", "Recreated", "topic"),
+    )
+    .unwrap();
+    git(root, &["add", "docs/adr/0002-topic.md"]);
+    criv(root)
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("complete staged transaction"));
+    fs::remove_file(root.join("docs/adr/0002-topic.md")).unwrap();
+    git(root, &["add", "-u", "docs/adr/0002-topic.md"]);
     let reconciled_adr = fs::read_to_string(root.join("docs/adr/0003-topic.md")).unwrap();
     fs::write(root.join("docs/adr/0003-topic.md"), "tampered\n").unwrap();
     git(root, &["add", "docs/adr/0003-topic.md"]);
