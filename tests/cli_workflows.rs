@@ -749,6 +749,68 @@ fn query_diff_uses_the_requested_root_despite_inherited_git_context() {
 }
 
 #[test]
+fn query_diff_reads_a_git_ref_without_a_git_executable() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    query_fixture(root);
+    git(root, &["init"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    git(root, &["add", "-f", ".criv/state.json"]);
+    git(root, &["commit", "-m", "record state"]);
+
+    let empty_path = TempDir::new().unwrap();
+    criv(root)
+        .env("PATH", empty_path.path())
+        .args(["query", "diff", "HEAD", "HEAD"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("node_added").not())
+        .stdout(predicate::str::contains("node_removed").not());
+}
+
+#[test]
+fn query_diff_reads_a_git_ref_from_a_linked_worktree() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    query_fixture(root);
+    git(root, &["init"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    git(root, &["add", "criv.toml", "src", "docs"]);
+    git(root, &["add", "-f", ".criv/state.json"]);
+    git(root, &["commit", "-m", "record vault and state"]);
+
+    let linked = root.join("linked-worktree");
+    git(root, &["worktree", "add", linked.to_str().unwrap(), "HEAD"]);
+
+    criv(&linked)
+        .env("PATH", TempDir::new().unwrap().path())
+        .args(["query", "diff", "HEAD", "HEAD"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn query_diff_rejects_non_utf8_state_from_a_git_ref() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    query_fixture(root);
+    git(root, &["init"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    fs::write(root.join(".criv/state.json"), [0xff, 0xfe]).unwrap();
+    git(root, &["add", "-f", ".criv/state.json"]);
+    git(root, &["commit", "-m", "record invalid state"]);
+
+    criv(root)
+        .args(["query", "diff", "HEAD", "HEAD"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("non-UTF-8 .criv/state.json"));
+}
+
+#[test]
 fn search_json_output_is_valid_for_special_characters() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

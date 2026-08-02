@@ -5,6 +5,7 @@ mod c4_code;
 mod check;
 mod config;
 mod enforce;
+mod git;
 mod init;
 mod query;
 mod search;

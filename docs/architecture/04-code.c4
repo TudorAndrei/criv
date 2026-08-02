@@ -690,6 +690,7 @@ digraph criv_code {
   "src/enforce.rs#type:ScanRecord" [label="ScanRecord\nsrc/enforce.rs"];
   "src/enforce.rs#type:Stage" [label="Stage\nsrc/enforce.rs"];
   "src/enforce.rs#type:Stage/member:as_str" [label="as_str\nsrc/enforce.rs"];
+  "src/git.rs#fn:read_file_at_ref" [label="read_file_at_ref\nsrc/git.rs"];
   "src/init.rs#fn:json_pretty" [label="json_pretty\nsrc/init.rs"];
   "src/init.rs#fn:link_claude_skills" [label="link_claude_skills\nsrc/init.rs"];
   "src/init.rs#fn:print_init_result" [label="print_init_result\nsrc/init.rs"];
@@ -2267,6 +2268,7 @@ digraph criv_code {
   "src/enforce.rs#fn:run" -> "src/enforce.rs#type:Stage/member:as_str";
   "src/enforce.rs#fn:run" -> "src/lib.rs#type:CrivError";
   "src/enforce.rs#fn:run" -> "src/vault.rs#type:Vault";
+  "src/git.rs#fn:read_file_at_ref" -> "src/lib.rs#type:CrivError";
   "src/init.rs#fn:json_pretty" -> "src/lib.rs#type:CrivError";
   "src/init.rs#fn:link_claude_skills" -> "src/init.rs#fn:write_templates";
   "src/init.rs#fn:link_claude_skills" -> "src/util.rs#fn:link_dir_in";
@@ -2408,7 +2410,6 @@ digraph criv_code {
   "src/query.rs#fn:governs" -> "src/vault.rs#type:index/member:effective_governs";
   "src/query.rs#fn:governs" -> "src/vault.rs#type:index/member:resolve_note";
   "src/query.rs#fn:governs" -> "src/vault.rs#type:index/member:source_files_matching_globs";
-  "src/query.rs#fn:load_git_state" -> "src/lib.rs#type:Command";
   "src/query.rs#fn:load_git_state" -> "src/lib.rs#type:CrivError";
   "src/query.rs#fn:load_snapshot" -> "src/lib.rs#type:CrivError";
   "src/query.rs#fn:load_snapshot" -> "src/query.rs#fn:is_snapshot_hash";
