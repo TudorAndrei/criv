@@ -253,16 +253,14 @@ impl State {
                 );
             }
 
-            for governs in vault.effective_governs(note) {
-                for source_file in vault.source_files_matching_glob(&governs) {
-                    add_edge(
-                        &mut graph,
-                        &mut seen_edges,
-                        &note_id,
-                        &code_node_id(&source_file),
-                        "governs",
-                    );
-                }
+            for source_file in vault.source_files_matching_globs(&vault.effective_governs(note)) {
+                add_edge(
+                    &mut graph,
+                    &mut seen_edges,
+                    &note_id,
+                    &code_node_id(&source_file),
+                    "governs",
+                );
             }
 
             for superseded in &note.supersedes {
@@ -548,10 +546,7 @@ fn incremental_policy_paths(
     {
         scoped_changed_paths(changed_files, &scopes)
     } else {
-        scopes
-            .iter()
-            .flat_map(|scope| vault.source_files_matching_glob(scope))
-            .collect()
+        vault.source_files_matching_globs(&scopes)
     };
     Some(paths.into_iter().collect())
 }
@@ -595,13 +590,10 @@ fn scoped_changed_paths(paths: &[String], scopes: &[String]) -> Vec<String> {
     if paths.is_empty() {
         return scopes.to_vec();
     }
+    let matcher = crate::util::GlobMatcher::from_valid_patterns(scopes);
     paths
         .iter()
-        .filter(|path| {
-            scopes
-                .iter()
-                .any(|scope| crate::util::glob_matches(scope, path))
-        })
+        .filter(|path| matcher.is_match(path))
         .cloned()
         .collect()
 }
