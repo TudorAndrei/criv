@@ -52,12 +52,17 @@ impl Default for Config {
 impl Config {
     pub(crate) fn load(root: &Path) -> Result<Self> {
         let path = root.join("criv.toml");
-        if !path.exists() {
-            return Ok(Self::default());
-        }
+        let contents = path.exists().then(|| read_to_string(&path)).transpose()?;
+        Self::parse(contents.as_deref())
+    }
 
-        let contents = read_to_string(&path)?;
-        let raw: RawConfig = toml::from_str(&contents)
+    /// Parses checkout or Git-tree configuration with the same defaults and
+    /// path normalization used by `Config::load`.
+    pub(crate) fn parse(contents: Option<&str>) -> Result<Self> {
+        let Some(contents) = contents else {
+            return Ok(Self::default());
+        };
+        let raw: RawConfig = toml::from_str(contents)
             .map_err(|err| CrivError::new(format!("failed to parse criv.toml: {err}")))?;
         raw.into_config()
     }
@@ -259,6 +264,17 @@ impl RawImportPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_optional_contents_with_load_defaults_and_normalization() {
+        assert_eq!(Config::parse(None).unwrap().docs_dir, "docs");
+        let config = Config::parse(Some(
+            "[vault]\ndocs = \"./notes\"\nadr = \"./decisions\"\n# comment\n",
+        ))
+        .unwrap();
+        assert_eq!(config.docs_dir, "notes");
+        assert_eq!(config.adr_dir, "decisions");
+    }
 
     #[test]
     fn parses_import_policies() {

@@ -60,3 +60,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0052-harden-generated-skill-refresh|ADR-0052]] - Harden generated skill refresh
 - [[0055-dependency-auditing-in-hk-checks|ADR-0055]] - Dependency auditing in hk checks
 - [[0056-adr-policy-patterns-are-the-only-registered-patterns|ADR-0056]] - ADR policy patterns are the only registered patterns
+- [[0057-branch-local-adr-publication-and-reconciliation|ADR-0057]] - Branch-local ADR publication and reconciliation
