@@ -299,9 +299,15 @@ impl LockOwner {
             match key {
                 "pid" => pid = value.trim().parse::<u32>().ok(),
                 "start" => {
-                    // An empty start time represents an unsupported platform.
-                    // Keep it distinct from a lock with no start field.
-                    start = Some(value.trim().to_string());
+                    let value = value.trim();
+                    // Older Unix locks used an empty field for a missing
+                    // timestamp. On Windows it is the platform's explicit
+                    // unknown-start sentinel and must round-trip instead.
+                    start = if value.is_empty() && cfg!(unix) {
+                        None
+                    } else {
+                        Some(value.to_string())
+                    };
                 }
                 _ => return None,
             }
@@ -495,7 +501,15 @@ mod tests {
             start: Some(String::new()),
         };
 
-        assert_eq!(super::LockOwner::parse(&owner.serialize()), Some(owner));
+        let expected = if cfg!(unix) {
+            super::LockOwner {
+                pid: owner.pid,
+                start: None,
+            }
+        } else {
+            owner.clone()
+        };
+        assert_eq!(super::LockOwner::parse(&owner.serialize()), Some(expected));
     }
 
     #[test]
