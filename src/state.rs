@@ -1023,6 +1023,26 @@ policy:
 "#,
         )
         .unwrap();
+        std::fs::write(
+            root.join("docs/adr/0002-draft-entrypoint.md"),
+            r#"---
+id: ADR-0002
+kind: decision
+title: Draft Entrypoint
+status: draft
+governs:
+  - src/lib.rs
+policy:
+  patterns:
+    - id: draft-entrypoint
+      language: rust
+      pattern: "fn $NAME() { $$$BODY }"
+---
+
+# Draft Entrypoint
+"#,
+        )
+        .unwrap();
 
         let vault = Vault::load(&root).unwrap();
         let actual: serde_json::Value =
@@ -1032,8 +1052,17 @@ policy:
 
         assert_eq!(actual, expected);
         assert_eq!(
+            actual["registered-patterns"],
+            serde_json::json!(["ADR-0001/entrypoint"])
+        );
+        assert!(
+            actual["patterns"]
+                .get("ADR-0002/draft-entrypoint")
+                .is_none()
+        );
+        assert_eq!(
             State::build(&root, &vault).unwrap().hash().unwrap(),
-            "45166264f39bc18e12b2180ca34c1f56b3d281fa7c67df38f043ed9a11d1bf60"
+            "f8c73cf18a6e2419171693357e3fed14281733b6071ea92e8c490d7e90ed64ba"
         );
 
         let _ = std::fs::remove_dir_all(root);
@@ -1280,6 +1309,7 @@ Consequences.
 "#;
 
     const PATTERN_ID: &str = "ADR-0001/no-println";
+    const DRAFT_PATTERN_ID: &str = "ADR-0002/no-debug";
     const FUNCTION_PATTERN_ID: &str = "ADR-0002/function";
     const FUNCTION_POLICY_ADR: &str = r#"---
 id: ADR-0002
@@ -1297,6 +1327,36 @@ policy:
 ---
 
 # Functions Require Review
+
+## Context
+
+Context.
+
+## Decision
+
+Decision.
+
+## Consequences
+
+Consequences.
+"#;
+
+    const DRAFT_POLICY_ADR: &str = r#"---
+id: ADR-0002
+kind: decision
+title: No Debug
+status: draft
+date: 2026-08-02
+governs:
+  - src/**/*.rs
+policy:
+  patterns:
+    - id: no-debug
+      language: rust
+      pattern: "println!($$$ARGS)"
+---
+
+# No Debug
 
 ## Context
 
@@ -1366,6 +1426,87 @@ Consequences.
     }
 
     #[test]
+    fn state_publishes_accepted_policy_patterns_only() {
+        let root = policy_vault("criv-accepted-only-state");
+        std::fs::write(root.join("docs/adr/0002-no-debug.md"), DRAFT_POLICY_ADR).unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+        let state = State::build(&root, &vault).unwrap();
+
+        assert_eq!(state.registered_patterns, vec![PATTERN_ID.to_string()]);
+        assert!(state.patterns.contains_key(PATTERN_ID));
+        assert!(
+            !state
+                .registered_patterns
+                .contains(&DRAFT_PATTERN_ID.to_string())
+        );
+        assert!(!state.patterns.contains_key(DRAFT_PATTERN_ID));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn incremental_policy_promotion_scans_every_governed_source() {
+        let root = policy_vault("criv-policy-promotion");
+        let policy_path = root.join("docs/adr/0002-no-debug.md");
+        std::fs::write(&policy_path, DRAFT_POLICY_ADR).unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+        let (_, before) = write_state(&root, &vault).unwrap();
+        assert!(!before.patterns.contains_key(DRAFT_PATTERN_ID));
+
+        std::fs::write(
+            &policy_path,
+            DRAFT_POLICY_ADR.replace("status: draft", "status: accepted"),
+        )
+        .unwrap();
+        let vault = Vault::load(&root).unwrap();
+        let (_, after) = write_state_incremental(&root, &vault, Some(&before), &[]).unwrap();
+
+        assert_eq!(
+            after.patterns[DRAFT_PATTERN_ID]
+                .iter()
+                .map(|matched| matched.file.as_str())
+                .collect::<Vec<_>>(),
+            vec!["src/alpha.rs", "src/beta.rs"],
+            "a newly accepted policy has no prior cache entry and must scan its whole scope"
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn incremental_policy_demotion_removes_registration_and_cached_matches() {
+        let root = policy_vault("criv-policy-demotion");
+        let policy_path = root.join("docs/adr/0002-no-debug.md");
+        let accepted = DRAFT_POLICY_ADR.replace("status: draft", "status: accepted");
+        std::fs::write(&policy_path, &accepted).unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+        let (_, before) = write_state(&root, &vault).unwrap();
+        assert!(before.patterns.contains_key(DRAFT_PATTERN_ID));
+
+        std::fs::write(&policy_path, DRAFT_POLICY_ADR).unwrap();
+        let vault = Vault::load(&root).unwrap();
+        let (_, after) = write_state_incremental(
+            &root,
+            &vault,
+            Some(&before),
+            &["docs/adr/0002-no-debug.md".to_string()],
+        )
+        .unwrap();
+
+        assert!(
+            !after
+                .registered_patterns
+                .contains(&DRAFT_PATTERN_ID.to_string())
+        );
+        assert!(!after.patterns.contains_key(DRAFT_PATTERN_ID));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn incremental_pattern_matches_reuse_unchanged_files() {
         let root = policy_vault("criv-incremental-pattern-reuse");
 
@@ -1399,6 +1540,8 @@ Consequences.
             std::slice::from_ref(&"src/beta.rs".to_string()),
         )
         .unwrap();
+
+        assert_eq!(second.registered_patterns, vec![PATTERN_ID.to_string()]);
 
         let second_matches = second.patterns.get(PATTERN_ID).unwrap();
         let alpha_after = second_matches
