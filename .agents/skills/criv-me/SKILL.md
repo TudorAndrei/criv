@@ -2,7 +2,7 @@
 name: criv-me
 description: Use when the user wants to develop a plan, make architectural or product decisions, stress-test a proposal against existing criv docs/ADRs/code, and capture settled rationale in the criv documentation graph.
 metadata:
-  criv-template: blake3:c6b36cf69a3bb7a2
+  criv-template: blake3:b08ba2edf5af2f98
 ---
 
 # criv-me
@@ -31,7 +31,8 @@ Use `criv-me` as a decision-development mode for criv vaults.
 - Create or update an ADR only when the decision is hard to reverse, surprising without context, and the result of a real tradeoff.
 - Use the existing criv ADR format under `docs/adr/`: `id`, `kind: decision`, `title`, `status`, `date`, and relevant `governs:` scopes.
 - When a decision includes an enforceable structural rule, add an inline `policy.patterns` entry with `id`, `language`, and either `pattern` or `rule`.
-- Never put ADR-owned structural rules in `criv.toml` as `[patterns."ADR-NNNN/..."]`; keep the rule body in the owning ADR's `policy.patterns` frontmatter.
+- Persistent named structural patterns exist only in ADR `policy.patterns` frontmatter. Address a named rule as `ADR-NNNN/local-id`.
+- Use `criv search --pattern-id ADR-NNNN/local-id` to inspect one named policy (its ADR's `governs` scope is the default), `criv search --rule ADR-NNNN` to inspect every policy in that ADR, and positional `criv search --lang rust 'pattern'` for ad hoc exploration.
 - Link decisions and docs to source with criv wiki-links such as `[[src/lib.rs#run]]`, `[[src/lib.rs#L10-L20]]`, `[[match:ADR-0007/pattern-id]]`, and `[[0007-content-addressed-state-and-diffing|ADR-0007]]`.
 - Prefer updating or superseding an existing ADR over creating a duplicate decision note.
 

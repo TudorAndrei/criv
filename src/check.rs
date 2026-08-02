@@ -758,7 +758,7 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
     }
 
     for pattern in &note.target_pattern_refs {
-        if !vault.patterns().contains(&pattern.id) {
+        if vault.resolve_policy_pattern(&pattern.id).is_none() {
             diagnostics.push(error(
                 "unresolved-pattern",
                 &note.rel_path,
@@ -1056,12 +1056,6 @@ fn c4_category_allowed_at_level(level: C4Level, category: C4ElementCategory) -> 
 
 fn validate_pattern_collisions(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
     let mut declarations: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for pattern in &vault.config.patterns {
-        declarations
-            .entry(pattern.clone())
-            .or_default()
-            .push("criv.toml".into());
-    }
     for note in &vault.notes {
         for pattern in &note.target_pattern_ids {
             declarations

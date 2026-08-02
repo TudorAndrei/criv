@@ -1284,6 +1284,120 @@ policy:
 }
 
 #[test]
+fn adr_policy_patterns_are_the_only_persistent_named_searches() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("docs/adr")).unwrap();
+    write_criv_config(
+        root,
+        vec!["src"],
+        vec!["**/target/**", "**/node_modules/**"],
+        true,
+    );
+    fs::write(
+        root.join("src/governed.rs"),
+        "pub fn governed() {\n    println!(\"governed\");\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("src/outside.rs"),
+        "pub fn outside() {\n    println!(\"outside\");\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("docs/adr/0990-pattern-search.md"),
+        r#"---
+id: ADR-0990
+kind: decision
+title: Pattern search
+status: accepted
+date: 2026-08-02
+governs:
+  - src/governed.rs
+policy:
+  patterns:
+    - id: no-println
+      language: rust
+      pattern: "println!($$$ARGS)"
+    - id: functions
+      language: rust
+      pattern: "pub fn $NAME() { $$$BODY }"
+---
+
+# Pattern search
+"#,
+    )
+    .unwrap();
+
+    criv(root)
+        .args(["search", "--pattern-id", "ADR-0990/no-println"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/governed.rs:2"))
+        .stdout(predicate::str::contains("src/outside.rs").not());
+    criv(root)
+        .args([
+            "search",
+            "--pattern-id",
+            "ADR-0990/no-println",
+            "--paths",
+            "src/outside.rs",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/outside.rs:2"))
+        .stdout(predicate::str::contains("src/governed.rs").not());
+    criv(root)
+        .args(["search", "--rule", "ADR-0990"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/governed.rs:1"))
+        .stdout(predicate::str::contains("src/governed.rs:2"))
+        .stdout(predicate::str::contains("src/outside.rs").not());
+    criv(root)
+        .args(["search", "--lang", "rust", "println!($$$ARGS)"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/governed.rs:2"))
+        .stdout(predicate::str::contains("src/outside.rs:2"));
+    criv(root)
+        .args(["search", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--pattern-id <PATTERN_ID>"));
+    criv(root)
+        .arg("--usage")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("flag --pattern-id"));
+
+    fs::write(
+        root.join("criv.toml"),
+        r#"
+[source]
+roots = ["src"]
+
+[patterns.no-println]
+language = "rust"
+pattern = "println!($$$ARGS)"
+"#,
+    )
+    .unwrap();
+    criv(root)
+        .arg("check")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "[patterns.*] is no longer supported",
+        ))
+        .stderr(predicate::str::contains("ADR-NNNN/local-id"))
+        .stderr(predicate::str::contains("--lang"));
+}
+
+#[test]
 fn search_rule_reports_invalid_inline_policy_definitions() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

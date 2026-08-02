@@ -1,12 +1,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+#[cfg(test)]
+use std::{cell::Cell, thread_local};
+
 use ast_grep_config::{DeserializeEnv, SerializableRuleCore};
 use ast_grep_core::meta_var::MetaVariable;
 use ast_grep_core::{Doc, Matcher, NodeMatch, Pattern};
 use ast_grep_language::{Language, LanguageExt, SupportLang};
 
-use crate::config::PatternConfig;
 use crate::source_paths::read_source_to_string;
 use crate::util::GlobMatcher;
 use crate::vault::{PolicyPattern, Vault};
@@ -87,12 +89,19 @@ struct CompiledPolicyRequest<'a> {
     paths: &'a BTreeSet<String>,
 }
 
-pub(crate) fn pattern_source(config: &PatternConfig) -> Option<PatternSource<'_>> {
-    config
-        .pattern
-        .as_deref()
-        .map(PatternSource::Pattern)
-        .or_else(|| config.rule.as_deref().map(PatternSource::Rule))
+#[cfg(test)]
+thread_local! {
+    static BATCH_PARSE_COUNT: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_batch_parse_count() {
+    BATCH_PARSE_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn batch_parse_count() -> usize {
+    BATCH_PARSE_COUNT.with(Cell::get)
 }
 
 pub(crate) fn validate_source(source: PatternSource<'_>, language: &str) -> Result<()> {
@@ -204,6 +213,8 @@ pub(crate) fn find_policies_batch(
         }
 
         let contents = read_source_to_string(root, source_file)?;
+        #[cfg(test)]
+        BATCH_PARSE_COUNT.with(|count| count.set(count.get() + 1));
         let ast = language.ast_grep(&contents);
         let root = ast.root();
         for request in requests {
@@ -243,25 +254,6 @@ fn sort_matches(rows: &mut Vec<StructuralMatch>) {
     rows.dedup_by(|left, right| {
         left.path == right.path && left.range == right.range && left.text == right.text
     });
-}
-
-pub(crate) fn find_pattern_id(
-    root: &Path,
-    vault: &Vault,
-    pattern_id: &str,
-    scope: PathScope<'_>,
-) -> Result<Vec<StructuralMatch>> {
-    let Some(pattern) = vault.config.pattern_defs.get(pattern_id) else {
-        return Err(CrivError::new(format!(
-            "registered pattern `{pattern_id}` does not resolve"
-        )));
-    };
-    let Some(source) = pattern_source(pattern) else {
-        return Err(CrivError::new(format!(
-            "registered pattern `{pattern_id}` has no ast-grep rule or pattern body"
-        )));
-    };
-    find(root, vault, source, scope, pattern.language.as_deref())
 }
 
 pub(crate) fn find_policy_pattern_entry(

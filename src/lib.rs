@@ -218,6 +218,8 @@ mod tests {
         assert!(spec.contains("cmd check"));
         assert!(spec.contains("cmd query"));
         assert!(spec.contains("cmd enforce"));
+        assert!(spec.contains("cmd search"));
+        assert!(spec.contains("flag --pattern-id"));
     }
 
     #[test]
@@ -226,6 +228,8 @@ mod tests {
         let default = usage_help(&[]).expect("default help should render");
         let query = usage_help(&["help".to_string(), "query".to_string()])
             .expect("query help should render");
+        let search = usage_help(&["search".to_string(), "--help".to_string()])
+            .expect("search help should render");
 
         assert!(root.contains("Usage: criv"));
         assert_eq!(root, default);
@@ -236,6 +240,7 @@ mod tests {
         assert!(query.contains("--without-docs"));
         assert!(root.contains("enforce --stage <STAGE>"));
         assert!(!root.contains("enforce <--stage <STAGE>>"));
+        assert!(search.contains("--pattern-id <PATTERN_ID>"));
     }
 
     #[test]

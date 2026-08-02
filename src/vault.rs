@@ -9,8 +9,8 @@ use crate::config::Config;
 use crate::source_graph::SourceGraph;
 use crate::source_index::{FffSourceIndex, SourceIndex};
 use crate::util::{
-    GlobMatcher, find_wiki_links_with_lines, kebab, markdown_headings as parse_markdown_headings,
-    read_to_string, strip_prefix, walk_files,
+    GlobMatcher, find_wiki_links_with_lines, is_adr_id, kebab,
+    markdown_headings as parse_markdown_headings, read_to_string, strip_prefix, walk_files,
 };
 use crate::{c4, c4_artifact};
 
@@ -161,9 +161,11 @@ impl Vault {
             }
         }
 
-        let mut patterns = config.patterns.clone();
+        let mut patterns = BTreeSet::new();
         for note in &notes {
-            if let Some(id) = &note.id {
+            if note.kind == NoteKind::Decision
+                && let Some(id) = &note.id
+            {
                 for pattern in &note.policy_patterns {
                     if let Some(pattern_id) = pattern.id.as_deref() {
                         patterns.insert(format!("{id}/{pattern_id}"));
@@ -277,7 +279,7 @@ impl Vault {
         }
 
         if let Some(pattern_id) = pattern_link_id(target) {
-            if self.patterns.contains(pattern_id) {
+            if self.resolve_policy_pattern(pattern_id).is_some() {
                 return ResolvedLink::Pattern {
                     id: pattern_id.to_string(),
                 };
@@ -398,6 +400,32 @@ impl Vault {
         &self.patterns
     }
 
+    /// Resolves the canonical full ID of an inline ADR policy pattern.
+    ///
+    /// Pattern IDs deliberately do not use general note resolution: a named
+    /// pattern is owned by an ADR and must be addressed as `ADR-NNNN/local-id`.
+    pub(crate) fn resolve_policy_pattern(
+        &self,
+        pattern_id: &str,
+    ) -> Option<(&Note, &PolicyPattern)> {
+        let (adr_id, local_id) = pattern_id.split_once('/')?;
+        if !is_adr_id(adr_id) || local_id.trim().is_empty() {
+            return None;
+        }
+        let note = self
+            .note_ids
+            .get(&adr_id.to_lowercase())
+            .and_then(|index| self.notes.get(*index))?;
+        if note.kind != NoteKind::Decision {
+            return None;
+        }
+        let policy = note
+            .policy_patterns
+            .iter()
+            .find(|policy| policy.id.as_deref() == Some(local_id))?;
+        Some((note, policy))
+    }
+
     pub(crate) fn effective_governs(&self, note: &Note) -> Vec<String> {
         if note.kind == NoteKind::Decision && note.governs.is_empty() {
             vec!["**".into()]
@@ -422,6 +450,19 @@ impl Vault {
                 titles.entry(title.to_lowercase()).or_insert(index);
             }
         }
+        let patterns = notes
+            .iter()
+            .filter(|note| note.kind == NoteKind::Decision)
+            .filter_map(|note| note.id.as_deref().map(|id| (id, note)))
+            .flat_map(|(id, note)| {
+                note.policy_patterns.iter().filter_map(move |pattern| {
+                    pattern
+                        .id
+                        .as_deref()
+                        .map(|local_id| format!("{id}/{local_id}"))
+                })
+            })
+            .collect();
 
         Self {
             config: Config::default(),
@@ -433,7 +474,7 @@ impl Vault {
             source_files: Vec::new(),
             source_index: Arc::new(EmptySourceIndex),
             source_graph: SourceGraph::default(),
-            patterns: BTreeSet::new(),
+            patterns,
         }
     }
 }

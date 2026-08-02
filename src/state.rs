@@ -368,18 +368,55 @@ impl State {
         source_index.sort_by(|left, right| left.path.cmp(&right.path));
 
         let mut patterns = BTreeMap::new();
+        let mut pending_policy_scans = Vec::new();
         for pattern_id in vault.patterns() {
-            patterns.insert(
-                pattern_id.clone(),
-                incremental_pattern_matches(root, vault, previous, changed_files, pattern_id)?,
-            );
+            if let Some((note, policy)) = vault.resolve_policy_pattern(pattern_id) {
+                pending_policy_scans.push(PendingPolicyScan {
+                    pattern_id: pattern_id.clone(),
+                    policy,
+                    paths: incremental_policy_paths(
+                        vault,
+                        vault.effective_governs(note),
+                        previous,
+                        changed_files,
+                        pattern_id,
+                    ),
+                    reused: reusable_pattern_matches(previous, changed_files, pattern_id),
+                });
+            }
+        }
+
+        let requests = pending_policy_scans
+            .iter()
+            .enumerate()
+            .filter(|(_, scan)| scan.paths.is_some())
+            .map(|(key, scan)| structural::PolicyScanRequest {
+                key,
+                policy: scan.policy,
+                paths: scan.paths.as_ref().expect("scans are filtered above"),
+            })
+            .collect::<Vec<_>>();
+        let rescanned = structural::find_policies_batch(root, vault, &requests)?;
+        for (key, scan) in pending_policy_scans.into_iter().enumerate() {
+            let mut matches = scan.reused;
+            if scan.paths.is_some() {
+                matches.extend(
+                    rescanned
+                        .get(&key)
+                        .expect("every policy scan request has a result")
+                        .iter()
+                        .map(pattern_match_from_structural),
+                );
+            }
+            sort_and_dedup_pattern_matches(&mut matches);
+            patterns.insert(scan.pattern_id, matches);
         }
         graph.root = graph_root(&graph);
 
         Ok(Self {
             schema: STATE_SCHEMA,
             graph,
-            registered_patterns: vault.patterns().iter().cloned().collect(),
+            registered_patterns: patterns.keys().cloned().collect(),
             patterns,
             source_index,
         })
@@ -478,119 +515,75 @@ pub(crate) fn work_counts() -> (usize, usize) {
     )
 }
 
-fn incremental_pattern_matches(
-    root: &Path,
+struct PendingPolicyScan<'a> {
+    pattern_id: String,
+    policy: &'a crate::vault::PolicyPattern,
+    // `None` means that prior state is completely reusable. An empty set still
+    // needs a batch request so invalid policy definitions retain their error
+    // behavior while an out-of-scope incremental change produces no matches.
+    paths: Option<BTreeSet<String>>,
+    reused: Vec<PatternMatch>,
+}
+
+fn incremental_policy_paths(
     vault: &Vault,
+    scopes: Vec<String>,
     previous: Option<&State>,
     changed_files: &[String],
     pattern_id: &str,
-) -> Result<Vec<PatternMatch>> {
-    let Some(previous_matches) = previous.and_then(|state| state.patterns.get(pattern_id)) else {
-        return state_pattern_matches(root, vault, pattern_id, &[]);
-    };
-    if changed_files.is_empty() {
-        return Ok(previous_matches.clone());
+) -> Option<BTreeSet<String>> {
+    if previous
+        .and_then(|state| state.patterns.get(pattern_id))
+        .is_some()
+        && changed_files.is_empty()
+    {
+        return None;
     }
 
-    let changed_set = changed_files.iter().cloned().collect::<BTreeSet<_>>();
-    let mut matches = previous_matches
+    let paths = if previous
+        .and_then(|state| state.patterns.get(pattern_id))
+        .is_some()
+    {
+        scoped_changed_paths(changed_files, &scopes)
+    } else {
+        vault.source_files_matching_globs(&scopes)
+    };
+    Some(paths.into_iter().collect())
+}
+
+fn reusable_pattern_matches(
+    previous: Option<&State>,
+    changed_files: &[String],
+    pattern_id: &str,
+) -> Vec<PatternMatch> {
+    let Some(previous_matches) = previous.and_then(|state| state.patterns.get(pattern_id)) else {
+        return Vec::new();
+    };
+    if changed_files.is_empty() {
+        return previous_matches.clone();
+    }
+
+    let changed_set = changed_files.iter().collect::<BTreeSet<_>>();
+    previous_matches
         .iter()
         .filter(|matched| !changed_set.contains(&matched.file))
         .cloned()
-        .collect::<Vec<_>>();
-    matches.extend(state_pattern_matches(
-        root,
-        vault,
-        pattern_id,
-        changed_files,
-    )?);
+        .collect()
+}
+
+fn pattern_match_from_structural(matched: &structural::StructuralMatch) -> PatternMatch {
+    PatternMatch {
+        file: matched.path.clone(),
+        range: Some(matched.range.clone()),
+        captures: matched.captures.clone(),
+    }
+}
+
+fn sort_and_dedup_pattern_matches(matches: &mut Vec<PatternMatch>) {
     matches.sort_by(|left, right| {
         (&left.file, &left.range, &left.captures).cmp(&(&right.file, &right.range, &right.captures))
     });
     matches.dedup();
-    Ok(matches)
-}
-
-fn state_pattern_matches(
-    root: &Path,
-    vault: &Vault,
-    pattern_id: &str,
-    paths: &[String],
-) -> Result<Vec<PatternMatch>> {
-    let matches = if let Some((adr_id, local_id)) = pattern_id.split_once('/') {
-        let note = vault.resolve_note(adr_id);
-        let scopes = note
-            .map(|note| vault.effective_governs(note))
-            .unwrap_or_else(|| vec!["**".into()]);
-        let scoped_paths = scoped_changed_paths(paths, &scopes);
-        if let Some(policy) = note.and_then(|note| {
-            note.policy_patterns
-                .iter()
-                .find(|policy| policy.id.as_deref() == Some(local_id))
-        }) {
-            structural::find_policy_pattern_entry(
-                root,
-                vault,
-                policy,
-                structural::PathScope::Globs(&scoped_paths),
-            )?
-        } else if note.is_some() {
-            Vec::new()
-        } else if let Some(configured) = vault.config.pattern_defs.get(pattern_id) {
-            if let Some(source) = structural::pattern_source(configured) {
-                let scoped_paths = if paths.is_empty() {
-                    scoped_paths
-                } else {
-                    let Some(scoped_paths) =
-                        configured_pattern_paths(&scoped_paths, configured.language.as_deref())
-                    else {
-                        return Ok(Vec::new());
-                    };
-                    scoped_paths
-                };
-                structural::find(
-                    root,
-                    vault,
-                    source,
-                    structural::PathScope::Globs(&scoped_paths),
-                    configured.language.as_deref(),
-                )?
-            } else {
-                Vec::new()
-            }
-        } else {
-            Vec::new()
-        }
-    } else if vault.config.pattern_defs.contains_key(pattern_id) {
-        let pattern = &vault.config.pattern_defs[pattern_id];
-        if paths.is_empty() {
-            structural::find_pattern_id(root, vault, pattern_id, structural::PathScope::All)?
-        } else if let Some(source) = structural::pattern_source(pattern) {
-            let Some(paths) = configured_pattern_paths(paths, pattern.language.as_deref()) else {
-                return Ok(Vec::new());
-            };
-            structural::find(
-                root,
-                vault,
-                source,
-                structural::PathScope::Globs(&paths),
-                pattern.language.as_deref(),
-            )?
-        } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
-    };
-
-    Ok(matches
-        .into_iter()
-        .map(|matched| PatternMatch {
-            file: matched.path,
-            range: Some(matched.range),
-            captures: matched.captures,
-        })
-        .collect())
 }
 
 fn scoped_changed_paths(paths: &[String], scopes: &[String]) -> Vec<String> {
@@ -603,23 +596,6 @@ fn scoped_changed_paths(paths: &[String], scopes: &[String]) -> Vec<String> {
         .filter(|path| matcher.is_match(path))
         .cloned()
         .collect()
-}
-
-fn configured_pattern_paths(paths: &[String], language: Option<&str>) -> Option<Vec<String>> {
-    if paths.is_empty() {
-        return Some(Vec::new());
-    }
-    let Some(language) = language else {
-        return Some(paths.to_vec());
-    };
-    let language_glob = structural::language_glob(language);
-    let matcher = crate::util::GlobMatcher::from_valid_patterns(&[language_glob.to_string()]);
-    let paths = paths
-        .iter()
-        .filter(|path| matcher.is_match(path))
-        .cloned()
-        .collect::<Vec<_>>();
-    (!paths.is_empty()).then_some(paths)
 }
 
 fn add_c4_diagrams_to_graph(
@@ -1017,19 +993,36 @@ roots = ["src"]
     fn serialized_state_matches_the_v0_contract_fixture() {
         let root = unique_temp_dir("criv-state-contract-fixture");
         std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("docs/adr")).unwrap();
         std::fs::write(
             root.join("criv.toml"),
             r#"
 [source]
 roots = ["src"]
-
-[patterns."code/entrypoint"]
-language = "rust"
-pattern = "fn $NAME() { $$$BODY }"
 "#,
         )
         .unwrap();
         std::fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
+        std::fs::write(
+            root.join("docs/adr/0001-entrypoint.md"),
+            r#"---
+id: ADR-0001
+kind: decision
+title: Entrypoint
+status: accepted
+governs:
+  - src/lib.rs
+policy:
+  patterns:
+    - id: entrypoint
+      language: rust
+      pattern: "fn $NAME() { $$$BODY }"
+---
+
+# Entrypoint
+"#,
+        )
+        .unwrap();
 
         let vault = Vault::load(&root).unwrap();
         let actual: serde_json::Value =
@@ -1040,7 +1033,7 @@ pattern = "fn $NAME() { $$$BODY }"
         assert_eq!(actual, expected);
         assert_eq!(
             State::build(&root, &vault).unwrap().hash().unwrap(),
-            "1d5fcf7a117fdfee16082f4fa23b527a639b59926cadcb216ae6e781359c1341"
+            "45166264f39bc18e12b2180ca34c1f56b3d281fa7c67df38f043ed9a11d1bf60"
         );
 
         let _ = std::fs::remove_dir_all(root);
@@ -1061,73 +1054,6 @@ pattern = "fn $NAME() { $$$BODY }"
 
         assert!(error.to_string().contains("symlinked vault path component"));
         assert!(!outside.path().join("state.json").exists());
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn slash_qualified_state_patterns_require_registered_sources() {
-        let root = unique_temp_dir("criv-state-slash-patterns");
-        std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::create_dir_all(root.join("docs/adr")).unwrap();
-        std::fs::write(
-            root.join("criv.toml"),
-            r#"
-[source]
-roots = ["src"]
-
-[patterns."tool/no-println"]
-language = "rust"
-pattern = "println!($$$ARGS)"
-"#,
-        )
-        .unwrap();
-        std::fs::write(
-            root.join("src/lib.rs"),
-            "pub fn run() {\n    println!(\"blocked\");\n}\n",
-        )
-        .unwrap();
-        std::fs::write(
-            root.join("docs/adr/0001-inline-policy.md"),
-            r#"---
-id: ADR-0001
-kind: decision
-title: Inline policy
-status: accepted
-governs:
-  - src/lib.rs
-policy:
-  patterns:
-    - id: no-println
-      language: rust
-      pattern: "println!($$$ARGS)"
----
-
-# Inline policy
-"#,
-        )
-        .unwrap();
-
-        let vault = Vault::load(&root).unwrap();
-
-        assert_eq!(
-            state_pattern_matches(&root, &vault, "missing/println!($$$ARGS)", &[])
-                .unwrap()
-                .len(),
-            0
-        );
-        assert_eq!(
-            state_pattern_matches(&root, &vault, "tool/no-println", &[])
-                .unwrap()
-                .len(),
-            1
-        );
-        assert_eq!(
-            state_pattern_matches(&root, &vault, "ADR-0001/no-println", &[])
-                .unwrap()
-                .len(),
-            1
-        );
-
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -1354,6 +1280,36 @@ Consequences.
 "#;
 
     const PATTERN_ID: &str = "ADR-0001/no-println";
+    const FUNCTION_PATTERN_ID: &str = "ADR-0002/function";
+    const FUNCTION_POLICY_ADR: &str = r#"---
+id: ADR-0002
+kind: decision
+title: Functions Require Review
+status: accepted
+date: 2026-07-25
+governs:
+  - src/**/*.rs
+policy:
+  patterns:
+    - id: function
+      language: rust
+      pattern: "fn $NAME() { $$$BODY }"
+---
+
+# Functions Require Review
+
+## Context
+
+Context.
+
+## Decision
+
+Decision.
+
+## Consequences
+
+Consequences.
+"#;
 
     fn policy_vault(prefix: &str) -> PathBuf {
         let root = unique_temp_dir(prefix);
@@ -1384,6 +1340,29 @@ Consequences.
             .get(PATTERN_ID)
             .map(|matches| matches.iter().map(|matched| matched.file.clone()).collect())
             .unwrap_or_default()
+    }
+
+    #[test]
+    fn state_batches_overlapping_adr_policies() {
+        let root = policy_vault("criv-state-batched-policies");
+        std::fs::write(
+            root.join("docs/adr/0002-functions-require-review.md"),
+            FUNCTION_POLICY_ADR,
+        )
+        .unwrap();
+        let vault = Vault::load(&root).unwrap();
+        structural::reset_batch_parse_count();
+        let state = State::build(&root, &vault).unwrap();
+
+        assert_eq!(
+            structural::batch_parse_count(),
+            2,
+            "each eligible source file is parsed once for both overlapping ADR policies"
+        );
+        assert_eq!(matched_files(&state).len(), 2);
+        assert_eq!(state.patterns.get(FUNCTION_PATTERN_ID).unwrap().len(), 2);
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
