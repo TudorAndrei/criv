@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::git;
-use crate::util::{remove_file_in, walk_files, write_atomic_in};
+use crate::util::{remove_file_in, write_atomic_in};
 use crate::vault::Vault;
 use crate::{CrivError, Result};
 
@@ -197,18 +197,90 @@ fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<Reconcile
         .collect::<BTreeMap<_, _>>();
     let target_paths = target_paths.into_iter().collect::<BTreeSet<_>>();
 
-    let adr_root = root.join(&adr_prefix);
-    let branch_adrs = walk_files(&adr_root, Some("md"))?
-        .into_iter()
-        .map(|path| {
-            let relative = crate::util::strip_prefix(&path, root);
-            Ok((relative, fs::read_to_string(path)?))
+    let changes = git::changes_between_paths(root, &merge_base, "HEAD", &[&adr_prefix])?;
+    let worktree_changes = git::worktree_changes_in(root, &[&adr_prefix])?;
+    let worktree_moves = worktree_changes
+        .entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.status,
+                git::ChangeStatus::Renamed | git::ChangeStatus::Copied
+            )
         })
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .filter(|(path, _)| is_adr_path(&adr_prefix, path) && !merge_paths.contains(path))
-        .map(|(path, contents)| parse_adr(&path, contents))
+        .cloned()
+        .filter_map(|entry| entry.previous_path.map(|previous| (previous, entry.path)))
+        .collect::<BTreeMap<_, _>>();
+    let worktree_additions = worktree_changes
+        .entries
+        .iter()
+        .filter(|entry| entry.status == git::ChangeStatus::Added)
+        .filter(|entry| is_adr_path(&adr_prefix, &entry.path))
+        .map(|entry| entry.path.clone())
+        .collect::<Vec<_>>();
+    let mut branch_adrs = changes
+        .entries
+        .iter()
+        .filter(|entry| is_adr_path(&adr_prefix, &entry.path))
+        .map(|entry| match entry.status {
+            git::ChangeStatus::Added => {
+                let current_path = worktree_moves.get(&entry.path).cloned().or_else(|| {
+                    let mut candidates = worktree_additions
+                        .iter()
+                        .filter(|candidate| same_adr_slug(&entry.path, candidate));
+                    let candidate = candidates.next()?.clone();
+                    candidates.next().is_none().then_some(candidate)
+                });
+                let current_path = current_path.as_deref().unwrap_or(&entry.path);
+                let contents = fs::read_to_string(root.join(current_path)).map_err(|error| {
+                    CrivError::new(format!(
+                        "cannot read branch-created ADR `{current_path}` while proving ownership: {error}"
+                    ))
+                })?;
+                parse_adr(current_path, contents)
+            }
+            git::ChangeStatus::Renamed | git::ChangeStatus::Copied => Err(CrivError::new(format!(
+                "ADR `{}` was renamed or copied from `{}`; published ADR content is immutable",
+                entry.path,
+                entry
+                    .previous_path
+                    .as_deref()
+                    .unwrap_or("an inherited path")
+            ))),
+            _ => Err(CrivError::new(format!(
+                "ADR `{}` is not a branch-created addition; published ADR content is immutable",
+                entry.path
+            ))),
+        })
         .collect::<Result<Vec<_>>>()?;
+    let mut branch_paths = branch_adrs
+        .iter()
+        .map(|adr| adr.path.clone())
+        .collect::<BTreeSet<_>>();
+    for entry in &worktree_changes.entries {
+        if !is_adr_path(&adr_prefix, &entry.path) {
+            continue;
+        }
+        match entry.status {
+            git::ChangeStatus::Added if branch_paths.insert(entry.path.clone()) => {
+                let contents = fs::read_to_string(root.join(&entry.path))?;
+                branch_adrs.push(parse_adr(&entry.path, contents)?);
+            }
+            git::ChangeStatus::Renamed | git::ChangeStatus::Copied
+                if entry
+                    .previous_path
+                    .as_deref()
+                    .is_some_and(|path| merge_paths.contains(path)) =>
+            {
+                return Err(CrivError::new(format!(
+                    "ADR `{}` was renamed or copied from published ADR `{}`; published ADR content is immutable",
+                    entry.path,
+                    entry.previous_path.as_deref().unwrap_or_default()
+                )));
+            }
+            _ => {}
+        }
+    }
     ensure_unique(&branch_adrs, "branch-local")?;
 
     let target_max = target.iter().map(|adr| adr.id).max().unwrap_or(0);
@@ -290,6 +362,19 @@ fn allocation_mappings(
 
 fn is_adr_path(prefix: &str, path: &str) -> bool {
     path.starts_with(prefix) && path != format!("{prefix}README.md") && path.ends_with(".md")
+}
+
+fn same_adr_slug(first: &str, second: &str) -> bool {
+    [first, second]
+        .into_iter()
+        .map(|path| {
+            Path::new(path)
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .and_then(|stem| stem.split_once('-').map(|(_, slug)| slug))
+        })
+        .collect::<Option<Vec<_>>>()
+        .is_some_and(|slugs| slugs[0] == slugs[1])
 }
 
 fn parse_adr(path: &str, contents: String) -> Result<AdrFile> {
@@ -435,11 +520,11 @@ fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<Stri
         .iter()
         .map(|mapping| (mapping.old_path.clone(), mapping.new_path.clone()))
         .collect::<BTreeMap<_, _>>();
-    let branch_paths = plan
-        .branch_adrs
-        .iter()
-        .map(|adr| adr.path.clone())
-        .collect::<BTreeSet<_>>();
+    let changed_paths = git::changes_between(root, &plan.merge_base, "HEAD")?
+        .entries
+        .into_iter()
+        .map(|entry| (entry.path.clone(), entry))
+        .collect::<BTreeMap<_, _>>();
     let mut paths = git::tree_paths(root, "HEAD", ".")?;
     for adr in &plan.branch_adrs {
         if !paths.contains(&adr.path) {
@@ -467,22 +552,40 @@ fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<Stri
                 continue;
             }
         };
-        let is_new =
-            branch_paths.contains(&path) || git::blob(root, &plan.merge_base, &path).is_err();
-        let rewritten = if is_new {
-            rewrite_text(&contents, &plan.mappings, &renamed)
-        } else {
-            rewrite_owned_lines(
+        let rewritten = match changed_paths.get(&path) {
+            Some(entry) if entry.status == git::ChangeStatus::Added => {
+                rewrite_text(&contents, &plan.mappings, &renamed)
+            }
+            Some(entry)
+                if matches!(
+                    entry.status,
+                    git::ChangeStatus::Renamed | git::ChangeStatus::Copied
+                ) =>
+            {
+                rewrite_owned_lines(
+                    root,
+                    &contents,
+                    &plan.merge_base,
+                    entry.previous_path.as_deref().ok_or_else(|| {
+                        CrivError::new(format!("Git did not report an inherited path for `{path}`"))
+                    })?,
+                    &path,
+                    &plan.mappings,
+                    &renamed,
+                )?
+            }
+            _ => rewrite_owned_lines(
                 root,
                 &contents,
                 &plan.merge_base,
                 &path,
+                &path,
                 &plan.mappings,
                 &renamed,
-            )?
+            )?,
         };
-        let output_path = renamed.get(&path).cloned().unwrap_or(path);
-        if rewritten != contents || output_path != crate::util::strip_prefix(&file, root) {
+        let output_path = renamed.get(&path).cloned().unwrap_or(path.clone());
+        if rewritten != contents || output_path != path {
             rewrites.insert(output_path, rewritten);
         }
     }
@@ -504,11 +607,16 @@ fn rewrite_owned_lines(
     root: &Path,
     contents: &str,
     merge_base: &str,
+    original_path: &str,
     path: &str,
     mappings: &[Mapping],
     renamed: &BTreeMap<String, String>,
 ) -> Result<String> {
-    let ranges = git::added_lines(root, merge_base, "HEAD", path)?;
+    let ranges = if original_path == path {
+        git::added_lines(root, merge_base, "HEAD", path)?
+    } else {
+        git::added_lines_between_paths(root, merge_base, original_path, "HEAD", path)?
+    };
     let mut output = String::new();
     for (index, line) in contents.split_inclusive('\n').enumerate() {
         let line_number = index + 1;

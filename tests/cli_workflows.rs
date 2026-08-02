@@ -1993,6 +1993,13 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
         adr("0001", "Base", "base"),
     )
     .unwrap();
+    fs::write(
+        root.join("docs/guide.md"),
+        "---\nid: guide\nkind: doc\ntitle: Guide\n---\n\n## Guide\n",
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/base.rs"), "// target-owned\n").unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "base"]);
 
@@ -2002,15 +2009,16 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
         adr("0002", "Topic", "topic"),
     )
     .unwrap();
+    git(root, &["mv", "docs/guide.md", "docs/guide-topic.md"]);
     fs::write(
-        root.join("docs/guide.md"),
+        root.join("docs/guide-topic.md"),
         "---\nid: guide\nkind: doc\ntitle: Guide\n---\n\n## Guide\n\nSee [[0002-topic|ADR-0002]].\n",
     )
     .unwrap();
-    fs::create_dir_all(root.join("src")).unwrap();
+    fs::copy(root.join("src/base.rs"), root.join("src/comment.rs")).unwrap();
     fs::write(
         root.join("src/comment.rs"),
-        "// ADR-0002\npub fn topic() {}\n",
+        "// target-owned\n// ADR-0002\npub fn topic() {}\n",
     )
     .unwrap();
     git(root, &["add", "."]);
@@ -2075,21 +2083,23 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
     let topic_adr = fs::read_to_string(root.join("docs/adr/0003-topic.md")).unwrap();
     assert!(topic_adr.contains("id: ADR-0003"));
     assert!(
-        fs::read_to_string(root.join("docs/guide.md"))
+        fs::read_to_string(root.join("docs/guide-topic.md"))
             .unwrap()
             .contains("[[0003-topic|ADR-0003]]")
     );
     assert!(
         fs::read_to_string(root.join("src/comment.rs"))
             .unwrap()
-            .contains("ADR-0003")
+            .contains("// target-owned\n// ADR-0003")
     );
     assert!(root.join(".criv/adr-reconcile.json").exists());
+    git(root, &["add", "-A"]);
     fs::write(
         root.join("docs/adr/0002-late.md"),
         adr("0002", "Late", "late"),
     )
     .unwrap();
+    git(root, &["add", "docs/adr/0002-late.md"]);
     criv(root)
         .args(["adr", "reconcile", "--base", "target", "--check"])
         .assert()
@@ -2187,6 +2197,55 @@ fn adr_reconcile_renames_a_same_path_branch_local_adr() {
             .unwrap()
             .contains("title: Topic")
     );
+}
+
+#[test]
+fn adr_reconcile_rejects_a_renamed_published_adr() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "target"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    init(root);
+    write_criv_config(root, vec!["src"], vec![], true);
+    fs::write(
+        root.join("docs/adr/0001-base.md"),
+        adr("0001", "Base", "base"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base"]);
+
+    git(root, &["checkout", "-b", "topic"]);
+    git(
+        root,
+        &["mv", "docs/adr/0001-base.md", "docs/adr/0001-renamed.md"],
+    );
+    fs::write(
+        root.join("docs/adr/0002-topic.md"),
+        adr("0002", "Topic", "topic"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "rename published adr"]);
+
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0002-target.md"),
+        adr("0002", "Target", "target"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "target adr"]);
+    git(root, &["checkout", "topic"]);
+
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "published ADR content is immutable",
+        ));
 }
 
 fn adr(id: &str, title: &str, slug: &str) -> String {

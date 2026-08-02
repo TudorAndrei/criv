@@ -103,6 +103,59 @@ pub(crate) fn changed_set(
     })
 }
 
+/// Compares two committed revisions with explicit rename and copy detection.
+/// This deliberately ignores user-level `diff.renames` settings because
+/// ownership proofs must be reproducible in hooks and CI.
+pub(crate) fn changes_between(root: &Path, old: &str, new: &str) -> Result<ChangedSet> {
+    changes_between_paths(root, old, new, &[])
+}
+
+/// Like [`changes_between`], but restricts Git's traversal to relevant paths.
+/// Callers proving ADR identity use this to avoid treating unrelated repository
+/// changes as allocation evidence.
+pub(crate) fn changes_between_paths(
+    root: &Path,
+    old: &str,
+    new: &str,
+    paths: &[&str],
+) -> Result<ChangedSet> {
+    let mut args = vec![
+        "diff",
+        "--name-status",
+        "-z",
+        "--find-renames=50%",
+        "--find-copies=100%",
+        "--find-copies-harder",
+        old,
+        new,
+    ];
+    if !paths.is_empty() {
+        args.push("--");
+        args.extend_from_slice(paths);
+    }
+    changed_set(root, &args, Some(old), Some(new))
+}
+
+/// Compares HEAD with the index and working tree using the same explicit move
+/// detection as committed comparisons. This is evidence of the current input,
+/// not a substitute for the merge-base ownership proof.
+pub(crate) fn worktree_changes_in(root: &Path, paths: &[&str]) -> Result<ChangedSet> {
+    let mut args = vec![
+        "diff",
+        "--name-status",
+        "-z",
+        "--find-renames=50%",
+        "--find-copies=100%",
+        "--find-copies-harder",
+        "HEAD",
+    ];
+    if !paths.is_empty() {
+        args.push("--");
+        args.extend_from_slice(paths);
+    }
+    changed_set(root, &args, Some("HEAD"), None)
+}
+
 pub(crate) fn parse_changed_entries(stdout: &[u8]) -> Result<Vec<ChangedEntry>> {
     let mut entries = Vec::new();
     let mut fields = stdout
@@ -234,7 +287,42 @@ pub(crate) fn added_lines(
             path,
         ],
     )?;
-    let text = String::from_utf8(output.stdout)
+    parse_added_lines(&output.stdout, path)
+}
+
+/// Zero-context line ownership where the old and new paths differ because Git
+/// identified a rename or copy. Supplying both pathspecs also works when the
+/// similarity score later falls below Git's rename threshold: only the new
+/// file contributes added ranges.
+pub(crate) fn added_lines_between_paths(
+    root: &Path,
+    old: &str,
+    old_path: &str,
+    new: &str,
+    new_path: &str,
+) -> Result<Vec<Range<usize>>> {
+    let output = output(
+        root,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--unified=0",
+            "--no-color",
+            "--find-renames=50%",
+            "--find-copies=100%",
+            "--find-copies-harder",
+            old,
+            new,
+            "--",
+            old_path,
+            new_path,
+        ],
+    )?;
+    parse_added_lines(&output.stdout, new_path)
+}
+
+fn parse_added_lines(stdout: &[u8], path: &str) -> Result<Vec<Range<usize>>> {
+    let text = String::from_utf8(stdout.to_vec())
         .map_err(|_| CrivError::new("Git diff output is not valid UTF-8"))?;
     let mut ranges = Vec::new();
     for line in text.lines() {
