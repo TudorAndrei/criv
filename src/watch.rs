@@ -284,11 +284,11 @@ impl LockOwner {
     }
 
     fn serialize(&self) -> String {
-        format!(
-            "pid {}\nstart {}\n",
-            self.pid,
-            self.start.as_deref().unwrap_or("")
-        )
+        let mut contents = format!("pid {}\n", self.pid);
+        if let Some(start) = &self.start {
+            contents.push_str(&format!("start {start}\n"));
+        }
+        contents
     }
 
     fn parse(contents: &str) -> Option<Self> {
@@ -300,7 +300,14 @@ impl LockOwner {
                 "pid" => pid = value.trim().parse::<u32>().ok(),
                 "start" => {
                     let value = value.trim();
-                    start = (!value.is_empty()).then(|| value.to_string());
+                    // Older Unix locks used an empty field for a missing
+                    // timestamp. On Windows it is the platform's explicit
+                    // unknown-start sentinel and must round-trip instead.
+                    start = if value.is_empty() && cfg!(unix) {
+                        None
+                    } else {
+                        Some(value.to_string())
+                    };
                 }
                 _ => return None,
             }
@@ -309,9 +316,16 @@ impl LockOwner {
     }
 
     fn is_alive(&self) -> bool {
+        // A process cannot reuse its own PID. This also avoids depending on
+        // platform process inspection for the current watcher.
+        if self.pid == std::process::id() && self.start.is_none() {
+            return true;
+        }
         match process_start_time(self.pid) {
-            // The PID is gone, so the owner cannot still be running.
-            None => false,
+            // If start-time inspection is unavailable, fall back to a PID
+            // probe. This is deliberately conservative: keeping a lock held
+            // is safer than reclaiming one from a live watcher.
+            None => process_is_alive(self.pid),
             // A recorded start time that no longer matches means the PID was
             // reused by a different process; the original owner is gone.
             Some(current) => self
@@ -320,6 +334,16 @@ impl LockOwner {
                 .is_none_or(|recorded| recorded == current),
         }
     }
+}
+
+fn process_is_alive(pid: u32) -> bool {
+    if !cfg!(unix) {
+        return true;
+    }
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .output()
+        .is_ok_and(|output| output.status.success())
 }
 
 /// Best-effort process start time, which doubles as a liveness probe: `None`
@@ -471,6 +495,24 @@ mod tests {
     }
 
     #[test]
+    fn lock_owner_round_trips_an_unknown_start_time() {
+        let owner = super::LockOwner {
+            pid: 42,
+            start: Some(String::new()),
+        };
+
+        let expected = if cfg!(unix) {
+            super::LockOwner {
+                pid: owner.pid,
+                start: None,
+            }
+        } else {
+            owner.clone()
+        };
+        assert_eq!(super::LockOwner::parse(&owner.serialize()), Some(expected));
+    }
+
+    #[test]
     fn lock_owner_rejects_unparseable_contents() {
         for contents in ["active", "pid notanumber\n", "owner 1\n", ""] {
             assert!(
@@ -484,6 +526,11 @@ mod tests {
     fn lock_owner_with_a_mismatched_start_time_is_not_alive() {
         // A PID that has been reused by an unrelated process must not be
         // mistaken for the original watcher.
+        if super::process_start_time(std::process::id()).is_none() {
+            // The fallback deliberately treats an uninspectable live PID as
+            // alive, so it cannot prove PID reuse in this environment.
+            return;
+        }
         let owner = super::LockOwner {
             pid: std::process::id(),
             start: Some("Mon Jan  1 00:00:00 2001".to_string()),

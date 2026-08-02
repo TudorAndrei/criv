@@ -13,7 +13,7 @@ use serde::Serialize;
 use crate::c4::{C4ElementCategory, C4Level};
 use crate::c4_artifact::C4ArtifactFormat;
 use crate::state::{self, State};
-use crate::util::{is_adr_id, kebab, write_atomic_in};
+use crate::util::{GlobMatcher, is_adr_id, kebab, write_atomic_in};
 use crate::vault::{
     Note, NoteKind, PolicyPattern, ResolvedLink, SourceTargetResolution, Vault,
     is_typed_source_target, source_target_body,
@@ -239,6 +239,9 @@ fn load_rumdl_config(root: &Path) -> Result<RumdlConfig> {
 }
 
 fn markdown_files(root: &Path, config: &RumdlConfig) -> Vec<String> {
+    let includes = (!config.global.include.is_empty())
+        .then(|| GlobMatcher::from_valid_patterns(&config.global.include));
+    let excludes = GlobMatcher::from_valid_patterns(&config.global.exclude);
     let mut files = WalkBuilder::new(root)
         .git_ignore(config.global.respect_gitignore)
         .git_global(config.global.respect_gitignore)
@@ -255,20 +258,11 @@ fn markdown_files(root: &Path, config: &RumdlConfig) -> Vec<String> {
             is_markdown_file(&path).then(|| relative_path(root, &path))
         })
         .filter(|path| {
-            config.global.include.is_empty()
-                || config
-                    .global
-                    .include
-                    .iter()
-                    .any(|pattern| crate::util::glob_matches(pattern, path))
+            includes
+                .as_ref()
+                .is_none_or(|matcher| matcher.is_match(path))
         })
-        .filter(|path| {
-            !config
-                .global
-                .exclude
-                .iter()
-                .any(|pattern| crate::util::glob_matches(pattern, path))
-        })
+        .filter(|path| !excludes.is_match(path))
         .collect::<Vec<_>>();
     files.sort();
     files
@@ -442,9 +436,9 @@ fn policy_violations(root: &Path, vault: &Vault) -> Result<Vec<PolicyViolation>>
 }
 
 fn policy_scope_files(vault: &Vault, scopes: &[String]) -> Vec<String> {
-    scopes
-        .iter()
-        .flat_map(|scope| vault.source_files_matching_glob(scope))
+    vault
+        .source_files_matching_globs(scopes)
+        .into_iter()
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect()
@@ -786,8 +780,12 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
         }
     }
 
-    for scope in &note.targets_scope {
-        if !vault.source_glob_has_match(scope) {
+    for (scope, has_match) in note
+        .targets_scope
+        .iter()
+        .zip(vault.source_globs_have_matches(&note.targets_scope))
+    {
+        if !has_match {
             diagnostics.push(warning(
                 "empty-target-scope",
                 &note.rel_path,
@@ -797,8 +795,12 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
         }
     }
 
-    for governs in vault.effective_governs(note) {
-        if !vault.source_glob_has_match(&governs) {
+    let governs = vault.effective_governs(note);
+    for (governs, has_match) in governs
+        .iter()
+        .zip(vault.source_globs_have_matches(&governs))
+    {
+        if !has_match {
             diagnostics.push(error(
                 "unresolved-governs",
                 &note.rel_path,

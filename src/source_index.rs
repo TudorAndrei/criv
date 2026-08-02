@@ -13,7 +13,7 @@ use regex::Regex;
 use crate::source_paths::{
     SourceRootKind, canonical_source_path, read_source_to_string, source_metadata, source_root_kind,
 };
-use crate::util::{GlobMatcher, glob_matches, is_text_file};
+use crate::util::{GlobMatcher, is_text_file};
 use crate::{CrivError, Result};
 
 const SCAN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -200,7 +200,7 @@ impl FffSourceIndex {
         &self,
         query: &str,
         mode: SourceGrepMode,
-        paths: &[String],
+        paths: Option<&GlobMatcher>,
         matcher: Option<&Regex>,
     ) -> Vec<GrepHit> {
         let plain_query = query.to_lowercase();
@@ -334,7 +334,9 @@ impl SourceIndex for FffSourceIndex {
 
     fn grep(&self, query: &str, mode: SourceGrepMode, paths: &[String]) -> Result<Vec<GrepHit>> {
         let regex_matcher = regex_matcher(query, mode)?;
-        let mut rows = self.grep_explicit_files(query, mode, paths, regex_matcher.as_ref());
+        let path_matcher = (!paths.is_empty()).then(|| GlobMatcher::from_valid_patterns(paths));
+        let mut rows =
+            self.grep_explicit_files(query, mode, path_matcher.as_ref(), regex_matcher.as_ref());
         for scoped in &self.pickers {
             rows.extend(self.with_picker(scoped, |picker| {
                 let grep_query = match mode {
@@ -362,7 +364,9 @@ impl SourceIndex for FffSourceIndex {
                         continue;
                     };
                     let path = prefixed_path(&scoped.prefix, file.relative_path(picker));
-                    if self.indexed_path(path.clone()).is_none() || !path_allowed(&path, paths) {
+                    if self.indexed_path(path.clone()).is_none()
+                        || !path_allowed(&path, path_matcher.as_ref())
+                    {
                         continue;
                     }
                     scoped_rows.push(GrepHit {
@@ -478,8 +482,8 @@ impl SourceIndex for FffSourceIndex {
     }
 }
 
-fn path_allowed(path: &str, patterns: &[String]) -> bool {
-    patterns.is_empty() || patterns.iter().any(|pattern| glob_matches(pattern, path))
+fn path_allowed(path: &str, matcher: Option<&GlobMatcher>) -> bool {
+    matcher.is_none_or(|matcher| matcher.is_match(path))
 }
 
 fn regex_matcher(query: &str, mode: SourceGrepMode) -> Result<Option<Regex>> {

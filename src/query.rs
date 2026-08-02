@@ -250,10 +250,7 @@ fn governs(vault: &Vault, adr_id: &str) -> Result<Vec<String>> {
     let note = vault
         .resolve_note(adr_id)
         .ok_or_else(|| CrivError::new(format!("decision `{adr_id}` does not resolve")))?;
-    let mut rows = Vec::new();
-    for pattern in vault.effective_governs(note) {
-        rows.extend(vault.source_files_matching_glob(&pattern));
-    }
+    let mut rows = vault.source_files_matching_globs(&vault.effective_governs(note));
     rows.sort();
     rows.dedup();
     Ok(rows)
@@ -269,9 +266,8 @@ fn governing(vault: &Vault, symbol: &str) -> Vec<String> {
             continue;
         }
         if vault
-            .effective_governs(note)
-            .iter()
-            .any(|pattern| vault.source_files_matching_glob(pattern).contains(&path))
+            .source_files_matching_globs(&vault.effective_governs(note))
+            .contains(&path)
         {
             rows.push(note.display_id().to_string());
         }
@@ -285,12 +281,7 @@ fn coverage(vault: &Vault, by: Option<&str>) -> Vec<String> {
         .notes
         .iter()
         .filter(|note| note.kind == NoteKind::Decision)
-        .flat_map(|note| {
-            vault
-                .effective_governs(note)
-                .into_iter()
-                .flat_map(|pattern| vault.source_files_matching_glob(&pattern))
-        })
+        .flat_map(|note| vault.source_files_matching_globs(&vault.effective_governs(note)))
         .collect::<std::collections::BTreeSet<_>>();
     if by == Some("module") {
         return coverage_by_module(vault, &governed);
@@ -340,9 +331,8 @@ fn coverage_by_adr(vault: &Vault) -> Vec<String> {
             continue;
         }
         let governed = vault
-            .effective_governs(note)
+            .source_files_matching_globs(&vault.effective_governs(note))
             .into_iter()
-            .flat_map(|pattern| vault.source_files_matching_glob(&pattern))
             .collect::<BTreeSet<_>>();
         rows.push(format!(
             "adr={} governed_files={}",

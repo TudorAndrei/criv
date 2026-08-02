@@ -253,16 +253,14 @@ impl State {
                 );
             }
 
-            for governs in vault.effective_governs(note) {
-                for source_file in vault.source_files_matching_glob(&governs) {
-                    add_edge(
-                        &mut graph,
-                        &mut seen_edges,
-                        &note_id,
-                        &code_node_id(&source_file),
-                        "governs",
-                    );
-                }
+            for source_file in vault.source_files_matching_globs(&vault.effective_governs(note)) {
+                add_edge(
+                    &mut graph,
+                    &mut seen_edges,
+                    &note_id,
+                    &code_node_id(&source_file),
+                    "governs",
+                );
             }
 
             for superseded in &note.supersedes {
@@ -599,13 +597,10 @@ fn scoped_changed_paths(paths: &[String], scopes: &[String]) -> Vec<String> {
     if paths.is_empty() {
         return scopes.to_vec();
     }
+    let matcher = crate::util::GlobMatcher::from_valid_patterns(scopes);
     paths
         .iter()
-        .filter(|path| {
-            scopes
-                .iter()
-                .any(|scope| crate::util::glob_matches(scope, path))
-        })
+        .filter(|path| matcher.is_match(path))
         .cloned()
         .collect()
 }
@@ -618,9 +613,10 @@ fn configured_pattern_paths(paths: &[String], language: Option<&str>) -> Option<
         return Some(paths.to_vec());
     };
     let language_glob = structural::language_glob(language);
+    let matcher = crate::util::GlobMatcher::from_valid_patterns(&[language_glob.to_string()]);
     let paths = paths
         .iter()
-        .filter(|path| crate::util::glob_matches(language_glob, path))
+        .filter(|path| matcher.is_match(path))
         .cloned()
         .collect::<Vec<_>>();
     (!paths.is_empty()).then_some(paths)

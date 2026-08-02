@@ -649,6 +649,7 @@ digraph criv_code {
   "src/enforce.rs#fn:env_string" [label="env_string\nsrc/enforce.rs"];
   "src/enforce.rs#fn:git" [label="git\nsrc/enforce.rs"];
   "src/enforce.rs#fn:git_changed_set" [label="git_changed_set\nsrc/enforce.rs"];
+  "src/enforce.rs#fn:git_command" [label="git_command\nsrc/enforce.rs"];
   "src/enforce.rs#fn:git_first_parent" [label="git_first_parent\nsrc/enforce.rs"];
   "src/enforce.rs#fn:git_output" [label="git_output\nsrc/enforce.rs"];
   "src/enforce.rs#fn:git_stdout" [label="git_stdout\nsrc/enforce.rs"];
@@ -1121,8 +1122,12 @@ digraph criv_code {
   "src/util.rs#fn:write_new_in" [label="write_new_in\nsrc/util.rs"];
   "src/util.rs#type:GlobMatcher" [label="GlobMatcher\nsrc/util.rs"];
   "src/util.rs#type:LinkOutcome" [label="LinkOutcome\nsrc/util.rs"];
-  "src/util.rs#type:pattern/member:is_match" [label="is_match\nsrc/util.rs"];
-  "src/util.rs#type:pattern/member:new" [label="new\nsrc/util.rs"];
+  "src/util.rs#type:legacy/member:from_patterns" [label="from_patterns\nsrc/util.rs"];
+  "src/util.rs#type:legacy/member:from_valid_patterns" [label="from_valid_patterns\nsrc/util.rs"];
+  "src/util.rs#type:legacy/member:is_match" [label="is_match\nsrc/util.rs"];
+  "src/util.rs#type:legacy/member:matching_pattern_indices_into" [label="matching_pattern_indices_into\nsrc/util.rs"];
+  "src/util.rs#type:legacy/member:new" [label="new\nsrc/util.rs"];
+  "src/vault.rs#fn:batch_source_globs_preserve_order_fallbacks_and_invalid_patterns" [label="batch_source_globs_preserve_order_fallbacks_and_invalid_patterns\nsrc/vault.rs"];
   "src/vault.rs#fn:c4_diagram_positions_are_file_relative" [label="c4_diagram_positions_are_file_relative\nsrc/vault.rs"];
   "src/vault.rs#fn:delimiter_line" [label="delimiter_line\nsrc/vault.rs"];
   "src/vault.rs#fn:disabled_source_index_skips_source_collection_and_graph" [label="disabled_source_index_skips_source_collection_and_graph\nsrc/vault.rs"];
@@ -1191,15 +1196,18 @@ digraph criv_code {
   "src/vault.rs#type:index/member:resolve_source_target" [label="resolve_source_target\nsrc/vault.rs"];
   "src/vault.rs#type:index/member:source_files" [label="source_files\nsrc/vault.rs"];
   "src/vault.rs#type:index/member:source_files_matching_glob" [label="source_files_matching_glob\nsrc/vault.rs"];
-  "src/vault.rs#type:index/member:source_glob_has_match" [label="source_glob_has_match\nsrc/vault.rs"];
+  "src/vault.rs#type:index/member:source_files_matching_globs" [label="source_files_matching_globs\nsrc/vault.rs"];
+  "src/vault.rs#type:index/member:source_globs_have_matches" [label="source_globs_have_matches\nsrc/vault.rs"];
   "src/vault.rs#type:index/member:source_graph" [label="source_graph\nsrc/vault.rs"];
   "src/vault.rs#type:index/member:source_index" [label="source_index\nsrc/vault.rs"];
   "src/watch.rs#fn:a_second_watch_once_reuses_the_cached_source_graph" [label="a_second_watch_once_reuses_the_cached_source_graph\nsrc/watch.rs"];
   "src/watch.rs#fn:acquire_reclaims_a_lock_owned_by_a_dead_process" [label="acquire_reclaims_a_lock_owned_by_a_dead_process\nsrc/watch.rs"];
   "src/watch.rs#fn:acquire_rejects_a_lock_held_by_this_live_process" [label="acquire_rejects_a_lock_held_by_this_live_process\nsrc/watch.rs"];
   "src/watch.rs#fn:lock_owner_rejects_unparseable_contents" [label="lock_owner_rejects_unparseable_contents\nsrc/watch.rs"];
+  "src/watch.rs#fn:lock_owner_round_trips_an_unknown_start_time" [label="lock_owner_round_trips_an_unknown_start_time\nsrc/watch.rs"];
   "src/watch.rs#fn:lock_owner_round_trips_through_the_lock_file_format" [label="lock_owner_round_trips_through_the_lock_file_format\nsrc/watch.rs"];
   "src/watch.rs#fn:lock_owner_with_a_mismatched_start_time_is_not_alive" [label="lock_owner_with_a_mismatched_start_time_is_not_alive\nsrc/watch.rs"];
+  "src/watch.rs#fn:process_is_alive" [label="process_is_alive\nsrc/watch.rs"];
   "src/watch.rs#fn:process_start_time" [label="process_start_time\nsrc/watch.rs"];
   "src/watch.rs#fn:rebuild" [label="rebuild\nsrc/watch.rs"];
   "src/watch.rs#fn:rebuild_includes_generated_code_architecture_in_same_run_state" [label="rebuild_includes_generated_code_architecture_in_same_run_state\nsrc/watch.rs"];
@@ -2041,6 +2049,8 @@ digraph criv_code {
   "src/check.rs#fn:markdown_files" -> "src/check.rs#fn:is_markdown_file";
   "src/check.rs#fn:markdown_files" -> "src/check.rs#fn:relative_path";
   "src/check.rs#fn:markdown_files" -> "src/state.rs#type:file/member:build";
+  "src/check.rs#fn:markdown_files" -> "src/structural.rs#type:CompiledPathScope/member:is_match";
+  "src/check.rs#fn:markdown_files" -> "src/util.rs#type:GlobMatcher";
   "src/check.rs#fn:metadata_only_note_links_are_non_portable" -> "src/check.rs#fn:decision_note";
   "src/check.rs#fn:metadata_only_note_links_are_non_portable" -> "src/check.rs#fn:test_vault";
   "src/check.rs#fn:metadata_only_note_links_are_non_portable" -> "src/check.rs#fn:validate";
@@ -2051,7 +2061,7 @@ digraph criv_code {
   "src/check.rs#fn:missing_c4_source_target_is_reported" -> "src/check.rs#fn:validate";
   "src/check.rs#fn:outdated_skills" -> "src/c4.rs#type:C4Level/member:as_str";
   "src/check.rs#fn:outdated_skills_handles_missing_and_malformed_frontmatter" -> "src/check.rs#fn:unique_temp_file";
-  "src/check.rs#fn:policy_scope_files" -> "src/vault.rs#type:index/member:source_files_matching_glob";
+  "src/check.rs#fn:policy_scope_files" -> "src/vault.rs#type:index/member:source_files_matching_globs";
   "src/check.rs#fn:policy_violations" -> "src/check.rs#fn:policy_scope_files";
   "src/check.rs#fn:policy_violations" -> "src/vault.rs#type:index/member:effective_governs";
   "src/check.rs#fn:previous_c4_interface_hashes" -> "src/c4.rs#type:C4Level/member:as_str";
@@ -2138,7 +2148,7 @@ digraph criv_code {
   "src/check.rs#fn:validate_targets" -> "src/vault.rs#type:index/member:effective_governs";
   "src/check.rs#fn:validate_targets" -> "src/vault.rs#type:index/member:patterns";
   "src/check.rs#fn:validate_targets" -> "src/vault.rs#type:index/member:resolve_source_target";
-  "src/check.rs#fn:validate_targets" -> "src/vault.rs#type:index/member:source_glob_has_match";
+  "src/check.rs#fn:validate_targets" -> "src/vault.rs#type:index/member:source_globs_have_matches";
   "src/check.rs#fn:validate_with_previous_c4_interfaces" -> "src/check.rs#fn:validate_c4_artifacts";
   "src/check.rs#fn:validate_with_previous_c4_interfaces" -> "src/check.rs#fn:validate_c4_interface_drift";
   "src/check.rs#fn:validate_with_previous_c4_interfaces" -> "src/check.rs#fn:validate_links";
@@ -2197,9 +2207,10 @@ digraph criv_code {
   "src/enforce.rs#fn:git" -> "src/lib.rs#type:Command";
   "src/enforce.rs#fn:git_changed_set" -> "src/enforce.rs#fn:git_output";
   "src/enforce.rs#fn:git_changed_set" -> "src/enforce.rs#fn:parse_changed_entries";
+  "src/enforce.rs#fn:git_command" -> "src/lib.rs#type:Command";
   "src/enforce.rs#fn:git_first_parent" -> "src/lib.rs#type:Command";
   "src/enforce.rs#fn:git_first_parent" -> "src/lib.rs#type:CrivError";
-  "src/enforce.rs#fn:git_output" -> "src/lib.rs#type:Command";
+  "src/enforce.rs#fn:git_output" -> "src/enforce.rs#fn:git_command";
   "src/enforce.rs#fn:git_output" -> "src/lib.rs#type:CrivError";
   "src/enforce.rs#fn:git_stdout" -> "src/lib.rs#type:Command";
   "src/enforce.rs#fn:import_matches" -> "src/structural.rs#type:CompiledPathScope/member:is_match";
@@ -2208,7 +2219,7 @@ digraph criv_code {
   "src/enforce.rs#fn:import_policy_violations" -> "src/vault.rs#type:index/member:source_graph";
   "src/enforce.rs#fn:is_allowed_adr_link_migration" -> "src/enforce.rs#fn:is_mechanical_wikilink_portability_migration";
   "src/enforce.rs#fn:is_allowed_adr_link_migration" -> "src/enforce.rs#fn:read_changed_content";
-  "src/enforce.rs#fn:is_git_repository" -> "src/lib.rs#type:Command";
+  "src/enforce.rs#fn:is_git_repository" -> "src/enforce.rs#fn:git_command";
   "src/enforce.rs#fn:is_git_repository" -> "src/lib.rs#type:CrivError";
   "src/enforce.rs#fn:is_mechanical_wikilink_portability_migration" -> "src/enforce.rs#fn:normalize_portable_adr_links";
   "src/enforce.rs#fn:manual_push_falls_back_to_the_last_commit_with_a_reported_basis" -> "src/enforce.rs#fn:changed_entries";
@@ -2227,7 +2238,7 @@ digraph criv_code {
   "src/enforce.rs#fn:policy_scan_files" -> "src/enforce.rs#fn:policy_scope_files";
   "src/enforce.rs#fn:policy_scan_files" -> "src/source_graph.rs#type:source_file/member:changed_files";
   "src/enforce.rs#fn:policy_scan_files_intersects_changed_files_with_governed_sources" -> "src/vault.rs#type:Vault";
-  "src/enforce.rs#fn:policy_scope_files" -> "src/vault.rs#type:index/member:source_files_matching_glob";
+  "src/enforce.rs#fn:policy_scope_files" -> "src/vault.rs#type:index/member:source_files_matching_globs";
   "src/enforce.rs#fn:policy_violations" -> "src/enforce.rs#fn:policy_scan_files";
   "src/enforce.rs#fn:policy_violations" -> "src/vault.rs#type:index/member:effective_governs";
   "src/enforce.rs#fn:pre_push_changed_entries" -> "src/enforce.rs#fn:git_first_parent";
@@ -2381,9 +2392,9 @@ digraph criv_code {
   "src/query.rs#fn:coverage" -> "src/query.rs#fn:coverage_by_adr";
   "src/query.rs#fn:coverage" -> "src/query.rs#fn:coverage_by_module";
   "src/query.rs#fn:coverage" -> "src/vault.rs#type:index/member:effective_governs";
-  "src/query.rs#fn:coverage" -> "src/vault.rs#type:index/member:source_files_matching_glob";
+  "src/query.rs#fn:coverage" -> "src/vault.rs#type:index/member:source_files_matching_globs";
   "src/query.rs#fn:coverage_by_adr" -> "src/vault.rs#type:index/member:effective_governs";
-  "src/query.rs#fn:coverage_by_adr" -> "src/vault.rs#type:index/member:source_files_matching_glob";
+  "src/query.rs#fn:coverage_by_adr" -> "src/vault.rs#type:index/member:source_files_matching_globs";
   "src/query.rs#fn:coverage_by_module" -> "src/source_index.rs#type:scan_root/member:source_files";
   "src/query.rs#fn:diff" -> "src/query.rs#fn:json_edge_set";
   "src/query.rs#fn:diff" -> "src/query.rs#fn:json_string_set";
@@ -2392,11 +2403,11 @@ digraph criv_code {
   "src/query.rs#fn:governing" -> "src/vault.rs#type:Note/member:display_id";
   "src/query.rs#fn:governing" -> "src/vault.rs#type:index/member:effective_governs";
   "src/query.rs#fn:governing" -> "src/vault.rs#type:index/member:resolve_source_path";
-  "src/query.rs#fn:governing" -> "src/vault.rs#type:index/member:source_files_matching_glob";
+  "src/query.rs#fn:governing" -> "src/vault.rs#type:index/member:source_files_matching_globs";
   "src/query.rs#fn:governs" -> "src/lib.rs#type:CrivError";
   "src/query.rs#fn:governs" -> "src/vault.rs#type:index/member:effective_governs";
   "src/query.rs#fn:governs" -> "src/vault.rs#type:index/member:resolve_note";
-  "src/query.rs#fn:governs" -> "src/vault.rs#type:index/member:source_files_matching_glob";
+  "src/query.rs#fn:governs" -> "src/vault.rs#type:index/member:source_files_matching_globs";
   "src/query.rs#fn:load_git_state" -> "src/lib.rs#type:Command";
   "src/query.rs#fn:load_git_state" -> "src/lib.rs#type:CrivError";
   "src/query.rs#fn:load_snapshot" -> "src/lib.rs#type:CrivError";
@@ -2467,7 +2478,7 @@ digraph criv_code {
   "src/search.rs#fn:notes" -> "src/lib.rs#type:CrivError";
   "src/search.rs#fn:notes" -> "src/search.rs#fn:lexical_notes";
   "src/search.rs#fn:notes" -> "src/search.rs#fn:semantic_notes";
-  "src/search.rs#fn:policy_scope_files" -> "src/vault.rs#type:index/member:source_files_matching_glob";
+  "src/search.rs#fn:policy_scope_files" -> "src/vault.rs#type:index/member:source_files_matching_globs";
   "src/search.rs#fn:print_rows" -> "src/lib.rs#type:CrivError";
   "src/search.rs#fn:run" -> "src/search.rs#fn:files";
   "src/search.rs#fn:run" -> "src/search.rs#fn:grep";
@@ -2538,6 +2549,7 @@ digraph criv_code {
   "src/source_graph.rs#fn:generic_function_signature" -> "src/source_graph.rs#fn:paren_contents";
   "src/source_graph.rs#fn:has_descendant_kind" -> "src/source_graph.rs#fn:descendant_of_kind";
   "src/source_graph.rs#fn:incremental_build_rejects_source_file_symlink_escape" -> "src/source_graph.rs#type:SourceGraph";
+  "src/source_graph.rs#fn:incremental_graph_reparses_same_size_content_with_restored_mtime" -> "extensions/vscode-criv/src/c4Preview.ts#type:C4PreviewManager/member:open";
   "src/source_graph.rs#fn:incremental_graph_reparses_same_size_content_with_restored_mtime" -> "src/source_graph.rs#type:SourceGraph";
   "src/source_graph.rs#fn:is_exported_symbol" -> "src/source_graph.rs#fn:parse_symbol";
   "src/source_graph.rs#fn:join_rust_import" -> "src/util.rs#fn:strip_prefix";
@@ -2645,7 +2657,7 @@ digraph criv_code {
   "src/source_graph.rs#type:source_file/member:resolve_symbol" -> "src/structural.rs#fn:find";
   "src/source_graph.rs#type:source_file/member:symbol" -> "src/structural.rs#fn:find";
   "src/source_index.rs#fn:explicit_file_fingerprint" -> "src/source_paths.rs#fn:source_metadata";
-  "src/source_index.rs#fn:path_allowed" -> "src/util.rs#fn:glob_matches";
+  "src/source_index.rs#fn:path_allowed" -> "src/structural.rs#type:CompiledPathScope/member:is_match";
   "src/source_index.rs#fn:regex_matcher" -> "src/lib.rs#type:CrivError";
   "src/source_index.rs#fn:source_index_enumeration_preserves_vault_source_file_semantics" -> ".obsidian/plugins/criv/src/core.ts#fn:index";
   "src/source_index.rs#fn:source_index_enumeration_preserves_vault_source_file_semantics" -> "src/source_index.rs#type:FffSourceIndex";
@@ -2675,6 +2687,7 @@ digraph criv_code {
   "src/source_index.rs#type:FffSourceIndex/member:grep" -> "src/source_index.rs#type:scan_root/member:grep_explicit_files";
   "src/source_index.rs#type:FffSourceIndex/member:grep" -> "src/source_index.rs#type:scan_root/member:indexed_path";
   "src/source_index.rs#type:FffSourceIndex/member:grep" -> "src/source_index.rs#type:scan_root/member:with_picker";
+  "src/source_index.rs#type:FffSourceIndex/member:grep" -> "src/util.rs#type:GlobMatcher";
   "src/source_index.rs#type:FffSourceIndex/member:resolve_partial_path" -> "src/source_index.rs#type:FffSourceIndex/member:fuzzy_files";
   "src/source_index.rs#type:FffSourceIndex/member:resolve_partial_path" -> "src/source_index.rs#type:scan_root/member:source_files";
   "src/source_index.rs#type:FffSourceIndex/member:source_fingerprint" -> "src/check.rs#fn:relative_path";
@@ -2741,6 +2754,7 @@ digraph criv_code {
   "src/state.rs#fn:collect_c4_interface_hashes" -> "src/state.rs#fn:c4_interface_node_id";
   "src/state.rs#fn:collect_c4_interface_hashes" -> "src/state.rs#fn:interface_anchor_hash";
   "src/state.rs#fn:collect_c4_interface_hashes" -> "src/vault.rs#type:index/member:resolve_source_target";
+  "src/state.rs#fn:configured_pattern_paths" -> "src/structural.rs#type:CompiledPathScope/member:is_match";
   "src/state.rs#fn:disabled_source_index_writes_empty_source_state" -> "src/state.rs#fn:unique_temp_dir";
   "src/state.rs#fn:disabled_source_index_writes_empty_source_state" -> "src/state.rs#type:State";
   "src/state.rs#fn:disabled_source_index_writes_empty_source_state" -> "src/vault.rs#type:Vault";
@@ -2770,6 +2784,7 @@ digraph criv_code {
   "src/state.rs#fn:interface_anchor_hash" -> "src/vault.rs#type:index/member:source_graph";
   "src/state.rs#fn:node_hash" -> "src/state.rs#fn:stable_hash";
   "src/state.rs#fn:policy_vault" -> "src/state.rs#fn:unique_temp_dir";
+  "src/state.rs#fn:scoped_changed_paths" -> "src/structural.rs#type:CompiledPathScope/member:is_match";
   "src/state.rs#fn:serialized_state_matches_the_v0_contract_fixture" -> "src/state.rs#fn:unique_temp_dir";
   "src/state.rs#fn:serialized_state_matches_the_v0_contract_fixture" -> "src/state.rs#type:State";
   "src/state.rs#fn:serialized_state_matches_the_v0_contract_fixture" -> "src/state.rs#type:file/member:to_json";
@@ -2817,7 +2832,7 @@ digraph criv_code {
   "src/state.rs#type:file/member:build_incremental" -> "src/vault.rs#type:index/member:patterns";
   "src/state.rs#type:file/member:build_incremental" -> "src/vault.rs#type:index/member:resolve_link";
   "src/state.rs#type:file/member:build_incremental" -> "src/vault.rs#type:index/member:resolve_source_target";
-  "src/state.rs#type:file/member:build_incremental" -> "src/vault.rs#type:index/member:source_files_matching_glob";
+  "src/state.rs#type:file/member:build_incremental" -> "src/vault.rs#type:index/member:source_files_matching_globs";
   "src/state.rs#type:file/member:build_incremental" -> "src/vault.rs#type:index/member:source_graph";
   "src/state.rs#type:file/member:build_incremental" -> "src/vault.rs#type:index/member:source_index";
   "src/state.rs#type:file/member:hash" -> "src/state.rs#type:file/member:serialize";
@@ -2900,7 +2915,7 @@ digraph criv_code {
   "src/util.rs#fn:find_wiki_links_with_lines" -> "src/util.rs#fn:line_number";
   "src/util.rs#fn:finish_link" -> "src/util.rs#fn:create_dir_in";
   "src/util.rs#fn:glob_matches" -> "src/util.rs#type:GlobMatcher";
-  "src/util.rs#fn:glob_matches" -> "src/util.rs#type:pattern/member:is_match";
+  "src/util.rs#fn:glob_matches" -> "src/util.rs#type:legacy/member:is_match";
   "src/util.rs#fn:link_dir_in" -> "src/lib.rs#type:CrivError";
   "src/util.rs#fn:link_dir_in" -> "src/util.rs#fn:finish_link";
   "src/util.rs#fn:link_dir_in" -> "src/util.rs#fn:reject_symlink_components";
@@ -2928,10 +2943,14 @@ digraph criv_code {
   "src/util.rs#fn:write_atomic_ready" -> "src/lib.rs#type:CrivError";
   "src/util.rs#fn:write_new_in" -> "src/util.rs#fn:prepare_confined_write";
   "src/util.rs#fn:write_new_in" -> "src/util.rs#fn:write_atomic_ready";
-  "src/util.rs#type:pattern/member:is_match" -> "src/util.rs#type:pattern/member:is_match";
-  "src/util.rs#type:pattern/member:new" -> ".obsidian/plugins/criv/test/stubs/codemirror-state.mjs#type:RangeSetBuilder/member:add";
-  "src/util.rs#type:pattern/member:new" -> "src/lib.rs#type:CrivError";
-  "src/util.rs#type:pattern/member:new" -> "src/state.rs#type:file/member:build";
+  "src/util.rs#type:legacy/member:from_patterns" -> ".obsidian/plugins/criv/test/stubs/codemirror-state.mjs#type:RangeSetBuilder/member:add";
+  "src/util.rs#type:legacy/member:from_patterns" -> "src/lib.rs#type:CrivError";
+  "src/util.rs#type:legacy/member:from_patterns" -> "src/state.rs#type:file/member:build";
+  "src/util.rs#type:legacy/member:from_valid_patterns" -> "src/state.rs#type:file/member:build";
+  "src/util.rs#type:legacy/member:is_match" -> "src/util.rs#type:legacy/member:is_match";
+  "src/util.rs#type:legacy/member:matching_pattern_indices_into" -> "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:clear";
+  "src/vault.rs#fn:batch_source_globs_preserve_order_fallbacks_and_invalid_patterns" -> "src/vault.rs#fn:unique_temp_dir";
+  "src/vault.rs#fn:batch_source_globs_preserve_order_fallbacks_and_invalid_patterns" -> "src/vault.rs#type:Vault";
   "src/vault.rs#fn:c4_diagram_positions_are_file_relative" -> "src/vault.rs#fn:parsed_note";
   "src/vault.rs#fn:delimiter_line" -> "src/structural.rs#fn:find";
   "src/vault.rs#fn:disabled_source_index_skips_source_collection_and_graph" -> "src/vault.rs#fn:unique_temp_dir";
@@ -3004,9 +3023,12 @@ digraph criv_code {
   "src/vault.rs#type:index/member:resolve_source_target" -> "src/vault.rs#fn:source_fragment_path";
   "src/vault.rs#type:index/member:resolve_source_target" -> "src/vault.rs#fn:source_target_body";
   "src/vault.rs#type:index/member:resolve_source_target" -> "src/vault.rs#type:index/member:resolve_source_path";
-  "src/vault.rs#type:index/member:source_files_matching_glob" -> "src/util.rs#fn:glob_matches";
-  "src/vault.rs#type:index/member:source_files_matching_glob" -> "src/vault.rs#type:index/member:resolve_source_target";
-  "src/vault.rs#type:index/member:source_glob_has_match" -> "src/util.rs#fn:glob_matches";
+  "src/vault.rs#type:index/member:source_files_matching_glob" -> "src/vault.rs#type:index/member:source_files_matching_globs";
+  "src/vault.rs#type:index/member:source_files_matching_globs" -> "src/util.rs#type:GlobMatcher";
+  "src/vault.rs#type:index/member:source_files_matching_globs" -> "src/util.rs#type:legacy/member:matching_pattern_indices_into";
+  "src/vault.rs#type:index/member:source_files_matching_globs" -> "src/vault.rs#type:index/member:resolve_source_target";
+  "src/vault.rs#type:index/member:source_globs_have_matches" -> "src/util.rs#type:GlobMatcher";
+  "src/vault.rs#type:index/member:source_globs_have_matches" -> "src/util.rs#type:legacy/member:matching_pattern_indices_into";
   "src/watch.rs#fn:a_second_watch_once_reuses_the_cached_source_graph" -> "src/watch.rs#fn:write_watch_architecture_fixture";
   "src/watch.rs#fn:acquire_reclaims_a_lock_owned_by_a_dead_process" -> "src/watch.rs#type:WatchLock/member:drop";
   "src/watch.rs#fn:acquire_rejects_a_lock_held_by_this_live_process" -> "src/watch.rs#type:line/member:serialize";
@@ -3040,5 +3062,6 @@ digraph criv_code {
   "src/watch.rs#type:WatchLock/member:try_create" -> "src/watch.rs#type:LockOwner";
   "src/watch.rs#type:WatchLock/member:try_create" -> "src/watch.rs#type:line/member:serialize";
   "src/watch.rs#type:line/member:current" -> "src/watch.rs#fn:process_start_time";
+  "src/watch.rs#type:line/member:is_alive" -> "src/watch.rs#fn:process_is_alive";
   "src/watch.rs#type:line/member:is_alive" -> "src/watch.rs#fn:process_start_time";
 }

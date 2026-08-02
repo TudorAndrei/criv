@@ -1492,7 +1492,9 @@ mod tests {
         let modified = fs::metadata(&path).unwrap().modified().unwrap();
 
         fs::write(&path, "pub fn two() {}\n").unwrap();
-        fs::File::open(&path)
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
             .unwrap()
             .set_times(fs::FileTimes::new().set_modified(modified))
             .unwrap();
