@@ -117,9 +117,16 @@ pub(crate) fn receipt_allows_change(root: &Path, entry: &git::ChangedEntry) -> b
                 .unwrap_or(true)
         })
         || receipt.files.iter().any(|file| {
-            git::blob(root, ":", &file.path)
-                .map(|contents| hash(&contents) != file.after_hash)
-                .unwrap_or(true)
+            let before_matches = match &file.before_hash {
+                Some(before_hash) => git::blob(root, &receipt.head_sha, &file.path)
+                    .map(|contents| hash(&contents) == *before_hash)
+                    .unwrap_or(false),
+                None => git::blob(root, &receipt.head_sha, &file.path).is_err(),
+            };
+            !before_matches
+                || git::blob(root, ":", &file.path)
+                    .map(|contents| hash(&contents) != file.after_hash)
+                    .unwrap_or(true)
         })
         || receipt.deletions.iter().any(|path| {
             !receipt.files.iter().any(|file| file.path == *path)

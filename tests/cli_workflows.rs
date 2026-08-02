@@ -2112,6 +2112,19 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
         fs::read_to_string(root.join("docs/adr/0003-topic.md")).unwrap()
     );
     git(root, &["config", "diff.renames", "false"]);
+    let receipt_path = root.join(".criv/adr-reconcile.json");
+    let receipt = fs::read_to_string(&receipt_path).unwrap();
+    fs::write(
+        &receipt_path,
+        receipt.replace("criv.adr-reconcile/2", "forged-receipt"),
+    )
+    .unwrap();
+    criv(root)
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR files are immutable"));
+    fs::write(&receipt_path, receipt).unwrap();
     let reconciled_adr = fs::read_to_string(root.join("docs/adr/0003-topic.md")).unwrap();
     fs::write(root.join("docs/adr/0003-topic.md"), "tampered\n").unwrap();
     git(root, &["add", "docs/adr/0003-topic.md"]);
