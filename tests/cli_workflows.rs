@@ -2026,6 +2026,19 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
     git(root, &["commit", "-m", "target adr"]);
     git(root, &["checkout", "topic"]);
 
+    let config = fs::read_to_string(root.join("criv.toml")).unwrap();
+    fs::write(
+        root.join("criv.toml"),
+        format!("{config}\n# topic configuration change\n"),
+    )
+    .unwrap();
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("changing criv.toml"));
+    fs::write(root.join("criv.toml"), config).unwrap();
+
     criv(root)
         .args(["adr", "reconcile", "--base", "target", "--check"])
         .assert()
