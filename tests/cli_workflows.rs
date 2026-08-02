@@ -1979,6 +1979,128 @@ title: Orphan
     criv(root).args(["watch", "--once"]).assert().success();
 }
 
+#[test]
+fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "target"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    init(root);
+    write_criv_config(root, vec!["src"], vec![], true);
+    fs::write(
+        root.join("docs/adr/0001-base.md"),
+        adr("0001", "Base", "base"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base"]);
+
+    git(root, &["checkout", "-b", "topic"]);
+    fs::write(
+        root.join("docs/adr/0002-topic.md"),
+        adr("0002", "Topic", "topic"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("docs/guide.md"),
+        "---\nid: guide\nkind: doc\ntitle: Guide\n---\n\n## Guide\n\nSee [[0002-topic|ADR-0002]].\n",
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("src/comment.rs"),
+        "// ADR-0002\npub fn topic() {}\n",
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "topic adr"]);
+
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0002-target.md"),
+        adr("0002", "Target", "target"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "target adr"]);
+    git(root, &["checkout", "topic"]);
+
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR-0002 -> ADR-0003"))
+        .stderr(predicate::str::contains("criv adr reconcile --base target"));
+    criv(root)
+        .env("CRIV_BASE_REF", "target")
+        .args(["enforce", "--stage", "ci"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR-0002 -> ADR-0003"));
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target"])
+        .assert()
+        .success();
+
+    assert!(!root.join("docs/adr/0002-topic.md").exists());
+    let adr = fs::read_to_string(root.join("docs/adr/0003-topic.md")).unwrap();
+    assert!(adr.contains("id: ADR-0003"));
+    assert!(
+        fs::read_to_string(root.join("docs/guide.md"))
+            .unwrap()
+            .contains("[[0003-topic|ADR-0003]]")
+    );
+    assert!(
+        fs::read_to_string(root.join("src/comment.rs"))
+            .unwrap()
+            .contains("ADR-0003")
+    );
+    assert!(root.join(".criv/adr-reconcile.json").exists());
+    git(root, &["add", "-A"]);
+    assert_eq!(
+        git_stdout(root, &["show", ":docs/adr/0003-topic.md"]),
+        fs::read_to_string(root.join("docs/adr/0003-topic.md")).unwrap()
+    );
+    criv(root)
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .success();
+    git(root, &["commit", "-m", "reconcile topic adr"]);
+    criv(root)
+        .env("CRIV_BASE_REF", "target")
+        .args(["enforce", "--stage", "ci"])
+        .assert()
+        .success();
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("already applied"));
+    criv(root)
+        .args(["adr", "reconcile", "--base", "topic", "--check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allocation is current"));
+    criv(root)
+        .args(["adr", "reconcile", "--base", "missing-target", "--check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot resolve base ref"));
+    fs::write(root.join("unrelated.txt"), "unrelated\n").unwrap();
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unrelated changes"));
+}
+
+fn adr(id: &str, title: &str, slug: &str) -> String {
+    format!(
+        "---\nid: ADR-{id}\nkind: decision\ntitle: {title}\nstatus: accepted\ndate: 2026-08-02\n---\n\n## {title}\n\n{slug}\n"
+    )
+}
+
 fn git(root: &Path, args: &[&str]) {
     let output = std::process::Command::new("git")
         .current_dir(root)
@@ -1997,4 +2119,14 @@ fn git(root: &Path, args: &[&str]) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn git_stdout(root: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .current_dir(root)
+        .args(args)
+        .output()
+        .expect("git command should run");
+    assert!(output.status.success());
+    String::from_utf8(output.stdout).unwrap()
 }

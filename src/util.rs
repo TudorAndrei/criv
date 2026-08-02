@@ -237,6 +237,22 @@ pub(crate) fn write_atomic_if_changed_in(
     Ok(true)
 }
 
+/// Remove a vault-controlled file without following symlinks. Callers use this
+/// after publishing replacement files so a failed reconciliation remains
+/// recoverable from its newly written destinations.
+pub(crate) fn remove_file_in(root: &Path, allowed_dir: &Path, destination: &Path) -> Result<()> {
+    let path = prepare_confined_write(root, allowed_dir, destination)?;
+    let metadata = fs::symlink_metadata(&path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(CrivError::new(format!(
+            "refusing to remove non-file vault path {}",
+            destination.display()
+        )));
+    }
+    fs::remove_file(path)?;
+    Ok(())
+}
+
 /// Create a new vault-controlled file without following symlinks.
 pub(crate) fn create_new_in(
     root: &Path,

@@ -2,11 +2,12 @@ use std::collections::BTreeSet;
 use std::env;
 use std::io::Read;
 use std::path::Path;
-use std::process::{Command, Output};
+use std::process::Command;
 
 use clap::{Args as ClapArgs, ValueEnum};
 
 use crate::check;
+use crate::git::{self, ChangeStatus, ChangedEntry, ChangedSet};
 use crate::vault::Vault;
 use crate::{CrivError, Result};
 
@@ -37,6 +38,11 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
         ));
     }
     let vault = Vault::load(root)?;
+    if options.stage == Stage::Ci
+        && let Some(base_ref) = env_string("CRIV_BASE_REF")
+    {
+        crate::adr::check_base(root, &base_ref)?;
+    }
     if !vault
         .config
         .enforce_stages
@@ -69,7 +75,10 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
         changed_entries
             .as_ref()
             .map(|changes| changes.entries.as_slice()),
-        |entry| is_allowed_adr_link_migration(root, changed_entries.as_ref(), entry),
+        |entry| {
+            is_allowed_adr_change(root, changed_entries.as_ref(), entry)
+                || (options.stage == Stage::Ci && is_branch_local_ci_change(root, entry))
+        },
     );
     match options.stage {
         Stage::Commit => {
@@ -266,37 +275,10 @@ fn import_policy_violations(vault: &Vault, changed_files: Option<&Vec<String>>) 
     violations
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
-struct ChangedSet {
-    entries: Vec<ChangedEntry>,
-    old_ref: Option<String>,
-    new_ref: Option<String>,
-    basis: String,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-struct ChangedEntry {
-    status: ChangeStatus,
-    path: String,
-    previous_path: Option<String>,
-    old_ref: Option<String>,
-    new_ref: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum ChangeStatus {
-    Added,
-    Modified,
-    Deleted,
-    Renamed,
-    Copied,
-    Other,
-}
-
 fn changed_entries(root: &Path, options: &EnforceOptions) -> Result<Option<ChangedSet>> {
     match options.stage {
-        Stage::Commit if !is_git_repository(root)? => Ok(None),
-        Stage::Commit => git_changed_set(
+        Stage::Commit if !git::is_repository(root)? => Ok(None),
+        Stage::Commit => git::changed_set(
             root,
             &["diff", "--name-status", "-z", "--cached"],
             Some("HEAD"),
@@ -314,15 +296,15 @@ fn changed_entries(root: &Path, options: &EnforceOptions) -> Result<Option<Chang
         .map(Some),
         // Manual invocations retain the documented best-effort upstream/last
         // commit fallback. Generated hooks always use the complete stdin mode.
-        Stage::Push if !is_git_repository(root)? => Ok(None),
-        Stage::Push => git_changed_set(
+        Stage::Push if !git::is_repository(root)? => Ok(None),
+        Stage::Push => git::changed_set(
             root,
             &["diff", "--name-status", "-z", "@{upstream}...HEAD"],
             Some("@{upstream}"),
             Some("HEAD"),
         )
         .or_else(|_| {
-            git_changed_set(
+            git::changed_set(
                 root,
                 &["diff", "--name-status", "-z", "HEAD~1..HEAD"],
                 Some("HEAD~1"),
@@ -344,7 +326,7 @@ fn ci_changed_entries_with_env(
     ci_environment: bool,
 ) -> Result<Option<ChangedSet>> {
     if let Some(base_ref) = env_value("CRIV_BASE_REF") {
-        return git_changed_set(
+        return git::changed_set(
             root,
             &["diff", "--name-status", "-z", &base_ref, "HEAD"],
             Some(&base_ref),
@@ -355,7 +337,7 @@ fn ci_changed_entries_with_env(
 
     if let Some(base_ref) = env_value("GITHUB_BASE_REF") {
         let origin_ref = format!("origin/{base_ref}");
-        if let Ok(changes) = git_changed_set(
+        if let Ok(changes) = git::changed_set(
             root,
             &["diff", "--name-status", "-z", &origin_ref, "HEAD"],
             Some(&origin_ref),
@@ -363,7 +345,7 @@ fn ci_changed_entries_with_env(
         ) {
             return Ok(Some(changes));
         }
-        if let Ok(changes) = git_changed_set(
+        if let Ok(changes) = git::changed_set(
             root,
             &["diff", "--name-status", "-z", &base_ref, "HEAD"],
             Some(&base_ref),
@@ -379,10 +361,10 @@ fn ci_changed_entries_with_env(
         ));
     }
 
-    if !is_git_repository(root)? {
+    if !git::is_repository(root)? {
         return Ok(None);
     }
-    git_changed_set(
+    git::changed_set(
         root,
         &["diff", "--name-status", "-z", "HEAD"],
         Some("HEAD"),
@@ -398,118 +380,6 @@ fn env_string(name: &str) -> Option<String> {
 fn is_ci_environment() -> bool {
     env::var("CI").is_ok_and(|value| value == "true")
         || env::var("GITHUB_ACTIONS").is_ok_and(|value| value == "true")
-}
-
-fn git_output(root: &Path, args: &[&str]) -> Result<Output> {
-    let output = git_command(root)
-        .args(args)
-        .output()
-        .map_err(|err| CrivError::new(format!("failed to run `git {}`: {err}", args.join(" "))))?;
-    if output.status.success() {
-        return Ok(output);
-    }
-    Err(CrivError::new(format!(
-        "`git {}` failed with {}: {}",
-        args.join(" "),
-        output.status,
-        String::from_utf8_lossy(&output.stderr).trim()
-    )))
-}
-
-fn is_git_repository(root: &Path) -> Result<bool> {
-    let output = git_command(root)
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .output()
-        .map_err(|err| {
-            CrivError::new(format!(
-                "failed to run `git rev-parse --is-inside-work-tree`: {err}"
-            ))
-        })?;
-    Ok(output.status.success() && output.stdout == b"true\n")
-}
-
-/// Builds a Git command rooted in the requested vault, independent of any
-/// repository context inherited from a Git hook.
-fn git_command(root: &Path) -> Command {
-    let mut command = Command::new("git");
-    command
-        .current_dir(root)
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_PREFIX");
-    command
-}
-
-fn git_changed_set(
-    root: &Path,
-    args: &[&str],
-    old_ref: Option<&str>,
-    new_ref: Option<&str>,
-) -> Result<ChangedSet> {
-    let output = git_output(root, args)?;
-    let mut entries = parse_changed_entries(&output.stdout)?;
-    for entry in &mut entries {
-        entry.old_ref = old_ref.map(str::to_string);
-        entry.new_ref = new_ref.map(str::to_string);
-    }
-    Ok(ChangedSet {
-        entries,
-        old_ref: old_ref.map(str::to_string),
-        new_ref: new_ref.map(str::to_string),
-        basis: match (old_ref, new_ref) {
-            (Some(old), Some(new)) => format!("Git comparison {old}..{new}"),
-            (Some(old), None) => format!("Git comparison {old}..worktree"),
-            (None, Some(new)) => format!("Git comparison ..{new}"),
-            (None, None) => "Git comparison".into(),
-        },
-    })
-}
-
-fn parse_changed_entries(stdout: &[u8]) -> Result<Vec<ChangedEntry>> {
-    let mut entries = Vec::new();
-    let mut fields = stdout
-        .split(|byte| *byte == b'\0')
-        .filter(|field| !field.is_empty());
-    while let Some(status_field) = fields.next() {
-        let status = status_field.first().copied().ok_or_else(|| {
-            CrivError::new("Git name-status output contained an empty status field")
-        })? as char;
-        let change_status = match status {
-            'A' => ChangeStatus::Added,
-            'M' | 'T' => ChangeStatus::Modified,
-            'D' => ChangeStatus::Deleted,
-            'R' => ChangeStatus::Renamed,
-            'C' => ChangeStatus::Copied,
-            _ => ChangeStatus::Other,
-        };
-        let (path, previous_path) = match change_status {
-            ChangeStatus::Renamed | ChangeStatus::Copied => {
-                let previous_path = next_git_path(&mut fields)?;
-                let path = next_git_path(&mut fields)?;
-                (path, Some(previous_path))
-            }
-            _ => (next_git_path(&mut fields)?, None),
-        };
-        entries.push(ChangedEntry {
-            status: change_status,
-            path,
-            previous_path,
-            old_ref: None,
-            new_ref: None,
-        });
-    }
-    Ok(entries)
-}
-
-fn next_git_path<'a>(fields: &mut impl Iterator<Item = &'a [u8]>) -> Result<String> {
-    let value = fields
-        .next()
-        .ok_or_else(|| CrivError::new("Git name-status output ended before a path field"))?;
-    String::from_utf8(value.to_vec()).map_err(|_| {
-        CrivError::new("Git changed path is not valid UTF-8; criv cannot represent it")
-    })
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -567,7 +437,7 @@ fn pre_push_changed_entries(
             continue;
         }
         for commit in outgoing_commits(root, remote_name, &update)? {
-            let output = git_output(
+            let output = git::output(
                 root,
                 &[
                     "diff-tree",
@@ -579,8 +449,8 @@ fn pre_push_changed_entries(
                     &commit,
                 ],
             )?;
-            let old_ref = git_first_parent(root, &commit)?;
-            for mut entry in parse_changed_entries(&output.stdout)? {
+            let old_ref = git::first_parent(root, &commit)?;
+            for mut entry in git::parse_changed_entries(&output.stdout)? {
                 entry.old_ref = old_ref.clone();
                 entry.new_ref = Some(commit.clone());
                 entries.push(entry);
@@ -612,26 +482,10 @@ fn outgoing_commits(root: &Path, remote_name: &str, update: &PrePushUpdate) -> R
             &remote_arg,
         ],
     };
-    let output = git_output(root, &args)?;
+    let output = git::output(root, &args)?;
     String::from_utf8(output.stdout)
         .map_err(|_| CrivError::new("Git rev-list output is not valid UTF-8"))
         .map(|stdout| stdout.lines().map(str::to_string).collect())
-}
-
-fn git_first_parent(root: &Path, commit: &str) -> Result<Option<String>> {
-    let output = Command::new("git")
-        .current_dir(root)
-        .args(["rev-parse", "--verify", &format!("{commit}^")])
-        .output()
-        .map_err(|err| {
-            CrivError::new(format!("failed to run git rev-parse for {commit}: {err}"))
-        })?;
-    if !output.status.success() {
-        return Ok(None);
-    }
-    String::from_utf8(output.stdout)
-        .map_err(|_| CrivError::new("Git parent object ID is not valid UTF-8"))
-        .map(|stdout| Some(stdout.trim().to_string()))
 }
 
 fn is_zero_oid(oid: &str) -> bool {
@@ -666,7 +520,7 @@ fn adr_immutability_violations(
         if !is_adr_file(docs_dir, adr_dir, path) {
             continue;
         }
-        if entry.status == ChangeStatus::Modified && is_allowed_change(entry) {
+        if is_allowed_change(entry) {
             continue;
         }
 
@@ -682,11 +536,12 @@ fn adr_immutability_violations(
     violations
 }
 
-fn is_allowed_adr_link_migration(
-    root: &Path,
-    _changes: Option<&ChangedSet>,
-    entry: &ChangedEntry,
-) -> bool {
+fn is_allowed_adr_change(root: &Path, _changes: Option<&ChangedSet>, entry: &ChangedEntry) -> bool {
+    if entry.status == ChangeStatus::Renamed
+        && let Some(old_path) = entry.previous_path.as_deref()
+    {
+        return crate::adr::receipt_allows_rename(root, old_path, &entry.path);
+    }
     if entry.status != ChangeStatus::Modified {
         return false;
     }
@@ -697,6 +552,23 @@ fn is_allowed_adr_link_migration(
         return false;
     };
     is_mechanical_wikilink_portability_migration(&old, &new)
+}
+
+/// A CI comparison can contain a deletion for a target path that did not exist
+/// at the branch/target merge base: that is the same-path allocation race, not
+/// an edit of a published ADR. The merge-base proof is deliberately narrow;
+/// anything present at that base stays immutable.
+fn is_branch_local_ci_change(root: &Path, entry: &ChangedEntry) -> bool {
+    let Some(target) = entry.old_ref.as_deref() else {
+        return false;
+    };
+    let path = entry.previous_path.as_deref().unwrap_or(&entry.path);
+    let Ok(merge_base) = git::merge_base(root, target, "HEAD") else {
+        return false;
+    };
+    git::tree_paths(root, &merge_base, path)
+        .map(|paths| !paths.iter().any(|candidate| candidate == path))
+        .unwrap_or(false)
 }
 
 fn read_changed_content(root: &Path, git_ref: Option<&str>, path: &str) -> Option<String> {
@@ -821,7 +693,7 @@ mod tests {
 
     #[test]
     fn parses_git_name_status_entries() {
-        let entries = parse_changed_entries(
+        let entries = git::parse_changed_entries(
             b"A\0docs/adr/0012-new.md\0M\0src/enforce.rs\0R100\0docs/adr/0001-old.md\0docs/adr/0001-renamed.md\0",
         )
         .unwrap();
@@ -838,7 +710,7 @@ mod tests {
 
     #[test]
     fn rejects_non_utf8_git_paths_in_name_status_output() {
-        let error = parse_changed_entries(b"M\0docs/adr/\xff.md\0").unwrap_err();
+        let error = git::parse_changed_entries(b"M\0docs/adr/\xff.md\0").unwrap_err();
         assert!(error.to_string().contains("not valid UTF-8"));
     }
 
@@ -881,7 +753,7 @@ mod tests {
         .unwrap();
         let violations =
             adr_immutability_violations("docs", "adr", Some(&changes.entries), |entry| {
-                is_allowed_adr_link_migration(root.path(), Some(&changes), entry)
+                is_allowed_adr_change(root.path(), Some(&changes), entry)
             });
 
         assert_eq!(violations.len(), 1);

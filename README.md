@@ -271,6 +271,36 @@ criv enforce --stage push
 criv enforce --stage ci
 ```
 
+## Reconciling branch-local ADR IDs
+
+An ADR number is provisional until it exists on the integration target. When
+two branches add the same next number, check the target allocation before
+merging:
+
+```sh
+criv adr reconcile --base origin/main --check
+```
+
+The command prints the exact resolved target SHA and any deterministic mapping.
+If it reports a collision, run the same command without `--check`; it renames
+the branch-local ADRs, rewrites branch-owned references, validates the vault,
+and writes an ignored `.criv/adr-reconcile.json` receipt. Review and commit the
+generated change:
+
+```sh
+criv adr reconcile --base origin/main
+cargo run -- check
+git add docs src # the receipt is ignored; do not add it
+git add -u
+git commit -m "docs(adr): reconcile branch-local ADR identities"
+```
+
+Before merging, compare the target SHA printed by the command with the current
+target. If it moved, rerun reconciliation against the new SHA. The merge queue
+or coordinator serializes this loop; criv does not reserve IDs, push, or merge.
+`criv query next-adr-id` remains checkout-local and is not an allocation
+authority.
+
 Generate a Usage spec for completions, Markdown, or manpages:
 
 ```sh
