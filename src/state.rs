@@ -372,13 +372,13 @@ impl State {
         let mut patterns = BTreeMap::new();
         let mut pending_policy_scans = Vec::new();
         for pattern_id in vault.patterns() {
-            if let Some((policy, scopes)) = inline_adr_policy(vault, pattern_id) {
+            if let Some((note, policy)) = vault.resolve_policy_pattern(pattern_id) {
                 pending_policy_scans.push(PendingPolicyScan {
                     pattern_id: pattern_id.clone(),
                     policy,
                     paths: incremental_policy_paths(
                         vault,
-                        scopes,
+                        vault.effective_governs(note),
                         previous,
                         changed_files,
                         pattern_id,
@@ -525,19 +525,6 @@ struct PendingPolicyScan<'a> {
     // behavior while an out-of-scope incremental change produces no matches.
     paths: Option<BTreeSet<String>>,
     reused: Vec<PatternMatch>,
-}
-
-fn inline_adr_policy<'a>(
-    vault: &'a Vault,
-    pattern_id: &str,
-) -> Option<(&'a crate::vault::PolicyPattern, Vec<String>)> {
-    let (adr_id, local_id) = pattern_id.split_once('/')?;
-    let note = vault.resolve_note(adr_id)?;
-    let policy = note
-        .policy_patterns
-        .iter()
-        .find(|policy| policy.id.as_deref() == Some(local_id))?;
-    Some((policy, vault.effective_governs(note)))
 }
 
 fn incremental_policy_paths(
@@ -1014,19 +1001,36 @@ roots = ["src"]
     fn serialized_state_matches_the_v0_contract_fixture() {
         let root = unique_temp_dir("criv-state-contract-fixture");
         std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("docs/adr")).unwrap();
         std::fs::write(
             root.join("criv.toml"),
             r#"
 [source]
 roots = ["src"]
-
-[patterns."code/entrypoint"]
-language = "rust"
-pattern = "fn $NAME() { $$$BODY }"
 "#,
         )
         .unwrap();
         std::fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
+        std::fs::write(
+            root.join("docs/adr/0001-entrypoint.md"),
+            r#"---
+id: ADR-0001
+kind: decision
+title: Entrypoint
+status: accepted
+governs:
+  - src/lib.rs
+policy:
+  patterns:
+    - id: entrypoint
+      language: rust
+      pattern: "fn $NAME() { $$$BODY }"
+---
+
+# Entrypoint
+"#,
+        )
+        .unwrap();
 
         let vault = Vault::load(&root).unwrap();
         let actual: serde_json::Value =
@@ -1037,7 +1041,7 @@ pattern = "fn $NAME() { $$$BODY }"
         assert_eq!(actual, expected);
         assert_eq!(
             State::build(&root, &vault).unwrap().hash().unwrap(),
-            "10adad338f2262f207027c87d69d0d5213308b3d5c77dd52f34616da76012221"
+            "45166264f39bc18e12b2180ca34c1f56b3d281fa7c67df38f043ed9a11d1bf60"
         );
 
         let _ = std::fs::remove_dir_all(root);
@@ -1347,19 +1351,13 @@ Consequences.
     }
 
     #[test]
-    fn state_batches_overlapping_adr_policies_and_ignores_configured_patterns() {
+    fn state_batches_overlapping_adr_policies() {
         let root = policy_vault("criv-state-batched-policies");
         std::fs::write(
             root.join("docs/adr/0002-functions-require-review.md"),
             FUNCTION_POLICY_ADR,
         )
         .unwrap();
-        std::fs::write(
-            root.join("criv.toml"),
-            "[vault]\ndocs = \"docs\"\nadr = \"adr\"\n\n[source]\nroots = [\"src\"]\n\n[patterns.configured-println]\nlanguage = \"rust\"\npattern = \"println!($$$ARGS)\"\n",
-        )
-        .unwrap();
-
         let vault = Vault::load(&root).unwrap();
         structural::reset_batch_parse_count();
         let state = State::build(&root, &vault).unwrap();
@@ -1371,13 +1369,6 @@ Consequences.
         );
         assert_eq!(matched_files(&state).len(), 2);
         assert_eq!(state.patterns.get(FUNCTION_PATTERN_ID).unwrap().len(), 2);
-        assert!(!state.patterns.contains_key("configured-println"));
-        assert!(
-            !state
-                .registered_patterns
-                .iter()
-                .any(|pattern| pattern == "configured-println")
-        );
 
         let _ = std::fs::remove_dir_all(root);
     }

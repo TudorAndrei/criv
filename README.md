@@ -180,7 +180,21 @@ policy:
 ```
 
 `criv check`, `criv search --rule ADR-NNNN`, and `criv enforce` parse those
-inline ast-grep rules from the ADR each time they run.
+inline ast-grep rules from the ADR each time they run. They are also the only
+persistent named patterns: a policy named `no-println` in `ADR-0005` is
+addressed as `ADR-0005/no-println` for links, state, and a focused search.
+
+Use `criv search --pattern-id ADR-NNNN/local-id` to inspect one persistent
+policy. With no `--paths`, the search uses the owning ADR's effective
+`governs` scope; pass `--paths` to deliberately override it. For unnamed
+exploratory searches, keep the pattern on the command line and specify its
+language:
+
+```sh
+criv search --pattern-id ADR-0005/no-println
+criv search --rule ADR-0005
+criv search --lang rust 'println!($$$ARGS)'
+```
 
 Refresh generated state when docs or source files change:
 
@@ -215,6 +229,7 @@ Search code and notes:
 criv search --files main
 criv search --grep "watch --once"
 criv search --notes "Obsidian"
+criv search --pattern-id ADR-0005/no-println
 criv search --rule ADR-0005
 ```
 

@@ -114,7 +114,8 @@ pub(crate) struct Row {
 
 pub(crate) fn run(root: &Path, options: SearchOptions) -> Result<()> {
     let vault = Vault::load(root)?;
-    let mut paths = options.paths.clone();
+    let explicit_paths = options.paths.clone();
+    let mut paths = explicit_paths.clone();
     if paths.is_empty()
         && let Some(language) = &options.lang
     {
@@ -132,7 +133,9 @@ pub(crate) fn run(root: &Path, options: SearchOptions) -> Result<()> {
             options.lang.as_deref(),
         )?),
         Mode::Rule(rule) => search_rule(root, &vault, &rule, &paths)?,
-        Mode::PatternId(pattern_id) => search_pattern_id(root, &vault, &pattern_id, &paths)?,
+        Mode::PatternId(pattern_id) => {
+            search_pattern_id(root, &vault, &pattern_id, &explicit_paths)?
+        }
     };
 
     print_rows(&rows, options.format)
@@ -144,12 +147,19 @@ fn search_pattern_id(
     pattern_id: &str,
     paths: &[String],
 ) -> Result<Vec<Row>> {
-    if !vault.config.pattern_defs.contains_key(pattern_id) {
-        return Err(CrivError::new(format!(
-            "registered pattern `{pattern_id}` does not resolve"
-        )));
-    }
-    structural::find_pattern_id(root, vault, pattern_id, PathScope::from_paths(paths))
+    let (note, policy) = vault.resolve_policy_pattern(pattern_id).ok_or_else(|| {
+        CrivError::new(format!(
+            "registered ADR policy pattern `{pattern_id}` does not resolve"
+        ))
+    })?;
+    let default_scopes;
+    let scopes = if paths.is_empty() {
+        default_scopes = policy_scope_files(vault, &vault.effective_governs(note));
+        &default_scopes
+    } else {
+        paths
+    };
+    structural::find_policy_pattern_entry(root, vault, policy, PathScope::Globs(scopes))
         .map(structural_rows)
 }
 

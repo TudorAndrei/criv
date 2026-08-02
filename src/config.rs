@@ -1,9 +1,9 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::util::{is_adr_id, read_to_string};
+use crate::util::read_to_string;
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone)]
@@ -17,15 +17,6 @@ pub(crate) struct Config {
     pub(crate) architecture_code: Option<ArchitectureCodeConfig>,
     pub(crate) enforce_stages: Vec<String>,
     pub(crate) import_policies: Vec<ImportPolicy>,
-    pub(crate) patterns: BTreeSet<String>,
-    pub(crate) pattern_defs: BTreeMap<String, PatternConfig>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct PatternConfig {
-    pub(crate) language: Option<String>,
-    pub(crate) pattern: Option<String>,
-    pub(crate) rule: Option<String>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -54,8 +45,6 @@ impl Default for Config {
             architecture_code: None,
             enforce_stages: vec!["commit".into(), "push".into(), "ci".into()],
             import_policies: Vec::new(),
-            patterns: BTreeSet::new(),
-            pattern_defs: BTreeMap::new(),
         }
     }
 }
@@ -93,11 +82,11 @@ impl RawConfig {
     fn into_config(self) -> Result<Config> {
         let defaults = Config::default();
         let docs_dir = vault_path("vault.docs", &self.vault.docs.unwrap_or(defaults.docs_dir))?;
-        let patterns: BTreeMap<_, _> = self
-            .patterns
-            .into_iter()
-            .filter(|(id, _)| !is_adr_prefixed_pattern_id(id))
-            .collect();
+        if !self.patterns.is_empty() {
+            return Err(CrivError::new(
+                "criv.toml [patterns.*] is no longer supported; move persistent patterns into an ADR policy.patterns entry and use its ADR-NNNN/local-id, or use positional structural search with --lang for ad hoc patterns",
+            ));
+        }
         Ok(Config {
             docs_dir: docs_dir.clone(),
             adr_dir: vault_path("vault.adr", &self.vault.adr.unwrap_or(defaults.adr_dir))?,
@@ -123,18 +112,8 @@ impl RawConfig {
                 .into_iter()
                 .map(RawImportPolicy::into_policy)
                 .collect::<Result<Vec<_>>>()?,
-            patterns: patterns.keys().cloned().collect(),
-            pattern_defs: patterns
-                .into_iter()
-                .map(|(id, value)| (id, PatternConfig::from_toml(value)))
-                .collect(),
         })
     }
-}
-
-fn is_adr_prefixed_pattern_id(id: &str) -> bool {
-    id.split_once('/')
-        .is_some_and(|(adr_id, local_id)| is_adr_id(adr_id) && !local_id.trim().is_empty())
 }
 
 fn vault_path(field: &str, value: &str) -> Result<String> {
@@ -172,25 +151,6 @@ fn vault_path(field: &str, value: &str) -> Result<String> {
         return Ok(".".into());
     }
     Ok(parts.join("/"))
-}
-
-impl PatternConfig {
-    fn from_toml(value: toml::Value) -> Self {
-        Self {
-            language: value
-                .get("language")
-                .and_then(toml::Value::as_str)
-                .map(str::to_string),
-            pattern: value
-                .get("pattern")
-                .and_then(toml::Value::as_str)
-                .map(str::to_string),
-            rule: value
-                .get("rule")
-                .and_then(toml::Value::as_str)
-                .map(str::to_string),
-        }
-    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -380,6 +340,26 @@ plugin = false
         assert_eq!(config.source_roots, vec!["src"]);
         assert!(!config.source_index);
         assert!(config.embeddings);
+    }
+
+    #[test]
+    fn rejects_legacy_pattern_configuration_with_migration_guidance() {
+        let error = toml::from_str::<RawConfig>(
+            r#"
+[patterns.no-println]
+language = "rust"
+pattern = "println!($$$ARGS)"
+"#,
+        )
+        .unwrap()
+        .into_config()
+        .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("[patterns.*]"));
+        assert!(message.contains("ADR policy.patterns"));
+        assert!(message.contains("ADR-NNNN/local-id"));
+        assert!(message.contains("--lang"));
     }
 
     #[test]

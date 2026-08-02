@@ -9,7 +9,6 @@ use ast_grep_core::meta_var::MetaVariable;
 use ast_grep_core::{Doc, Matcher, NodeMatch, Pattern};
 use ast_grep_language::{Language, LanguageExt, SupportLang};
 
-use crate::config::PatternConfig;
 use crate::source_paths::read_source_to_string;
 use crate::util::GlobMatcher;
 use crate::vault::{PolicyPattern, Vault};
@@ -103,14 +102,6 @@ pub(crate) fn reset_batch_parse_count() {
 #[cfg(test)]
 pub(crate) fn batch_parse_count() -> usize {
     BATCH_PARSE_COUNT.with(Cell::get)
-}
-
-pub(crate) fn pattern_source(config: &PatternConfig) -> Option<PatternSource<'_>> {
-    config
-        .pattern
-        .as_deref()
-        .map(PatternSource::Pattern)
-        .or_else(|| config.rule.as_deref().map(PatternSource::Rule))
 }
 
 pub(crate) fn validate_source(source: PatternSource<'_>, language: &str) -> Result<()> {
@@ -263,25 +254,6 @@ fn sort_matches(rows: &mut Vec<StructuralMatch>) {
     rows.dedup_by(|left, right| {
         left.path == right.path && left.range == right.range && left.text == right.text
     });
-}
-
-pub(crate) fn find_pattern_id(
-    root: &Path,
-    vault: &Vault,
-    pattern_id: &str,
-    scope: PathScope<'_>,
-) -> Result<Vec<StructuralMatch>> {
-    let Some(pattern) = vault.config.pattern_defs.get(pattern_id) else {
-        return Err(CrivError::new(format!(
-            "registered pattern `{pattern_id}` does not resolve"
-        )));
-    };
-    let Some(source) = pattern_source(pattern) else {
-        return Err(CrivError::new(format!(
-            "registered pattern `{pattern_id}` has no ast-grep rule or pattern body"
-        )));
-    };
-    find(root, vault, source, scope, pattern.language.as_deref())
 }
 
 pub(crate) fn find_policy_pattern_entry(

@@ -37,10 +37,18 @@ assert.deepEqual(
   core.interpretState(stateContractRaw.replace("criv.state.v0", "criv.state.v1"), "criv.state.v0"),
   { error: "Unsupported criv state schema criv.state.v1", kind: "schema" },
 );
-assert.equal(stateContract.graph.nodes.length, 2);
-assert.equal(stateContract.graph.edges.length, 1);
-assert.deepEqual(stateContract["registered-patterns"], []);
-assert.deepEqual(stateContract.patterns, {});
+assert.equal(stateContract.graph.nodes.length, 4);
+assert.equal(stateContract.graph.edges.length, 3);
+assert.deepEqual(stateContract["registered-patterns"], ["ADR-0001/entrypoint"]);
+assert.deepEqual(stateContract.patterns, {
+  "ADR-0001/entrypoint": [
+    {
+      file: "src/lib.rs",
+      range: "L1:C1-L1:C12",
+      captures: { BODY: "", NAME: "run" },
+    },
+  ],
+});
 const c4Expected = JSON.parse(readFileSync(resolve(c4FixtureDir, "expected.json"), "utf8"));
 const c4FixtureNames = readdirSync(c4FixtureDir).filter((name) => name.endsWith(".c4"));
 assert.ok(c4FixtureNames.length > 0, "expected shared C4 fixtures");
