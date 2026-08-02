@@ -47,8 +47,15 @@ struct ReconcilePlan {
     head_sha: String,
     target_sha: String,
     merge_base: String,
+    /// Paths and IDs currently materialized in the worktree. These are the
+    /// inputs to rewriting, which can differ from the committed branch
+    /// identity after an earlier receipt has been applied.
     mappings: Vec<Mapping>,
+    /// The equivalent transaction expressed against `head_sha`. Receipts
+    /// always describe the eventual index/commit relative to that commit.
+    receipt_mappings: Vec<Mapping>,
     branch_adrs: Vec<AdrFile>,
+    receipt_sources: Vec<AdrFile>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -183,6 +190,7 @@ fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
         ));
     }
     let target_sha = git::resolve_commit(root, &options.base)?;
+    let materialized = current_materialized_receipt(root)?;
     let plan = build_plan(root, &options.base, &target_sha)?;
     println!("ADR reconciliation target: {}", plan.target_sha);
     if plan.mappings.is_empty() {
@@ -197,7 +205,7 @@ fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
         )));
     }
     let dirty = git::dirty_paths(root)?;
-    if !dirty.is_empty() {
+    if !dirty.is_empty() && materialized.is_none() {
         return Err(CrivError::new(format!(
             "refusing to reconcile a dirty worktree; commit or stash: {}",
             dirty.join(", ")
@@ -208,6 +216,15 @@ fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
             "target ref `{}` moved since it resolved to {}; retry reconciliation",
             options.base, plan.target_sha
         )));
+    }
+    if let Some(receipt) = materialized {
+        let paths = receipt
+            .files
+            .iter()
+            .map(|file| file.path.clone())
+            .chain(receipt.deletions)
+            .collect::<Vec<_>>();
+        git::reset_index_paths(root, &paths)?;
     }
     apply_plan(root, &plan)?;
     if !git::ref_is_stable(root, &options.base, &plan.target_sha)? {
@@ -259,6 +276,24 @@ fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<Reconcile
         .collect::<BTreeMap<_, _>>();
     let target_paths = target_paths.into_iter().collect::<BTreeSet<_>>();
 
+    let materialized = current_materialized_receipt(root)?;
+    let prior_mappings = materialized
+        .as_ref()
+        .map(|receipt| &receipt.mappings)
+        .into_iter()
+        .flatten()
+        .map(|mapping| (mapping.old_path.clone(), mapping.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let current_paths = materialized
+        .as_ref()
+        .map(|receipt| {
+            receipt
+                .mappings
+                .iter()
+                .map(|mapping| (mapping.old_path.clone(), mapping.new_path.clone()))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
     let changes = git::changes_between_paths(root, &merge_base, "HEAD", &[&adr_prefix])?;
     let worktree_changes = git::worktree_changes_in(root, &[&adr_prefix])?;
     let worktree_moves = worktree_changes
@@ -280,13 +315,14 @@ fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<Reconcile
         .filter(|entry| is_adr_path(&adr_prefix, &entry.path))
         .map(|entry| entry.path.clone())
         .collect::<Vec<_>>();
+    let mut receipt_sources = Vec::new();
     let mut branch_adrs = changes
         .entries
         .iter()
         .filter(|entry| is_adr_path(&adr_prefix, &entry.path))
         .map(|entry| match entry.status {
             git::ChangeStatus::Added => {
-                let current_path = worktree_moves.get(&entry.path).cloned().or_else(|| {
+                let current_path = current_paths.get(&entry.path).cloned().or_else(|| worktree_moves.get(&entry.path).cloned()).or_else(|| {
                     let mut candidates = worktree_additions
                         .iter()
                         .filter(|candidate| same_adr_slug(&entry.path, candidate));
@@ -299,7 +335,10 @@ fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<Reconcile
                         "cannot read branch-created ADR `{current_path}` while proving ownership: {error}"
                     ))
                 })?;
-                parse_adr(current_path, contents)
+                let adr = parse_adr(current_path, contents)?;
+                let source_contents = git::blob(root, "HEAD", &entry.path)?;
+                receipt_sources.push(parse_adr(&entry.path, source_contents)?);
+                Ok(adr)
             }
             git::ChangeStatus::Renamed | git::ChangeStatus::Copied => Err(CrivError::new(format!(
                 "ADR `{}` was renamed or copied from `{}`; published ADR content is immutable",
@@ -354,6 +393,21 @@ fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<Reconcile
             || adr.id <= target_max
     });
     let mappings = allocation_mappings(&branch_adrs, target_max, conflicted)?;
+    let receipt_mappings = mappings
+        .iter()
+        .map(|mapping| {
+            let original = prior_mappings
+                .values()
+                .find(|prior| prior.new_path == mapping.old_path)
+                .unwrap_or(mapping);
+            Mapping {
+                old_id: original.old_id,
+                new_id: mapping.new_id,
+                old_path: original.old_path.clone(),
+                new_path: mapping.new_path.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
     let destination_paths = mappings
         .iter()
         .map(|mapping| mapping.new_path.clone())
@@ -380,7 +434,9 @@ fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<Reconcile
         target_sha: target_sha.into(),
         merge_base,
         mappings,
+        receipt_mappings,
         branch_adrs,
+        receipt_sources,
     })
 }
 
@@ -535,12 +591,20 @@ fn apply_plan(root: &Path, plan: &ReconcilePlan) -> Result<()> {
             after_hash: hash(contents),
         });
     }
-    let deletions = superseded_paths(&plan.mappings)
+    let deletions = superseded_paths(&plan.receipt_mappings)
         .into_iter()
         .map(str::to_string)
         .collect::<Vec<_>>();
-    for path in &deletions {
-        remove_file_in(root, Path::new("."), Path::new(path))?;
+    let physical_deletions = superseded_paths(&plan.mappings)
+        .into_iter()
+        .chain(deletions.iter().map(String::as_str))
+        .collect::<BTreeSet<_>>();
+    for path in physical_deletions {
+        // A retry expresses its final transaction against the original HEAD;
+        // an earlier materialized receipt may already have removed this path.
+        if root.join(path).exists() {
+            remove_file_in(root, Path::new("."), Path::new(path))?;
+        }
     }
     let errors = crate::check::validate_all(root)?
         .into_iter()
@@ -562,9 +626,9 @@ fn apply_plan(root: &Path, plan: &ReconcilePlan) -> Result<()> {
         head_sha: plan.head_sha.clone(),
         target_sha: plan.target_sha.clone(),
         merge_base: plan.merge_base.clone(),
-        mappings: plan.mappings.clone(),
+        mappings: plan.receipt_mappings.clone(),
         sources: plan
-            .branch_adrs
+            .receipt_sources
             .iter()
             .map(|adr| ReceiptSource {
                 path: adr.path.clone(),
@@ -583,6 +647,70 @@ fn apply_plan(root: &Path, plan: &ReconcilePlan) -> Result<()> {
         Path::new(".criv/adr-reconcile.json"),
         &contents,
     )
+}
+
+/// A generated reconcile operation is safe to re-plan before it is staged or
+/// committed only when every changed path is exactly the receipt's output.
+/// This intentionally does not inspect the target ref: an advanced target is
+/// the reason a retry may be needed.
+fn materialized_receipt(root: &Path) -> Result<Receipt> {
+    let receipt = read_receipt(root)?;
+    if receipt.schema != "criv.adr-reconcile/2"
+        || git::resolve_commit(root, "HEAD")? != receipt.head_sha
+        || receipt.sources.iter().any(|source| {
+            git::blob(root, &receipt.head_sha, &source.path)
+                .map(|contents| hash(&contents) != source.before_hash)
+                .unwrap_or(true)
+        })
+        || receipt.files.iter().any(|file| {
+            let before_matches = match &file.before_hash {
+                Some(before_hash) => git::blob(root, &receipt.head_sha, &file.path)
+                    .map(|contents| hash(&contents) == *before_hash)
+                    .unwrap_or(false),
+                None => git::blob(root, &receipt.head_sha, &file.path).is_err(),
+            };
+            !before_matches
+                || fs::read_to_string(root.join(&file.path))
+                    .map(|contents| hash(&contents) != file.after_hash)
+                    .unwrap_or(true)
+        })
+        || receipt
+            .deletions
+            .iter()
+            .any(|path| root.join(path).exists())
+    {
+        return Err(CrivError::new(
+            "ADR reconciliation receipt does not match the materialized worktree",
+        ));
+    }
+    let expected = receipt
+        .files
+        .iter()
+        .map(|file| file.path.clone())
+        .chain(receipt.deletions.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let actual = git::dirty_paths(root)?.into_iter().collect::<BTreeSet<_>>();
+    if actual != expected {
+        return Err(CrivError::new(
+            "ADR reconciliation receipt does not cover every dirty worktree path",
+        ));
+    }
+    Ok(receipt)
+}
+
+/// Old receipts deliberately become inert after their planning commit is no
+/// longer HEAD. A receipt that claims to describe the current HEAD, however,
+/// must be valid rather than silently bypassed.
+fn current_materialized_receipt(root: &Path) -> Result<Option<Receipt>> {
+    let receipt_path = root.join(".criv/adr-reconcile.json");
+    if !receipt_path.exists() {
+        return Ok(None);
+    }
+    let receipt = read_receipt(root)?;
+    if git::resolve_commit(root, "HEAD")? != receipt.head_sha {
+        return Ok(None);
+    }
+    materialized_receipt(root).map(Some)
 }
 
 /// A destination can also be another mapping's source. In that case its old
@@ -636,35 +764,43 @@ fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<Stri
                 continue;
             }
         };
-        let rewritten = match changed_paths.get(&path) {
-            Some(entry) if entry.status == git::ChangeStatus::Added => {
-                rewrite_text(&contents, &plan.mappings)?
-            }
-            Some(entry)
-                if matches!(
-                    entry.status,
-                    git::ChangeStatus::Renamed | git::ChangeStatus::Copied
-                ) =>
-            {
-                rewrite_owned_lines(
+        let rewritten = if plan.branch_adrs.iter().any(|adr| adr.path == path) {
+            // A receipt can have already moved this branch-owned ADR to an
+            // untracked path, so it has no `HEAD` diff entry to attribute.
+            rewrite_text(&contents, &plan.mappings)?
+        } else {
+            match changed_paths.get(&path) {
+                Some(entry) if entry.status == git::ChangeStatus::Added => {
+                    rewrite_text(&contents, &plan.mappings)?
+                }
+                Some(entry)
+                    if matches!(
+                        entry.status,
+                        git::ChangeStatus::Renamed | git::ChangeStatus::Copied
+                    ) =>
+                {
+                    rewrite_owned_lines(
+                        root,
+                        &contents,
+                        &plan.merge_base,
+                        entry.previous_path.as_deref().ok_or_else(|| {
+                            CrivError::new(format!(
+                                "Git did not report an inherited path for `{path}`"
+                            ))
+                        })?,
+                        &path,
+                        &plan.mappings,
+                    )?
+                }
+                _ => rewrite_owned_lines(
                     root,
                     &contents,
                     &plan.merge_base,
-                    entry.previous_path.as_deref().ok_or_else(|| {
-                        CrivError::new(format!("Git did not report an inherited path for `{path}`"))
-                    })?,
+                    &path,
                     &path,
                     &plan.mappings,
-                )?
+                )?,
             }
-            _ => rewrite_owned_lines(
-                root,
-                &contents,
-                &plan.merge_base,
-                &path,
-                &path,
-                &plan.mappings,
-            )?,
         };
         let output_path = plan
             .mappings

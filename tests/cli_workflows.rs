@@ -2104,7 +2104,7 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
         .args(["adr", "reconcile", "--base", "target", "--check"])
         .assert()
         .failure()
-        .stdout(predicate::str::contains("ADR-0003 -> ADR-0004"));
+        .stderr(predicate::str::contains("does not cover every dirty"));
     fs::remove_file(root.join("docs/adr/0002-late.md")).unwrap();
     git(root, &["add", "-A"]);
     assert_eq!(
@@ -2234,6 +2234,97 @@ fn adr_reconcile_renames_a_same_path_branch_local_adr() {
             .unwrap()
             .contains("title: Topic")
     );
+}
+
+#[test]
+fn adr_reconcile_recognizes_and_retries_a_materialized_worktree() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "target"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    init(root);
+    write_criv_config(root, vec!["src"], vec![], true);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn base() {}\n").unwrap();
+    fs::write(
+        root.join("docs/adr/0001-base.md"),
+        adr("0001", "Base", "base"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base"]);
+
+    git(root, &["checkout", "-b", "topic"]);
+    fs::write(
+        root.join("docs/adr/0002-topic.md"),
+        adr("0002", "Topic", "topic"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "topic adr"]);
+
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0002-target.md"),
+        adr("0002", "Target", "target"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "target adr"]);
+    git(root, &["checkout", "topic"]);
+
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target"])
+        .assert()
+        .success();
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allocation is current"));
+    git(root, &["add", "-A"]);
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .success();
+
+    git(root, &["stash", "push", "-u"]);
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0003-target.md"),
+        adr("0003", "Target next", "target-next"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "target next adr"]);
+    git(root, &["checkout", "topic"]);
+    git(root, &["stash", "pop"]);
+
+    fs::write(root.join("unrelated.txt"), "unrelated\n").unwrap();
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("does not cover every dirty"));
+    fs::remove_file(root.join("unrelated.txt")).unwrap();
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR-0003 -> ADR-0004"));
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target"])
+        .assert()
+        .success();
+    assert!(!root.join("docs/adr/0002-topic.md").exists());
+    assert!(!root.join("docs/adr/0003-topic.md").exists());
+    assert!(root.join("docs/adr/0004-topic.md").exists());
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allocation is current"));
 }
 
 #[test]

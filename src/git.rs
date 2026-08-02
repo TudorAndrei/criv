@@ -375,13 +375,29 @@ pub(crate) fn dirty_paths(root: &Path) -> Result<Vec<String>> {
             CrivError::new("Git status path is not valid UTF-8; criv cannot represent it")
         })?;
         paths.push(path);
-        if renamed_or_copied && fields.next().is_none() {
-            return Err(CrivError::new("Git status rename output was malformed"));
+        if renamed_or_copied {
+            let previous = fields
+                .next()
+                .ok_or_else(|| CrivError::new("Git status rename output was malformed"))?;
+            paths.push(String::from_utf8(previous.to_vec()).map_err(|_| {
+                CrivError::new("Git status path is not valid UTF-8; criv cannot represent it")
+            })?);
         }
     }
     paths.sort();
     paths.dedup();
     Ok(paths)
+}
+
+/// Restore only the named paths in the index to HEAD. Callers use this for a
+/// receipt they have already proved complete; it never touches worktree data.
+pub(crate) fn reset_index_paths(root: &Path, paths: &[String]) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let mut args = vec!["reset", "--quiet", "HEAD", "--"];
+    args.extend(paths.iter().map(String::as_str));
+    output(root, &args).map(|_| ())
 }
 
 pub(crate) fn ref_is_stable(root: &Path, git_ref: &str, expected_sha: &str) -> Result<bool> {
