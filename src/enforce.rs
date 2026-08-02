@@ -401,8 +401,7 @@ fn is_ci_environment() -> bool {
 }
 
 fn git_output(root: &Path, args: &[&str]) -> Result<Output> {
-    let output = Command::new("git")
-        .current_dir(root)
+    let output = git_command(root)
         .args(args)
         .output()
         .map_err(|err| CrivError::new(format!("failed to run `git {}`: {err}", args.join(" "))))?;
@@ -418,8 +417,7 @@ fn git_output(root: &Path, args: &[&str]) -> Result<Output> {
 }
 
 fn is_git_repository(root: &Path) -> Result<bool> {
-    let output = Command::new("git")
-        .current_dir(root)
+    let output = git_command(root)
         .args(["rev-parse", "--is-inside-work-tree"])
         .output()
         .map_err(|err| {
@@ -428,6 +426,20 @@ fn is_git_repository(root: &Path) -> Result<bool> {
             ))
         })?;
     Ok(output.status.success() && output.stdout == b"true\n")
+}
+
+/// Builds a Git command rooted in the requested vault, independent of any
+/// repository context inherited from a Git hook.
+fn git_command(root: &Path) -> Command {
+    let mut command = Command::new("git");
+    command
+        .current_dir(root)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_PREFIX");
+    command
 }
 
 fn git_changed_set(
