@@ -356,9 +356,10 @@ mod tests {
         let state =
             parse_state(include_str!("../../../fixtures/state/criv.state.v0.json")).unwrap();
         assert_eq!(state.schema, "criv.state.v0");
-        assert_eq!(state.graph.nodes.len(), 4);
-        assert_eq!(state.graph.edges.len(), 3);
+        assert_eq!(state.graph.nodes.len(), 6);
+        assert_eq!(state.graph.edges.len(), 5);
         assert_eq!(state.registered_patterns, ["ADR-0001/entrypoint"]);
+        assert_eq!(state.registered_patterns.len(), 1);
         assert_eq!(state.source_index.len(), 1);
         assert_eq!(state.source_index[0].frecency, 0);
     }
