@@ -70,9 +70,10 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
     let violations = policy_violations(root, &vault, changed_files.as_ref())?;
     let import_violations = import_policy_violations(&vault, changed_files.as_ref());
     let receipt_is_current = crate::adr::receipt_is_current(root);
-    let receipt_allows_transaction = changed_entries
-        .as_ref()
-        .is_some_and(|changes| crate::adr::receipt_allows_transaction(root, &changes.entries));
+    let receipt_allows_transaction = options.stage == Stage::Commit
+        && changed_entries
+            .as_ref()
+            .is_some_and(|changes| crate::adr::receipt_allows_transaction(root, &changes.entries));
     let mut adr_violations = adr_immutability_violations(
         &vault.config.docs_dir,
         &vault.config.adr_dir,
@@ -81,7 +82,7 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
             .map(|changes| changes.entries.as_slice()),
         |entry| {
             (receipt_allows_transaction
-                && is_allowed_adr_change(root, changed_entries.as_ref(), entry))
+                || is_allowed_adr_change(root, changed_entries.as_ref(), entry))
                 || (options.stage == Stage::Ci && is_branch_local_ci_change(root, entry))
         },
     );
@@ -307,21 +308,9 @@ fn changed_entries(root: &Path, options: &EnforceOptions) -> Result<Option<Chang
         // Manual invocations retain the documented best-effort upstream/last
         // commit fallback. Generated hooks always use the complete stdin mode.
         Stage::Push if !git::is_repository(root)? => Ok(None),
-        Stage::Push => git::changed_set(
-            root,
-            &["diff", "--name-status", "-z", "@{upstream}...HEAD"],
-            Some("@{upstream}"),
-            Some("HEAD"),
-        )
-        .or_else(|_| {
-            git::changed_set(
-                root,
-                &["diff", "--name-status", "-z", "HEAD~1..HEAD"],
-                Some("HEAD~1"),
-                Some("HEAD"),
-            )
-        })
-        .map(Some),
+        Stage::Push => committed_changed_entries(root, "@{upstream}..HEAD", "@{upstream}..HEAD")
+            .or_else(|_| committed_changed_entries(root, "HEAD~1..HEAD", "HEAD~1..HEAD"))
+            .map(Some),
         Stage::Ci => ci_changed_entries(root),
     }
 }
@@ -441,37 +430,57 @@ fn pre_push_changed_entries(
     remote_name: &str,
     updates: Vec<PrePushUpdate>,
 ) -> Result<ChangedSet> {
-    let mut entries = Vec::new();
+    let mut commits = Vec::new();
     for update in updates {
         if is_zero_oid(&update.local_oid) {
             continue;
         }
-        for commit in outgoing_commits(root, remote_name, &update)? {
-            let output = git::output(
-                root,
-                &[
-                    "diff-tree",
-                    "--root",
-                    "--no-commit-id",
-                    "--name-status",
-                    "-z",
-                    "-r",
-                    &commit,
-                ],
-            )?;
-            let old_ref = git::first_parent(root, &commit)?;
-            for mut entry in git::parse_changed_entries(&output.stdout)? {
-                entry.old_ref = old_ref.clone();
-                entry.new_ref = Some(commit.clone());
-                entries.push(entry);
-            }
+        commits.extend(outgoing_commits(root, remote_name, &update)?);
+    }
+    changes_for_commits(
+        root,
+        commits,
+        format!("pre-push ref updates for remote {remote_name}"),
+    )
+}
+
+fn committed_changed_entries(root: &Path, range: &str, basis: &str) -> Result<ChangedSet> {
+    let output = git::output(root, &["rev-list", "--reverse", range])?;
+    let commits = String::from_utf8(output.stdout)
+        .map_err(|_| CrivError::new("Git rev-list output is not valid UTF-8"))?
+        .lines()
+        .map(str::to_string)
+        .collect();
+    changes_for_commits(root, commits, basis.to_string())
+}
+
+fn changes_for_commits(root: &Path, commits: Vec<String>, basis: String) -> Result<ChangedSet> {
+    let mut entries = Vec::new();
+    for commit in commits {
+        let output = git::output(
+            root,
+            &[
+                "diff-tree",
+                "--root",
+                "--no-commit-id",
+                "--name-status",
+                "-z",
+                "-r",
+                &commit,
+            ],
+        )?;
+        let old_ref = git::first_parent(root, &commit)?;
+        for mut entry in git::parse_changed_entries(&output.stdout)? {
+            entry.old_ref = old_ref.clone();
+            entry.new_ref = Some(commit.clone());
+            entries.push(entry);
         }
     }
     Ok(ChangedSet {
         entries,
         old_ref: None,
         new_ref: None,
-        basis: format!("pre-push ref updates for remote {remote_name}"),
+        basis,
     })
 }
 
@@ -548,7 +557,11 @@ fn adr_immutability_violations(
 
 fn is_allowed_adr_change(root: &Path, _changes: Option<&ChangedSet>, entry: &ChangedEntry) -> bool {
     if matches!(entry.status, ChangeStatus::Renamed | ChangeStatus::Deleted)
-        && crate::adr::receipt_allows_change(root, entry)
+        && (crate::adr::receipt_allows_change(root, entry)
+            || entry
+                .new_ref
+                .as_deref()
+                .is_some_and(|commit| crate::adr::receipt_allows_commit(root, commit)))
     {
         return true;
     }

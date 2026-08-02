@@ -2154,6 +2154,28 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
         .success();
     git(root, &["commit", "-m", "reconcile topic adr"]);
     criv(root)
+        .args(["enforce", "--stage", "push"])
+        .assert()
+        .success();
+    let reconciliation_commit = git_stdout(root, &["rev-parse", "HEAD"]).trim().to_owned();
+    let reconciliation_parent = git_stdout(root, &["rev-parse", "HEAD^"]).trim().to_owned();
+    criv(root)
+        .args([
+            "enforce",
+            "--stage",
+            "push",
+            "--pre-push",
+            "--remote-name",
+            "origin",
+            "--remote-url",
+            "https://example.invalid/criv.git",
+        ])
+        .write_stdin(format!(
+            "refs/heads/topic {reconciliation_commit} refs/heads/topic {reconciliation_parent}\n"
+        ))
+        .assert()
+        .success();
+    criv(root)
         .env("CRIV_BASE_REF", "target")
         .args(["enforce", "--stage", "ci"])
         .assert()
@@ -2179,6 +2201,33 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
         .assert()
         .success()
         .stdout(predicate::str::contains("allocation is current"));
+    fs::remove_file(root.join("unrelated.txt")).unwrap();
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0004-target-late.md"),
+        adr("0004", "Target late", "target-late"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "advance target"]);
+    git(root, &["checkout", "topic"]);
+    criv(root)
+        .args([
+            "enforce",
+            "--stage",
+            "push",
+            "--pre-push",
+            "--remote-name",
+            "origin",
+            "--remote-url",
+            "https://example.invalid/criv.git",
+        ])
+        .write_stdin(format!(
+            "refs/heads/topic {reconciliation_commit} refs/heads/topic {reconciliation_parent}\n"
+        ))
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR files are immutable"));
 }
 
 #[test]

@@ -171,16 +171,70 @@ pub(crate) fn receipt_allows_transaction(root: &Path, entries: &[git::ChangedEnt
     let Ok(receipt) = read_receipt(root) else {
         return false;
     };
-    if !receipt_is_current(root) {
+    git::resolve_commit(root, "HEAD").ok().as_deref() == Some(receipt.head_sha.as_str())
+        && receipt_common_matches(root, &receipt)
+        && receipt_tree_matches(root, &receipt, ":")
+        && receipt_paths_match(&receipt, entries)
+}
+
+/// A reconciliation receipt may prove exactly one committed transaction after
+/// its planning HEAD. This is used for push enforcement, where the receipt is
+/// intentionally ignored and the checkout may have advanced past that commit.
+pub(crate) fn receipt_allows_commit(root: &Path, commit: &str) -> bool {
+    let Ok(receipt) = read_receipt(root) else {
+        return false;
+    };
+    let Ok(Some(parent)) = git::first_parent(root, commit) else {
+        return false;
+    };
+    if parent != receipt.head_sha || !receipt_common_matches(root, &receipt) {
         return false;
     }
-    receipt.deletions.iter().all(|deleted| {
-        entries.iter().any(|entry| {
-            entry.status == git::ChangeStatus::Deleted && entry.path == *deleted
-                || entry.status == git::ChangeStatus::Renamed
-                    && entry.previous_path.as_deref() == Some(deleted)
+    let Ok(entries) = git::changes_between(root, &parent, commit) else {
+        return false;
+    };
+    receipt_tree_matches(root, &receipt, commit) && receipt_paths_match(&receipt, &entries.entries)
+}
+
+fn receipt_common_matches(root: &Path, receipt: &Receipt) -> bool {
+    receipt.schema == "criv.adr-reconcile/2"
+        && git::ref_is_stable(root, &receipt.base_ref, &receipt.target_sha).unwrap_or(false)
+        && receipt.sources.iter().all(|source| {
+            git::blob(root, &receipt.head_sha, &source.path)
+                .map(|contents| hash(&contents) == source.before_hash)
+                .unwrap_or(false)
         })
+}
+
+fn receipt_tree_matches(root: &Path, receipt: &Receipt, tree: &str) -> bool {
+    receipt.files.iter().all(|file| {
+        let before_matches = match &file.before_hash {
+            Some(before_hash) => git::blob(root, &receipt.head_sha, &file.path)
+                .map(|contents| hash(&contents) == *before_hash)
+                .unwrap_or(false),
+            None => git::blob(root, &receipt.head_sha, &file.path).is_err(),
+        };
+        before_matches
+            && git::blob(root, tree, &file.path)
+                .map(|contents| hash(&contents) == file.after_hash)
+                .unwrap_or(false)
+    }) && receipt.deletions.iter().all(|path| {
+        !receipt.files.iter().any(|file| file.path == *path) && git::blob(root, tree, path).is_err()
     })
+}
+
+fn receipt_paths_match(receipt: &Receipt, entries: &[git::ChangedEntry]) -> bool {
+    let expected = receipt
+        .files
+        .iter()
+        .map(|file| file.path.clone())
+        .chain(receipt.deletions.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let actual = entries
+        .iter()
+        .flat_map(|entry| std::iter::once(entry.path.clone()).chain(entry.previous_path.clone()))
+        .collect::<BTreeSet<_>>();
+    actual == expected
 }
 
 fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
