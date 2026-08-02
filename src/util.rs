@@ -222,23 +222,27 @@ pub(crate) fn write_atomic_in(
     write_atomic_ready(&path, contents)
 }
 
-pub(crate) fn write_atomic_preserving_mode_from_in(
+pub(crate) fn file_permissions_in(root: &Path, source: &Path) -> Result<fs::Permissions> {
+    let source_path = prepare_confined_write(root, Path::new("."), source)?;
+    let metadata = fs::symlink_metadata(source_path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(CrivError::new(format!(
+            "refusing to inherit file permissions from non-file vault path {}",
+            source.display()
+        )));
+    }
+    Ok(metadata.permissions())
+}
+
+pub(crate) fn write_atomic_with_permissions_in(
     root: &Path,
     allowed_dir: &Path,
     destination: &Path,
-    mode_source: &Path,
     contents: &str,
+    permissions: fs::Permissions,
 ) -> Result<()> {
     let path = prepare_confined_write(root, allowed_dir, destination)?;
-    let source = prepare_confined_write(root, Path::new("."), mode_source)?;
-    let metadata = fs::symlink_metadata(&source)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(CrivError::new(format!(
-            "refusing to inherit file mode from non-file vault path {}",
-            mode_source.display()
-        )));
-    }
-    write_atomic_ready_with_permissions(&path, contents, Some(metadata.permissions()))
+    write_atomic_ready_with_permissions(&path, contents, Some(permissions))
 }
 
 /// Like [`write_atomic_in`], but leaves an identical existing file untouched.

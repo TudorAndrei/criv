@@ -2038,6 +2038,15 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "target adr"]);
     git(root, &["checkout", "topic"]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(
+            root.join("src/comment.rs"),
+            fs::Permissions::from_mode(0o640),
+        )
+        .unwrap();
+    }
 
     let config = fs::read_to_string(root.join("criv.toml")).unwrap();
     fs::write(
@@ -2101,6 +2110,18 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
         fs::read_to_string(root.join("src/no-reference.rs")).unwrap(),
         shared_boilerplate
     );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(root.join("src/comment.rs"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o640
+        );
+    }
     assert!(root.join(".criv/adr-reconcile.json").exists());
     git(root, &["add", "-A"]);
     fs::write(
@@ -2125,7 +2146,7 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
     let receipt = fs::read_to_string(&receipt_path).unwrap();
     fs::write(
         &receipt_path,
-        receipt.replace("criv.adr-reconcile/2", "forged-receipt"),
+        receipt.replace("criv.adr-reconcile/3", "forged-receipt"),
     )
     .unwrap();
     criv(root)
@@ -2408,6 +2429,144 @@ fn adr_reconcile_recognizes_and_retries_a_materialized_worktree() {
         .assert()
         .success()
         .stdout(predicate::str::contains("allocation is current"));
+}
+
+#[cfg(unix)]
+#[test]
+fn adr_reconcile_normalizes_git_modes_and_snapshots_overlapping_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "target"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    init(root);
+    write_criv_config(root, vec!["src"], vec![], true);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn base() {}\n").unwrap();
+    fs::write(
+        root.join("docs/adr/0001-base.md"),
+        adr("0001", "Base", "base"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base"]);
+
+    git(root, &["checkout", "-b", "topic"]);
+    for (id, title) in [
+        ("0002", "Two"),
+        ("0003", "Three"),
+        ("0004", "Four"),
+        ("0005", "Five"),
+    ] {
+        fs::write(
+            root.join(format!("docs/adr/{id}-topic.md")),
+            adr(id, title, "topic"),
+        )
+        .unwrap();
+    }
+    fs::set_permissions(
+        root.join("docs/adr/0005-topic.md"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "topic adrs"]);
+
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0002-target.md"),
+        adr("0002", "Target", "target"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "target adr"]);
+    git(root, &["checkout", "topic"]);
+
+    for (path, mode) in [
+        ("docs/adr/0002-topic.md", 0o444),
+        ("docs/adr/0003-topic.md", 0o640),
+        ("docs/adr/0004-topic.md", 0o644),
+        ("docs/adr/0005-topic.md", 0o755),
+    ] {
+        fs::set_permissions(root.join(path), fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target"])
+        .assert()
+        .success();
+    for (path, expected) in [
+        ("docs/adr/0003-topic.md", 0o444),
+        ("docs/adr/0004-topic.md", 0o640),
+        ("docs/adr/0005-topic.md", 0o644),
+        ("docs/adr/0006-topic.md", 0o755),
+    ] {
+        assert_eq!(
+            fs::metadata(root.join(path)).unwrap().permissions().mode() & 0o777,
+            expected,
+            "permissions for {path}"
+        );
+    }
+
+    let receipt_path = root.join(".criv/adr-reconcile.json");
+    let receipt = fs::read_to_string(&receipt_path).unwrap();
+    let receipt_json: serde_json::Value = serde_json::from_str(&receipt).unwrap();
+    assert_eq!(receipt_json["schema"], "criv.adr-reconcile/3");
+    let modes = receipt_json["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|file| {
+            Some((
+                file["path"].as_str()?.to_owned(),
+                file["after_mode"].as_str()?.to_owned(),
+            ))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(modes["docs/adr/0003-topic.md"], "100644");
+    assert_eq!(modes["docs/adr/0004-topic.md"], "100644");
+    assert_eq!(modes["docs/adr/0005-topic.md"], "100644");
+    assert_eq!(modes["docs/adr/0006-topic.md"], "100755");
+
+    fs::write(
+        &receipt_path,
+        receipt.replace("criv.adr-reconcile/3", "criv.adr-reconcile/2"),
+    )
+    .unwrap();
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "receipt schema `criv.adr-reconcile/2` is unsupported",
+        ));
+    fs::write(&receipt_path, receipt).unwrap();
+
+    git(root, &["add", "-A"]);
+    git(
+        root,
+        &["update-index", "--chmod=+x", "docs/adr/0003-topic.md"],
+    );
+    criv(root)
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR files are immutable"));
+    git(
+        root,
+        &["update-index", "--chmod=-x", "docs/adr/0003-topic.md"],
+    );
+    criv(root)
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .success();
+    git(root, &["commit", "-m", "reconcile modes"]);
+    criv(root)
+        .args(["enforce", "--stage", "push"])
+        .assert()
+        .success();
 }
 
 #[test]

@@ -556,12 +556,17 @@ fn adr_immutability_violations(
 }
 
 fn is_allowed_adr_change(root: &Path, _changes: Option<&ChangedSet>, entry: &ChangedEntry) -> bool {
+    // A committed receipt proves the entire tree transition, including paths
+    // that Git reports as modifications when ADR mappings overlap.
+    if entry
+        .new_ref
+        .as_deref()
+        .is_some_and(|commit| crate::adr::receipt_allows_commit(root, commit))
+    {
+        return true;
+    }
     if matches!(entry.status, ChangeStatus::Renamed | ChangeStatus::Deleted)
-        && (crate::adr::receipt_allows_change(root, entry)
-            || entry
-                .new_ref
-                .as_deref()
-                .is_some_and(|commit| crate::adr::receipt_allows_commit(root, commit)))
+        && crate::adr::receipt_allows_change(root, entry)
     {
         return true;
     }

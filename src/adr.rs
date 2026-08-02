@@ -7,9 +7,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::git;
-use crate::util::{remove_file_in, write_atomic_in, write_atomic_preserving_mode_from_in};
+use crate::util::{
+    file_permissions_in, remove_file_in, write_atomic_in, write_atomic_with_permissions_in,
+};
 use crate::vault::Vault;
 use crate::{CrivError, Result};
+
+const RECEIPT_SCHEMA: &str = "criv.adr-reconcile/3";
 
 #[derive(Debug, ClapArgs)]
 pub(crate) struct AdrOptions {
@@ -142,7 +146,7 @@ pub(crate) fn receipt_is_current(root: &Path) -> bool {
     let Ok(receipt) = read_receipt(root) else {
         return false;
     };
-    receipt.schema == "criv.adr-reconcile/2"
+    receipt.schema == RECEIPT_SCHEMA
         && git::resolve_commit(root, "HEAD").ok().as_deref() == Some(receipt.head_sha.as_str())
 }
 
@@ -179,7 +183,7 @@ pub(crate) fn receipt_allows_commit(root: &Path, commit: &str) -> bool {
 }
 
 fn receipt_common_matches(root: &Path, receipt: &Receipt) -> bool {
-    receipt.schema == "criv.adr-reconcile/2"
+    receipt.schema == RECEIPT_SCHEMA
         && git::ref_is_stable(root, &receipt.base_ref, &receipt.target_sha).unwrap_or(false)
         && receipt.sources.iter().all(|source| {
             git::blob(root, &receipt.head_sha, &source.path)
@@ -740,19 +744,28 @@ fn print_mapping(mappings: &[Mapping]) {
 
 fn apply_plan(root: &Path, plan: &ReconcilePlan) -> Result<()> {
     let rewrite_paths = rewrite_candidates(root, plan)?;
+    // Capture every source before publishing any destination. A destination
+    // may be another mapping's source, so reading permissions inside the write
+    // loop would make the result depend on mapping order.
+    let destination_permissions = plan
+        .mappings
+        .iter()
+        .map(|mapping| {
+            Ok((
+                mapping.new_path.clone(),
+                file_permissions_in(root, Path::new(&mapping.old_path))?,
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
     let mut receipt_files = Vec::new();
     for (path, contents) in &rewrite_paths {
-        if let Some(mapping) = plan
-            .mappings
-            .iter()
-            .find(|mapping| mapping.new_path == *path)
-        {
-            write_atomic_preserving_mode_from_in(
+        if let Some(permissions) = destination_permissions.get(path) {
+            write_atomic_with_permissions_in(
                 root,
                 Path::new("."),
                 Path::new(path),
-                Path::new(&mapping.old_path),
                 contents,
+                permissions.clone(),
             )?;
         } else {
             write_atomic_in(root, Path::new("."), Path::new(path), contents)?;
@@ -797,7 +810,7 @@ fn apply_plan(root: &Path, plan: &ReconcilePlan) -> Result<()> {
         )));
     }
     let receipt = Receipt {
-        schema: "criv.adr-reconcile/2".into(),
+        schema: RECEIPT_SCHEMA.into(),
         base_ref: plan.base_ref.clone(),
         head_sha: plan.head_sha.clone(),
         target_sha: plan.target_sha.clone(),
@@ -836,7 +849,7 @@ fn apply_plan(root: &Path, plan: &ReconcilePlan) -> Result<()> {
 /// the reason a retry may be needed.
 fn materialized_receipt(root: &Path) -> Result<Receipt> {
     let receipt = read_receipt(root)?;
-    if receipt.schema != "criv.adr-reconcile/2"
+    if receipt.schema != RECEIPT_SCHEMA
         || git::resolve_commit(root, "HEAD")? != receipt.head_sha
         || receipt.sources.iter().any(|source| {
             git::blob(root, &receipt.head_sha, &source.path)
@@ -1301,10 +1314,11 @@ fn worktree_file_mode(root: &Path, path: &str) -> Result<String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        Ok(format!(
-            "{:06o}",
-            0o100000 | (metadata.permissions().mode() & 0o777)
-        ))
+        Ok(if metadata.permissions().mode() & 0o100 == 0 {
+            "100644".into()
+        } else {
+            "100755".into()
+        })
     }
     #[cfg(not(unix))]
     {
@@ -1313,11 +1327,21 @@ fn worktree_file_mode(root: &Path, path: &str) -> Result<String> {
 }
 
 fn read_receipt(root: &Path) -> Result<Receipt> {
-    serde_json::from_str(&fs::read_to_string(root.join(".criv/adr-reconcile.json"))?).map_err(|_| {
+    let receipt: Receipt = serde_json::from_str(&fs::read_to_string(
+        root.join(".criv/adr-reconcile.json"),
+    )?)
+    .map_err(|_| {
         CrivError::new(
             "ADR reconciliation receipt is malformed; remove it only after recovering the worktree",
         )
-    })
+    })?;
+    if receipt.schema != RECEIPT_SCHEMA {
+        return Err(CrivError::new(format!(
+            "ADR reconciliation receipt schema `{}` is unsupported; expected `{RECEIPT_SCHEMA}`",
+            receipt.schema
+        )));
+    }
+    Ok(receipt)
 }
 
 #[cfg(test)]
