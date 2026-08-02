@@ -1731,6 +1731,31 @@ fn commit_enforcement_handles_an_unborn_head_without_a_git_executable() {
 }
 
 #[test]
+fn manual_push_enforcement_runs_without_a_git_executable() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    git(root, &["init"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    fs::write(root.join("tracked.txt"), "before\n").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "initial"]);
+    fs::write(root.join("tracked.txt"), "after\n").unwrap();
+    git(root, &["add", "tracked.txt"]);
+    git(root, &["commit", "-m", "change"]);
+
+    let empty_path = TempDir::new().unwrap();
+    criv(root)
+        .env("PATH", empty_path.path())
+        .args(["enforce", "--stage", "push"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1 changed files"));
+}
+
+#[test]
 fn commit_enforcement_respects_selector_governed_policy_files() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

@@ -646,8 +646,6 @@ digraph criv_code {
   "src/enforce.rs#fn:ci_changed_entries_with_env" [label="ci_changed_entries_with_env\nsrc/enforce.rs"];
   "src/enforce.rs#fn:env_string" [label="env_string\nsrc/enforce.rs"];
   "src/enforce.rs#fn:git" [label="git\nsrc/enforce.rs"];
-  "src/enforce.rs#fn:git_command" [label="git_command\nsrc/enforce.rs"];
-  "src/enforce.rs#fn:git_output" [label="git_output\nsrc/enforce.rs"];
   "src/enforce.rs#fn:git_stdout" [label="git_stdout\nsrc/enforce.rs"];
   "src/enforce.rs#fn:import_matches" [label="import_matches\nsrc/enforce.rs"];
   "src/enforce.rs#fn:import_patterns_match_exact_prefix_and_glob_forms" [label="import_patterns_match_exact_prefix_and_glob_forms\nsrc/enforce.rs"];
@@ -661,11 +659,8 @@ digraph criv_code {
   "src/enforce.rs#fn:mechanical_adr_link_migrations_are_allowed" [label="mechanical_adr_link_migrations_are_allowed\nsrc/enforce.rs"];
   "src/enforce.rs#fn:mechanical_adr_link_migrations_reject_content_edits" [label="mechanical_adr_link_migrations_reject_content_edits\nsrc/enforce.rs"];
   "src/enforce.rs#fn:mechanical_adr_link_migrations_reject_mismatched_targets" [label="mechanical_adr_link_migrations_reject_mismatched_targets\nsrc/enforce.rs"];
-  "src/enforce.rs#fn:next_git_path" [label="next_git_path\nsrc/enforce.rs"];
   "src/enforce.rs#fn:normalize_portable_adr_links" [label="normalize_portable_adr_links\nsrc/enforce.rs"];
-  "src/enforce.rs#fn:parse_changed_entries" [label="parse_changed_entries\nsrc/enforce.rs"];
   "src/enforce.rs#fn:parse_pre_push_updates" [label="parse_pre_push_updates\nsrc/enforce.rs"];
-  "src/enforce.rs#fn:parses_git_name_status_entries" [label="parses_git_name_status_entries\nsrc/enforce.rs"];
   "src/enforce.rs#fn:parses_multiple_pre_push_updates_and_rejects_malformed_records" [label="parses_multiple_pre_push_updates_and_rejects_malformed_records\nsrc/enforce.rs"];
   "src/enforce.rs#fn:policy_scan_files" [label="policy_scan_files\nsrc/enforce.rs"];
   "src/enforce.rs#fn:policy_scan_files_intersects_changed_files_with_governed_sources" [label="policy_scan_files_intersects_changed_files_with_governed_sources\nsrc/enforce.rs"];
@@ -676,7 +671,6 @@ digraph criv_code {
   "src/enforce.rs#fn:pre_push_checks_each_outgoing_commit_on_a_new_branch" [label="pre_push_checks_each_outgoing_commit_on_a_new_branch\nsrc/enforce.rs"];
   "src/enforce.rs#fn:read_changed_content" [label="read_changed_content\nsrc/enforce.rs"];
   "src/enforce.rs#fn:read_pre_push_updates" [label="read_pre_push_updates\nsrc/enforce.rs"];
-  "src/enforce.rs#fn:rejects_non_utf8_git_paths_in_name_status_output" [label="rejects_non_utf8_git_paths_in_name_status_output\nsrc/enforce.rs"];
   "src/enforce.rs#fn:required_repository" [label="required_repository\nsrc/enforce.rs"];
   "src/enforce.rs#fn:run" [label="run\nsrc/enforce.rs"];
   "src/enforce.rs#type:EnforceOptions" [label="EnforceOptions\nsrc/enforce.rs"];
@@ -2222,9 +2216,6 @@ digraph criv_code {
   "src/enforce.rs#fn:ci_changed_entries_with_env" -> "src/git.rs#type:the/member:changed_set";
   "src/enforce.rs#fn:ci_changed_entries_with_env" -> "src/lib.rs#type:CrivError";
   "src/enforce.rs#fn:git" -> "src/lib.rs#type:Command";
-  "src/enforce.rs#fn:git_command" -> "src/lib.rs#type:Command";
-  "src/enforce.rs#fn:git_output" -> "src/enforce.rs#fn:git_command";
-  "src/enforce.rs#fn:git_output" -> "src/lib.rs#type:CrivError";
   "src/enforce.rs#fn:git_stdout" -> "src/lib.rs#type:Command";
   "src/enforce.rs#fn:import_matches" -> "src/structural.rs#type:CompiledPathScope/member:is_match";
   "src/enforce.rs#fn:import_policy_violations" -> "src/enforce.rs#fn:import_matches";
@@ -2235,13 +2226,9 @@ digraph criv_code {
   "src/enforce.rs#fn:is_mechanical_wikilink_portability_migration" -> "src/enforce.rs#fn:normalize_portable_adr_links";
   "src/enforce.rs#fn:manual_push_falls_back_to_the_last_commit_with_a_reported_basis" -> "src/enforce.rs#fn:changed_entries";
   "src/enforce.rs#fn:manual_push_falls_back_to_the_last_commit_with_a_reported_basis" -> "src/enforce.rs#fn:git";
-  "src/enforce.rs#fn:next_git_path" -> "src/lib.rs#type:CrivError";
   "src/enforce.rs#fn:normalize_portable_adr_links" -> "src/enforce.rs#fn:portable_adr_link_alias";
   "src/enforce.rs#fn:normalize_portable_adr_links" -> "src/structural.rs#fn:find";
-  "src/enforce.rs#fn:parse_changed_entries" -> "src/enforce.rs#fn:next_git_path";
-  "src/enforce.rs#fn:parse_changed_entries" -> "src/lib.rs#type:CrivError";
   "src/enforce.rs#fn:parse_pre_push_updates" -> "src/lib.rs#type:CrivError";
-  "src/enforce.rs#fn:parses_git_name_status_entries" -> "src/enforce.rs#fn:parse_changed_entries";
   "src/enforce.rs#fn:parses_multiple_pre_push_updates_and_rejects_malformed_records" -> "src/enforce.rs#fn:parse_pre_push_updates";
   "src/enforce.rs#fn:policy_scan_files" -> "src/enforce.rs#fn:policy_scope_files";
   "src/enforce.rs#fn:policy_scan_files" -> "src/source_graph.rs#type:source_file/member:changed_files";
@@ -2264,7 +2251,6 @@ digraph criv_code {
   "src/enforce.rs#fn:read_pre_push_updates" -> "src/enforce.rs#fn:parse_pre_push_updates";
   "src/enforce.rs#fn:read_pre_push_updates" -> "src/lib.rs#type:CrivError";
   "src/enforce.rs#fn:read_pre_push_updates" -> "src/util.rs#fn:read_to_string";
-  "src/enforce.rs#fn:rejects_non_utf8_git_paths_in_name_status_output" -> "src/enforce.rs#fn:parse_changed_entries";
   "src/enforce.rs#fn:required_repository" -> "src/lib.rs#type:CrivError";
   "src/enforce.rs#fn:run" -> "src/check.rs#type:Diagnostic/member:is_error";
   "src/enforce.rs#fn:run" -> "src/check.rs#type:Diagnostic/member:is_warning";

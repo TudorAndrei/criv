@@ -2,7 +2,6 @@ use std::collections::BTreeSet;
 use std::env;
 use std::io::Read;
 use std::path::Path;
-use std::process::{Command, Output};
 
 use clap::{Args as ClapArgs, ValueEnum};
 
@@ -367,81 +366,6 @@ fn is_ci_environment() -> bool {
         || env::var("GITHUB_ACTIONS").is_ok_and(|value| value == "true")
 }
 
-fn git_output(root: &Path, args: &[&str]) -> Result<Output> {
-    let output = git_command(root)
-        .args(args)
-        .output()
-        .map_err(|err| CrivError::new(format!("failed to run `git {}`: {err}", args.join(" "))))?;
-    if output.status.success() {
-        return Ok(output);
-    }
-    Err(CrivError::new(format!(
-        "`git {}` failed with {}: {}",
-        args.join(" "),
-        output.status,
-        String::from_utf8_lossy(&output.stderr).trim()
-    )))
-}
-
-/// Builds a Git command rooted in the requested vault, independent of any
-/// repository context inherited from a Git hook.
-fn git_command(root: &Path) -> Command {
-    let mut command = Command::new("git");
-    command
-        .current_dir(root)
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_PREFIX");
-    command
-}
-
-fn parse_changed_entries(stdout: &[u8]) -> Result<Vec<ChangedEntry>> {
-    let mut entries = Vec::new();
-    let mut fields = stdout
-        .split(|byte| *byte == b'\0')
-        .filter(|field| !field.is_empty());
-    while let Some(status_field) = fields.next() {
-        let status = status_field.first().copied().ok_or_else(|| {
-            CrivError::new("Git name-status output contained an empty status field")
-        })? as char;
-        let change_status = match status {
-            'A' => ChangeStatus::Added,
-            'M' | 'T' => ChangeStatus::Modified,
-            'D' => ChangeStatus::Deleted,
-            'R' => ChangeStatus::Renamed,
-            'C' => ChangeStatus::Copied,
-            _ => ChangeStatus::Other,
-        };
-        let (path, previous_path) = match change_status {
-            ChangeStatus::Renamed | ChangeStatus::Copied => {
-                let previous_path = next_git_path(&mut fields)?;
-                let path = next_git_path(&mut fields)?;
-                (path, Some(previous_path))
-            }
-            _ => (next_git_path(&mut fields)?, None),
-        };
-        entries.push(ChangedEntry {
-            status: change_status,
-            path,
-            previous_path,
-            old_ref: None,
-            new_ref: None,
-        });
-    }
-    Ok(entries)
-}
-
-fn next_git_path<'a>(fields: &mut impl Iterator<Item = &'a [u8]>) -> Result<String> {
-    let value = fields
-        .next()
-        .ok_or_else(|| CrivError::new("Git name-status output ended before a path field"))?;
-    String::from_utf8(value.to_vec()).map_err(|_| {
-        CrivError::new("Git changed path is not valid UTF-8; criv cannot represent it")
-    })
-}
-
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct PrePushUpdate {
     local_ref: String,
@@ -669,6 +593,7 @@ impl Stage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
     #[test]
     fn import_patterns_match_exact_prefix_and_glob_forms() {
@@ -685,35 +610,6 @@ mod tests {
             None,
             "crate::infrastructure"
         ));
-    }
-
-    #[test]
-    fn parses_git_name_status_entries() {
-        let entries = parse_changed_entries(
-            b"A\0docs/adr/0012-new.md\0T\0src/enforce.rs\0D\0deleted.rs\0R100\0docs/adr/0001-old.md\0docs/adr/0001-renamed.md\0C100\0src/original.rs\0src/copied.rs\0X\0other.rs\0",
-        )
-        .unwrap();
-
-        assert_eq!(entries[0].status, ChangeStatus::Added);
-        assert_eq!(entries[0].path, "docs/adr/0012-new.md");
-        assert_eq!(entries[3].status, ChangeStatus::Renamed);
-        assert_eq!(
-            entries[3].previous_path.as_deref(),
-            Some("docs/adr/0001-old.md")
-        );
-        assert_eq!(entries[3].path, "docs/adr/0001-renamed.md");
-        assert_eq!(entries[1].status, ChangeStatus::Modified);
-        assert_eq!(entries[2].status, ChangeStatus::Deleted);
-        assert_eq!(entries[4].status, ChangeStatus::Copied);
-        assert_eq!(entries[4].previous_path.as_deref(), Some("src/original.rs"));
-        assert_eq!(entries[4].path, "src/copied.rs");
-        assert_eq!(entries[5].status, ChangeStatus::Other);
-    }
-
-    #[test]
-    fn rejects_non_utf8_git_paths_in_name_status_output() {
-        let error = parse_changed_entries(b"M\0docs/adr/\xff.md\0").unwrap_err();
-        assert!(error.to_string().contains("not valid UTF-8"));
     }
 
     #[test]
