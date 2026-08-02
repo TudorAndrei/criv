@@ -28,6 +28,10 @@ fn criv(root: &Path) -> Command {
     command
 }
 
+fn normalize_newlines(contents: &str) -> String {
+    contents.replace("\r\n", "\n")
+}
+
 fn init(root: &Path) {
     criv(root)
         .args(["init", "--no-obsidian", "--no-skills"])
@@ -516,6 +520,9 @@ fn file_search_matches_jsx_for_the_jsx_language_filter() {
         .stdout("src/component.jsx\n");
 }
 
+// Windows cannot represent the quote, tab, and newline characters used in the
+// filename fixture. JSON escaping remains covered there by the search test.
+#[cfg(not(windows))]
 #[test]
 fn query_json_output_is_valid_for_special_characters() {
     let temp = TempDir::new().unwrap();
@@ -2169,6 +2176,7 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
     git(root, &["init", "-b", "target"]);
     git(root, &["config", "user.email", "criv@example.com"]);
     git(root, &["config", "user.name", "criv"]);
+    git(root, &["config", "core.autocrlf", "true"]);
     init(root);
     write_criv_config(root, vec!["src"], vec![], true);
     fs::write(
@@ -2285,12 +2293,11 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
             .contains("[[0003-topic|ADR-0003]]")
     );
     assert!(
-        fs::read_to_string(root.join("src/comment.rs"))
-            .unwrap()
+        normalize_newlines(&fs::read_to_string(root.join("src/comment.rs")).unwrap())
             .contains("// target-owned\n// ADR-0003")
     );
     assert_eq!(
-        fs::read_to_string(root.join("src/no-reference.rs")).unwrap(),
+        normalize_newlines(&fs::read_to_string(root.join("src/no-reference.rs")).unwrap()),
         shared_boilerplate
     );
     #[cfg(unix)]
@@ -2322,7 +2329,7 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
     git(root, &["add", "-A"]);
     assert_eq!(
         git_stdout(root, &["show", ":docs/adr/0003-topic.md"]),
-        fs::read_to_string(root.join("docs/adr/0003-topic.md")).unwrap()
+        normalize_newlines(&fs::read_to_string(root.join("docs/adr/0003-topic.md")).unwrap())
     );
     git(root, &["config", "diff.renames", "false"]);
     let receipt_path = root.join(".criv/adr-reconcile.json");
@@ -2806,6 +2813,7 @@ fn adr_reconcile_rejects_a_short_reference_carried_by_a_low_similarity_move() {
     git(root, &["init", "-b", "target"]);
     git(root, &["config", "user.email", "criv@example.com"]);
     git(root, &["config", "user.name", "criv"]);
+    git(root, &["config", "core.autocrlf", "true"]);
     init(root);
     write_criv_config(root, vec!["src"], vec![], true);
     fs::create_dir_all(root.join("src")).unwrap();
@@ -2859,7 +2867,7 @@ fn adr_reconcile_rejects_a_short_reference_carried_by_a_low_similarity_move() {
             "refusing to rewrite target-owned reference",
         ));
     assert_eq!(
-        fs::read_to_string(root.join("src/moved.rs")).unwrap(),
+        normalize_newlines(&fs::read_to_string(root.join("src/moved.rs")).unwrap()),
         moved
     );
     assert!(root.join("docs/adr/0002-topic.md").exists());
@@ -2873,6 +2881,7 @@ fn adr_reconcile_proves_an_overlapping_mapping_transaction() {
     git(root, &["init", "-b", "target"]);
     git(root, &["config", "user.email", "criv@example.com"]);
     git(root, &["config", "user.name", "criv"]);
+    git(root, &["config", "core.autocrlf", "true"]);
     init(root);
     write_criv_config(root, vec!["src"], vec![], true);
     fs::write(

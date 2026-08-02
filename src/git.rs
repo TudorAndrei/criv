@@ -518,6 +518,31 @@ pub(crate) fn blob(root: &Path, reference: &str, path: &str) -> Result<String> {
     )))
 }
 
+/// Reads a worktree file as Git would stage it, including configured clean
+/// filters such as `core.autocrlf`, without writing the repository index.
+pub(crate) fn worktree_blob(root: &Path, path: &str) -> Result<String> {
+    let repository = required_repository(root)?;
+    let mut index = repository
+        .repository
+        .index()
+        .map_err(|error| CrivError::new(format!("Git index could not be read: {error}")))?;
+    index.add_path(Path::new(path)).map_err(|error| {
+        CrivError::new(format!(
+            "Git worktree file `{path}` could not be filtered for staging: {error}"
+        ))
+    })?;
+    let entry = index.get_path(Path::new(path), 0).ok_or_else(|| {
+        CrivError::new(format!(
+            "Git worktree file `{path}` did not produce an index entry"
+        ))
+    })?;
+    String::from_utf8(repository.read_blob(entry.id, "worktree", Path::new(path))?).map_err(|_| {
+        CrivError::new(format!(
+            "Git worktree blob `{path}` is not valid UTF-8; reconciliation only supports text files"
+        ))
+    })
+}
+
 pub(crate) fn file_mode(root: &Path, reference: &str, path: &str) -> Result<Option<String>> {
     let repository = required_repository(root)?;
     let mode = if reference == ":" {
