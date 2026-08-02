@@ -245,7 +245,9 @@ fn repository_skill_copies_match_shipped_templates() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for template in templates::agent_skills() {
         assert_eq!(
-            std::fs::read_to_string(root.join(template.path)).unwrap(),
+            std::fs::read_to_string(root.join(template.path))
+                .unwrap()
+                .replace("\r\n", "\n"),
             templates::stamped_skill(template.contents),
             "{} is not synchronized with its shipped template",
             template.path

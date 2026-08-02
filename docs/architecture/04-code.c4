@@ -649,6 +649,7 @@ digraph criv_code {
   "src/enforce.rs#fn:env_string" [label="env_string\nsrc/enforce.rs"];
   "src/enforce.rs#fn:git" [label="git\nsrc/enforce.rs"];
   "src/enforce.rs#fn:git_changed_set" [label="git_changed_set\nsrc/enforce.rs"];
+  "src/enforce.rs#fn:git_command" [label="git_command\nsrc/enforce.rs"];
   "src/enforce.rs#fn:git_first_parent" [label="git_first_parent\nsrc/enforce.rs"];
   "src/enforce.rs#fn:git_output" [label="git_output\nsrc/enforce.rs"];
   "src/enforce.rs#fn:git_stdout" [label="git_stdout\nsrc/enforce.rs"];
@@ -1203,8 +1204,10 @@ digraph criv_code {
   "src/watch.rs#fn:acquire_reclaims_a_lock_owned_by_a_dead_process" [label="acquire_reclaims_a_lock_owned_by_a_dead_process\nsrc/watch.rs"];
   "src/watch.rs#fn:acquire_rejects_a_lock_held_by_this_live_process" [label="acquire_rejects_a_lock_held_by_this_live_process\nsrc/watch.rs"];
   "src/watch.rs#fn:lock_owner_rejects_unparseable_contents" [label="lock_owner_rejects_unparseable_contents\nsrc/watch.rs"];
+  "src/watch.rs#fn:lock_owner_round_trips_an_unknown_start_time" [label="lock_owner_round_trips_an_unknown_start_time\nsrc/watch.rs"];
   "src/watch.rs#fn:lock_owner_round_trips_through_the_lock_file_format" [label="lock_owner_round_trips_through_the_lock_file_format\nsrc/watch.rs"];
   "src/watch.rs#fn:lock_owner_with_a_mismatched_start_time_is_not_alive" [label="lock_owner_with_a_mismatched_start_time_is_not_alive\nsrc/watch.rs"];
+  "src/watch.rs#fn:process_is_alive" [label="process_is_alive\nsrc/watch.rs"];
   "src/watch.rs#fn:process_start_time" [label="process_start_time\nsrc/watch.rs"];
   "src/watch.rs#fn:rebuild" [label="rebuild\nsrc/watch.rs"];
   "src/watch.rs#fn:rebuild_includes_generated_code_architecture_in_same_run_state" [label="rebuild_includes_generated_code_architecture_in_same_run_state\nsrc/watch.rs"];
@@ -2204,9 +2207,10 @@ digraph criv_code {
   "src/enforce.rs#fn:git" -> "src/lib.rs#type:Command";
   "src/enforce.rs#fn:git_changed_set" -> "src/enforce.rs#fn:git_output";
   "src/enforce.rs#fn:git_changed_set" -> "src/enforce.rs#fn:parse_changed_entries";
+  "src/enforce.rs#fn:git_command" -> "src/lib.rs#type:Command";
   "src/enforce.rs#fn:git_first_parent" -> "src/lib.rs#type:Command";
   "src/enforce.rs#fn:git_first_parent" -> "src/lib.rs#type:CrivError";
-  "src/enforce.rs#fn:git_output" -> "src/lib.rs#type:Command";
+  "src/enforce.rs#fn:git_output" -> "src/enforce.rs#fn:git_command";
   "src/enforce.rs#fn:git_output" -> "src/lib.rs#type:CrivError";
   "src/enforce.rs#fn:git_stdout" -> "src/lib.rs#type:Command";
   "src/enforce.rs#fn:import_matches" -> "src/structural.rs#type:CompiledPathScope/member:is_match";
@@ -2215,7 +2219,7 @@ digraph criv_code {
   "src/enforce.rs#fn:import_policy_violations" -> "src/vault.rs#type:index/member:source_graph";
   "src/enforce.rs#fn:is_allowed_adr_link_migration" -> "src/enforce.rs#fn:is_mechanical_wikilink_portability_migration";
   "src/enforce.rs#fn:is_allowed_adr_link_migration" -> "src/enforce.rs#fn:read_changed_content";
-  "src/enforce.rs#fn:is_git_repository" -> "src/lib.rs#type:Command";
+  "src/enforce.rs#fn:is_git_repository" -> "src/enforce.rs#fn:git_command";
   "src/enforce.rs#fn:is_git_repository" -> "src/lib.rs#type:CrivError";
   "src/enforce.rs#fn:is_mechanical_wikilink_portability_migration" -> "src/enforce.rs#fn:normalize_portable_adr_links";
   "src/enforce.rs#fn:manual_push_falls_back_to_the_last_commit_with_a_reported_basis" -> "src/enforce.rs#fn:changed_entries";
@@ -2545,6 +2549,7 @@ digraph criv_code {
   "src/source_graph.rs#fn:generic_function_signature" -> "src/source_graph.rs#fn:paren_contents";
   "src/source_graph.rs#fn:has_descendant_kind" -> "src/source_graph.rs#fn:descendant_of_kind";
   "src/source_graph.rs#fn:incremental_build_rejects_source_file_symlink_escape" -> "src/source_graph.rs#type:SourceGraph";
+  "src/source_graph.rs#fn:incremental_graph_reparses_same_size_content_with_restored_mtime" -> "extensions/vscode-criv/src/c4Preview.ts#type:C4PreviewManager/member:open";
   "src/source_graph.rs#fn:incremental_graph_reparses_same_size_content_with_restored_mtime" -> "src/source_graph.rs#type:SourceGraph";
   "src/source_graph.rs#fn:is_exported_symbol" -> "src/source_graph.rs#fn:parse_symbol";
   "src/source_graph.rs#fn:join_rust_import" -> "src/util.rs#fn:strip_prefix";
@@ -3057,5 +3062,6 @@ digraph criv_code {
   "src/watch.rs#type:WatchLock/member:try_create" -> "src/watch.rs#type:LockOwner";
   "src/watch.rs#type:WatchLock/member:try_create" -> "src/watch.rs#type:line/member:serialize";
   "src/watch.rs#type:line/member:current" -> "src/watch.rs#fn:process_start_time";
+  "src/watch.rs#type:line/member:is_alive" -> "src/watch.rs#fn:process_is_alive";
   "src/watch.rs#type:line/member:is_alive" -> "src/watch.rs#fn:process_start_time";
 }

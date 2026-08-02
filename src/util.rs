@@ -433,7 +433,7 @@ fn walk_files_inner(root: &Path, extension: Option<&str>, files: &mut Vec<PathBu
     Ok(())
 }
 
-pub(crate) fn normalize_rel(path: &Path) -> String {
+fn normalize_rel(path: &Path) -> String {
     path.components()
         .map(|component| component.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
@@ -576,7 +576,7 @@ pub(crate) fn markdown_headings(markdown: &str) -> Vec<(usize, String, usize)> {
 }
 
 #[cfg(test)]
-pub(crate) fn glob_matches(pattern: &str, value: &str) -> bool {
+fn glob_matches(pattern: &str, value: &str) -> bool {
     let patterns = [pattern.to_string()];
     GlobMatcher::new(&patterns).is_ok_and(|matcher| matcher.is_match(value))
 }
