@@ -38,11 +38,6 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
         ));
     }
     let vault = Vault::load(root)?;
-    if options.stage == Stage::Ci
-        && let Some(base_ref) = env_string("CRIV_BASE_REF")
-    {
-        crate::adr::check_base(root, &base_ref)?;
-    }
     if !vault
         .config
         .enforce_stages
@@ -53,6 +48,11 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
             "stage `{}` is not enabled in criv.toml",
             options.stage.as_str()
         )));
+    }
+    if options.stage == Stage::Ci
+        && let Some(base_ref) = env_string("CRIV_BASE_REF")
+    {
+        crate::adr::check_base(root, &base_ref)?;
     }
 
     let diagnostics = check::validate(&vault);

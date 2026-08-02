@@ -2033,10 +2033,25 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
     )
     .unwrap();
     criv(root)
-        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .args(["adr", "reconcile", "--base", "topic", "--check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allocation is current"));
+    criv(root)
+        .env("CRIV_BASE_REF", "topic")
+        .args(["enforce", "--stage", "ci"])
+        .assert()
+        .success();
+    fs::write(
+        root.join("criv.toml"),
+        config.replace("docs = \"docs\"", "docs = \"other-docs\""),
+    )
+    .unwrap();
+    criv(root)
+        .args(["adr", "reconcile", "--base", "topic", "--check"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("changing criv.toml"));
+        .stderr(predicate::str::contains("vault.docs or vault.adr"));
     fs::write(root.join("criv.toml"), config).unwrap();
 
     criv(root)
@@ -2057,8 +2072,8 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
         .success();
 
     assert!(!root.join("docs/adr/0002-topic.md").exists());
-    let adr = fs::read_to_string(root.join("docs/adr/0003-topic.md")).unwrap();
-    assert!(adr.contains("id: ADR-0003"));
+    let topic_adr = fs::read_to_string(root.join("docs/adr/0003-topic.md")).unwrap();
+    assert!(topic_adr.contains("id: ADR-0003"));
     assert!(
         fs::read_to_string(root.join("docs/guide.md"))
             .unwrap()
@@ -2070,6 +2085,17 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
             .contains("ADR-0003")
     );
     assert!(root.join(".criv/adr-reconcile.json").exists());
+    fs::write(
+        root.join("docs/adr/0002-late.md"),
+        adr("0002", "Late", "late"),
+    )
+    .unwrap();
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR-0003 -> ADR-0004"));
+    fs::remove_file(root.join("docs/adr/0002-late.md")).unwrap();
     git(root, &["add", "-A"]);
     assert_eq!(
         git_stdout(root, &["show", ":docs/adr/0003-topic.md"]),
@@ -2089,7 +2115,7 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
         .args(["adr", "reconcile", "--base", "target", "--check"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("already applied"));
+        .stdout(predicate::str::contains("allocation is current"));
     criv(root)
         .args(["adr", "reconcile", "--base", "topic", "--check"])
         .assert()
@@ -2104,8 +2130,8 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
     criv(root)
         .args(["adr", "reconcile", "--base", "target", "--check"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("unrelated changes"));
+        .success()
+        .stdout(predicate::str::contains("allocation is current"));
 }
 
 #[test]

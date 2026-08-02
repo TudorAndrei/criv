@@ -5,6 +5,7 @@ use std::path::Path;
 use clap::{Args as ClapArgs, Subcommand};
 use serde::{Deserialize, Serialize};
 
+use crate::config::Config;
 use crate::git;
 use crate::util::{remove_file_in, walk_files, write_atomic_in};
 use crate::vault::Vault;
@@ -120,10 +121,6 @@ fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
         ));
     }
     let target_sha = git::resolve_commit(root, &options.base)?;
-    if receipt_matches(root, &options.base, &target_sha)? {
-        println!("ADR reconciliation already applied for target {target_sha}");
-        return Ok(());
-    }
     let plan = build_plan(root, &options.base, &target_sha)?;
     println!("ADR reconciliation target: {}", plan.target_sha);
     if plan.mappings.is_empty() {
@@ -163,11 +160,7 @@ fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
 
 fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<ReconcilePlan> {
     let vault = Vault::load(root)?;
-    let config_path = root.join("criv.toml");
-    let current_config = config_path
-        .exists()
-        .then(|| fs::read_to_string(&config_path))
-        .transpose()?;
+    let current_config = &vault.config;
     let target_config = if git::tree_paths(root, target_sha, "criv.toml")?
         .iter()
         .any(|path| path == "criv.toml")
@@ -176,9 +169,12 @@ fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<Reconcile
     } else {
         None
     };
-    if current_config != target_config {
+    let target_config = Config::parse(target_config.as_deref())?;
+    if current_config.docs_dir != target_config.docs_dir
+        || current_config.adr_dir != target_config.adr_dir
+    {
         return Err(CrivError::new(
-            "refusing ADR reconciliation after changing criv.toml; reconcile against an unchanged vault configuration",
+            "refusing ADR reconciliation because vault.docs or vault.adr differs from the target; cannot prove ADR ownership",
         ));
     }
     let adr_prefix = format!("{}/{}/", vault.config.docs_dir, vault.config.adr_dir);
@@ -215,13 +211,14 @@ fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<Reconcile
         .collect::<Result<Vec<_>>>()?;
     ensure_unique(&branch_adrs, "branch-local")?;
 
+    let target_max = target.iter().map(|adr| adr.id).max().unwrap_or(0);
     let conflicted = branch_adrs.iter().any(|adr| {
         target_paths.contains(&adr.path)
             || target_by_id
                 .get(&adr.id)
                 .is_some_and(|target| target.path != adr.path)
+            || adr.id <= target_max
     });
-    let target_max = target.iter().map(|adr| adr.id).max().unwrap_or(0);
     let mappings = allocation_mappings(&branch_adrs, target_max, conflicted)?;
     let destination_paths = mappings
         .iter()
@@ -262,6 +259,14 @@ fn allocation_mappings(
     }
     let mut ordered = branch_adrs.to_vec();
     ordered.sort_by_key(|adr| adr.id);
+    let allocation_end = target_max
+        .checked_add(ordered.len() as u32)
+        .ok_or_else(|| CrivError::new("ADR ID allocation overflow"))?;
+    if allocation_end > 9999 {
+        return Err(CrivError::new(
+            "ADR reconciliation allocation exceeds ADR-9999",
+        ));
+    }
     ordered
         .into_iter()
         .enumerate()
@@ -585,54 +590,6 @@ fn hash(contents: &str) -> String {
     blake3::hash(contents.as_bytes()).to_hex().to_string()
 }
 
-fn receipt_matches(root: &Path, base_ref: &str, target_sha: &str) -> Result<bool> {
-    let path = root.join(".criv/adr-reconcile.json");
-    if !path.exists() {
-        return Ok(false);
-    }
-    let receipt = read_receipt(root)?;
-    if receipt.schema != "criv.adr-reconcile/1"
-        || receipt.base_ref != base_ref
-        || receipt.target_sha != target_sha
-    {
-        return Ok(false);
-    }
-    let allowed_dirty_paths = receipt
-        .files
-        .iter()
-        .map(|file| file.path.as_str())
-        .chain(
-            receipt
-                .mappings
-                .iter()
-                .map(|mapping| mapping.old_path.as_str()),
-        )
-        .collect::<BTreeSet<_>>();
-    let unexpected = git::dirty_paths(root)?
-        .into_iter()
-        .filter(|path| !allowed_dirty_paths.contains(path.as_str()))
-        .collect::<Vec<_>>();
-    if !unexpected.is_empty() {
-        return Err(CrivError::new(format!(
-            "ADR reconciliation receipt is present but the worktree also has unrelated changes: {}",
-            unexpected.join(", ")
-        )));
-    }
-    for file in &receipt.files {
-        if fs::read_to_string(root.join(&file.path))
-            .map(|contents| hash(&contents))
-            .ok()
-            .as_deref()
-            != Some(&file.after_hash)
-        {
-            return Err(CrivError::new(
-                "ADR reconciliation receipt does not match the worktree; refusing to trust it",
-            ));
-        }
-    }
-    Ok(true)
-}
-
 fn read_receipt(root: &Path) -> Result<Receipt> {
     serde_json::from_str(&fs::read_to_string(root.join(".criv/adr-reconcile.json"))?).map_err(|_| {
         CrivError::new(
@@ -729,5 +686,17 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn rejects_allocations_past_adr_9999() {
+        let branch_adrs = vec![AdrFile {
+            path: "docs/adr/0001-topic.md".into(),
+            id: 1,
+            slug: "topic".into(),
+            contents: String::new(),
+        }];
+        let error = allocation_mappings(&branch_adrs, 9999, true).unwrap_err();
+        assert!(error.to_string().contains("ADR-9999"));
     }
 }
