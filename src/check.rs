@@ -67,31 +67,17 @@ impl Diagnostic {
     pub(crate) fn is_warning(&self) -> bool {
         matches!(self.severity, Severity::Warning)
     }
+
+    pub(crate) fn describe(&self) -> String {
+        match self.line {
+            Some(line) => format!("{}:{line}: {}", self.path, self.message),
+            None => format!("{}: {}", self.path, self.message),
+        }
+    }
 }
 
 pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
-    let mut diagnostics = validate_markdown_format(root, options.fix)?;
-    let vault = Vault::load(root)?;
-    let previous_interface_hashes = previous_c4_interface_hashes(root)?;
-    diagnostics.extend(validate_with_previous_c4_interfaces(
-        &vault,
-        previous_interface_hashes.as_ref(),
-    ));
-    diagnostics.extend(
-        policy_violations(root, &vault)?
-            .into_iter()
-            .map(|violation| {
-                error(
-                    "policy-violation",
-                    &violation.path,
-                    violation.line,
-                    format!(
-                        "{} policy `{}` matched `{}`",
-                        violation.adr_id, violation.pattern_id, violation.text
-                    ),
-                )
-            }),
-    );
+    let mut diagnostics = validate_all_with_fix(root, options.fix)?;
 
     if let Some(filter) = &options.filter {
         diagnostics.retain(|diag| {
@@ -126,6 +112,39 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Full read-only validation for commands that make a confined write and need
+/// to verify the resulting vault before reporting success.
+pub(crate) fn validate_all(root: &Path) -> Result<Vec<Diagnostic>> {
+    validate_all_with_fix(root, false)
+}
+
+fn validate_all_with_fix(root: &Path, fix: bool) -> Result<Vec<Diagnostic>> {
+    let mut diagnostics = validate_markdown_format(root, fix)?;
+    let vault = Vault::load(root)?;
+    let previous_interface_hashes = previous_c4_interface_hashes(root)?;
+    diagnostics.extend(validate_with_previous_c4_interfaces(
+        &vault,
+        previous_interface_hashes.as_ref(),
+    ));
+    diagnostics.extend(
+        policy_violations(root, &vault)?
+            .into_iter()
+            .map(|violation| {
+                error(
+                    "policy-violation",
+                    &violation.path,
+                    violation.line,
+                    format!(
+                        "{} policy `{}` matched `{}`",
+                        violation.adr_id, violation.pattern_id, violation.text
+                    ),
+                )
+            }),
+    );
+
+    Ok(diagnostics)
 }
 
 /// Advisory only. Governed by ADR-0053.

@@ -83,9 +83,12 @@ affect `git2 v0.20.4`, which reaches criv only through
 git2 v0.20.4 <- fff-search v0.10.1 <- criv
 ```
 
-`criv` has no direct `git2` dependency; `cargo tree -i git2@0.21.0` finds no
-resolved package. The 0.9.6 version and direct-`git2` statement in the prior
-snapshot were stale.
+`criv` directly depends on `git2 v0.21.0` with default features disabled for
+local repository discovery, tree/index/worktree diffs, commit traversal, and
+blob reads. It does not create transports or invoke the advisory APIs. The
+older `git2 v0.20.4` remains an independent transitive dependency of
+`fff-search`; `cargo tree -i git2@0.21.0` and `cargo tree -i git2@0.20.4`
+distinguish the two paths.
 
 The locally installed `fff-search v0.10.1` source was inspected. Its git path
 uses `Repository::open`, status enumeration, `workdir`, and `status_file`; a
@@ -121,17 +124,37 @@ The monitor-only decision is unchanged. The current findings are two
 unmaintained crates and two potentially unsound-but-unreached APIs, not a new
 vulnerability classification or demonstrated runtime exploit path. Do not add
 an audit ignore list or failing gate, and do not replace `fff-search`, without a
-separate approved decision. Because this policy did not change, no new ADR is
-needed and accepted ADRs remain unmodified.
+separate approved decision. The embedded repository backend is governed by its
+own ADR; accepted audit-policy ADRs remain unmodified.
 
 [[0055-dependency-auditing-in-hk-checks|ADR-0055]] subsequently runs this same
 command as a visible, non-blocking hk monitor. It does not change this Rust
 decision or make `cargo audit` a failing gate.
 
+## Embedded Git backend measurement, 2026-08-02
+
+`git2 v0.21.0` is a direct `MIT OR Apache-2.0` dependency with default features
+disabled. Its native `libgit2-sys v0.18.7+1.9.6` dependency has the same license
+expression. The resolved graph deliberately contains both `git2 v0.21.0` for
+criv's local repository boundary and `git2 v0.20.4` through `fff-search`; Cargo
+resolves both wrappers onto the same `libgit2-sys` version.
+
+Same-toolchain, clean, size-optimized release builds on this macOS host measured
+the `main` binary at 12,702,432 bytes in 1:14.62 and this branch at 12,737,152
+bytes in 1:59.65. The embedded backend therefore adds 34,720 bytes (0.27%). The
+branch build is slower by 45.03 seconds in this cold local comparison; this is
+recorded for release review, not treated as a release blocker.
+
+`cargo audit --no-fetch` on 2026-08-02 reported the same four allowed warnings:
+the two `git2 v0.20.4` advisory paths and the existing `bincode` and `paste`
+maintenance warnings. It reported no advisory for direct `git2 v0.21.0`.
+
 Evidence commands:
 
 ```sh
 cargo audit --no-fetch
+cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "git2" or .name == "libgit2-sys") | "\(.name) \(.version): \(.license // "NOASSERTION")"'
+cargo tree -i git2@0.21.0
 cargo tree -i git2@0.20.4
 cargo tree -i bincode@1.3.3
 cargo tree --all-features --target all -e features -i paste@1.0.15

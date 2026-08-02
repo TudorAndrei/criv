@@ -222,6 +222,29 @@ pub(crate) fn write_atomic_in(
     write_atomic_ready(&path, contents)
 }
 
+pub(crate) fn file_permissions_in(root: &Path, source: &Path) -> Result<fs::Permissions> {
+    let source_path = prepare_confined_write(root, Path::new("."), source)?;
+    let metadata = fs::symlink_metadata(source_path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(CrivError::new(format!(
+            "refusing to inherit file permissions from non-file vault path {}",
+            source.display()
+        )));
+    }
+    Ok(metadata.permissions())
+}
+
+pub(crate) fn write_atomic_with_permissions_in(
+    root: &Path,
+    allowed_dir: &Path,
+    destination: &Path,
+    contents: &str,
+    permissions: fs::Permissions,
+) -> Result<()> {
+    let path = prepare_confined_write(root, allowed_dir, destination)?;
+    write_atomic_ready_with_permissions(&path, contents, Some(permissions))
+}
+
 /// Like [`write_atomic_in`], but leaves an identical existing file untouched.
 pub(crate) fn write_atomic_if_changed_in(
     root: &Path,
@@ -235,6 +258,22 @@ pub(crate) fn write_atomic_if_changed_in(
     }
     write_atomic_ready(&path, contents)?;
     Ok(true)
+}
+
+/// Remove a vault-controlled file without following symlinks. Callers use this
+/// after publishing replacement files so a failed reconciliation remains
+/// recoverable from its newly written destinations.
+pub(crate) fn remove_file_in(root: &Path, allowed_dir: &Path, destination: &Path) -> Result<()> {
+    let path = prepare_confined_write(root, allowed_dir, destination)?;
+    let metadata = fs::symlink_metadata(&path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(CrivError::new(format!(
+            "refusing to remove non-file vault path {}",
+            destination.display()
+        )));
+    }
+    fs::remove_file(path)?;
+    Ok(())
 }
 
 /// Create a new vault-controlled file without following symlinks.
@@ -252,6 +291,18 @@ pub(crate) fn create_new_in(
 }
 
 fn write_atomic_ready(path: &Path, contents: &str) -> Result<()> {
+    let permissions = fs::symlink_metadata(path)
+        .ok()
+        .filter(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+        .map(|metadata| metadata.permissions());
+    write_atomic_ready_with_permissions(path, contents, permissions)
+}
+
+fn write_atomic_ready_with_permissions(
+    path: &Path,
+    contents: &str,
+    permissions: Option<fs::Permissions>,
+) -> Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = path
         .file_name()
@@ -282,6 +333,12 @@ fn write_atomic_ready(path: &Path, contents: &str) -> Result<()> {
             .write_all(contents.as_bytes())
             .and_then(|_| file.sync_all());
         if let Err(err) = write_result {
+            let _ = fs::remove_file(&temp_path);
+            return Err(err.into());
+        }
+        if let Some(permissions) = &permissions
+            && let Err(err) = fs::set_permissions(&temp_path, permissions.clone())
+        {
             let _ = fs::remove_file(&temp_path);
             return Err(err.into());
         }
