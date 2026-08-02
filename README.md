@@ -284,7 +284,9 @@ criv adr reconcile --base origin/main --check
 The command prints the exact resolved target SHA and any deterministic mapping.
 If it reports a collision, run the same command without `--check`; it renames
 the branch-local ADRs, rewrites branch-owned references, validates the vault,
-and writes an ignored `.criv/adr-reconcile.json` receipt. Review and commit the
+and writes an ignored `.criv/adr-reconcile.json` receipt. The receipt is local
+commit proof for that exact generated transaction; it is not allocation state
+and never makes a later reconciliation check succeed. Review and commit the
 generated change:
 
 ```sh

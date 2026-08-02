@@ -537,10 +537,10 @@ fn adr_immutability_violations(
 }
 
 fn is_allowed_adr_change(root: &Path, _changes: Option<&ChangedSet>, entry: &ChangedEntry) -> bool {
-    if entry.status == ChangeStatus::Renamed
-        && let Some(old_path) = entry.previous_path.as_deref()
+    if matches!(entry.status, ChangeStatus::Renamed | ChangeStatus::Deleted)
+        && crate::adr::receipt_allows_change(root, entry)
     {
-        return crate::adr::receipt_allows_rename(root, old_path, &entry.path);
+        return true;
     }
     if entry.status != ChangeStatus::Modified {
         return false;
