@@ -164,15 +164,22 @@ fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
 fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<ReconcilePlan> {
     let vault = Vault::load(root)?;
     let config_path = root.join("criv.toml");
-    if config_path.exists() {
-        let current = fs::read_to_string(&config_path)?;
-        if let Ok(target) = git::blob(root, target_sha, "criv.toml")
-            && target != current
-        {
-            return Err(CrivError::new(
-                "refusing ADR reconciliation after changing criv.toml; reconcile against an unchanged vault configuration",
-            ));
-        }
+    let current_config = config_path
+        .exists()
+        .then(|| fs::read_to_string(&config_path))
+        .transpose()?;
+    let target_config = if git::tree_paths(root, target_sha, "criv.toml")?
+        .iter()
+        .any(|path| path == "criv.toml")
+    {
+        Some(git::blob(root, target_sha, "criv.toml")?)
+    } else {
+        None
+    };
+    if current_config != target_config {
+        return Err(CrivError::new(
+            "refusing ADR reconciliation after changing criv.toml; reconcile against an unchanged vault configuration",
+        ));
     }
     let adr_prefix = format!("{}/{}/", vault.config.docs_dir, vault.config.adr_dir);
     let merge_base = git::merge_base(root, target_sha, "HEAD")?;
