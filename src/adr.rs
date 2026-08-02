@@ -515,11 +515,6 @@ fn superseded_paths(mappings: &[Mapping]) -> Vec<&str> {
 }
 
 fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<String, String>> {
-    let renamed = plan
-        .mappings
-        .iter()
-        .map(|mapping| (mapping.old_path.clone(), mapping.new_path.clone()))
-        .collect::<BTreeMap<_, _>>();
     let changed_paths = git::changes_between(root, &plan.merge_base, "HEAD")?
         .entries
         .into_iter()
@@ -554,7 +549,7 @@ fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<Stri
         };
         let rewritten = match changed_paths.get(&path) {
             Some(entry) if entry.status == git::ChangeStatus::Added => {
-                rewrite_text(&contents, &plan.mappings, &renamed)
+                rewrite_text(&contents, &plan.mappings)?
             }
             Some(entry)
                 if matches!(
@@ -571,7 +566,6 @@ fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<Stri
                     })?,
                     &path,
                     &plan.mappings,
-                    &renamed,
                 )?
             }
             _ => rewrite_owned_lines(
@@ -581,10 +575,14 @@ fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<Stri
                 &path,
                 &path,
                 &plan.mappings,
-                &renamed,
             )?,
         };
-        let output_path = renamed.get(&path).cloned().unwrap_or(path.clone());
+        let output_path = plan
+            .mappings
+            .iter()
+            .find(|mapping| mapping.old_path == path)
+            .map(|mapping| mapping.new_path.clone())
+            .unwrap_or_else(|| path.clone());
         if rewritten != contents || output_path != path {
             rewrites.insert(output_path, rewritten);
         }
@@ -594,10 +592,12 @@ fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<Stri
             .mappings
             .iter()
             .find(|mapping| mapping.old_path == adr.path)
+            && !rewrites.contains_key(&mapping.new_path)
         {
-            rewrites
-                .entry(mapping.new_path.clone())
-                .or_insert_with(|| rewrite_text(&adr.contents, &plan.mappings, &renamed));
+            rewrites.insert(
+                mapping.new_path.clone(),
+                rewrite_text(&adr.contents, &plan.mappings)?,
+            );
         }
     }
     Ok(rewrites)
@@ -610,7 +610,6 @@ fn rewrite_owned_lines(
     original_path: &str,
     path: &str,
     mappings: &[Mapping],
-    renamed: &BTreeMap<String, String>,
 ) -> Result<String> {
     let ranges = if original_path == path {
         git::added_lines(root, merge_base, "HEAD", path)?
@@ -622,7 +621,7 @@ fn rewrite_owned_lines(
         let line_number = index + 1;
         let owned = ranges.iter().any(|range| range.contains(&line_number));
         let rewritten = if owned {
-            rewrite_text(line, mappings, renamed)
+            rewrite_text(line, mappings)?
         } else {
             line.to_owned()
         };
@@ -637,61 +636,162 @@ fn rewrite_owned_lines(
 }
 
 fn contains_reference(bytes: &[u8], mappings: &[Mapping]) -> bool {
-    mappings.iter().any(|mapping| {
-        let id = format!("ADR-{:04}", mapping.old_id);
-        let name = Path::new(&mapping.old_path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(&mapping.old_path);
-        let stem = name.strip_suffix(".md").unwrap_or(name);
-        bytes
-            .windows(id.len())
-            .any(|window| window == id.as_bytes())
-            || bytes
-                .windows(mapping.old_path.len())
-                .any(|window| window == mapping.old_path.as_bytes())
-            || bytes
-                .windows(name.len())
-                .any(|window| window == name.as_bytes())
-            || bytes
-                .windows(stem.len())
-                .any(|window| window == stem.as_bytes())
-    })
+    std::str::from_utf8(bytes).ok().is_some_and(|text| {
+        !reference_edits(text, mappings)
+            .unwrap_or_default()
+            .is_empty()
+    }) || mappings
+        .iter()
+        .any(|mapping| contains_exact_id(bytes, mapping.old_id))
+        || contains_wikilink_reference_bytes(bytes, mappings)
 }
 
-fn rewrite_text(
+#[derive(Debug, Eq, PartialEq)]
+struct TextEdit {
+    start: usize,
+    end: usize,
+    replacement: String,
+}
+
+fn rewrite_text(contents: &str, mappings: &[Mapping]) -> Result<String> {
+    let edits = reference_edits(contents, mappings)?;
+    let mut output = contents.to_owned();
+    for edit in edits.into_iter().rev() {
+        output.replace_range(edit.start..edit.end, &edit.replacement);
+    }
+    Ok(output)
+}
+
+fn reference_edits(contents: &str, mappings: &[Mapping]) -> Result<Vec<TextEdit>> {
+    let bytes = contents.as_bytes();
+    let mut edits = Vec::new();
+    for mapping in mappings {
+        let old_id = format!("ADR-{:04}", mapping.old_id);
+        let new_id = format!("ADR-{:04}", mapping.new_id);
+        for (start, _) in contents.match_indices(&old_id) {
+            let end = start + old_id.len();
+            if is_exact_token(bytes, start, end) {
+                edits.push(TextEdit {
+                    start,
+                    end,
+                    replacement: new_id.clone(),
+                });
+            }
+        }
+    }
+    let mut cursor = 0;
+    while let Some(relative_start) = contents[cursor..].find("[[") {
+        let start = cursor + relative_start;
+        let body_start = start + 2;
+        let Some(relative_end) = contents[body_start..].find("]]") else {
+            break;
+        };
+        let end = body_start + relative_end;
+        add_wikilink_edits(contents, body_start, end, mappings, &mut edits);
+        cursor = end + 2;
+    }
+    edits.sort_by_key(|edit| (edit.start, edit.end));
+    for pair in edits.windows(2) {
+        if pair[0].end > pair[1].start
+            && (pair[0].start != pair[1].start
+                || pair[0].end != pair[1].end
+                || pair[0].replacement != pair[1].replacement)
+        {
+            return Err(CrivError::new("ADR reference edits overlap ambiguously"));
+        }
+    }
+    edits.dedup();
+    Ok(edits)
+}
+
+fn add_wikilink_edits(
     contents: &str,
+    start: usize,
+    end: usize,
     mappings: &[Mapping],
-    _renamed: &BTreeMap<String, String>,
-) -> String {
-    let mut text = contents.to_owned();
-    for (index, mapping) in mappings.iter().enumerate() {
-        let token = format!("__CRIV_ADR_TOKEN_{index}__");
-        text = text.replace(&format!("ADR-{:04}", mapping.old_id), &token);
-        text = text.replace(&mapping.old_path, &format!("__CRIV_PATH_TOKEN_{index}__"));
-        let old_name = Path::new(&mapping.old_path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(&mapping.old_path);
-        text = text.replace(old_name, &format!("__CRIV_NAME_TOKEN_{index}__"));
-        let old_stem = old_name.strip_suffix(".md").unwrap_or(old_name);
-        text = text.replace(old_stem, &format!("__CRIV_STEM_TOKEN_{index}__"));
+    edits: &mut Vec<TextEdit>,
+) {
+    let body = &contents[start..end];
+    let mut part_start = start;
+    for part in body.split('|') {
+        let link_target = part.split_once('#').map_or(part, |(target, _)| target);
+        for mapping in mappings {
+            let old_name = Path::new(&mapping.old_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(&mapping.old_path);
+            let old_stem = old_name.strip_suffix(".md").unwrap_or(old_name);
+            let new_name = Path::new(&mapping.new_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or(&mapping.new_path);
+            let new_stem = new_name.strip_suffix(".md").unwrap_or(new_name);
+            let replacement = if link_target == mapping.old_path {
+                Some(mapping.new_path.as_str())
+            } else if link_target == old_name {
+                Some(new_name)
+            } else if link_target == old_stem {
+                Some(new_stem)
+            } else {
+                None
+            };
+            if let Some(replacement) = replacement {
+                edits.push(TextEdit {
+                    start: part_start,
+                    end: part_start + link_target.len(),
+                    replacement: replacement.to_owned(),
+                });
+            }
+        }
+        part_start += part.len() + 1;
     }
-    for (index, mapping) in mappings.iter().enumerate() {
-        text = text.replace(
-            &format!("__CRIV_ADR_TOKEN_{index}__"),
-            &format!("ADR-{:04}", mapping.new_id),
-        );
-        text = text.replace(&format!("__CRIV_PATH_TOKEN_{index}__"), &mapping.new_path);
-        let new_name = Path::new(&mapping.new_path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(&mapping.new_path);
-        text = text.replace(&format!("__CRIV_NAME_TOKEN_{index}__"), new_name);
-        let new_stem = new_name.strip_suffix(".md").unwrap_or(new_name);
-        text = text.replace(&format!("__CRIV_STEM_TOKEN_{index}__"), new_stem);
+}
+
+fn contains_exact_id(bytes: &[u8], id: u32) -> bool {
+    let needle = format!("ADR-{id:04}");
+    bytes
+        .windows(needle.len())
+        .enumerate()
+        .any(|(start, window)| {
+            window == needle.as_bytes() && is_exact_token(bytes, start, start + needle.len())
+        })
+}
+
+fn contains_wikilink_reference_bytes(bytes: &[u8], mappings: &[Mapping]) -> bool {
+    let mut cursor = 0;
+    while let Some(relative_start) = bytes[cursor..]
+        .windows(2)
+        .position(|window| window == b"[[")
+    {
+        let start = cursor + relative_start + 2;
+        let Some(relative_end) = bytes[start..].windows(2).position(|window| window == b"]]")
+        else {
+            break;
+        };
+        let body = &bytes[start..start + relative_end];
+        if body.split(|byte| *byte == b'|').any(|part| {
+            let target = part.split(|byte| *byte == b'#').next().unwrap_or(part);
+            mappings.iter().any(|mapping| {
+                let name = Path::new(&mapping.old_path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(&mapping.old_path);
+                let stem = name.strip_suffix(".md").unwrap_or(name);
+                target == mapping.old_path.as_bytes()
+                    || target == name.as_bytes()
+                    || target == stem.as_bytes()
+            })
+        }) {
+            return true;
+        }
+        cursor = start + relative_end + 2;
     }
-    text
+    false
+}
+
+fn is_exact_token(bytes: &[u8], start: usize, end: usize) -> bool {
+    let is_word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    (start == 0 || !is_word(bytes[start - 1])) && (end == bytes.len() || !is_word(bytes[end]))
 }
 
 fn hash(contents: &str) -> String {
@@ -726,14 +826,45 @@ mod tests {
                 new_path: "docs/adr/0008-b.md".into(),
             },
         ];
-        let paths = mappings
-            .iter()
-            .map(|mapping| (mapping.old_path.clone(), mapping.new_path.clone()))
-            .collect();
         assert_eq!(
-            rewrite_text("ADR-0005 ADR-0006 0005-a.md", &mappings, &paths),
-            "ADR-0007 ADR-0008 0007-a.md"
+            rewrite_text(
+                "ADR-0005 ADR-0006 ADR-00020 [[0005-a.md|ADR-0005]] [[docs/adr/0006-b.md#context]] [[0005-a]]",
+                &mappings,
+            )
+            .unwrap(),
+            "ADR-0007 ADR-0008 ADR-00020 [[0007-a.md|ADR-0007]] [[docs/adr/0008-b.md#context]] [[0007-a]]"
         );
+    }
+
+    #[test]
+    fn keeps_incidental_text_and_placeholder_like_values_intact() {
+        let mappings = vec![Mapping {
+            old_id: 2,
+            new_id: 3,
+            old_path: "docs/adr/0002-topic.md".into(),
+            new_path: "docs/adr/0003-topic.md".into(),
+        }];
+        assert_eq!(
+            rewrite_text(
+                "ADR-0002/local-id ADR-00020 XADR-0002 __CRIV_ADR_TOKEN_0__ 0002-topic.md\r\n",
+                &mappings,
+            )
+            .unwrap(),
+            "ADR-0003/local-id ADR-00020 XADR-0002 __CRIV_ADR_TOKEN_0__ 0002-topic.md\r\n"
+        );
+    }
+
+    #[test]
+    fn detects_supported_references_in_non_utf8_content_without_rewriting_it() {
+        let mappings = vec![Mapping {
+            old_id: 2,
+            new_id: 3,
+            old_path: "docs/adr/0002-topic.md".into(),
+            new_path: "docs/adr/0003-topic.md".into(),
+        }];
+        assert!(contains_reference(b"\xff[[0002-topic]]", &mappings));
+        assert!(contains_reference(b"\xffADR-0002/local-id", &mappings));
+        assert!(!contains_reference(b"\xffADR-00020", &mappings));
     }
 
     #[test]
