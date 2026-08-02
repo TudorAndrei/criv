@@ -182,7 +182,12 @@ fn search_rule(root: &Path, vault: &Vault, adr_id: &str, paths: &[String]) -> Re
 }
 
 fn policy_scope_files(vault: &Vault, scopes: &[String]) -> Vec<String> {
-    vault.source_files_matching_globs(scopes)
+    vault
+        .source_files_matching_globs(scopes)
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn grep(vault: &Vault, text: &str, mode: SourceGrepMode, paths: &[String]) -> Result<Vec<Row>> {

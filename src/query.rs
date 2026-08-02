@@ -250,7 +250,10 @@ fn governs(vault: &Vault, adr_id: &str) -> Result<Vec<String>> {
     let note = vault
         .resolve_note(adr_id)
         .ok_or_else(|| CrivError::new(format!("decision `{adr_id}` does not resolve")))?;
-    Ok(vault.source_files_matching_globs(&vault.effective_governs(note)))
+    let mut rows = vault.source_files_matching_globs(&vault.effective_governs(note));
+    rows.sort();
+    rows.dedup();
+    Ok(rows)
 }
 
 fn governing(vault: &Vault, symbol: &str) -> Vec<String> {

@@ -335,41 +335,51 @@ impl Vault {
             .canonical_symbol_target(&format!("{path}#{fragment}"))
     }
 
-    pub(crate) fn source_glob_has_match(&self, pattern: &str) -> bool {
-        !self.source_files_matching_glob(pattern).is_empty()
-    }
-
     pub(crate) fn source_files_matching_glob(&self, pattern: &str) -> Vec<String> {
         self.source_files_matching_globs(&[pattern.to_string()])
     }
 
     pub(crate) fn source_files_matching_globs(&self, patterns: &[String]) -> Vec<String> {
         let matcher = GlobMatcher::from_valid_patterns(patterns);
-        let mut matched_patterns = vec![false; patterns.len()];
-        let mut matched_files = BTreeSet::new();
+        let mut matches_by_pattern = vec![Vec::new(); patterns.len()];
         let mut indices = Vec::new();
         for source_file in &self.source_files {
             matcher.matching_pattern_indices_into(source_file, &mut indices);
-            if !indices.is_empty() {
-                matched_files.insert(source_file.clone());
-                for index in &indices {
-                    matched_patterns[*index] = true;
-                }
+            for index in &indices {
+                matches_by_pattern[*index].push(source_file.clone());
             }
         }
+        let mut matches = Vec::new();
         for (index, pattern) in patterns.iter().enumerate() {
-            if !matched_patterns[index]
+            if matches_by_pattern[index].is_empty()
                 && let SourceTargetResolution::Resolved { path, .. } =
                     self.resolve_source_target(pattern)
             {
-                matched_files.insert(path);
+                matches.push(path);
+            } else {
+                matches.extend(matches_by_pattern[index].iter().cloned());
             }
         }
-        self.source_files
-            .iter()
-            .filter(|path| matched_files.contains(*path))
-            .cloned()
-            .collect()
+        matches
+    }
+
+    pub(crate) fn source_globs_have_matches(&self, patterns: &[String]) -> Vec<bool> {
+        let matcher = GlobMatcher::from_valid_patterns(patterns);
+        let mut matched = vec![false; patterns.len()];
+        let mut indices = Vec::new();
+        for source_file in &self.source_files {
+            matcher.matching_pattern_indices_into(source_file, &mut indices);
+            for index in &indices {
+                matched[*index] = true;
+            }
+        }
+        for (index, pattern) in patterns.iter().enumerate() {
+            matched[index] |= matches!(
+                self.resolve_source_target(pattern),
+                SourceTargetResolution::Resolved { .. }
+            );
+        }
+        matched
     }
 
     pub(crate) fn source_files(&self) -> &[String] {
@@ -1037,21 +1047,32 @@ roots = ["src"]
     fn batch_source_globs_preserve_order_fallbacks_and_invalid_patterns() {
         let root = unique_temp_dir("criv-batch-source-globs");
         std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::write(root.join("criv.toml"), "[source]\nroots = [\"src\"]\n").unwrap();
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        std::fs::write(
+            root.join("criv.toml"),
+            "[source]\nroots = [\"src\", \"assets/blob.bin\"]\n",
+        )
+        .unwrap();
         std::fs::write(root.join("src/a.rs"), "pub fn a() {}\n").unwrap();
         std::fs::write(root.join("src/z.rs"), "pub fn run() {}\n").unwrap();
+        std::fs::write(root.join("assets/blob.bin"), [0, 0, 0, 0]).unwrap();
 
         let vault = Vault::load(&root).unwrap();
-        let patterns = vec![
-            "src/*.rs".into(),
-            "src/a.rs".into(),
-            "src/z.rs#run".into(),
-            "[".into(),
-        ];
-
         assert_eq!(
-            vault.source_files_matching_globs(&patterns),
-            vec!["src/a.rs", "src/z.rs"]
+            vault.source_files_matching_globs(&["src/z.rs#run".into(), "src/a.rs".into()]),
+            vec!["src/z.rs", "src/a.rs"]
+        );
+        assert_eq!(
+            vault.source_files_matching_globs(&["src/*.rs".into(), "src/a.rs".into()]),
+            vec!["src/a.rs", "src/z.rs", "src/a.rs"]
+        );
+        assert_eq!(
+            vault.source_files_matching_globs(&["[".into(), "src/a.rs".into()]),
+            vec!["src/a.rs"]
+        );
+        assert_eq!(
+            vault.source_files_matching_globs(&["assets/blob.bin".into()]),
+            vec!["assets/blob.bin"]
         );
 
         let _ = std::fs::remove_dir_all(root);

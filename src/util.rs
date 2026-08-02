@@ -583,62 +583,84 @@ pub(crate) fn glob_matches(pattern: &str, value: &str) -> bool {
 
 #[derive(Debug, Clone)]
 pub(crate) struct GlobMatcher {
-    set: GlobSet,
-    pattern_indices: Vec<usize>,
+    sets: Vec<(GlobSet, Vec<usize>)>,
 }
 
 impl GlobMatcher {
     pub(crate) fn new(patterns: &[String]) -> Result<Self> {
-        let mut builder = GlobSetBuilder::new();
-        for pattern in patterns {
-            let glob = GlobBuilder::new(pattern)
-                .literal_separator(true)
-                .backslash_escape(true)
-                .build()
-                .map_err(|err| CrivError::new(format!("invalid glob `{pattern}`: {err}")))?;
-            builder.add(glob);
-        }
-        Self::from_builder(builder, (0..patterns.len()).collect())
+        Self::from_patterns(patterns, (0..patterns.len()).collect())
     }
 
     /// Compiles every valid pattern and preserves its original index. This is
     /// for legacy matching paths where an invalid glob has always meant
     /// "does not match", rather than a validation error.
     pub(crate) fn from_valid_patterns(patterns: &[String]) -> Self {
-        let mut builder = GlobSetBuilder::new();
-        let mut pattern_indices = Vec::new();
+        let mut valid = Vec::new();
         for (index, pattern) in patterns.iter().enumerate() {
-            let Ok(glob) = GlobBuilder::new(pattern)
+            if GlobBuilder::new(pattern)
                 .literal_separator(true)
                 .backslash_escape(true)
                 .build()
-            else {
-                continue;
-            };
-            builder.add(glob);
-            pattern_indices.push(index);
+                .is_ok()
+            {
+                valid.push((index, pattern.clone()));
+            }
         }
-        // An empty builder is valid and matches nothing.
-        Self::from_builder(builder, pattern_indices).expect("empty glob set builds")
+        match Self::from_patterns(
+            &valid
+                .iter()
+                .map(|(_, pattern)| pattern.clone())
+                .collect::<Vec<_>>(),
+            valid.iter().map(|(index, _)| *index).collect(),
+        ) {
+            Ok(matcher) => matcher,
+            // A valid aggregate can exceed globset's automaton limit. Keep the
+            // tolerant contract by compiling each valid pattern independently.
+            Err(_) => Self {
+                sets: valid
+                    .iter()
+                    .filter_map(|(index, pattern)| {
+                        Self::from_patterns(std::slice::from_ref(pattern), vec![*index]).ok()
+                    })
+                    .flat_map(|matcher| matcher.sets)
+                    .collect(),
+            },
+        }
     }
 
-    fn from_builder(builder: GlobSetBuilder, pattern_indices: Vec<usize>) -> Result<Self> {
+    fn from_patterns(patterns: &[String], pattern_indices: Vec<usize>) -> Result<Self> {
+        let mut builder = GlobSetBuilder::new();
+        for pattern in patterns {
+            builder.add(
+                GlobBuilder::new(pattern)
+                    .literal_separator(true)
+                    .backslash_escape(true)
+                    .build()
+                    .map_err(|err| CrivError::new(format!("invalid glob `{pattern}`: {err}")))?,
+            );
+        }
         Ok(Self {
-            set: builder
-                .build()
-                .map_err(|err| CrivError::new(format!("failed to compile globs: {err}")))?,
-            pattern_indices,
+            sets: vec![(
+                builder
+                    .build()
+                    .map_err(|err| CrivError::new(format!("failed to compile globs: {err}")))?,
+                pattern_indices,
+            )],
         })
     }
 
     pub(crate) fn is_match(&self, value: &str) -> bool {
-        self.set.is_match(value)
+        self.sets.iter().any(|(set, _)| set.is_match(value))
     }
 
     pub(crate) fn matching_pattern_indices_into(&self, value: &str, into: &mut Vec<usize>) {
-        self.set.matches_into(value, into);
-        for index in into.iter_mut() {
-            *index = self.pattern_indices[*index];
+        into.clear();
+        let mut matched = Vec::new();
+        for (set, pattern_indices) in &self.sets {
+            // globset clears `matched` before every call, so it is safe to
+            // reuse this scratch allocation while accumulating all sets.
+            set.matches_into(value, &mut matched);
+            into.extend(matched.iter().map(|index| pattern_indices[*index]));
         }
     }
 }

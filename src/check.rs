@@ -436,7 +436,12 @@ fn policy_violations(root: &Path, vault: &Vault) -> Result<Vec<PolicyViolation>>
 }
 
 fn policy_scope_files(vault: &Vault, scopes: &[String]) -> Vec<String> {
-    vault.source_files_matching_globs(scopes)
+    vault
+        .source_files_matching_globs(scopes)
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 pub(crate) fn validate(vault: &Vault) -> Vec<Diagnostic> {
@@ -775,8 +780,12 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
         }
     }
 
-    for scope in &note.targets_scope {
-        if !vault.source_glob_has_match(scope) {
+    for (scope, has_match) in note
+        .targets_scope
+        .iter()
+        .zip(vault.source_globs_have_matches(&note.targets_scope))
+    {
+        if !has_match {
             diagnostics.push(warning(
                 "empty-target-scope",
                 &note.rel_path,
@@ -786,8 +795,12 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
         }
     }
 
-    for governs in vault.effective_governs(note) {
-        if !vault.source_glob_has_match(&governs) {
+    let governs = vault.effective_governs(note);
+    for (governs, has_match) in governs
+        .iter()
+        .zip(vault.source_globs_have_matches(&governs))
+    {
+        if !has_match {
             diagnostics.push(error(
                 "unresolved-governs",
                 &note.rel_path,
