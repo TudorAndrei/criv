@@ -242,7 +242,7 @@ impl GitRepository {
         self.changed_set_from_diff(diff, old_ref.as_deref(), Some(commit_id))
     }
 
-    pub(crate) fn read_file_at_ref(&self, reference: &str, path: &Path) -> Result<Vec<u8>> {
+    fn read_file_at_ref(&self, reference: &str, path: &Path) -> Result<Vec<u8>> {
         let object = self
             .repository
             .revparse_single(reference)
@@ -263,7 +263,7 @@ impl GitRepository {
         self.read_blob(entry.id(), reference, path)
     }
 
-    pub(crate) fn read_file_at_index(&self, path: &Path) -> Result<Vec<u8>> {
+    fn read_file_at_index(&self, path: &Path) -> Result<Vec<u8>> {
         let index = self
             .repository
             .index()
