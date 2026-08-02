@@ -1,5 +1,5 @@
 ---
-id: ADR-0057
+id: ADR-0058
 kind: decision
 title: Embedded Git Repository Access
 status: accepted
@@ -61,7 +61,7 @@ reads, UTF-8 rejection, and the documented comparison fallbacks.
 
 The runtime performs no Git transport operation and has no executable fallback.
 `Command::new("git")` is prohibited in governed production code by
-[[match:ADR-0057/no-runtime-git-subprocess]]. The structural rule excludes only
+[[match:ADR-0058/no-runtime-git-subprocess]]. The structural rule excludes only
 the `mod tests` fixture/oracle helpers in `src/enforce.rs`;
 integration tests outside the governed runtime paths may also build fixture
 repositories with the Git CLI. The

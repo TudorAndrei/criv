@@ -2162,6 +2162,772 @@ title: Orphan
     criv(root).args(["watch", "--once"]).assert().success();
 }
 
+#[test]
+fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "target"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    init(root);
+    write_criv_config(root, vec!["src"], vec![], true);
+    fs::write(
+        root.join("docs/adr/0001-base.md"),
+        adr("0001", "Base", "base"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("docs/guide.md"),
+        "---\nid: guide\nkind: doc\ntitle: Guide\n---\n\n## Guide\n",
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("src")).unwrap();
+    let shared_boilerplate = "// this long boilerplate line is shared but has no ADR reference\n";
+    fs::write(
+        root.join("src/base.rs"),
+        format!("// target-owned\n{shared_boilerplate}"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base"]);
+
+    git(root, &["checkout", "-b", "topic"]);
+    fs::write(
+        root.join("docs/adr/0002-topic.md"),
+        adr("0002", "Topic", "topic"),
+    )
+    .unwrap();
+    git(root, &["mv", "docs/guide.md", "docs/guide-topic.md"]);
+    fs::write(
+        root.join("docs/guide-topic.md"),
+        "---\nid: guide\nkind: doc\ntitle: Guide\n---\n\n## Guide\n\nSee [[0002-topic|ADR-0002]].\n",
+    )
+    .unwrap();
+    fs::write(root.join("src/no-reference.rs"), shared_boilerplate).unwrap();
+    fs::write(
+        root.join("src/comment.rs"),
+        "// target-owned\n// ADR-0002\npub fn topic() {}\n",
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "topic adr"]);
+
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0002-target.md"),
+        adr("0002", "Target", "target"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "target adr"]);
+    git(root, &["checkout", "topic"]);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(
+            root.join("src/comment.rs"),
+            fs::Permissions::from_mode(0o640),
+        )
+        .unwrap();
+    }
+
+    let config = fs::read_to_string(root.join("criv.toml")).unwrap();
+    fs::write(
+        root.join("criv.toml"),
+        format!("{config}\n# topic configuration change\n"),
+    )
+    .unwrap();
+    criv(root)
+        .args(["adr", "reconcile", "--base", "topic", "--check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allocation is current"));
+    criv(root)
+        .env("CRIV_BASE_REF", "topic")
+        .args(["enforce", "--stage", "ci"])
+        .assert()
+        .success();
+    fs::write(
+        root.join("criv.toml"),
+        config.replace("docs = \"docs\"", "docs = \"other-docs\""),
+    )
+    .unwrap();
+    criv(root)
+        .args(["adr", "reconcile", "--base", "topic", "--check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("vault.docs or vault.adr"));
+    fs::write(root.join("criv.toml"), config).unwrap();
+
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR-0002 -> ADR-0003"))
+        .stderr(predicate::str::contains("criv adr reconcile --base target"));
+    criv(root)
+        .env("CRIV_BASE_REF", "target")
+        .args(["enforce", "--stage", "ci"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR-0002 -> ADR-0003"));
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target"])
+        .assert()
+        .success();
+
+    assert!(!root.join("docs/adr/0002-topic.md").exists());
+    let topic_adr = fs::read_to_string(root.join("docs/adr/0003-topic.md")).unwrap();
+    assert!(topic_adr.contains("id: ADR-0003"));
+    assert!(
+        fs::read_to_string(root.join("docs/guide-topic.md"))
+            .unwrap()
+            .contains("[[0003-topic|ADR-0003]]")
+    );
+    assert!(
+        fs::read_to_string(root.join("src/comment.rs"))
+            .unwrap()
+            .contains("// target-owned\n// ADR-0003")
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("src/no-reference.rs")).unwrap(),
+        shared_boilerplate
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(root.join("src/comment.rs"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o640
+        );
+    }
+    assert!(root.join(".criv/adr-reconcile.json").exists());
+    git(root, &["add", "-A"]);
+    fs::write(
+        root.join("docs/adr/0002-late.md"),
+        adr("0002", "Late", "late"),
+    )
+    .unwrap();
+    git(root, &["add", "docs/adr/0002-late.md"]);
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("does not cover every dirty"));
+    fs::remove_file(root.join("docs/adr/0002-late.md")).unwrap();
+    git(root, &["add", "-A"]);
+    assert_eq!(
+        git_stdout(root, &["show", ":docs/adr/0003-topic.md"]),
+        fs::read_to_string(root.join("docs/adr/0003-topic.md")).unwrap()
+    );
+    git(root, &["config", "diff.renames", "false"]);
+    let receipt_path = root.join(".criv/adr-reconcile.json");
+    let receipt = fs::read_to_string(&receipt_path).unwrap();
+    fs::write(
+        &receipt_path,
+        receipt.replace("criv.adr-reconcile/3", "forged-receipt"),
+    )
+    .unwrap();
+    criv(root)
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR files are immutable"));
+    fs::write(&receipt_path, receipt).unwrap();
+    fs::write(
+        root.join("docs/adr/0002-topic.md"),
+        adr("0002", "Recreated", "topic"),
+    )
+    .unwrap();
+    git(root, &["add", "docs/adr/0002-topic.md"]);
+    criv(root)
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("complete staged transaction"));
+    fs::remove_file(root.join("docs/adr/0002-topic.md")).unwrap();
+    git(root, &["add", "-u", "docs/adr/0002-topic.md"]);
+    let reconciled_adr = fs::read_to_string(root.join("docs/adr/0003-topic.md")).unwrap();
+    fs::write(root.join("docs/adr/0003-topic.md"), "tampered\n").unwrap();
+    git(root, &["add", "docs/adr/0003-topic.md"]);
+    criv(root)
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR files are immutable"));
+    fs::write(root.join("docs/adr/0003-topic.md"), reconciled_adr).unwrap();
+    git(root, &["add", "docs/adr/0003-topic.md"]);
+    criv(root)
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .success();
+    git(root, &["commit", "-m", "reconcile topic adr"]);
+    criv(root)
+        .args(["enforce", "--stage", "push"])
+        .assert()
+        .success();
+    let reconciliation_commit = git_stdout(root, &["rev-parse", "HEAD"]).trim().to_owned();
+    let reconciliation_parent = git_stdout(root, &["rev-parse", "HEAD^"]).trim().to_owned();
+    criv(root)
+        .args([
+            "enforce",
+            "--stage",
+            "push",
+            "--pre-push",
+            "--remote-name",
+            "origin",
+            "--remote-url",
+            "https://example.invalid/criv.git",
+        ])
+        .write_stdin(format!(
+            "refs/heads/topic {reconciliation_commit} refs/heads/topic {reconciliation_parent}\n"
+        ))
+        .assert()
+        .success();
+    criv(root)
+        .env("CRIV_BASE_REF", "target")
+        .args(["enforce", "--stage", "ci"])
+        .assert()
+        .success();
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allocation is current"));
+    criv(root)
+        .args(["adr", "reconcile", "--base", "topic", "--check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allocation is current"));
+    criv(root)
+        .args(["adr", "reconcile", "--base", "missing-target", "--check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("cannot resolve base ref"));
+    fs::write(root.join("unrelated.txt"), "unrelated\n").unwrap();
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allocation is current"));
+    fs::remove_file(root.join("unrelated.txt")).unwrap();
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0004-target-late.md"),
+        adr("0004", "Target late", "target-late"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "advance target"]);
+    git(root, &["checkout", "topic"]);
+    criv(root)
+        .args([
+            "enforce",
+            "--stage",
+            "push",
+            "--pre-push",
+            "--remote-name",
+            "origin",
+            "--remote-url",
+            "https://example.invalid/criv.git",
+        ])
+        .write_stdin(format!(
+            "refs/heads/topic {reconciliation_commit} refs/heads/topic {reconciliation_parent}\n"
+        ))
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR files are immutable"));
+}
+
+#[test]
+fn adr_reconcile_renames_a_same_path_branch_local_adr() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "target"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    init(root);
+    write_criv_config(root, vec!["src"], vec![], true);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn base() {}\n").unwrap();
+    fs::write(
+        root.join("docs/adr/0001-base.md"),
+        adr("0001", "Base", "base"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base"]);
+
+    git(root, &["checkout", "-b", "topic"]);
+    fs::write(
+        root.join("docs/adr/0002-shared.md"),
+        adr("0002", "Topic", "topic"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "topic adr"]);
+
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0002-shared.md"),
+        adr("0002", "Target", "target"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "target adr"]);
+    git(root, &["checkout", "topic"]);
+
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR-0002 -> ADR-0003"));
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target"])
+        .assert()
+        .success();
+    assert!(!root.join("docs/adr/0002-shared.md").exists());
+    assert!(
+        fs::read_to_string(root.join("docs/adr/0003-shared.md"))
+            .unwrap()
+            .contains("title: Topic")
+    );
+}
+
+#[test]
+fn adr_reconcile_recognizes_and_retries_a_materialized_worktree() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "target"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    init(root);
+    write_criv_config(root, vec!["src"], vec![], true);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn base() {}\n").unwrap();
+    fs::write(
+        root.join("docs/adr/0001-base.md"),
+        adr("0001", "Base", "base"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base"]);
+
+    git(root, &["checkout", "-b", "topic"]);
+    fs::write(
+        root.join("docs/adr/0002-topic.md"),
+        adr("0002", "Topic", "topic"),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(
+            root.join("docs/adr/0002-topic.md"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "topic adr"]);
+
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0002-target.md"),
+        adr("0002", "Target", "target"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "target adr"]);
+    git(root, &["checkout", "topic"]);
+
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target"])
+        .assert()
+        .success();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let destination = root.join("docs/adr/0003-topic.md");
+        assert_eq!(
+            fs::metadata(&destination).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        fs::set_permissions(&destination, fs::Permissions::from_mode(0o644)).unwrap();
+        criv(root)
+            .args(["adr", "reconcile", "--base", "target", "--check"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("does not match the materialized"));
+        fs::set_permissions(&destination, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allocation is current"));
+    git(root, &["add", "-A"]);
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .success();
+
+    git(root, &["stash", "push", "-u"]);
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0003-target.md"),
+        adr("0003", "Target next", "target-next"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "target next adr"]);
+    git(root, &["checkout", "topic"]);
+    git(root, &["stash", "pop"]);
+
+    fs::write(root.join("unrelated.txt"), "unrelated\n").unwrap();
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("does not cover every dirty"));
+    fs::remove_file(root.join("unrelated.txt")).unwrap();
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR-0003 -> ADR-0004"));
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target"])
+        .assert()
+        .success();
+    assert!(!root.join("docs/adr/0002-topic.md").exists());
+    assert!(!root.join("docs/adr/0003-topic.md").exists());
+    assert!(root.join("docs/adr/0004-topic.md").exists());
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("allocation is current"));
+}
+
+#[cfg(unix)]
+#[test]
+fn adr_reconcile_normalizes_git_modes_and_snapshots_overlapping_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "target"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    init(root);
+    write_criv_config(root, vec!["src"], vec![], true);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn base() {}\n").unwrap();
+    fs::write(
+        root.join("docs/adr/0001-base.md"),
+        adr("0001", "Base", "base"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base"]);
+
+    git(root, &["checkout", "-b", "topic"]);
+    for (id, title) in [
+        ("0002", "Two"),
+        ("0003", "Three"),
+        ("0004", "Four"),
+        ("0005", "Five"),
+    ] {
+        fs::write(
+            root.join(format!("docs/adr/{id}-topic.md")),
+            adr(id, title, "topic"),
+        )
+        .unwrap();
+    }
+    fs::set_permissions(
+        root.join("docs/adr/0005-topic.md"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "topic adrs"]);
+
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0002-target.md"),
+        adr("0002", "Target", "target"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "target adr"]);
+    git(root, &["checkout", "topic"]);
+
+    for (path, mode) in [
+        ("docs/adr/0002-topic.md", 0o444),
+        ("docs/adr/0003-topic.md", 0o640),
+        ("docs/adr/0004-topic.md", 0o644),
+        ("docs/adr/0005-topic.md", 0o755),
+    ] {
+        fs::set_permissions(root.join(path), fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target"])
+        .assert()
+        .success();
+    for (path, expected) in [
+        ("docs/adr/0003-topic.md", 0o444),
+        ("docs/adr/0004-topic.md", 0o640),
+        ("docs/adr/0005-topic.md", 0o644),
+        ("docs/adr/0006-topic.md", 0o755),
+    ] {
+        assert_eq!(
+            fs::metadata(root.join(path)).unwrap().permissions().mode() & 0o777,
+            expected,
+            "permissions for {path}"
+        );
+    }
+
+    let receipt_path = root.join(".criv/adr-reconcile.json");
+    let receipt = fs::read_to_string(&receipt_path).unwrap();
+    let receipt_json: serde_json::Value = serde_json::from_str(&receipt).unwrap();
+    assert_eq!(receipt_json["schema"], "criv.adr-reconcile/3");
+    let modes = receipt_json["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|file| {
+            Some((
+                file["path"].as_str()?.to_owned(),
+                file["after_mode"].as_str()?.to_owned(),
+            ))
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(modes["docs/adr/0003-topic.md"], "100644");
+    assert_eq!(modes["docs/adr/0004-topic.md"], "100644");
+    assert_eq!(modes["docs/adr/0005-topic.md"], "100644");
+    assert_eq!(modes["docs/adr/0006-topic.md"], "100755");
+
+    fs::write(
+        &receipt_path,
+        receipt.replace("criv.adr-reconcile/3", "criv.adr-reconcile/2"),
+    )
+    .unwrap();
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "receipt schema `criv.adr-reconcile/2` is unsupported",
+        ));
+    fs::write(&receipt_path, receipt).unwrap();
+
+    git(root, &["add", "-A"]);
+    git(
+        root,
+        &["update-index", "--chmod=+x", "docs/adr/0003-topic.md"],
+    );
+    criv(root)
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR files are immutable"));
+    git(
+        root,
+        &["update-index", "--chmod=-x", "docs/adr/0003-topic.md"],
+    );
+    criv(root)
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .success();
+    git(root, &["commit", "-m", "reconcile modes"]);
+    criv(root)
+        .args(["enforce", "--stage", "push"])
+        .assert()
+        .success();
+}
+
+#[test]
+fn adr_reconcile_rejects_a_renamed_published_adr() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "target"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    init(root);
+    write_criv_config(root, vec!["src"], vec![], true);
+    fs::write(
+        root.join("docs/adr/0001-base.md"),
+        adr("0001", "Base", "base"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base"]);
+
+    git(root, &["checkout", "-b", "topic"]);
+    fs::write(
+        root.join("docs/adr/0002-topic.md"),
+        fs::read_to_string(root.join("docs/adr/0001-base.md"))
+            .unwrap()
+            .replace("ADR-0001", "ADR-0002"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "rename published adr"]);
+
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0002-target.md"),
+        adr("0002", "Target", "target"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "target adr"]);
+    git(root, &["checkout", "topic"]);
+
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target", "--check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "appears to carry published content",
+        ));
+}
+
+#[test]
+fn adr_reconcile_rejects_a_short_reference_carried_by_a_low_similarity_move() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "target"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    init(root);
+    write_criv_config(root, vec!["src"], vec![], true);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(
+        root.join("docs/adr/0001-base.md"),
+        adr("0001", "Base", "base"),
+    )
+    .unwrap();
+    let inherited = format!(
+        "ADR-0002\n{}",
+        (0..100)
+            .map(|index| format!("old inherited line {index}\n"))
+            .collect::<String>()
+    );
+    fs::write(root.join("src/original.rs"), inherited).unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base"]);
+
+    git(root, &["checkout", "-b", "topic"]);
+    fs::write(
+        root.join("docs/adr/0002-topic.md"),
+        adr("0002", "Topic", "topic"),
+    )
+    .unwrap();
+    git(root, &["mv", "src/original.rs", "src/moved.rs"]);
+    let moved = format!(
+        "ADR-0002\n{}",
+        (0..100)
+            .map(|index| format!("new branch line {index}\n"))
+            .collect::<String>()
+    );
+    fs::write(root.join("src/moved.rs"), &moved).unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "topic"]);
+
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0002-target.md"),
+        adr("0002", "Target", "target"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "target"]);
+    git(root, &["checkout", "topic"]);
+
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "refusing to rewrite target-owned reference",
+        ));
+    assert_eq!(
+        fs::read_to_string(root.join("src/moved.rs")).unwrap(),
+        moved
+    );
+    assert!(root.join("docs/adr/0002-topic.md").exists());
+    assert!(!root.join("docs/adr/0003-topic.md").exists());
+}
+
+#[test]
+fn adr_reconcile_proves_an_overlapping_mapping_transaction() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "target"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    init(root);
+    write_criv_config(root, vec!["src"], vec![], true);
+    fs::write(
+        root.join("docs/adr/0001-base.md"),
+        adr("0001", "Base", "base"),
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn base() {}\n").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base"]);
+
+    git(root, &["checkout", "-b", "topic"]);
+    fs::write(
+        root.join("docs/adr/0005-first.md"),
+        adr("0005", "First", "first"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("docs/adr/0007-second.md"),
+        adr("0007", "Second", "second"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "topic adrs"]);
+
+    git(root, &["checkout", "target"]);
+    fs::write(
+        root.join("docs/adr/0006-target.md"),
+        adr("0006", "Target", "target"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "target adr"]);
+    git(root, &["checkout", "topic"]);
+
+    criv(root)
+        .args(["adr", "reconcile", "--base", "target"])
+        .assert()
+        .success();
+    assert!(root.join("docs/adr/0007-first.md").exists());
+    assert!(root.join("docs/adr/0008-second.md").exists());
+    git(root, &["add", "-A"]);
+    criv(root)
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .success();
+}
+
+fn adr(id: &str, title: &str, slug: &str) -> String {
+    format!(
+        "---\nid: ADR-{id}\nkind: decision\ntitle: {title}\nstatus: accepted\ndate: 2026-08-02\n---\n\n## {title}\n\n{slug}\n"
+    )
+}
+
 fn git(root: &Path, args: &[&str]) {
     let output = std::process::Command::new("git")
         .current_dir(root)
@@ -2180,4 +2946,25 @@ fn git(root: &Path, args: &[&str]) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn git_stdout(root: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .current_dir(root)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_PREFIX")
+        .args(args)
+        .output()
+        .expect("git command should run");
+    assert!(
+        output.status.success(),
+        "git {:?} failed: {}{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
 }

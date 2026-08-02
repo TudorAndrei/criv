@@ -1,3 +1,4 @@
+mod adr;
 mod architecture;
 mod c4;
 mod c4_artifact;
@@ -68,6 +69,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     Init(init::InitOptions),
+    Adr(adr::AdrOptions),
     Check(check::CheckOptions),
     Query(query::QueryOptions),
     Search(search::SearchOptions),
@@ -108,6 +110,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
             Ok(())
         }
         Some(Command::Init(options)) => init::run(&cwd, options),
+        Some(Command::Adr(options)) => adr::run(&cwd, options),
         Some(Command::Check(options)) => check::run(&cwd, options),
         Some(Command::Query(options)) => query::run(&cwd, options),
         Some(Command::Search(options)) => search::run(&cwd, options),
