@@ -1,5 +1,5 @@
 ---
-id: ADR-0057
+id: ADR-0059
 kind: decision
 title: Accepted Only ADR Policy State
 status: accepted
