@@ -222,6 +222,25 @@ pub(crate) fn write_atomic_in(
     write_atomic_ready(&path, contents)
 }
 
+pub(crate) fn write_atomic_preserving_mode_from_in(
+    root: &Path,
+    allowed_dir: &Path,
+    destination: &Path,
+    mode_source: &Path,
+    contents: &str,
+) -> Result<()> {
+    let path = prepare_confined_write(root, allowed_dir, destination)?;
+    let source = prepare_confined_write(root, Path::new("."), mode_source)?;
+    let metadata = fs::symlink_metadata(&source)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(CrivError::new(format!(
+            "refusing to inherit file mode from non-file vault path {}",
+            mode_source.display()
+        )));
+    }
+    write_atomic_ready_with_permissions(&path, contents, Some(metadata.permissions()))
+}
+
 /// Like [`write_atomic_in`], but leaves an identical existing file untouched.
 pub(crate) fn write_atomic_if_changed_in(
     root: &Path,
@@ -268,6 +287,18 @@ pub(crate) fn create_new_in(
 }
 
 fn write_atomic_ready(path: &Path, contents: &str) -> Result<()> {
+    let permissions = fs::symlink_metadata(path)
+        .ok()
+        .filter(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
+        .map(|metadata| metadata.permissions());
+    write_atomic_ready_with_permissions(path, contents, permissions)
+}
+
+fn write_atomic_ready_with_permissions(
+    path: &Path,
+    contents: &str,
+    permissions: Option<fs::Permissions>,
+) -> Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let file_name = path
         .file_name()
@@ -298,6 +329,12 @@ fn write_atomic_ready(path: &Path, contents: &str) -> Result<()> {
             .write_all(contents.as_bytes())
             .and_then(|_| file.sync_all());
         if let Err(err) = write_result {
+            let _ = fs::remove_file(&temp_path);
+            return Err(err.into());
+        }
+        if let Some(permissions) = &permissions
+            && let Err(err) = fs::set_permissions(&temp_path, permissions.clone())
+        {
             let _ = fs::remove_file(&temp_path);
             return Err(err.into());
         }

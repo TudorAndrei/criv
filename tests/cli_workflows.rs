@@ -2310,6 +2310,15 @@ fn adr_reconcile_recognizes_and_retries_a_materialized_worktree() {
         adr("0002", "Topic", "topic"),
     )
     .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(
+            root.join("docs/adr/0002-topic.md"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "topic adr"]);
 
@@ -2327,6 +2336,22 @@ fn adr_reconcile_recognizes_and_retries_a_materialized_worktree() {
         .args(["adr", "reconcile", "--base", "target"])
         .assert()
         .success();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let destination = root.join("docs/adr/0003-topic.md");
+        assert_eq!(
+            fs::metadata(&destination).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        fs::set_permissions(&destination, fs::Permissions::from_mode(0o644)).unwrap();
+        criv(root)
+            .args(["adr", "reconcile", "--base", "target", "--check"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("does not match the materialized"));
+        fs::set_permissions(&destination, fs::Permissions::from_mode(0o755)).unwrap();
+    }
     criv(root)
         .args(["adr", "reconcile", "--base", "target", "--check"])
         .assert()

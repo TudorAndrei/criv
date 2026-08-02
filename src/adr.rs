@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::git;
-use crate::util::{remove_file_in, write_atomic_in};
+use crate::util::{remove_file_in, write_atomic_in, write_atomic_preserving_mode_from_in};
 use crate::vault::Vault;
 use crate::{CrivError, Result};
 
@@ -84,12 +84,15 @@ struct ReceiptFile {
     path: String,
     before_hash: Option<String>,
     after_hash: String,
+    before_mode: Option<String>,
+    after_mode: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ReceiptSource {
     path: String,
     before_hash: String,
+    before_mode: String,
 }
 
 pub(crate) fn run(root: &Path, options: AdrOptions) -> Result<()> {
@@ -182,6 +185,11 @@ fn receipt_common_matches(root: &Path, receipt: &Receipt) -> bool {
             git::blob(root, &receipt.head_sha, &source.path)
                 .map(|contents| hash(&contents) == source.before_hash)
                 .unwrap_or(false)
+                && git::file_mode(root, &receipt.head_sha, &source.path)
+                    .ok()
+                    .flatten()
+                    .as_deref()
+                    == Some(source.before_mode.as_str())
         })
 }
 
@@ -194,9 +202,19 @@ fn receipt_tree_matches(root: &Path, receipt: &Receipt, tree: &str) -> bool {
             None => git::blob(root, &receipt.head_sha, &file.path).is_err(),
         };
         before_matches
+            && git::file_mode(root, &receipt.head_sha, &file.path)
+                .ok()
+                .flatten()
+                .as_deref()
+                == file.before_mode.as_deref()
             && git::blob(root, tree, &file.path)
                 .map(|contents| hash(&contents) == file.after_hash)
                 .unwrap_or(false)
+            && git::file_mode(root, tree, &file.path)
+                .ok()
+                .flatten()
+                .as_deref()
+                == Some(file.after_mode.as_str())
     }) && receipt.deletions.iter().all(|path| {
         !receipt.files.iter().any(|file| file.path == *path) && git::blob(root, tree, path).is_err()
     })
@@ -694,13 +712,29 @@ fn apply_plan(root: &Path, plan: &ReconcilePlan) -> Result<()> {
     let rewrite_paths = rewrite_candidates(root, plan)?;
     let mut receipt_files = Vec::new();
     for (path, contents) in &rewrite_paths {
-        write_atomic_in(root, Path::new("."), Path::new(path), contents)?;
+        if let Some(mapping) = plan
+            .mappings
+            .iter()
+            .find(|mapping| mapping.new_path == *path)
+        {
+            write_atomic_preserving_mode_from_in(
+                root,
+                Path::new("."),
+                Path::new(path),
+                Path::new(&mapping.old_path),
+                contents,
+            )?;
+        } else {
+            write_atomic_in(root, Path::new("."), Path::new(path), contents)?;
+        }
         receipt_files.push(ReceiptFile {
             path: path.clone(),
             before_hash: git::blob(root, &plan.head_sha, path)
                 .ok()
                 .map(|before| hash(&before)),
             after_hash: hash(contents),
+            before_mode: git::file_mode(root, &plan.head_sha, path)?,
+            after_mode: worktree_file_mode(root, path)?,
         });
     }
     let deletions = superseded_paths(&plan.receipt_mappings)
@@ -742,11 +776,16 @@ fn apply_plan(root: &Path, plan: &ReconcilePlan) -> Result<()> {
         sources: plan
             .receipt_sources
             .iter()
-            .map(|adr| ReceiptSource {
-                path: adr.path.clone(),
-                before_hash: hash(&adr.contents),
+            .map(|adr| {
+                Ok(ReceiptSource {
+                    path: adr.path.clone(),
+                    before_hash: hash(&adr.contents),
+                    before_mode: git::file_mode(root, &plan.head_sha, &adr.path)?.ok_or_else(
+                        || CrivError::new(format!("cannot read Git mode for `{}`", adr.path)),
+                    )?,
+                })
             })
-            .collect(),
+            .collect::<Result<Vec<_>>>()?,
         deletions,
         files: receipt_files,
     };
@@ -773,6 +812,11 @@ fn materialized_receipt(root: &Path) -> Result<Receipt> {
             git::blob(root, &receipt.head_sha, &source.path)
                 .map(|contents| hash(&contents) != source.before_hash)
                 .unwrap_or(true)
+                || git::file_mode(root, &receipt.head_sha, &source.path)
+                    .ok()
+                    .flatten()
+                    .as_deref()
+                    != Some(source.before_mode.as_str())
         })
         || receipt.files.iter().any(|file| {
             let before_matches = match &file.before_hash {
@@ -782,8 +826,16 @@ fn materialized_receipt(root: &Path) -> Result<Receipt> {
                 None => git::blob(root, &receipt.head_sha, &file.path).is_err(),
             };
             !before_matches
+                || git::file_mode(root, &receipt.head_sha, &file.path)
+                    .ok()
+                    .flatten()
+                    .as_deref()
+                    != file.before_mode.as_deref()
                 || fs::read_to_string(root.join(&file.path))
                     .map(|contents| hash(&contents) != file.after_hash)
+                    .unwrap_or(true)
+                || worktree_file_mode(root, &file.path)
+                    .map(|mode| mode != file.after_mode)
                     .unwrap_or(true)
         })
         || receipt
@@ -966,12 +1018,11 @@ fn inherited_source(
         }
         if let Ok(candidate_contents) = git::blob(root, merge_base, &candidate)
             && plausible_carried_content(contents, &candidate_contents)
+            && inherited.replace(candidate).is_some()
         {
-            if inherited.replace(candidate).is_some() {
-                return Err(CrivError::new(format!(
-                    "file `{path}` has ambiguous inherited provenance; cannot prove its ADR references are branch-owned"
-                )));
-            }
+            return Err(CrivError::new(format!(
+                "file `{path}` has ambiguous inherited provenance; cannot prove its ADR references are branch-owned"
+            )));
         }
     }
     Ok(inherited)
@@ -1170,6 +1221,27 @@ fn is_exact_token(bytes: &[u8], start: usize, end: usize) -> bool {
 
 fn hash(contents: &str) -> String {
     blake3::hash(contents.as_bytes()).to_hex().to_string()
+}
+
+fn worktree_file_mode(root: &Path, path: &str) -> Result<String> {
+    let metadata = fs::symlink_metadata(root.join(path))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(CrivError::new(format!(
+            "cannot record Git mode for non-file `{path}`"
+        )));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        Ok(format!(
+            "{:06o}",
+            0o100000 | (metadata.permissions().mode() & 0o777)
+        ))
+    }
+    #[cfg(not(unix))]
+    {
+        Ok("100644".into())
+    }
 }
 
 fn read_receipt(root: &Path) -> Result<Receipt> {

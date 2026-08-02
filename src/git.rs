@@ -266,6 +266,30 @@ pub(crate) fn blob(root: &Path, git_ref: &str, path: &str) -> Result<String> {
     })
 }
 
+pub(crate) fn file_mode(root: &Path, git_ref: &str, path: &str) -> Result<Option<String>> {
+    let output = if git_ref == ":" {
+        output(root, &["ls-files", "-s", "-z", "--", path])?
+    } else {
+        output(root, &["ls-tree", "-z", git_ref, "--", path])?
+    };
+    let Some(record) = output.stdout.split(|byte| *byte == b'\0').next() else {
+        return Ok(None);
+    };
+    if record.is_empty() {
+        return Ok(None);
+    }
+    let mode = record
+        .split(|byte| *byte == b' ')
+        .next()
+        .ok_or_else(|| CrivError::new("Git mode output was malformed"))?;
+    let mode = String::from_utf8(mode.to_vec())
+        .map_err(|_| CrivError::new("Git mode output is not valid UTF-8"))?;
+    (mode.len() == 6 && mode.bytes().all(|byte| byte.is_ascii_digit()))
+        .then_some(mode)
+        .map(Some)
+        .ok_or_else(|| CrivError::new("Git mode output was malformed"))
+}
+
 /// Zero-context line ownership for content newly added between two revisions.
 pub(crate) fn added_lines(
     root: &Path,
