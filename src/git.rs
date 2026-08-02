@@ -38,7 +38,7 @@ pub(crate) enum ChangeStatus {
 
 /// Builds a Git command rooted in the requested vault, independent of any
 /// repository context inherited from a Git hook.
-pub(crate) fn command(root: &Path) -> Command {
+fn command(root: &Path) -> Command {
     let mut command = Command::new("git");
     command
         .current_dir(root)
