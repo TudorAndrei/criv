@@ -115,30 +115,9 @@ pub(crate) fn receipt_allows_change(root: &Path, entry: &git::ChangedEntry) -> b
     let Ok(receipt) = read_receipt(root) else {
         return false;
     };
-    if receipt.schema != "criv.adr-reconcile/2"
-        || !git::ref_is_stable(root, &receipt.base_ref, &receipt.target_sha).unwrap_or(false)
-        || git::resolve_commit(root, "HEAD").ok().as_deref() != Some(receipt.head_sha.as_str())
-        || receipt.sources.iter().any(|source| {
-            git::blob(root, &receipt.head_sha, &source.path)
-                .map(|contents| hash(&contents) != source.before_hash)
-                .unwrap_or(true)
-        })
-        || receipt.files.iter().any(|file| {
-            let before_matches = match &file.before_hash {
-                Some(before_hash) => git::blob(root, &receipt.head_sha, &file.path)
-                    .map(|contents| hash(&contents) == *before_hash)
-                    .unwrap_or(false),
-                None => git::blob(root, &receipt.head_sha, &file.path).is_err(),
-            };
-            !before_matches
-                || git::blob(root, ":", &file.path)
-                    .map(|contents| hash(&contents) != file.after_hash)
-                    .unwrap_or(true)
-        })
-        || receipt.deletions.iter().any(|path| {
-            !receipt.files.iter().any(|file| file.path == *path)
-                && git::blob(root, ":", path).is_ok()
-        })
+    if git::resolve_commit(root, "HEAD").ok().as_deref() != Some(receipt.head_sha.as_str())
+        || !receipt_common_matches(root, &receipt)
+        || !receipt_tree_matches(root, &receipt, ":")
     {
         return false;
     }
@@ -389,6 +368,15 @@ fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<Reconcile
                         "cannot read branch-created ADR `{current_path}` while proving ownership: {error}"
                     ))
                 })?;
+                ensure_proven_new_adr(
+                    root,
+                    &entry.path,
+                    &contents,
+                    &merge_base,
+                    target_sha,
+                    &merge_paths,
+                    &target_paths,
+                )?;
                 let adr = parse_adr(current_path, contents)?;
                 let source_contents = git::blob(root, "HEAD", &entry.path)?;
                 receipt_sources.push(parse_adr(&entry.path, source_contents)?);
@@ -419,6 +407,15 @@ fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<Reconcile
         match entry.status {
             git::ChangeStatus::Added if branch_paths.insert(entry.path.clone()) => {
                 let contents = fs::read_to_string(root.join(&entry.path))?;
+                ensure_proven_new_adr(
+                    root,
+                    &entry.path,
+                    &contents,
+                    &merge_base,
+                    target_sha,
+                    &merge_paths,
+                    &target_paths,
+                )?;
                 branch_adrs.push(parse_adr(&entry.path, contents)?);
             }
             git::ChangeStatus::Renamed | git::ChangeStatus::Copied
@@ -492,6 +489,76 @@ fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<Reconcile
         branch_adrs,
         receipt_sources,
     })
+}
+
+/// Git's `A` status is not proof of authorship: an inherited ADR can be
+/// copied and changed enough to miss its normal rename threshold. Restrict
+/// candidate discovery to the ADR vault, then reject a new-looking file when
+/// it retains distinctive published material.
+fn ensure_proven_new_adr(
+    root: &Path,
+    path: &str,
+    contents: &str,
+    merge_base: &str,
+    target_sha: &str,
+    merge_paths: &BTreeSet<String>,
+    target_paths: &BTreeSet<String>,
+) -> Result<()> {
+    let candidates = merge_paths
+        .iter()
+        .map(|path| (merge_base, path))
+        .chain(target_paths.iter().map(|path| (target_sha, path)));
+    for (revision, candidate) in candidates {
+        if candidate == path || !candidate.ends_with(".md") {
+            continue;
+        }
+        let source = git::blob(root, revision, candidate)?;
+        if plausible_carried_content(contents, &source) {
+            return Err(CrivError::new(format!(
+                "ADR `{path}` appears to carry published content from `{candidate}`; copied or renamed ADRs are immutable"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Ignore generic vault metadata but require a distinctive carried line. This
+/// deliberately fails closed for a repeated title or a substantive body line;
+/// those are evidence that an apparent addition may be a rewritten copy.
+fn plausible_carried_content(first: &str, second: &str) -> bool {
+    if hash(first) == hash(second) {
+        return true;
+    }
+    let first = significant_lines(first);
+    let second = significant_lines(second);
+    first.iter().any(|line| {
+        second.contains(line)
+            && (line.starts_with("title:") || line.len() >= 16 || line.starts_with("## "))
+    })
+}
+
+fn significant_lines(contents: &str) -> BTreeSet<&str> {
+    let mut in_frontmatter = false;
+    contents
+        .lines()
+        .filter_map(|line| {
+            if line == "---" {
+                in_frontmatter = !in_frontmatter;
+                return None;
+            }
+            let line = line.trim();
+            if line.is_empty()
+                || (in_frontmatter
+                    && matches!(
+                        line.split_once(':').map(|(key, _)| key),
+                        Some("id" | "kind" | "status" | "date")
+                    ))
+            {
+                return None;
+            }
+            Some(line)
+        })
+        .collect()
 }
 
 fn allocation_mappings(
@@ -625,23 +692,14 @@ fn print_mapping(mappings: &[Mapping]) {
 
 fn apply_plan(root: &Path, plan: &ReconcilePlan) -> Result<()> {
     let rewrite_paths = rewrite_candidates(root, plan)?;
-    let before_hashes = rewrite_paths
-        .keys()
-        .map(|path| {
-            (
-                path.clone(),
-                fs::read_to_string(root.join(path))
-                    .ok()
-                    .map(|before| hash(&before)),
-            )
-        })
-        .collect::<BTreeMap<_, _>>();
     let mut receipt_files = Vec::new();
     for (path, contents) in &rewrite_paths {
         write_atomic_in(root, Path::new("."), Path::new(path), contents)?;
         receipt_files.push(ReceiptFile {
             path: path.clone(),
-            before_hash: before_hashes.get(path).cloned().flatten(),
+            before_hash: git::blob(root, &plan.head_sha, path)
+                .ok()
+                .map(|before| hash(&before)),
             after_hash: hash(contents),
         });
     }
@@ -825,7 +883,17 @@ fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<Stri
         } else {
             match changed_paths.get(&path) {
                 Some(entry) if entry.status == git::ChangeStatus::Added => {
-                    rewrite_text(&contents, &plan.mappings)?
+                    match inherited_source(root, &path, &contents, &plan.merge_base)? {
+                        Some(source) => rewrite_owned_lines(
+                            root,
+                            &contents,
+                            &plan.merge_base,
+                            &source,
+                            &path,
+                            &plan.mappings,
+                        )?,
+                        None => rewrite_text(&contents, &plan.mappings)?,
+                    }
                 }
                 Some(entry)
                     if matches!(
@@ -880,6 +948,33 @@ fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<Stri
         }
     }
     Ok(rewrites)
+}
+
+/// Resolve a plausible merge-base source for an apparent addition. Reference
+/// rewriting then uses line ownership against that source instead of granting
+/// blanket ownership merely because Git reported `A`.
+fn inherited_source(
+    root: &Path,
+    path: &str,
+    contents: &str,
+    merge_base: &str,
+) -> Result<Option<String>> {
+    let mut inherited = None;
+    for candidate in git::tree_paths(root, merge_base, ".")? {
+        if candidate == path {
+            continue;
+        }
+        if let Ok(candidate_contents) = git::blob(root, merge_base, &candidate)
+            && plausible_carried_content(contents, &candidate_contents)
+        {
+            if inherited.replace(candidate).is_some() {
+                return Err(CrivError::new(format!(
+                    "file `{path}` has ambiguous inherited provenance; cannot prove its ADR references are branch-owned"
+                )));
+            }
+        }
+    }
+    Ok(inherited)
 }
 
 fn rewrite_owned_lines(
@@ -1163,6 +1258,18 @@ mod tests {
             },
         ];
         assert_eq!(superseded_paths(&mappings), vec!["docs/adr/0005-a.md"]);
+    }
+
+    #[test]
+    fn detects_distinctive_content_carried_by_an_apparent_addition() {
+        assert!(plausible_carried_content(
+            "---\nid: ADR-0002\nkind: decision\ntitle: Base\nstatus: accepted\ndate: 2026-08-02\n---\n\n## Base\n\nbase\n",
+            "---\nid: ADR-0001\nkind: decision\ntitle: Base\nstatus: accepted\ndate: 2026-08-02\n---\n\n## Base\n\nbase\n",
+        ));
+        assert!(!plausible_carried_content(
+            "---\nid: ADR-0002\nkind: decision\ntitle: Topic\nstatus: accepted\ndate: 2026-08-02\n---\n\n## Topic\n\ntopic\n",
+            "---\nid: ADR-0001\nkind: decision\ntitle: Base\nstatus: accepted\ndate: 2026-08-02\n---\n\n## Base\n\nbase\n",
+        ));
     }
 
     #[test]

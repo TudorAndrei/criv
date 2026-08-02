@@ -2394,13 +2394,11 @@ fn adr_reconcile_rejects_a_renamed_published_adr() {
     git(root, &["commit", "-m", "base"]);
 
     git(root, &["checkout", "-b", "topic"]);
-    git(
-        root,
-        &["mv", "docs/adr/0001-base.md", "docs/adr/0001-renamed.md"],
-    );
     fs::write(
         root.join("docs/adr/0002-topic.md"),
-        adr("0002", "Topic", "topic"),
+        fs::read_to_string(root.join("docs/adr/0001-base.md"))
+            .unwrap()
+            .replace("ADR-0001", "ADR-0002"),
     )
     .unwrap();
     git(root, &["add", "."]);
@@ -2421,7 +2419,7 @@ fn adr_reconcile_rejects_a_renamed_published_adr() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "published ADR content is immutable",
+            "appears to carry published content",
         ));
 }
 
