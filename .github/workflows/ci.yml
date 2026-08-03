@@ -61,7 +61,7 @@ jobs:
         run: cargo run --quiet -- check --format github
 
       - name: Run core repository checks
-        run: mise run check
+        run: hk check --all
 
   wasm:
     name: Wasm build

@@ -12,13 +12,16 @@ repository.
 
 | Command | When to use |
 | --- | --- |
-| `mise run check` | Run before finishing any change; it is what CI runs. |
 | `cargo test --workspace` | Rust CLI, wasm crate, and integration tests. |
 | `cargo clippy --workspace --all-targets -- -D warnings` | Rust lint gate. |
 | `cargo run --quiet -- check` | Fast criv vault validation after docs/code edits. |
 | `npm --prefix .obsidian/plugins/criv test` | Obsidian companion plugin tests. |
 | `npm --prefix extensions/vscode-criv test` | VS Code companion extension tests. |
 | `mise run fix` | Apply configured formatting/fixers to modified files. |
+
+Pre-commit and pre-push hooks run their validation phases automatically. Do not
+replay them after each commit with an aggregate task; no `mise run check` task
+exists. Use the commands above only for targeted development or diagnosis.
 
 ## Conventions
 

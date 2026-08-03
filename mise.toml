@@ -19,10 +19,6 @@ HK_PKL_BACKEND = "pklr"
 [hooks]
 postinstall = "hk install --mise"
 
-[tasks.check]
-description = "Run repository-core hk checks"
-run = "hk check --all"
-
 [tasks.fix]
 description = "Run hk fixes against modified files"
 run = "hk fix"

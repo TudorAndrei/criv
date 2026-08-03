@@ -109,7 +109,6 @@ Manual task entry points are:
 mise run commit-msg -- .git/COMMIT_EDITMSG
 mise run pre-commit
 mise run pre-push
-mise run check
 mise run fix
 mise run perf
 mise run vscode-build
@@ -118,11 +117,14 @@ mise run release-plan
 mise run release-auto
 ```
 
-`mise run check` is the complete local repository-core gate. It covers Rust,
-workflow security, criv validation and enforcement, and the monitor-only Rust
-advisory audit. Every step hk runs is defined in `hk.pkl` with its command
-inline, per [[0049-checks-defined-in-hk-not-mise|ADR-0049]]. To inspect or run
-one core step:
+Pre-commit and pre-push are the automatic local validation boundary. Agents and
+contributors do not need to replay them with an aggregate command after each
+commit. The former `mise run check` aggregate task has been removed.
+
+Hosted CI invokes the complete hk `check` profile directly. Every step hk runs
+is defined in `hk.pkl` with its command inline, per
+[[0049-checks-defined-in-hk-not-mise|ADR-0049]]. To inspect or debug one core
+step explicitly:
 
 ```sh
 hk check --all --plan                        # list every step
@@ -130,8 +132,8 @@ hk check --all --step hawk
 ```
 
 Pre-push runs Clippy, workspace tests, Hawk, and criv push enforcement. Hawk is
-kept in both pre-push and the complete local core gate so unnecessary public
-Rust APIs fail before hosted CI.
+kept in both pre-push and the hosted CI profile so unnecessary public Rust APIs
+fail before hosted CI during normal local development.
 
 `mise run perf` runs `scripts/measure-performance.sh` against the current
 vault by default. Pass another vault root to measure larger repositories:
@@ -208,4 +210,4 @@ or its configuration change. Hawk uses `target/hawk` for its instrumented Cargo
 artifacts so its compiler work stays isolated from the other parallel checks.
 This policy is captured in [[0043-hawk-visibility-analysis|ADR-0043]] and the
 local/hosted validation boundary is
-[[0060-parallel-hosted-validation-and-lean-local-hooks|ADR-0060]].
+[[0061-hook-owned-local-validation-and-direct-ci-profile|ADR-0061]].
