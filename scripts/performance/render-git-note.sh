@@ -62,6 +62,10 @@ jq --null-input --sort-keys \
           attempt: $workflow_attempt
         },
         artifact: $artifact_name,
+        report: {
+          format: "html",
+          artifact_path: "report.html"
+        },
         evidence: {
           run_id: $run[0].run_id,
           profile: $run[0].profile,

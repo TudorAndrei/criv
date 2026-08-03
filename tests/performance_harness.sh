@@ -76,9 +76,20 @@ done
 jq -e '
   .schema == "criv.performance-git-note.v2"
   and .evidence.observation == "external-subprocess"
+  and .report == {"artifact_path":"report.html","format":"html"}
   and (.timings | length) == 2
   and has("work") == false
 ' "$test_root/performance-note.json" >/dev/null
+
+cargo run --quiet -p criv-perf-harness --bin criv-perf-report -- \
+  --result-dir "$note_fixture" \
+  --note "$test_root/performance-note.json" \
+  --output "$test_root/report.html" \
+  --github-summary "$test_root/report-summary.md"
+grep -q '<!doctype html>' "$test_root/report.html"
+grep -q 'role="img"' "$test_root/report.html"
+grep -q 'JSON evidence remains canonical' "$test_root/report.html"
+grep -q '^## Performance report' "$test_root/report-summary.md"
 
 foreign_sample="$test_root/foreign-sample"
 mkdir -p "$foreign_sample"

@@ -12,7 +12,7 @@ env:
 
 jobs:
   measure-and-publish:
-    name: Measure and publish Git note
+    name: Measure and publish performance evidence
     if: ${{ github.event_name == 'workflow_dispatch' || !github.event.deleted }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -53,16 +53,7 @@ jobs:
             --samples 5 \
             --results-root performance-results
 
-      - name: Upload raw performance evidence
-        if: ${{ always() }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: performance-${{ github.sha }}-${{ github.run_attempt }}
-          path: performance-results
-          if-no-files-found: warn
-          retention-days: 30
-
-      - name: Render performance note
+      - name: Render performance note and report
         env:
           ARTIFACT_NAME: performance-${{ github.sha }}-${{ github.run_attempt }}
           COMMIT: ${{ github.sha }}
@@ -76,13 +67,38 @@ jobs:
           test -n "$result_dir"
           scripts/performance/render-git-note.sh \
             "$result_dir" \
-            performance-note.json \
+            performance-results/performance-note.json \
             "$COMMIT" \
             "$PUSHED_REF" \
             "$WORKFLOW_URL" \
             "$WORKFLOW_RUN_ID" \
             "$WORKFLOW_ATTEMPT" \
             "$ARTIFACT_NAME"
+          target/release/criv-perf-report \
+            --result-dir "$result_dir" \
+            --note performance-results/performance-note.json \
+            --output performance-results/report.html \
+            --github-summary performance-results/report-summary.md
+
+      - name: Upload performance report and raw evidence
+        id: evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: performance-${{ github.sha }}-${{ github.run_attempt }}
+          path: performance-results
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Publish workflow summary
+        if: ${{ success() }}
+        env:
+          ARTIFACT_URL: ${{ steps.evidence.outputs.artifact-url }}
+        shell: bash
+        run: |
+          cat performance-results/report-summary.md >>"$GITHUB_STEP_SUMMARY"
+          printf '\n[Download the HTML report and raw evidence](%s)\n' \
+            "$ARTIFACT_URL" >>"$GITHUB_STEP_SUMMARY"
 
       - name: Publish performance note
         env:
@@ -93,6 +109,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config user.name "github-actions[bot]"
           scripts/performance/publish-git-note.sh \
-            performance-note.json \
+            performance-results/performance-note.json \
             "${{ github.sha }}" \
             origin

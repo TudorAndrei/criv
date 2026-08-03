@@ -5,6 +5,7 @@ title: Repeatable Performance Evidence
 targets:
   symbols:
     - scripts/measure-performance.sh
+    - scripts/performance/src/bin/criv-perf-report.rs
 ---
 
 # Repeatable Performance Evidence
@@ -80,7 +81,9 @@ sample, preserving identity, cache state, exit status, elapsed/user/system
 seconds, output digests, generated-state and snapshot hashes when present.
 `summary.json` groups compatible successful rows and reports sample count,
 minimum, median, maximum, and median absolute deviation without discarding raw
-values.
+values. `report.html` is a self-contained derived view with shared-scale timing
+ranges, exact-value tables, run identity, and workload provenance. It uses no
+external assets or services, and JSON remains the canonical evidence.
 
 Cross-commit comparisons use separate result directories and freshly generated
 vaults. They compare rows only when workload digest, command case, cache state,
@@ -117,8 +120,10 @@ the harness still owns sample isolation inside the container.
 
 Every successful repository push runs a separate, non-gating host measurement
 workflow and publishes its compact JSON summary to
-`refs/notes/criv-performance`. The complete result directory remains available
-as a workflow artifact for 30 days. Fetch and inspect the durable note with:
+`refs/notes/criv-performance`. The GitHub job summary shows the headline values
+and links to a 30-day workflow artifact containing `report.html` alongside the
+complete raw result directory. The note names the artifact and report path.
+Fetch and inspect the durable note with:
 
 ```sh
 git fetch origin refs/notes/criv-performance:refs/notes/criv-performance
