@@ -73,3 +73,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0067-staged-changes-are-a-partial-check-scope|ADR-0067]] - Staged changes are a partial check scope
 - [[0068-bounded-local-snapshot-lifecycle|ADR-0068]] - Bounded local snapshot lifecycle
 - [[0069-repeatable-two-tier-performance-evidence|ADR-0069]] - Repeatable two tier performance evidence
+- [[0070-publish-push-performance-evidence-as-git-notes|ADR-0070]] - Publish push performance evidence as Git notes

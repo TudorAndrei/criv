@@ -119,5 +119,23 @@ entry point because it requires a Docker-API-compatible runtime and may need to
 acquire the pinned image. Testcontainers owns container startup and cleanup;
 the harness still owns sample isolation inside the container.
 
-The governing decision is
-[[0069-repeatable-two-tier-performance-evidence|ADR-0069]].
+## Push notes
+
+Every successful repository push runs a separate, non-gating host measurement
+workflow and publishes its compact JSON summary to
+`refs/notes/criv-performance`. The complete result directory remains available
+as a workflow artifact for 30 days. Fetch and inspect the durable note with:
+
+```sh
+git fetch origin refs/notes/criv-performance:refs/notes/criv-performance
+git log --notes=criv-performance
+git notes --ref=criv-performance show <commit>
+```
+
+The publisher uses the workflow's scoped token, never force-pushes the notes
+ref, and retries after concurrent note updates. The job is not part of the CI
+aggregate or local hooks and does not require Docker.
+
+The governing decisions are
+[[0069-repeatable-two-tier-performance-evidence|ADR-0069]] and
+[[0070-publish-push-performance-evidence-as-git-notes|ADR-0070]].
