@@ -67,3 +67,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0061-hook-owned-local-validation-and-direct-ci-profile|ADR-0061]] - Hook-owned local validation and direct CI profile
 - [[0062-canonical-generated-criv-configuration|ADR-0062]] - Canonical generated criv configuration
 - [[0063-adr-reconciliation-owns-its-commit|ADR-0063]] - ADR reconciliation owns its commit
+- [[0064-typed-query-subcommands|ADR-0064]] - Typed query subcommands
