@@ -12,6 +12,7 @@ roots = [
   "crates/criv-wasm",
   "extensions/vscode-criv",
   ".gitignore",
+  ".taplo.toml",
   "Cargo.toml",
   "cog.toml",
   "criv.toml",
