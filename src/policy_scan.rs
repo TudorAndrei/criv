@@ -70,8 +70,8 @@ impl ScanPaths<'_> {
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub(crate) struct WorkCounts {
-    pub(crate) definition_compilations: usize,
-    pub(crate) adr_scope_resolutions: usize,
+    definition_compilations: usize,
+    adr_scope_resolutions: usize,
 }
 
 #[cfg(test)]
@@ -92,12 +92,12 @@ fn record_work(record: impl FnOnce(&mut WorkCounts)) {
 }
 
 #[cfg(test)]
-pub(crate) fn reset_work_counts() {
+fn reset_work_counts() {
     WORK_COUNTS.with(|counts| counts.set(WorkCounts::default()));
 }
 
 #[cfg(test)]
-pub(crate) fn work_counts() -> WorkCounts {
+fn work_counts() -> WorkCounts {
     WORK_COUNTS.with(Cell::get)
 }
 

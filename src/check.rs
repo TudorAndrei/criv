@@ -385,7 +385,7 @@ fn relative_path(root: &Path, path: &Path) -> String {
 }
 
 #[cfg(test)]
-pub(crate) fn validate(vault: &Vault) -> Vec<Diagnostic> {
+fn validate(vault: &Vault) -> Vec<Diagnostic> {
     let policy_plan = PolicyScanPlan::new(vault);
     validate_with_previous_c4_interfaces(vault, None, &policy_plan)
 }
