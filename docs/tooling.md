@@ -142,10 +142,22 @@ vault by default. Pass another vault root to measure larger repositories:
 mise run perf -- /path/to/large/criv-vault
 ```
 
-The script records cold and warm `watch --once` timings, source-index file
-search startup, validation, CI enforcement, and a no-op snapshot diff. Use those
-numbers before changing source graph parsing, source indexing, snapshot writing,
-or pattern matching behavior.
+The script records repeated samples for cold and warm `watch --once`,
+source-index file search startup, validation, CI enforcement, and a no-op
+snapshot diff. It prints every real/user/system sample plus min/median/max real
+time for each command. Five samples are collected by default; set
+`CRIV_PERF_SAMPLES` to a positive integer to change the count:
+
+```sh
+CRIV_PERF_SAMPLES=9 mise run perf -- /path/to/large/criv-vault
+```
+
+The report includes the vault revision, binary path, and sample count. Use the
+same binary profile, vault contents, sample count, and machine conditions for a
+before/after pair. The cold/warm labels preserve the ordered watch cases but do
+not reset operating-system caches between samples. Whole-command wall-clock
+samples are supporting evidence; deterministic work counters in Rust tests are
+the stronger evidence when a change claims to remove repeated internal work.
 
 Obsidian and VS Code validation are hosted-CI suites rather than automatic hk
 steps. Contributors changing a companion should run its package scripts
