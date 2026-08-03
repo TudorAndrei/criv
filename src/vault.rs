@@ -9,7 +9,7 @@ use serde::Deserialize;
 
 use crate::Result;
 use crate::config::Config;
-use crate::source_graph::SourceGraph;
+use crate::source_graph::{SourceGraph, SourceGraphBuild};
 use crate::source_index::{FffSourceIndex, SourceIndex};
 use crate::util::{
     GlobMatcher, find_wiki_links_with_lines, is_adr_id, kebab,
@@ -140,7 +140,7 @@ pub(crate) struct Vault {
     titles: BTreeMap<String, usize>,
     source_files: Vec<String>,
     source_index: Arc<dyn SourceIndex>,
-    source_graph: SourceGraph,
+    source_graph: SourceGraphBuild,
     patterns: BTreeSet<String>,
 }
 
@@ -167,7 +167,7 @@ impl Vault {
 
     pub(crate) fn load_incremental_with_source_index(
         root: &Path,
-        previous_graph: Option<&SourceGraph>,
+        previous_graph: Option<&SourceGraphBuild>,
         shared_source_index: Option<Arc<dyn SourceIndex>>,
     ) -> Result<Self> {
         let config = Config::load(root)?;
@@ -201,7 +201,7 @@ impl Vault {
         let (source_files, source_index, source_graph): (
             Vec<String>,
             Arc<dyn SourceIndex>,
-            SourceGraph,
+            SourceGraphBuild,
         ) = if config.source_index {
             let source_index: Arc<dyn SourceIndex> = match shared_source_index {
                 Some(source_index) => source_index,
@@ -217,14 +217,15 @@ impl Vault {
                 .into_iter()
                 .map(|entry| entry.path)
                 .collect::<Vec<_>>();
-            let source_graph = SourceGraph::build_incremental(root, &source_files, previous_graph)?;
-            crate::source_graph::store_cached(root, &source_graph)?;
+            let source_graph =
+                SourceGraphBuild::build_incremental(root, &source_files, previous_graph)?
+                    .publish(root)?;
             (source_files, source_index, source_graph)
         } else {
             (
                 Vec::new(),
                 Arc::new(EmptySourceIndex),
-                SourceGraph::default(),
+                SourceGraphBuild::disabled(),
             )
         };
 
@@ -345,6 +346,7 @@ impl Vault {
 
         if self
             .source_graph
+            .graph()
             .resolve_symbol(&format!("{path}#{fragment}"))
             .is_some()
         {
@@ -361,6 +363,7 @@ impl Vault {
             return Some(path);
         };
         self.source_graph
+            .graph()
             .canonical_symbol_target(&format!("{path}#{fragment}"))
     }
 
@@ -416,7 +419,15 @@ impl Vault {
     }
 
     pub(crate) fn source_graph(&self) -> &SourceGraph {
+        self.source_graph.graph()
+    }
+
+    pub(crate) fn source_graph_build(&self) -> &SourceGraphBuild {
         &self.source_graph
+    }
+
+    pub(crate) fn retain_source_graph_changes_from(&mut self, previous: &SourceGraphBuild) {
+        self.source_graph.retain_changed_files_from(previous);
     }
 
     pub(crate) fn source_index(&self) -> &dyn SourceIndex {
@@ -488,7 +499,7 @@ impl Vault {
             titles,
             source_files: Vec::new(),
             source_index: Arc::new(EmptySourceIndex),
-            source_graph: SourceGraph::default(),
+            source_graph: SourceGraphBuild::disabled(),
             patterns,
         }
     }

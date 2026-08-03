@@ -182,33 +182,101 @@ pub(crate) struct VariantSignature {
     fields: Vec<FieldSignature>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 struct GraphCacheFile {
     schema: String,
     graph: SourceGraph,
 }
 
-pub(crate) fn load_cached(root: &Path) -> Option<SourceGraph> {
+#[derive(Serialize)]
+struct BorrowedGraphCacheFile<'a> {
+    schema: &'static str,
+    graph: &'a SourceGraph,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum CacheDisposition {
+    Clean,
+    Dirty,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SourceGraphBuild {
+    graph: SourceGraph,
+    cache: CacheDisposition,
+}
+
+impl SourceGraphBuild {
+    pub(crate) fn build_incremental(
+        root: &Path,
+        source_files: &[String],
+        previous: Option<&Self>,
+    ) -> Result<Self> {
+        let graph = SourceGraph::build_incremental(
+            root,
+            source_files,
+            previous.map(SourceGraphBuild::graph),
+        )?;
+        let cache = if previous.is_some_and(|previous| {
+            previous.cache == CacheDisposition::Clean
+                && graph.changed_files().is_empty()
+                && graph_cache_path(root).is_file()
+        }) {
+            CacheDisposition::Clean
+        } else {
+            CacheDisposition::Dirty
+        };
+        Ok(Self { graph, cache })
+    }
+
+    pub(crate) fn disabled() -> Self {
+        Self {
+            graph: SourceGraph::default(),
+            cache: CacheDisposition::Clean,
+        }
+    }
+
+    pub(crate) fn graph(&self) -> &SourceGraph {
+        &self.graph
+    }
+
+    pub(crate) fn retain_changed_files_from(&mut self, previous: &Self) {
+        self.graph
+            .changed_files
+            .extend(previous.graph.changed_files.iter().cloned());
+        self.graph.changed_files.sort();
+        self.graph.changed_files.dedup();
+    }
+
+    pub(crate) fn publish(mut self, root: &Path) -> Result<Self> {
+        if self.cache == CacheDisposition::Dirty {
+            store_cached(root, &self.graph)?;
+            self.cache = CacheDisposition::Clean;
+        }
+        Ok(self)
+    }
+}
+
+pub(crate) fn load_cached(root: &Path) -> Option<SourceGraphBuild> {
     let path = graph_cache_path(root);
     let contents = fs::read_to_string(path).ok()?;
     let cache = serde_json::from_str::<GraphCacheFile>(&contents).ok()?;
-    (cache.schema == GRAPH_CACHE_SCHEMA).then_some(cache.graph)
+    (cache.schema == GRAPH_CACHE_SCHEMA).then_some(SourceGraphBuild {
+        graph: cache.graph,
+        cache: CacheDisposition::Clean,
+    })
 }
 
-pub(crate) fn store_cached(root: &Path, graph: &SourceGraph) -> Result<()> {
-    let cache = GraphCacheFile {
-        schema: GRAPH_CACHE_SCHEMA.to_string(),
-        graph: graph.clone(),
+fn store_cached(root: &Path, graph: &SourceGraph) -> Result<()> {
+    let cache = BorrowedGraphCacheFile {
+        schema: GRAPH_CACHE_SCHEMA,
+        graph,
     };
     #[cfg(test)]
     record_work(|counts| counts.cache_serializations += 1);
     let contents = serde_json::to_string_pretty(&cache)
         .map_err(|err| CrivError::new(format!("failed to serialize source graph cache: {err}")))?;
     let contents = format!("{contents}\n");
-    let path = graph_cache_path(root);
-    if fs::read_to_string(&path).ok().as_deref() == Some(&contents) {
-        return Ok(());
-    }
     write_atomic_in(
         root,
         Path::new(".criv"),
@@ -1515,17 +1583,18 @@ mod tests {
         let root = temp.path();
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
-        let mut graph = SourceGraph::build_incremental(root, &["src/lib.rs".into()], None).unwrap();
-        assert_eq!(graph.changed_files(), &["src/lib.rs".to_string()]);
-        graph.changed_files.push("scratch.rs".to_string());
+        let mut build =
+            SourceGraphBuild::build_incremental(root, &["src/lib.rs".into()], None).unwrap();
+        assert_eq!(build.graph.changed_files(), &["src/lib.rs".to_string()]);
+        build.graph.changed_files.push("scratch.rs".to_string());
 
-        store_cached(root, &graph).unwrap();
+        let build = build.publish(root).unwrap();
         let loaded = load_cached(root).unwrap();
 
-        let mut expected = graph.clone();
+        let mut expected = build.graph.clone();
         expected.changed_files.clear();
-        assert_eq!(loaded, expected);
-        assert!(loaded.changed_files().is_empty());
+        assert_eq!(loaded.graph(), &expected);
+        assert!(loaded.graph().changed_files().is_empty());
     }
 
     #[test]
@@ -1534,16 +1603,29 @@ mod tests {
         let root = temp.path();
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
-        let graph = SourceGraph::build_incremental(root, &["src/lib.rs".into()], None).unwrap();
-
-        store_cached(root, &graph).unwrap();
+        let first = SourceGraphBuild::build_incremental(root, &["src/lib.rs".into()], None)
+            .unwrap()
+            .publish(root)
+            .unwrap();
         let path = graph_cache_path(root);
         let before = fs::read_to_string(&path).unwrap();
-        let modified = fs::metadata(&path).unwrap().modified().unwrap();
-        store_cached(root, &graph).unwrap();
+        let modified = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_234_567);
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        reset_work_counts();
+        SourceGraphBuild::build_incremental(root, &["src/lib.rs".into()], Some(&first))
+            .unwrap()
+            .publish(root)
+            .unwrap();
 
         assert_eq!(fs::read_to_string(&path).unwrap(), before);
         assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+        assert_eq!(work_counts().cache_serializations, 0);
+        assert_eq!(work_counts().cache_publications, 0);
     }
 
     #[test]
@@ -1554,19 +1636,132 @@ mod tests {
         fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
         reset_work_counts();
 
-        let first = SourceGraph::build_incremental(root, &["src/lib.rs".into()], None).unwrap();
-        store_cached(root, &first).unwrap();
-        let second =
-            SourceGraph::build_incremental(root, &["src/lib.rs".into()], Some(&first)).unwrap();
-        store_cached(root, &second).unwrap();
+        let first = SourceGraphBuild::build_incremental(root, &["src/lib.rs".into()], None)
+            .unwrap()
+            .publish(root)
+            .unwrap();
+        SourceGraphBuild::build_incremental(root, &["src/lib.rs".into()], Some(&first))
+            .unwrap()
+            .publish(root)
+            .unwrap();
 
         let counts = work_counts();
         assert_eq!(counts.source_reads, 2);
         assert_eq!(counts.parsed_files, 1);
         assert_eq!(counts.reused_files, 1);
-        assert_eq!(counts.cache_serializations, 2);
+        assert_eq!(counts.cache_serializations, 1);
         assert_eq!(counts.cache_publications, 1);
         assert!(counts.published_bytes > 0);
+    }
+
+    #[test]
+    fn every_dirty_or_untrusted_graph_cache_publishes_exactly_once() {
+        fn baseline() -> (TempDir, SourceGraphBuild) {
+            let temp = TempDir::new().unwrap();
+            fs::create_dir_all(temp.path().join("src")).unwrap();
+            fs::write(temp.path().join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+            let build =
+                SourceGraphBuild::build_incremental(temp.path(), &["src/lib.rs".into()], None)
+                    .unwrap()
+                    .publish(temp.path())
+                    .unwrap();
+            (temp, build)
+        }
+
+        fn publish_and_assert(
+            root: &Path,
+            source_files: &[String],
+            previous: Option<&SourceGraphBuild>,
+        ) -> SourceGraphBuild {
+            reset_work_counts();
+            let build = SourceGraphBuild::build_incremental(root, source_files, previous)
+                .unwrap()
+                .publish(root)
+                .unwrap();
+            let counts = work_counts();
+            assert_eq!(counts.cache_serializations, 1);
+            assert_eq!(counts.cache_publications, 1);
+            build
+        }
+
+        let (missing, previous) = baseline();
+        fs::remove_file(graph_cache_path(missing.path())).unwrap();
+        publish_and_assert(missing.path(), &["src/lib.rs".into()], Some(&previous));
+
+        let (garbage, _) = baseline();
+        fs::write(graph_cache_path(garbage.path()), "garbage\n").unwrap();
+        let loaded = load_cached(garbage.path());
+        assert!(loaded.is_none());
+        publish_and_assert(garbage.path(), &["src/lib.rs".into()], loaded.as_ref());
+
+        let (wrong_schema, _) = baseline();
+        let cache_path = graph_cache_path(wrong_schema.path());
+        let cache = fs::read_to_string(&cache_path).unwrap().replacen(
+            GRAPH_CACHE_SCHEMA,
+            "criv.source-graph/wrong",
+            1,
+        );
+        fs::write(&cache_path, cache).unwrap();
+        let loaded = load_cached(wrong_schema.path());
+        assert!(loaded.is_none());
+        publish_and_assert(wrong_schema.path(), &["src/lib.rs".into()], loaded.as_ref());
+
+        let (edited, previous) = baseline();
+        fs::write(edited.path().join("src/lib.rs"), "pub fn changed() {}\n").unwrap();
+        publish_and_assert(edited.path(), &["src/lib.rs".into()], Some(&previous));
+
+        let (same_size, previous) = baseline();
+        let source = same_size.path().join("src/lib.rs");
+        let modified = fs::metadata(&source).unwrap().modified().unwrap();
+        fs::write(&source, "pub fn two() {}\n").unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&source)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(modified))
+            .unwrap();
+        publish_and_assert(same_size.path(), &["src/lib.rs".into()], Some(&previous));
+
+        let (added, previous) = baseline();
+        fs::write(added.path().join("src/new.rs"), "pub fn new() {}\n").unwrap();
+        publish_and_assert(
+            added.path(),
+            &["src/lib.rs".into(), "src/new.rs".into()],
+            Some(&previous),
+        );
+
+        let (renamed, previous) = baseline();
+        fs::rename(
+            renamed.path().join("src/lib.rs"),
+            renamed.path().join("src/main.rs"),
+        )
+        .unwrap();
+        publish_and_assert(renamed.path(), &["src/main.rs".into()], Some(&previous));
+
+        let (deleted, previous) = baseline();
+        fs::remove_file(deleted.path().join("src/lib.rs")).unwrap();
+        publish_and_assert(deleted.path(), &[], Some(&previous));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn graph_cache_publication_rejects_a_symlinked_criv_directory() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("vault");
+        let outside = temp.path().join("outside");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+        symlink(&outside, root.join(".criv")).unwrap();
+        let build =
+            SourceGraphBuild::build_incremental(&root, &["src/lib.rs".into()], None).unwrap();
+
+        let error = build.publish(&root).unwrap_err();
+
+        assert!(error.to_string().contains("symlinked vault path component"));
+        assert!(!outside.join("source-graph.json").exists());
     }
 
     #[test]

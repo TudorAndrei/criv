@@ -10,7 +10,9 @@ use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::Recursiv
 use crate::architecture;
 use crate::check;
 use crate::config::Config;
+#[cfg(test)]
 use crate::source_graph::SourceGraph;
+use crate::source_graph::SourceGraphBuild;
 use crate::source_index::{FffSourceIndex, SourceIndex};
 use crate::state::{self, State};
 use crate::util::create_new_in;
@@ -45,7 +47,7 @@ pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
         None
     };
     let (mut vault, mut state) = rebuild(root, cached_graph.as_ref(), shared_source_index.clone())?;
-    let mut source_graph = vault.source_graph().clone();
+    let mut source_graph = vault.source_graph_build().clone();
 
     let docs_path = config.docs_path(root);
     let mut source_watch = shared_source_index
@@ -113,7 +115,7 @@ pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
                     Ok((next_vault, next_state)) => {
                         vault = next_vault;
                         state = next_state;
-                        source_graph = vault.source_graph().clone();
+                        source_graph = vault.source_graph_build().clone();
                     }
                     Err(err) => eprintln!("criv watch: {err}"),
                 }
@@ -161,7 +163,7 @@ fn run_once(root: &Path) -> Result<(Vault, State)> {
 
 fn rebuild(
     root: &Path,
-    previous_graph: Option<&SourceGraph>,
+    previous_graph: Option<&SourceGraphBuild>,
     shared_source_index: Option<Arc<dyn SourceIndex>>,
 ) -> Result<(Vault, State)> {
     let mut vault = previous_graph.map_or_else(
@@ -175,8 +177,13 @@ fn rebuild(
         },
     )?;
     if architecture::write_code_architecture(root, &vault)? {
-        vault =
-            Vault::load_incremental_with_source_index(root, previous_graph, shared_source_index)?;
+        let refreshed_graph = vault.source_graph_build().clone();
+        vault = Vault::load_incremental_with_source_index(
+            root,
+            Some(&refreshed_graph),
+            shared_source_index,
+        )?;
+        vault.retain_source_graph_changes_from(&refreshed_graph);
     }
     let diagnostics = check::validate_with_previous_state(&vault, None);
     let (snapshot, state) = state::write_state(root, &vault)?;
@@ -188,7 +195,7 @@ fn rebuild(
 
 fn rebuild_incremental(
     root: &Path,
-    previous_graph: Option<&SourceGraph>,
+    previous_graph: Option<&SourceGraphBuild>,
     previous_state: Option<&State>,
     shared_source_index: Option<Arc<dyn SourceIndex>>,
 ) -> Result<(Vault, State)> {
@@ -197,13 +204,19 @@ fn rebuild_incremental(
         previous_graph,
         shared_source_index.clone(),
     )?;
+    let changed_files = vault.source_graph().changed_files().to_vec();
     if architecture::write_code_architecture(root, &vault)? {
-        vault =
-            Vault::load_incremental_with_source_index(root, previous_graph, shared_source_index)?;
+        let refreshed_graph = vault.source_graph_build().clone();
+        vault = Vault::load_incremental_with_source_index(
+            root,
+            Some(&refreshed_graph),
+            shared_source_index,
+        )?;
+        vault.retain_source_graph_changes_from(&refreshed_graph);
     }
     let diagnostics = check::validate_with_previous_state(&vault, previous_state);
     let changed_files = previous_state
-        .map(|_| vault.source_graph().changed_files())
+        .map(|_| changed_files.as_slice())
         .unwrap_or(&[]);
     let (snapshot, state) =
         state::write_state_incremental(root, &vault, previous_state, changed_files)?;
@@ -574,7 +587,7 @@ mod tests {
 
             let incremental_previous = (!mutation.docs_changed()).then_some(&incremental_state);
             let incremental_previous_graph =
-                (!mutation.docs_changed()).then_some(incremental_vault.source_graph());
+                (!mutation.docs_changed()).then_some(incremental_vault.source_graph_build());
             reset_refresh_work();
             let (next_incremental_vault, next_incremental_state) = rebuild_incremental(
                 incremental.path(),
@@ -909,27 +922,34 @@ mod tests {
             FixtureMutation::Noop => {
                 assert_eq!(work.source_graph.parsed_files, 0);
                 assert_eq!(work.source_graph.reused_files, 2);
+                assert_eq!(work.source_graph.cache_serializations, 0);
+                assert_eq!(work.source_graph.cache_publications, 0);
                 assert_eq!(work.structural.ast_parses, 0);
             }
             FixtureMutation::DocsProse => {
                 assert_eq!(work.source_graph.parsed_files, 2);
+                assert_eq!(work.source_graph.cache_publications, 1);
                 assert_eq!(work.structural.ast_parses, 1);
             }
             FixtureMutation::SourceEdit | FixtureMutation::SameSizeSourceEdit => {
                 assert_eq!(
-                    work.source_graph.parsed_files, 2,
-                    "the generated-architecture reload currently reparses the changed source"
+                    work.source_graph.parsed_files, 1,
+                    "the generated-architecture reload should reuse the first load's graph"
                 );
+                assert_eq!(work.source_graph.cache_publications, 1);
                 assert_eq!(work.structural.ast_parses, 1);
             }
             FixtureMutation::AddSource | FixtureMutation::RenameSource => {
-                assert_eq!(work.source_graph.parsed_files, 2);
+                assert_eq!(work.source_graph.parsed_files, 1);
+                assert_eq!(work.source_graph.cache_publications, 1);
             }
             FixtureMutation::DeleteSource => {
                 assert_eq!(work.source_graph.parsed_files, 0);
+                assert_eq!(work.source_graph.cache_publications, 1);
             }
             FixtureMutation::PolicyDemotion | FixtureMutation::PolicyPromotionAndGovernance => {
                 assert_eq!(work.source_graph.parsed_files, 2);
+                assert_eq!(work.source_graph.cache_publications, 1);
             }
         }
     }
