@@ -46,94 +46,12 @@ local toml_fmt = (Builtins.taplo_format) {
   glob = List("**/*.toml", ".cargo/**/*.toml")
 }
 
-local plugin_files = List(
-  ".obsidian/plugins/criv/package.json",
-  ".obsidian/plugins/criv/package-lock.json",
-  ".obsidian/plugins/criv/tsconfig.json",
-  ".obsidian/plugins/criv/**/*.ts",
-  ".obsidian/plugins/criv/**/*.mjs",
-  ".obsidian/plugins/criv/test/**/*.mjs",
-  ".obsidian/plugins/criv/fixtures/**/*.json",
-  "crates/criv-wasm/**",
-  "mise.toml",
-  "hk.pkl",
-)
-
-local plugin_format_check = new Step {
-  glob = plugin_files
-  check = "npm --prefix .obsidian/plugins/criv run format:check"
-}
-
-local plugin_lint = new Step {
-  glob = plugin_files
-  check = "npm --prefix .obsidian/plugins/criv run lint"
-}
-
-local plugin_test = new Step {
-  glob = plugin_files
-  check = "npm --prefix .obsidian/plugins/criv test"
-}
-
-local plugin_build = new Step {
-  glob = plugin_files
-  check = "npm --prefix .obsidian/plugins/criv run build"
-}
-
-local vscode_files = List(
-  "extensions/vscode-criv/package.json",
-  "extensions/vscode-criv/package-lock.json",
-  "extensions/vscode-criv/tsconfig.json",
-  "extensions/vscode-criv/**/*.ts",
-  "extensions/vscode-criv/**/*.mjs",
-  "extensions/vscode-criv/**/*.json",
-  "extensions/vscode-criv/test/**/*.ts",
-  "extensions/vscode-criv/scripts/**/*.mjs",
-  "crates/criv-wasm/**",
-  "mise.toml",
-  "hk.pkl",
-)
-
-local vscode_lint = new Step {
-  glob = vscode_files
-  check = "npm --prefix extensions/vscode-criv run lint"
-}
-
-local vscode_test = new Step {
-  glob = vscode_files
-  check = "npm --prefix extensions/vscode-criv test"
-}
-
-local vscode_format_check = new Step {
-  glob = vscode_files
-  check = "npm --prefix extensions/vscode-criv run format:check"
-}
-
-local vscode_json_diagnostics = new Step {
-  glob = List(
-    "extensions/vscode-criv/package.json",
-    "extensions/vscode-criv/language-configuration.json",
-    "extensions/vscode-criv/test/integration/runner.ts",
-    "extensions/vscode-criv/test/run-integration.mjs",
-    "mise.toml",
-    "hk.pkl",
-  )
-  check = "npm --prefix extensions/vscode-criv run test:integration"
-}
-
 local enforce_ci = new Step {
   check = "cargo run --quiet -- enforce --stage ci"
 }
 
 local cargo_audit = new Step {
   check = "cargo audit --no-fetch || { criv_audit_exit=$?; echo \"cargo audit is monitor-only (exit $criv_audit_exit)\"; true; }"
-}
-
-local obsidian_npm_audit = new Step {
-  check = "npm --prefix .obsidian/plugins/criv audit --audit-level=high"
-}
-
-local vscode_npm_audit = new Step {
-  check = "npm --prefix extensions/vscode-criv audit --audit-level=high"
 }
 
 local actionlint = new Step {
@@ -168,8 +86,6 @@ hooks {
       ["toml-fmt"] = toml_fmt
       ["actionlint"] = actionlint
       ["zizmor"] = zizmor
-      ["vscode-lint"] = vscode_lint
-      ["vscode-json-diagnostics"] = vscode_json_diagnostics
       ["criv-check"] = staged_docs
       ["criv-enforce"] = enforce_commit
     }
@@ -179,7 +95,7 @@ hooks {
     steps {
       ["cargo-clippy"] = cargo_clippy
       ["cargo-test"] = cargo_test
-      ["vscode-test"] = vscode_test
+      ["hawk"] = hawk
       ["criv-enforce"] = enforce_push
     }
   }
@@ -194,16 +110,6 @@ hooks {
       ["cargo-test"] = cargo_test
       ["hawk"] = hawk
       ["cargo-audit"] = cargo_audit
-      ["obsidian-npm-audit"] = obsidian_npm_audit
-      ["vscode-npm-audit"] = vscode_npm_audit
-      ["plugin-format-check"] = plugin_format_check
-      ["plugin-lint"] = plugin_lint
-      ["plugin-test"] = plugin_test
-      ["plugin-build"] = plugin_build
-      ["vscode-format-check"] = vscode_format_check
-      ["vscode-lint"] = vscode_lint
-      ["vscode-test"] = vscode_test
-      ["vscode-json-diagnostics"] = vscode_json_diagnostics
       ["criv-check"] = staged_docs
       ["criv-enforce-ci"] = enforce_ci
     }

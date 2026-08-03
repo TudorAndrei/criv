@@ -118,16 +118,20 @@ mise run release-plan
 mise run release-auto
 ```
 
-Checks and tests are not mise tasks. Every step hk runs is defined in `hk.pkl`
-with its command inline, per
-[[0049-checks-defined-in-hk-not-mise|ADR-0049]]. To run one on its own:
+`mise run check` is the complete local repository-core gate. It covers Rust,
+workflow security, criv validation and enforcement, and the monitor-only Rust
+advisory audit. Every step hk runs is defined in `hk.pkl` with its command
+inline, per [[0049-checks-defined-in-hk-not-mise|ADR-0049]]. To inspect or run
+one core step:
 
 ```sh
 hk check --all --plan                        # list every step
 hk check --all --step hawk
-hk check --all --step plugin-test
-hk check --all --step vscode-json-diagnostics
 ```
+
+Pre-push runs Clippy, workspace tests, Hawk, and criv push enforcement. Hawk is
+kept in both pre-push and the complete local core gate so unnecessary public
+Rust APIs fail before hosted CI.
 
 `mise run perf` runs `scripts/measure-performance.sh` against the current
 vault by default. Pass another vault root to measure larger repositories:
@@ -141,17 +145,30 @@ search startup, validation, CI enforcement, and a no-op snapshot diff. Use those
 numbers before changing source graph parsing, source indexing, snapshot writing,
 or pattern matching behavior.
 
-The `plugin-build` hk step runs `npm --prefix .obsidian/plugins/criv run build`,
-which builds the Obsidian companion plugin and its Rust WASM helper. That npm
-script invokes `wasm-pack` through `mise exec cargo:wasm-pack@0.15.0
-rust@1.97.1`, so the pinned Rust and Cargo toolchain is used rather than whichever
-Rust appears first in the shell environment. The pinning lives in the plugin's
-own `package.json`, so it holds no matter who invokes the script.
+Obsidian and VS Code validation are hosted-CI suites rather than automatic hk
+steps. Contributors changing a companion should run its package scripts
+directly. The Obsidian companion commands are:
+
+```sh
+npm --prefix .obsidian/plugins/criv audit --audit-level=high
+npm --prefix .obsidian/plugins/criv run format:check
+npm --prefix .obsidian/plugins/criv run lint
+npm --prefix .obsidian/plugins/criv test
+npm --prefix .obsidian/plugins/criv run build:wasm
+npm --prefix .obsidian/plugins/criv run build:plugin
+npm --prefix .obsidian/plugins/criv run build
+```
+
+The combined build preserves the release and manual entry point by running the
+Wasm build followed by the plugin build. The Wasm command invokes `wasm-pack`
+through `mise exec cargo:wasm-pack@0.15.0`, so the repository's pinned tools are
+used rather than whichever Rust or `wasm-pack` appears first in the shell.
 
 The VS Code-compatible extension lives in `extensions/vscode-criv`. Its local
 tasks are exposed through mise and npm:
 
 ```sh
+npm --prefix extensions/vscode-criv audit --audit-level=high
 npm --prefix extensions/vscode-criv run build
 npm --prefix extensions/vscode-criv run test
 npm --prefix extensions/vscode-criv run test:integration
@@ -160,10 +177,10 @@ npm --prefix extensions/vscode-criv run format:check
 npm --prefix extensions/vscode-criv run package
 ```
 
-The `vscode-json-diagnostics` hk step launches the VS Code extension integration
-test host and fails on JSON diagnostics for extension manifest and language
-configuration files. This keeps hook validation aligned with the warnings shown
-in VS Code's Problems panel.
+The integration command launches the VS Code extension test host and fails on
+JSON diagnostics for extension manifest and language configuration files. Its
+short temporary user-data and extension-installation paths avoid macOS IPC path
+limits. Hosted CI runs this command under Xvfb; it is not part of local hooks.
 
 The extension renders `.c4` previews locally: Mermaid C4 artifacts use Mermaid
 11, DOT Code artifacts use `@viz-js/viz`, and the preview webview uses packaged
@@ -186,8 +203,9 @@ shell wrapper around `hk util check-conventional-commit`.
 The `hawk` hk step runs Hawk with warnings denied against the shipped `criv` CLI.
 The `criv-wasm` crate is excluded because its exported functions are consumed by
 the separately built WASM artifacts, outside the CLI binary's Cargo graph. The
-full `check` hook runs Hawk whenever Rust sources, Cargo metadata, or its
-configuration change. Hawk uses `target/hawk` for its instrumented Cargo
+pre-push and full `check` hooks run Hawk whenever Rust sources, Cargo metadata,
+or its configuration change. Hawk uses `target/hawk` for its instrumented Cargo
 artifacts so its compiler work stays isolated from the other parallel checks.
-This policy is captured in
-[[0043-hawk-visibility-analysis|ADR-0043]].
+This policy is captured in [[0043-hawk-visibility-analysis|ADR-0043]] and the
+local/hosted validation boundary is
+[[0060-parallel-hosted-validation-and-lean-local-hooks|ADR-0060]].

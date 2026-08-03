@@ -13,8 +13,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check:
-    name: Repository checks
+  core:
+    name: Core repository checks
     runs-on: ubuntu-24.04
 
     steps:
@@ -47,14 +47,6 @@ jobs:
           restore-keys: |
             cargo-${{ runner.os }}-
 
-      - name: Cache npm
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ~/.npm
-          key: npm-${{ runner.os }}-${{ hashFiles('.obsidian/plugins/criv/package-lock.json', 'extensions/vscode-criv/package-lock.json') }}
-          restore-keys: |
-            npm-${{ runner.os }}-
-
       - name: Install mise tools
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
@@ -64,22 +56,154 @@ jobs:
       - name: Install Rust components
         run: rustup component add clippy rustfmt --toolchain 1.97.1
 
-      - name: Install plugin dependencies
+      - name: Emit criv annotations
+        continue-on-error: true
+        run: cargo run --quiet -- check --format github
+
+      - name: Run core repository checks
+        run: mise run check
+
+  wasm:
+    name: Wasm build
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Cache Cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: cargo-wasm-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-wasm-${{ runner.os }}-
+
+      - name: Install mise tools
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          install: true
+          cache: true
+
+      - name: Build Wasm helper
+        run: npm --prefix .obsidian/plugins/criv run build:wasm
+
+  obsidian:
+    name: Obsidian companion
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Cache npm
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.npm
+          key: npm-obsidian-${{ runner.os }}-${{ hashFiles('.obsidian/plugins/criv/package-lock.json') }}
+          restore-keys: |
+            npm-obsidian-${{ runner.os }}-
+
+      - name: Install mise tools
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          install: true
+          cache: true
+
+      - name: Install dependencies
         run: npm --prefix .obsidian/plugins/criv ci
 
-      - name: Install VS Code extension dependencies
+      - name: Audit dependencies
+        run: npm --prefix .obsidian/plugins/criv audit --audit-level=high
+
+      - name: Check formatting
+        run: npm --prefix .obsidian/plugins/criv run format:check
+
+      - name: Lint
+        run: npm --prefix .obsidian/plugins/criv run lint
+
+      - name: Test
+        run: npm --prefix .obsidian/plugins/criv test
+
+      - name: Build plugin
+        run: npm --prefix .obsidian/plugins/criv run build:plugin
+
+  vscode:
+    name: VS Code companion
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Cache npm
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.npm
+          key: npm-vscode-${{ runner.os }}-${{ hashFiles('extensions/vscode-criv/package-lock.json') }}
+          restore-keys: |
+            npm-vscode-${{ runner.os }}-
+
+      - name: Install mise tools
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          install: true
+          cache: true
+
+      - name: Install dependencies
         run: npm --prefix extensions/vscode-criv ci
 
-      - name: Run repository checks
-        run: xvfb-run -a mise run check
+      - name: Audit dependencies
+        run: npm --prefix extensions/vscode-criv audit --audit-level=high
+
+      - name: Check formatting
+        run: npm --prefix extensions/vscode-criv run format:check
+
+      - name: Lint
+        run: npm --prefix extensions/vscode-criv run lint
+
+      - name: Test
+        run: npm --prefix extensions/vscode-criv test
+
+      - name: Run extension-host integration tests
+        run: xvfb-run -a npm --prefix extensions/vscode-criv run test:integration
+
+  check:
+    name: Repository checks
+    runs-on: ubuntu-24.04
+    needs:
+      - core
+      - wasm
+      - obsidian
+      - vscode
+    if: ${{ always() }}
+
+    steps:
+      - name: Require all Linux lanes
+        env:
+          CORE_RESULT: ${{ needs.core.result }}
+          WASM_RESULT: ${{ needs.wasm.result }}
+          OBSIDIAN_RESULT: ${{ needs.obsidian.result }}
+          VSCODE_RESULT: ${{ needs.vscode.result }}
+        run: |
+          test "$CORE_RESULT" = success
+          test "$WASM_RESULT" = success
+          test "$OBSIDIAN_RESULT" = success
+          test "$VSCODE_RESULT" = success
 
   windows:
     name: Windows build and tests
     runs-on: windows-2025
-    # Reports without blocking until #27 and #28 are fixed. Those are
-    # pre-existing Windows failures unrelated to any current change; this job is
-    # the first time criv has been built or tested on Windows. Remove once they
-    # are closed, so the job becomes a real gate.
+    # Reports without blocking until the Windows support policy in #30 lands.
     continue-on-error: true
 
     steps:
