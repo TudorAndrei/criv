@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -9,7 +8,7 @@ use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::Recursiv
 
 use crate::config::Config;
 use crate::refresh::{RefreshCause, RefreshSession};
-use crate::source_index::{FffSourceIndex, SourceIndex};
+use crate::source_index::SourceChange;
 use crate::util::create_new_in;
 use crate::{CrivError, Result};
 
@@ -26,21 +25,10 @@ pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
         return Ok(());
     }
     let config = Config::load(root)?;
-    let shared_source_index: Option<Arc<dyn SourceIndex>> = if config.source_index {
-        Some(Arc::new(FffSourceIndex::new(
-            root,
-            &config.source_roots,
-            &config.source_exclude,
-            true,
-        )?))
-    } else {
-        None
-    };
-    let mut refresh = RefreshSession::live(root, shared_source_index);
+    let mut refresh = RefreshSession::live(root, &config)?;
     refresh.refresh(root, RefreshCause::Initial)?;
 
     let docs_path = config.docs_path(root);
-    let mut source_fingerprint = refresh.source_fingerprint()?;
 
     let (tx, rx) = mpsc::channel::<DebounceEventResult>();
     let mut debouncer = new_debouncer(Duration::from_millis(250), move |event| {
@@ -69,20 +57,13 @@ pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
             Err(mpsc::RecvTimeoutError::Disconnected) => WatchSignal::Disconnected,
         };
 
-        let source_changed = if let Some(source_fingerprint) = &mut source_fingerprint {
-            match refresh.source_fingerprint() {
-                Ok(Some(next_fingerprint)) if next_fingerprint != *source_fingerprint => {
-                    *source_fingerprint = next_fingerprint;
-                    true
-                }
-                Ok(Some(_)) | Ok(None) => false,
-                Err(err) => {
-                    eprintln!("criv watch: source index error: {err}");
-                    false
-                }
+        let source_changed = match refresh.observe_source_change() {
+            Ok(SourceChange::Changed) => true,
+            Ok(SourceChange::Unchanged | SourceChange::Disabled) => false,
+            Err(err) => {
+                eprintln!("criv watch: source index error: {err}");
+                false
             }
-        } else {
-            false
         };
 
         match watch_decision(signal, source_changed) {
@@ -134,7 +115,7 @@ fn watch_decision(signal: WatchSignal, source_changed: bool) -> WatchDecision {
 /// A single `criv watch --once` rebuild, warmed by the on-disk source graph
 /// cache left behind by the previous run.
 fn run_once(root: &Path) -> Result<()> {
-    let mut refresh = RefreshSession::one_shot(root);
+    let mut refresh = RefreshSession::one_shot(root)?;
     refresh.refresh(root, RefreshCause::Initial)?;
     Ok(())
 }

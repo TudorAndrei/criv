@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tempfile::TempDir;
@@ -65,6 +66,22 @@ impl FixtureMutation {
             RefreshCause::SourceChanged
         }
     }
+
+    fn requires_source_observation(self) -> bool {
+        matches!(
+            self,
+            Self::SourceEdit | Self::AddSource | Self::RenameSource | Self::DeleteSource
+        )
+    }
+
+    fn expected_catalog(self) -> Option<&'static [&'static str]> {
+        match self {
+            Self::AddSource => Some(&["src/helper.ts", "src/lib.rs", "src/worker.py"]),
+            Self::RenameSource => Some(&["src/format.ts", "src/lib.rs", "src/worker.py"]),
+            Self::DeleteSource => Some(&["src/lib.rs", "src/worker.py"]),
+            _ => None,
+        }
+    }
 }
 
 #[test]
@@ -72,7 +89,7 @@ fn generated_code_architecture_is_included_in_the_same_refresh_state() {
     let temp = TempDir::new().unwrap();
     write_architecture_fixture(temp.path());
     state::reset_work_counts();
-    let mut refresh = RefreshSession::one_shot(temp.path());
+    let mut refresh = one_shot_session(temp.path());
 
     let result = refresh.refresh(temp.path(), RefreshCause::Initial).unwrap();
 
@@ -95,25 +112,42 @@ fn generated_code_architecture_is_included_in_the_same_refresh_state() {
 fn warm_one_shot_reuses_the_cached_source_graph() {
     let temp = TempDir::new().unwrap();
     write_architecture_fixture(temp.path());
-    let mut cold = RefreshSession::one_shot(temp.path());
+    let mut cold = one_shot_session(temp.path());
     let cold = cold.refresh(temp.path(), RefreshCause::Initial).unwrap();
     assert_eq!(
         cold.vault().source_graph().changed_files(),
         &["src/lib.rs".to_string()]
     );
 
-    let mut warm = RefreshSession::one_shot(temp.path());
+    let mut warm = one_shot_session(temp.path());
     let warm = warm.refresh(temp.path(), RefreshCause::Initial).unwrap();
 
     assert!(warm.vault().source_graph().changed_files().is_empty());
 }
 
 #[test]
+fn live_refresh_reuses_exactly_one_source_index_adapter() {
+    let fixture = incremental_fixture("one-live-adapter");
+    source_index::reset_work_counts();
+    let mut session = live_session(fixture.path());
+    assert_eq!(source_index::work_counts().fff_starts, 1);
+
+    session
+        .refresh(fixture.path(), RefreshCause::Initial)
+        .unwrap();
+    session
+        .refresh(fixture.path(), RefreshCause::DocsChanged)
+        .unwrap();
+
+    assert_eq!(source_index::work_counts().fff_starts, 1);
+}
+
+#[test]
 fn incremental_refresh_matches_a_cache_free_full_rebuild_after_each_mutation() {
     let incremental = incremental_fixture("incremental");
     let full = incremental_fixture("full");
-    let mut incremental_session = RefreshSession::live(incremental.path(), None);
-    let mut full_session = RefreshSession::one_shot(full.path());
+    let mut incremental_session = live_session(incremental.path());
+    let mut full_session = one_shot_session(full.path());
 
     let incremental_result = incremental_session
         .refresh(incremental.path(), RefreshCause::Initial)
@@ -140,6 +174,12 @@ fn incremental_refresh_matches_a_cache_free_full_rebuild_after_each_mutation() {
     ] {
         apply_fixture_mutation(incremental.path(), mutation);
         apply_fixture_mutation(full.path(), mutation);
+        if let Some(expected) = mutation.expected_catalog() {
+            wait_for_source_paths(&incremental_session, mutation.name(), expected);
+        }
+        if mutation.requires_source_observation() {
+            wait_for_source_change(&mut incremental_session, mutation.name());
+        }
         let incremental_previous = incremental_session
             .previous
             .as_ref()
@@ -164,7 +204,7 @@ fn incremental_refresh_matches_a_cache_free_full_rebuild_after_each_mutation() {
         );
 
         fs::remove_file(full.path().join(".criv/source-graph.json")).unwrap();
-        let mut next_full_session = RefreshSession::one_shot(full.path());
+        let mut next_full_session = one_shot_session(full.path());
         let full_result = next_full_session
             .refresh(full.path(), RefreshCause::Initial)
             .unwrap();
@@ -182,7 +222,7 @@ fn incremental_refresh_matches_a_cache_free_full_rebuild_after_each_mutation() {
 fn invalid_graph_cache_schema_converges_with_a_cache_free_build() {
     let incremental = incremental_fixture("invalid-schema-incremental");
     let full = incremental_fixture("invalid-schema-full");
-    let mut initial = RefreshSession::one_shot(incremental.path());
+    let mut initial = one_shot_session(incremental.path());
     initial
         .refresh(incremental.path(), RefreshCause::Initial)
         .unwrap();
@@ -196,13 +236,13 @@ fn invalid_graph_cache_schema_converges_with_a_cache_free_build() {
     .unwrap();
 
     reset_refresh_work();
-    let mut incremental_session = RefreshSession::one_shot(incremental.path());
+    let mut incremental_session = one_shot_session(incremental.path());
     let incremental_result = incremental_session
         .refresh(incremental.path(), RefreshCause::Initial)
         .unwrap();
     let work = refresh_work();
     let incremental_snapshot = refresh_snapshot(incremental.path(), incremental_result, None);
-    let mut full_session = RefreshSession::one_shot(full.path());
+    let mut full_session = one_shot_session(full.path());
     let full_result = full_session
         .refresh(full.path(), RefreshCause::Initial)
         .unwrap();
@@ -221,7 +261,7 @@ fn invalid_graph_cache_schema_converges_with_a_cache_free_build() {
 fn failed_refresh_retries_from_the_last_successful_state() {
     let incremental = incremental_fixture("failed-refresh-incremental");
     let full = incremental_fixture("failed-refresh-full");
-    let mut session = RefreshSession::live(incremental.path(), None);
+    let mut session = live_session(incremental.path());
     session
         .refresh(incremental.path(), RefreshCause::Initial)
         .unwrap();
@@ -252,7 +292,7 @@ fn failed_refresh_retries_from_the_last_successful_state() {
         .refresh(incremental.path(), RefreshCause::SourceChanged)
         .unwrap();
     let recovered = refresh_snapshot(incremental.path(), recovered, Some(&previous));
-    let mut full_session = RefreshSession::one_shot(full.path());
+    let mut full_session = one_shot_session(full.path());
     let full_result = full_session
         .refresh(full.path(), RefreshCause::Initial)
         .unwrap();
@@ -271,6 +311,50 @@ fn incremental_fixture(prefix: &str) -> TempDir {
         temp.path(),
     );
     temp
+}
+
+fn one_shot_session(root: &Path) -> RefreshSession {
+    RefreshSession::one_shot(root).unwrap()
+}
+
+fn live_session(root: &Path) -> RefreshSession {
+    let config = Config::load(root).unwrap();
+    RefreshSession::live(root, &config).unwrap()
+}
+
+fn wait_for_source_change(session: &mut RefreshSession, label: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        match session.observe_source_change().unwrap() {
+            source_index::SourceChange::Changed => return,
+            source_index::SourceChange::Unchanged => {}
+            source_index::SourceChange::Disabled => panic!("{label} used a disabled source index"),
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out observing {label} in the live source catalog"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn wait_for_source_paths(session: &RefreshSession, label: &str, expected: &[&str]) {
+    let expected = expected
+        .iter()
+        .map(|path| (*path).to_string())
+        .collect::<Vec<_>>();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let actual = session.source_paths().unwrap();
+        if actual == expected {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {label}: expected {expected:?}, got {actual:?}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 fn copy_fixture_tree(source: &Path, destination: &Path) {

@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 #[cfg(test)]
 use std::{cell::Cell, thread_local};
@@ -11,7 +10,7 @@ use crate::Result;
 use crate::config::Config;
 use crate::measurement::{self, Counter};
 use crate::source_graph::{SourceGraph, SourceGraphBuild};
-use crate::source_index::{FffSourceIndex, SourceIndex};
+use crate::source_index::{OneShotSourceIndex, SourceIndex, SourceIndexHandle};
 use crate::util::{
     GlobMatcher, find_wiki_links_with_lines, is_adr_id, kebab,
     markdown_headings as parse_markdown_headings, read_to_string, strip_prefix, walk_files,
@@ -142,7 +141,7 @@ pub(crate) struct Vault {
     filenames: BTreeMap<String, usize>,
     titles: BTreeMap<String, usize>,
     source_files: Vec<String>,
-    source_index: Arc<dyn SourceIndex>,
+    source_index: SourceIndexHandle,
     source_graph: SourceGraphBuild,
     patterns: BTreeSet<String>,
     link_resolutions: BTreeMap<String, ResolvedLink>,
@@ -176,15 +175,15 @@ impl Vault {
     pub(crate) fn load_incremental_with_source_index(
         root: &Path,
         previous_graph: Option<&SourceGraphBuild>,
-        shared_source_index: Option<Arc<dyn SourceIndex>>,
+        source_index: SourceIndexHandle,
     ) -> Result<Self> {
-        Self::load_with_source_facilities(root, previous_graph, shared_source_index, true)
+        Self::load_with_source_facilities(root, previous_graph, Some(source_index), true)
     }
 
     fn load_with_source_facilities(
         root: &Path,
         previous_graph: Option<&SourceGraphBuild>,
-        shared_source_index: Option<Arc<dyn SourceIndex>>,
+        source_index: Option<SourceIndexHandle>,
         load_sources: bool,
     ) -> Result<Self> {
         let _span = measurement::span("vault.load");
@@ -216,21 +215,17 @@ impl Vault {
 
         let patterns = registered_policy_patterns(&notes);
 
-        let (source_files, source_index, source_graph): (
-            Vec<String>,
-            Arc<dyn SourceIndex>,
-            SourceGraphBuild,
-        ) = if load_sources && config.source_index {
-            let source_index: Arc<dyn SourceIndex> = match shared_source_index {
+        let source_index = if load_sources {
+            match source_index {
                 Some(source_index) => source_index,
-                None => Arc::new(FffSourceIndex::new(
-                    root,
-                    &config.source_roots,
-                    &config.source_exclude,
-                    false,
-                )?),
-            };
+                None => OneShotSourceIndex::new(root, &config)?.handle(),
+            }
+        } else {
+            SourceIndexHandle::disabled()
+        };
+        let (source_files, source_graph) = if source_index.is_enabled() {
             let source_files = source_index
+                .as_index()
                 .entries()?
                 .into_iter()
                 .map(|entry| entry.path)
@@ -239,13 +234,9 @@ impl Vault {
             let source_graph =
                 SourceGraphBuild::build_incremental(root, &source_files, previous_graph)?
                     .publish(root)?;
-            (source_files, source_index, source_graph)
+            (source_files, source_graph)
         } else {
-            (
-                Vec::new(),
-                Arc::new(EmptySourceIndex),
-                SourceGraphBuild::disabled(),
-            )
+            (Vec::new(), SourceGraphBuild::disabled())
         };
 
         let mut vault = Self {
@@ -383,7 +374,7 @@ impl Vault {
     }
 
     pub(crate) fn resolve_source_path(&self, path: &str) -> Option<(String, bool)> {
-        self.source_index.resolve_partial_path(path)
+        self.source_index.as_index().resolve_partial_path(path)
     }
 
     pub(crate) fn resolve_source_target(&self, target: &str) -> SourceTargetResolution {
@@ -495,7 +486,7 @@ impl Vault {
     }
 
     pub(crate) fn source_index(&self) -> &dyn SourceIndex {
-        self.source_index.as_ref()
+        self.source_index.as_index()
     }
 
     pub(crate) fn patterns(&self) -> &BTreeSet<String> {
@@ -562,7 +553,7 @@ impl Vault {
             filenames,
             titles,
             source_files: Vec::new(),
-            source_index: Arc::new(EmptySourceIndex),
+            source_index: SourceIndexHandle::disabled(),
             source_graph: SourceGraphBuild::disabled(),
             patterns,
             link_resolutions: BTreeMap::new(),
@@ -593,40 +584,6 @@ fn registered_policy_patterns(notes: &[Note]) -> BTreeSet<String> {
             })
         })
         .collect()
-}
-
-#[derive(Debug)]
-struct EmptySourceIndex;
-
-impl SourceIndex for EmptySourceIndex {
-    fn fuzzy_files(
-        &self,
-        _query: &str,
-        _limit: usize,
-    ) -> Result<Vec<crate::source_index::FileHit>> {
-        Ok(Vec::new())
-    }
-
-    fn grep(
-        &self,
-        _query: &str,
-        _mode: crate::source_index::SourceGrepMode,
-        _paths: &[String],
-    ) -> Result<Vec<crate::source_index::GrepHit>> {
-        Ok(Vec::new())
-    }
-
-    fn resolve_partial_path(&self, _path: &str) -> Option<(String, bool)> {
-        None
-    }
-
-    fn entries(&self) -> Result<Vec<crate::source_index::IndexedSource>> {
-        Ok(Vec::new())
-    }
-
-    fn source_fingerprint(&self) -> Result<String> {
-        Ok(String::new())
-    }
 }
 
 fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
@@ -948,8 +905,6 @@ struct RawPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::source_index::FffSourceIndex;
-    use std::sync::Arc;
 
     #[test]
     fn splits_exact_frontmatter_delimiters_with_lf_and_crlf() {
@@ -1328,15 +1283,17 @@ roots = ["src"]
         .unwrap();
         std::fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
 
-        let index: Arc<dyn SourceIndex> =
-            Arc::new(FffSourceIndex::new(&root, &["src".into()], &[], false).unwrap());
+        let config = Config::load(&root).unwrap();
+        let lifecycle = OneShotSourceIndex::new(&root, &config).unwrap();
+        let index = lifecycle.handle();
         let expected = index
+            .as_index()
             .entries()
             .unwrap()
             .into_iter()
             .map(|entry| entry.path)
             .collect::<Vec<_>>();
-        let vault = Vault::load_incremental_with_source_index(&root, None, Some(index)).unwrap();
+        let vault = Vault::load_incremental_with_source_index(&root, None, index).unwrap();
 
         assert_eq!(vault.source_files(), expected);
         assert!(vault.source_graph().files.contains_key("src/lib.rs"));

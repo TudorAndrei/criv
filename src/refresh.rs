@@ -1,11 +1,11 @@
 use std::path::Path;
-use std::sync::Arc;
 
 use crate::Result;
 use crate::architecture;
 use crate::check;
+use crate::config::Config;
 use crate::source_graph::{self, SourceGraphBuild};
-use crate::source_index::SourceIndex;
+use crate::source_index::{LiveSourceIndex, OneShotSourceIndex, SourceChange, SourceIndexHandle};
 use crate::state::{self, State};
 use crate::vault::Vault;
 
@@ -25,25 +25,48 @@ pub(crate) struct RefreshResult {
 #[derive(Debug)]
 pub(crate) struct RefreshSession {
     seed_graph: Option<SourceGraphBuild>,
-    source_index: Option<Arc<dyn SourceIndex>>,
+    source_index: RefreshSourceIndex,
     previous: Option<RefreshResult>,
 }
 
-impl RefreshSession {
-    pub(crate) fn one_shot(root: &Path) -> Self {
-        Self {
-            seed_graph: source_graph::load_cached(root),
-            source_index: None,
-            previous: None,
+#[derive(Debug)]
+enum RefreshSourceIndex {
+    OneShot(OneShotSourceIndex),
+    Live(LiveSourceIndex),
+}
+
+impl RefreshSourceIndex {
+    fn handle(&self) -> SourceIndexHandle {
+        match self {
+            Self::OneShot(index) => index.handle(),
+            Self::Live(index) => index.handle(),
         }
     }
 
-    pub(crate) fn live(root: &Path, source_index: Option<Arc<dyn SourceIndex>>) -> Self {
-        Self {
-            seed_graph: source_graph::load_cached(root),
-            source_index,
-            previous: None,
+    fn observe_source_change(&mut self) -> Result<SourceChange> {
+        match self {
+            Self::OneShot(_) => Ok(SourceChange::Unchanged),
+            Self::Live(index) => index.observe_source_change(),
         }
+    }
+}
+
+impl RefreshSession {
+    pub(crate) fn one_shot(root: &Path) -> Result<Self> {
+        let config = Config::load(root)?;
+        Ok(Self {
+            seed_graph: source_graph::load_cached(root),
+            source_index: RefreshSourceIndex::OneShot(OneShotSourceIndex::new(root, &config)?),
+            previous: None,
+        })
+    }
+
+    pub(crate) fn live(root: &Path, config: &Config) -> Result<Self> {
+        Ok(Self {
+            seed_graph: source_graph::load_cached(root),
+            source_index: RefreshSourceIndex::Live(LiveSourceIndex::new(root, config)?),
+            previous: None,
+        })
     }
 
     pub(crate) fn refresh(&mut self, root: &Path, cause: RefreshCause) -> Result<&RefreshResult> {
@@ -61,7 +84,7 @@ impl RefreshSession {
             root,
             previous_graph,
             previous_state,
-            self.source_index.clone(),
+            self.source_index.handle(),
         )?;
 
         self.seed_graph = None;
@@ -72,11 +95,20 @@ impl RefreshSession {
             .expect("refresh result was just stored"))
     }
 
-    pub(crate) fn source_fingerprint(&self) -> Result<Option<String>> {
-        self.source_index
-            .as_ref()
-            .map(|source_index| source_index.source_fingerprint())
-            .transpose()
+    pub(crate) fn observe_source_change(&mut self) -> Result<SourceChange> {
+        self.source_index.observe_source_change()
+    }
+
+    #[cfg(test)]
+    fn source_paths(&self) -> Result<Vec<String>> {
+        Ok(self
+            .source_index
+            .handle()
+            .as_index()
+            .entries()?
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect())
     }
 }
 
@@ -84,7 +116,7 @@ fn execute(
     root: &Path,
     previous_graph: Option<&SourceGraphBuild>,
     previous_state: Option<&State>,
-    source_index: Option<Arc<dyn SourceIndex>>,
+    source_index: SourceIndexHandle,
 ) -> Result<RefreshResult> {
     let mut vault =
         Vault::load_incremental_with_source_index(root, previous_graph, source_index.clone())?;

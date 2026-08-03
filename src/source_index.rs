@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, UNIX_EPOCH};
 
 #[cfg(test)]
@@ -13,6 +13,7 @@ use fff_search::{
 };
 use regex::Regex;
 
+use crate::config::Config;
 use crate::measurement::{self, Counter};
 use crate::source_paths::{
     SourceRootKind, canonical_source_path, read_source_to_string, source_metadata, source_root_kind,
@@ -25,6 +26,7 @@ const SCAN_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub(crate) struct WorkCounts {
+    pub(crate) fff_starts: usize,
     pub(crate) catalog_traversals: usize,
     pub(crate) source_enumerations: usize,
 }
@@ -32,6 +34,7 @@ pub(crate) struct WorkCounts {
 #[cfg(test)]
 thread_local! {
     static WORK_COUNTS: Cell<WorkCounts> = const { Cell::new(WorkCounts {
+        fff_starts: 0,
         catalog_traversals: 0,
         source_enumerations: 0,
     }) };
@@ -88,11 +91,142 @@ pub(crate) trait SourceIndex: std::fmt::Debug + Send + Sync {
     fn grep(&self, query: &str, mode: SourceGrepMode, paths: &[String]) -> Result<Vec<GrepHit>>;
     fn resolve_partial_path(&self, path: &str) -> Option<(String, bool)>;
     fn entries(&self) -> Result<Vec<IndexedSource>>;
-    fn source_fingerprint(&self) -> Result<String>;
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SourceIndexHandle {
+    adapter: SourceIndexAdapter,
+}
+
+#[derive(Debug, Clone)]
+enum SourceIndexAdapter {
+    Fff(Arc<FffSourceIndex>),
+    Empty(Arc<EmptySourceIndex>),
+}
+
+impl SourceIndexHandle {
+    fn enabled(index: Arc<FffSourceIndex>) -> Self {
+        Self {
+            adapter: SourceIndexAdapter::Fff(index),
+        }
+    }
+
+    pub(crate) fn disabled() -> Self {
+        Self {
+            adapter: SourceIndexAdapter::Empty(Arc::new(EmptySourceIndex)),
+        }
+    }
+
+    pub(crate) fn is_enabled(&self) -> bool {
+        matches!(self.adapter, SourceIndexAdapter::Fff(_))
+    }
+
+    pub(crate) fn as_index(&self) -> &dyn SourceIndex {
+        match &self.adapter {
+            SourceIndexAdapter::Fff(index) => index.as_ref(),
+            SourceIndexAdapter::Empty(index) => index.as_ref(),
+        }
+    }
 }
 
 #[derive(Debug)]
-pub(crate) struct FffSourceIndex {
+pub(crate) struct OneShotSourceIndex {
+    handle: SourceIndexHandle,
+}
+
+impl OneShotSourceIndex {
+    pub(crate) fn new(root: &Path, config: &Config) -> Result<Self> {
+        let handle = if config.source_index {
+            SourceIndexHandle::enabled(Arc::new(FffSourceIndex::new(
+                root,
+                &config.source_roots,
+                &config.source_exclude,
+                SourceIndexLifetime::OneShot,
+            )?))
+        } else {
+            SourceIndexHandle::disabled()
+        };
+        Ok(Self { handle })
+    }
+
+    pub(crate) fn handle(&self) -> SourceIndexHandle {
+        self.handle.clone()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum SourceChange {
+    Changed,
+    Unchanged,
+    Disabled,
+}
+
+#[derive(Debug)]
+pub(crate) struct LiveSourceIndex {
+    handle: SourceIndexHandle,
+    index: Option<Arc<FffSourceIndex>>,
+    fingerprint: Option<String>,
+}
+
+impl LiveSourceIndex {
+    pub(crate) fn new(root: &Path, config: &Config) -> Result<Self> {
+        let index = config
+            .source_index
+            .then(|| {
+                FffSourceIndex::new(
+                    root,
+                    &config.source_roots,
+                    &config.source_exclude,
+                    SourceIndexLifetime::Live,
+                )
+                .map(Arc::new)
+            })
+            .transpose()?;
+        let fingerprint = index
+            .as_ref()
+            .map(|index| index.source_fingerprint())
+            .transpose()?;
+        let handle = index
+            .as_ref()
+            .map_or_else(SourceIndexHandle::disabled, |index| {
+                SourceIndexHandle::enabled(index.clone())
+            });
+        Ok(Self {
+            handle,
+            index,
+            fingerprint,
+        })
+    }
+
+    pub(crate) fn handle(&self) -> SourceIndexHandle {
+        self.handle.clone()
+    }
+
+    pub(crate) fn observe_source_change(&mut self) -> Result<SourceChange> {
+        let Some(index) = &self.index else {
+            return Ok(SourceChange::Disabled);
+        };
+        let next = index.source_fingerprint()?;
+        let changed = self
+            .fingerprint
+            .replace(next.clone())
+            .is_some_and(|previous| previous != next);
+        Ok(if changed {
+            SourceChange::Changed
+        } else {
+            SourceChange::Unchanged
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum SourceIndexLifetime {
+    OneShot,
+    Live,
+}
+
+#[derive(Debug)]
+struct FffSourceIndex {
     root: PathBuf,
     source_roots: Vec<String>,
     source_excludes: GlobMatcher,
@@ -109,12 +243,15 @@ struct ScopedPicker {
 }
 
 impl FffSourceIndex {
-    pub(crate) fn new(
+    fn new(
         root: &Path,
         source_roots: &[String],
         source_exclude: &[String],
-        watch: bool,
+        lifetime: SourceIndexLifetime,
     ) -> Result<Self> {
+        #[cfg(test)]
+        record_work(|counts| counts.fff_starts += 1);
+        let watch = lifetime == SourceIndexLifetime::Live;
         let source_roots = normalize_source_roots(source_roots);
         let source_excludes = GlobMatcher::new(source_exclude)?;
         let scan_plan = SourceScanPlan::new(root, &source_roots)?;
@@ -154,7 +291,7 @@ impl FffSourceIndex {
             source_excludes,
             pickers,
             explicit_files: scan_plan.files,
-            source_files_cache: (!watch).then(OnceLock::new),
+            source_files_cache: (lifetime == SourceIndexLifetime::OneShot).then(OnceLock::new),
         })
     }
 
@@ -224,6 +361,36 @@ impl FffSourceIndex {
         Ok(files.into_iter().collect())
     }
 
+    fn source_fingerprint(&self) -> Result<String> {
+        let mut rows = Vec::new();
+        for scoped in &self.pickers {
+            rows.extend(self.with_picker(scoped, |picker| {
+                picker
+                    .get_files()
+                    .iter()
+                    .filter(|file| !file.is_binary() && !file.is_deleted())
+                    .filter_map(|file| {
+                        let path = prefixed_path(&scoped.prefix, file.relative_path(picker));
+                        self.indexed_path(path.clone())
+                            .is_some()
+                            .then_some(format!("{path}\0{}\0{}", file.size, file.modified))
+                    })
+                    .collect::<Vec<_>>()
+            })?);
+        }
+        rows.extend(
+            self.explicit_files
+                .iter()
+                .filter(|path| self.indexed_path((*path).clone()).is_some())
+                .filter_map(|path| explicit_file_fingerprint(&self.root, path).ok()),
+        );
+        rows.sort();
+        rows.dedup();
+        Ok(blake3::hash(rows.join("\n").as_bytes())
+            .to_hex()
+            .to_string())
+    }
+
     fn explicit_file_hits(&self, query: &str) -> Vec<FileHit> {
         self.explicit_files
             .iter()
@@ -271,14 +438,6 @@ impl FffSourceIndex {
             }
         }
         rows
-    }
-
-    #[cfg(test)]
-    fn scanned_roots(&self) -> Vec<String> {
-        self.pickers
-            .iter()
-            .map(|picker| picker.prefix.clone())
-            .collect()
     }
 }
 
@@ -496,35 +655,26 @@ impl SourceIndex for FffSourceIndex {
         entries.sort_by(|left, right| left.path.cmp(&right.path));
         Ok(entries)
     }
+}
 
-    fn source_fingerprint(&self) -> Result<String> {
-        let mut rows = Vec::new();
-        for scoped in &self.pickers {
-            rows.extend(self.with_picker(scoped, |picker| {
-                picker
-                    .get_files()
-                    .iter()
-                    .filter(|file| !file.is_binary() && !file.is_deleted())
-                    .filter_map(|file| {
-                        let path = prefixed_path(&scoped.prefix, file.relative_path(picker));
-                        self.indexed_path(path.clone())
-                            .is_some()
-                            .then_some(format!("{path}\0{}\0{}", file.size, file.modified))
-                    })
-                    .collect::<Vec<_>>()
-            })?);
-        }
-        rows.extend(
-            self.explicit_files
-                .iter()
-                .filter(|path| self.indexed_path((*path).clone()).is_some())
-                .filter_map(|path| explicit_file_fingerprint(&self.root, path).ok()),
-        );
-        rows.sort();
-        rows.dedup();
-        Ok(blake3::hash(rows.join("\n").as_bytes())
-            .to_hex()
-            .to_string())
+#[derive(Debug)]
+struct EmptySourceIndex;
+
+impl SourceIndex for EmptySourceIndex {
+    fn fuzzy_files(&self, _query: &str, _limit: usize) -> Result<Vec<FileHit>> {
+        Ok(Vec::new())
+    }
+
+    fn grep(&self, _query: &str, _mode: SourceGrepMode, _paths: &[String]) -> Result<Vec<GrepHit>> {
+        Ok(Vec::new())
+    }
+
+    fn resolve_partial_path(&self, _path: &str) -> Option<(String, bool)> {
+        None
+    }
+
+    fn entries(&self) -> Result<Vec<IndexedSource>> {
+        Ok(Vec::new())
     }
 }
 
@@ -587,6 +737,7 @@ fn explicit_file_fingerprint(root: &Path, path: &str) -> Result<String> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::time::Instant;
     use tempfile::TempDir;
 
     #[test]
@@ -601,20 +752,12 @@ mod tests {
         fs::write(root.join("Cargo.toml"), "[package]\nname = \"fixture\"\n").unwrap();
         fs::write(root.join("docs/ignored.md"), "# ignored\n").unwrap();
 
-        let index = FffSourceIndex::new(
-            root,
-            &[
-                "src".into(),
-                ".github/workflows".into(),
-                "Cargo.toml".into(),
-            ],
-            &[],
-            false,
-        )
-        .unwrap();
         reset_work_counts();
+        let config = test_config(&["src", ".github/workflows", "Cargo.toml"], &[], true);
+        let lifecycle = OneShotSourceIndex::new(root, &config).unwrap();
+        let handle = lifecycle.handle();
+        let index = handle.as_index();
 
-        assert_eq!(index.scanned_roots(), vec![".github/workflows", "src"]);
         let entries = index
             .entries()
             .unwrap()
@@ -650,7 +793,14 @@ mod tests {
                 .iter()
                 .any(|hit| hit.path == "Cargo.toml" && hit.line == 1)
         );
-        assert_eq!(index.source_files().unwrap(), index.source_files().unwrap());
+        assert_eq!(
+            index.resolve_partial_path("lib.rs"),
+            Some(("src/lib.rs".into(), false))
+        );
+        assert_eq!(
+            index.resolve_partial_path("lib.rs"),
+            Some(("src/lib.rs".into(), false))
+        );
         let error = index
             .grep("[", SourceGrepMode::Regex, &[])
             .expect_err("invalid regex should fail");
@@ -658,6 +808,7 @@ mod tests {
         assert_eq!(
             work_counts(),
             WorkCounts {
+                fff_starts: 1,
                 catalog_traversals: 1,
                 source_enumerations: 1,
             },
@@ -679,19 +830,14 @@ mod tests {
         fs::write(root.join("Cargo.toml"), "[package]\nname = \"fixture\"\n").unwrap();
         fs::write(root.join("binary.bin"), [0_u8, 159, 146, 150]).unwrap();
 
-        let index = FffSourceIndex::new(
-            root,
-            &[
-                "src".into(),
-                "src/nested".into(),
-                "Cargo.toml".into(),
-                "binary.bin".into(),
-                "src".into(),
-            ],
-            &["src/excluded.rs".into()],
-            false,
-        )
-        .unwrap();
+        let config = test_config(
+            &["src", "src/nested", "Cargo.toml", "binary.bin", "src"],
+            &["src/excluded.rs"],
+            true,
+        );
+        let lifecycle = OneShotSourceIndex::new(root, &config).unwrap();
+        let handle = lifecycle.handle();
+        let index = handle.as_index();
 
         let paths = index
             .entries()
@@ -711,9 +857,86 @@ mod tests {
     }
 
     #[test]
+    fn one_shot_lifecycle_keeps_one_stable_enumeration() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/one.rs"), "fn one() {}\n").unwrap();
+        let config = test_config(&["src"], &[], true);
+
+        reset_work_counts();
+        let lifecycle = OneShotSourceIndex::new(root, &config).unwrap();
+        let handle = lifecycle.handle();
+        assert_eq!(paths(&handle), vec!["src/one.rs"]);
+        fs::write(root.join("src/two.rs"), "fn two() {}\n").unwrap();
+        assert_eq!(paths(&handle), vec!["src/one.rs"]);
+        assert_eq!(work_counts().fff_starts, 1);
+        assert_eq!(work_counts().source_enumerations, 1);
+    }
+
+    #[test]
+    fn live_lifecycle_observes_add_modify_rename_and_delete() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/one.rs"), "fn one() {}\n").unwrap();
+        let config = test_config(&["src"], &[], true);
+
+        reset_work_counts();
+        let mut lifecycle = LiveSourceIndex::new(root, &config).unwrap();
+        let handle = lifecycle.handle();
+        assert_eq!(paths(&handle), vec!["src/one.rs"]);
+        assert_eq!(
+            lifecycle.observe_source_change().unwrap(),
+            SourceChange::Unchanged
+        );
+
+        fs::write(root.join("src/two.rs"), "fn two() {}\n").unwrap();
+        wait_for_paths(&handle, &["src/one.rs", "src/two.rs"]);
+        wait_for_change(&mut lifecycle, "source addition");
+
+        fs::write(
+            root.join("src/one.rs"),
+            "fn one() { println!(\"changed\"); }\n",
+        )
+        .unwrap();
+        wait_for_change(&mut lifecycle, "source modification");
+
+        fs::rename(root.join("src/two.rs"), root.join("src/three.rs")).unwrap();
+        wait_for_paths(&handle, &["src/one.rs", "src/three.rs"]);
+        wait_for_change(&mut lifecycle, "source rename");
+
+        fs::remove_file(root.join("src/three.rs")).unwrap();
+        wait_for_paths(&handle, &["src/one.rs"]);
+        wait_for_change(&mut lifecycle, "source deletion");
+
+        assert_eq!(work_counts().fff_starts, 1);
+    }
+
+    #[test]
+    fn disabled_lifecycles_use_the_empty_adapter_without_starting_fff() {
+        let temp = TempDir::new().unwrap();
+        let config = test_config(&["src"], &[], false);
+
+        reset_work_counts();
+        let one_shot = OneShotSourceIndex::new(temp.path(), &config).unwrap();
+        let mut live = LiveSourceIndex::new(temp.path(), &config).unwrap();
+
+        assert!(!one_shot.handle().is_enabled());
+        assert!(!live.handle().is_enabled());
+        assert!(paths(&one_shot.handle()).is_empty());
+        assert_eq!(
+            live.observe_source_change().unwrap(),
+            SourceChange::Disabled
+        );
+        assert_eq!(work_counts().fff_starts, 0);
+    }
+
+    #[test]
     fn source_index_rejects_parent_traversing_source_roots() {
         let temp = TempDir::new().unwrap();
-        let error = FffSourceIndex::new(temp.path(), &["../outside".into()], &[], false)
+        let config = test_config(&["../outside"], &[], true);
+        let error = OneShotSourceIndex::new(temp.path(), &config)
             .expect_err("parent source root should fail");
 
         assert!(error.to_string().contains("parent-directory"));
@@ -732,16 +955,72 @@ mod tests {
         fs::write(outside.join("secret.rs"), "pub fn secret() {}\n").unwrap();
         symlink(&outside, root.join("src")).unwrap();
 
-        let error = FffSourceIndex::new(&root, &["src".into()], &[], false)
-            .expect_err("symlinked source root should fail");
+        let config = test_config(&["src"], &[], true);
+        let error =
+            OneShotSourceIndex::new(&root, &config).expect_err("symlinked source root should fail");
         assert!(error.to_string().contains("must not be a symlink"));
 
         fs::remove_file(root.join("src")).unwrap();
         fs::create_dir_all(root.join("src")).unwrap();
         symlink(outside.join("secret.rs"), root.join("src/secret.rs")).unwrap();
 
-        let error = FffSourceIndex::new(&root, &["src/secret.rs".into()], &[], false)
+        let config = test_config(&["src/secret.rs"], &[], true);
+        let error = OneShotSourceIndex::new(&root, &config)
             .expect_err("symlinked source file root should fail");
         assert!(error.to_string().contains("must not be a symlink"));
+    }
+
+    fn test_config(roots: &[&str], exclude: &[&str], source_index: bool) -> Config {
+        Config {
+            source_roots: roots.iter().map(|root| (*root).to_string()).collect(),
+            source_exclude: exclude
+                .iter()
+                .map(|pattern| (*pattern).to_string())
+                .collect(),
+            source_index,
+            ..Config::default()
+        }
+    }
+
+    fn paths(handle: &SourceIndexHandle) -> Vec<String> {
+        handle
+            .as_index()
+            .entries()
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect()
+    }
+
+    fn wait_for_paths(handle: &SourceIndexHandle, expected: &[&str]) {
+        let expected = expected
+            .iter()
+            .map(|path| (*path).to_string())
+            .collect::<Vec<_>>();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let actual = paths(handle);
+            if actual == expected {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "expected {expected:?}, got {actual:?}"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    fn wait_for_change(lifecycle: &mut LiveSourceIndex, label: &str) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match lifecycle.observe_source_change().unwrap() {
+                SourceChange::Changed => return,
+                SourceChange::Unchanged => {}
+                SourceChange::Disabled => panic!("{label} used a disabled source index"),
+            }
+            assert!(Instant::now() < deadline, "timed out observing {label}");
+            std::thread::sleep(Duration::from_millis(25));
+        }
     }
 }
