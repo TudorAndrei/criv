@@ -138,35 +138,40 @@ Pre-push runs Clippy, workspace tests, Hawk, and criv push enforcement. Hawk is
 kept in both pre-push and the hosted CI profile so unnecessary public Rust APIs
 fail before hosted CI during normal local development.
 
-`mise run perf` runs `scripts/measure-performance.sh` against the current
-vault by default. Pass another vault root to measure larger repositories:
+`mise run perf` generates isolated vaults from the checked-in `barrs-small`
+and `criv-medium` manifests, then measures an explicit release binary. Build
+that binary first and identify its profile at the command line:
 
 ```sh
-mise run perf -- /path/to/large/criv-vault
+cargo build --release
+mise run perf -- --binary target/release/criv --profile release
 ```
 
-The script records repeated samples for cold and warm `watch --once`,
+The script records repeated samples for cold, warm, and changed `watch --once`,
 source-index file search startup, validation, CI enforcement, docs-only
 `next-adr-id`, `orphan-docs`, and `nodes --kind doc` queries, and a no-op
-snapshot diff. It prints every real/user/system sample plus min/median/max real
-time for each command. Five samples are collected by default; set
-`CRIV_PERF_SAMPLES` to a positive integer to change the count:
+snapshot diff. Five samples are collected by default; use `--samples` to
+change the count or repeat `--case` to select cases:
 
 ```sh
-CRIV_PERF_SAMPLES=9 mise run perf -- /path/to/large/criv-vault
+mise run perf -- --binary target/release/criv --profile release --samples 9
+mise run perf -- --binary target/release/criv --profile release --case check
 ```
 
-The report includes the vault revision, binary path, and sample count. Use the
-same binary profile, vault contents, sample count, and machine conditions for a
-before/after pair. The cold/warm labels preserve the ordered watch cases but do
-not reset operating-system caches between samples. Whole-command wall-clock
-samples are supporting evidence; deterministic work counters in Rust tests are
-the stronger evidence when a change claims to remove repeated internal work.
-For capability-directed resolution work, capture three reports: the baseline,
-the Wikilink-dispatch revision, and the query-loading revision. Compare
-`check`/`watch_once_warm` across the first two reports, then compare
-`query_next_adr_id`, `query_orphan_docs`, `query_nodes_docs`, and `diff_latest`
-across the second and third so the two changes remain isolated.
+Every recorded sample receives a fresh generated vault. Warm cases perform an
+untimed state-building run inside that vault before the recorded command, and
+the changed case mutates the manifest's declared number of supported source
+files without changing their sizes. A unique result directory preserves the
+run identity, exact manifest copies, raw JSONL samples, stdout/stderr, and a
+JSON summary with min/median/max and median absolute deviation. Failed samples
+remain in the raw evidence and make the harness fail.
+
+`mise run perf-container` runs one ignored smoke case through Testcontainers.
+It builds criv and the harness inside a digest-pinned Rust Linux image. Docker
+is only an optional execution environment: the same checked-in manifests and
+generator define the vaults, results have their own container machine identity,
+and this task is not part of hooks or hosted CI. A Docker-API-compatible runtime
+is required. Large-workload measurement remains deferred.
 
 Obsidian and VS Code validation are hosted-CI suites rather than automatic hk
 steps. Contributors changing a companion should run its package scripts

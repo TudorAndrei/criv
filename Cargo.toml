@@ -9,7 +9,7 @@ homepage = "https://github.com/TudorAndrei/criv"
 documentation = "https://docs.rs/criv"
 
 [workspace]
-members = ["crates/criv-wasm"]
+members = ["crates/criv-wasm", "scripts/performance"]
 
 [profile.release]
 strip = true
@@ -69,3 +69,4 @@ junction = "2"
 assert_cmd = "2"
 predicates = "3"
 tempfile = "3"
+testcontainers = { version = "0.27.3", features = ["blocking"] }

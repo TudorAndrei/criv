@@ -1,0 +1,13 @@
+{
+  "schema": "criv.performance-workloads.v1",
+  "canonical": [
+    "barrs-small.toml",
+    "criv-medium.toml"
+  ],
+  "deferred": [
+    {
+      "tier": "large",
+      "reason": "No maintainer-approved observed large criv vault is available."
+    }
+  ]
+}

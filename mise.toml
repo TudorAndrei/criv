@@ -32,8 +32,12 @@ description = "Cut a tag-only release from conventional commits"
 run = "bash scripts/release-auto.sh"
 
 [tasks.perf]
-description = "Measure criv local performance on this or another vault"
+description = "Measure criv performance with canonical generated workloads"
 run = "bash scripts/measure-performance.sh"
+
+[tasks.perf-container]
+description = "Smoke-test the performance harness in a pinned Docker environment"
+run = "cargo test --test performance_container performance_harness_runs_in_pinned_container -- --ignored --nocapture"
 
 [tasks.vscode-build]
 description = "Build the VS Code-compatible companion extension"
