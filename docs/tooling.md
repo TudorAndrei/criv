@@ -119,7 +119,7 @@ mise run release-auto
 
 Pre-commit and pre-push are the automatic local validation boundary. Agents and
 contributors do not need to replay them with an aggregate command after each
-commit. The former `mise run check` aggregate task has been removed.
+commit. The former local aggregate task has been removed.
 
 Hosted CI invokes the complete hk `check` profile directly. Every step hk runs
 is defined in `hk.pkl` with its command inline, per

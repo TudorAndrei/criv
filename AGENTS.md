@@ -20,8 +20,8 @@ repository.
 | `mise run fix` | Apply configured formatting/fixers to modified files. |
 
 Pre-commit and pre-push hooks run their validation phases automatically. Do not
-replay them after each commit with an aggregate task; no `mise run check` task
-exists. Use the commands above only for targeted development or diagnosis.
+replay them after each commit; no local aggregate task exists. Use the commands
+above only for targeted development or diagnosis.
 
 ## Conventions
 

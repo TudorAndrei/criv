@@ -311,18 +311,18 @@ criv --usage | usage generate markdown --file - --out-file docs/cli.md
 criv --usage | usage generate manpage --file - --out-file criv.1
 ```
 
-In this repository, the common manual tasks are:
+The installed pre-commit and pre-push hooks run their validation phases
+automatically. The common manual fixer is:
 
 ```sh
-mise run pre-commit
-mise run pre-push
-mise run check
 mise run fix
 ```
 
-Checks and tests are defined in `hk.pkl`, not as mise tasks. Run one on its own
-with `hk check --all --step <name>`, for example `hk check --all --step hawk` or
-`hk check --all --step vscode-test`. `hk check --all --plan` lists every step.
+The hosted core profile is defined in `hk.pkl`, not as a mise task. For targeted
+diagnosis, run one step with `hk check --all --step <name>`; for example,
+`hk check --all --step hawk`. `hk check --all --plan` lists every hosted core
+step. Companion checks use the package commands documented in
+[[tooling|Tooling and Git Hooks]].
 
 ## Obsidian Extension
 
