@@ -142,6 +142,7 @@ pub(crate) struct Vault {
     source_files: Vec<String>,
     source_index: SourceIndexHandle,
     source_graph: SourceGraphBuild,
+    effective_decisions: BTreeSet<String>,
     patterns: BTreeSet<String>,
     link_resolutions: BTreeMap<String, ResolvedLink>,
 }
@@ -211,7 +212,8 @@ impl Vault {
             }
         }
 
-        let patterns = registered_policy_patterns(&notes);
+        let effective_decisions = effective_accepted_decision_ids(&notes);
+        let patterns = registered_policy_patterns(&notes, &effective_decisions);
 
         let source_index = if load_sources {
             match source_index {
@@ -246,6 +248,7 @@ impl Vault {
             source_files,
             source_index,
             source_graph,
+            effective_decisions,
             patterns,
             link_resolutions: BTreeMap::new(),
         };
@@ -522,6 +525,18 @@ impl Vault {
         }
     }
 
+    pub(crate) fn is_effective_decision(&self, note: &Note) -> bool {
+        note.id
+            .as_ref()
+            .is_some_and(|id| self.effective_decisions.contains(id))
+    }
+
+    pub(crate) fn is_historical_decision(&self, note: &Note) -> bool {
+        note.kind == NoteKind::Decision
+            && note.status.as_deref() == Some("accepted")
+            && !self.is_effective_decision(note)
+    }
+
     #[cfg(test)]
     pub(crate) fn from_parts_for_test(notes: Vec<Note>) -> Self {
         let mut note_ids = BTreeMap::new();
@@ -538,7 +553,8 @@ impl Vault {
                 titles.entry(title.to_lowercase()).or_insert(index);
             }
         }
-        let patterns = registered_policy_patterns(&notes);
+        let effective_decisions = effective_accepted_decision_ids(&notes);
+        let patterns = registered_policy_patterns(&notes, &effective_decisions);
 
         let mut vault = Self {
             config: Config::default(),
@@ -550,6 +566,7 @@ impl Vault {
             source_files: Vec::new(),
             source_index: SourceIndexHandle::disabled(),
             source_graph: SourceGraphBuild::disabled(),
+            effective_decisions,
             patterns,
             link_resolutions: BTreeMap::new(),
         };
@@ -558,16 +575,16 @@ impl Vault {
     }
 }
 
-/// Returns the policy IDs published in generated state.
-///
-/// Policy lookup remains status-agnostic for validation, search, and wikilink
-/// resolution. State registration is deliberately narrower: only policies
-/// owned by an accepted ADR are published.
-fn registered_policy_patterns(notes: &[Note]) -> BTreeSet<String> {
+fn registered_policy_patterns(
+    notes: &[Note],
+    effective_decisions: &BTreeSet<String>,
+) -> BTreeSet<String> {
     notes
         .iter()
         .filter(|note| {
-            note.kind == NoteKind::Decision && note.status.as_deref() == Some("accepted")
+            note.id
+                .as_ref()
+                .is_some_and(|id| effective_decisions.contains(id))
         })
         .filter_map(|note| note.id.as_deref().map(|id| (id, note)))
         .flat_map(|(id, note)| {
@@ -579,6 +596,36 @@ fn registered_policy_patterns(notes: &[Note]) -> BTreeSet<String> {
             })
         })
         .collect()
+}
+
+fn effective_accepted_decision_ids(notes: &[Note]) -> BTreeSet<String> {
+    let decisions = notes
+        .iter()
+        .filter(|note| note.kind == NoteKind::Decision)
+        .filter_map(|note| note.id.as_deref().map(|id| (id, note)))
+        .collect::<BTreeMap<_, _>>();
+    let accepted = decisions
+        .iter()
+        .filter(|(_, note)| note.status.as_deref() == Some("accepted"))
+        .map(|(id, _)| (*id).to_string())
+        .collect::<BTreeSet<_>>();
+
+    let mut superseded = BTreeSet::new();
+    let mut pending = decisions
+        .values()
+        .filter(|note| note.status.as_deref() == Some("accepted"))
+        .flat_map(|note| note.supersedes.iter().cloned())
+        .collect::<Vec<_>>();
+    while let Some(id) = pending.pop() {
+        if !superseded.insert(id.clone()) {
+            continue;
+        }
+        if let Some(note) = decisions.get(id.as_str()) {
+            pending.extend(note.supersedes.iter().cloned());
+        }
+    }
+
+    accepted.difference(&superseded).cloned().collect()
 }
 
 fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
@@ -1084,6 +1131,80 @@ policy:
             ResolvedLink::Pattern {
                 id: "ADR-0002/draft".into()
             }
+        );
+    }
+
+    #[test]
+    fn accepted_successors_make_predecessors_historical_transitively() {
+        let mut old = parsed_note(
+            "criv-old-policy-registration",
+            r#"---
+id: ADR-0001
+kind: decision
+title: Old
+status: accepted
+policy:
+  patterns:
+    - id: old
+---
+
+# Old
+"#,
+        );
+        let middle = parsed_note(
+            "criv-middle-policy-registration",
+            r#"---
+id: ADR-0002
+kind: decision
+title: Middle
+status: draft
+supersedes:
+  - ADR-0001
+---
+
+# Middle
+"#,
+        );
+        let newest = parsed_note(
+            "criv-newest-policy-registration",
+            r#"---
+id: ADR-0003
+kind: decision
+title: Newest
+status: accepted
+supersedes:
+  - ADR-0002
+---
+
+# Newest
+"#,
+        );
+        let vault = Vault::from_parts_for_test(vec![old.clone(), middle, newest]);
+
+        assert!(vault.is_historical_decision(&old));
+        assert!(vault.patterns().is_empty());
+        assert!(vault.resolve_policy_pattern("ADR-0001/old").is_some());
+
+        old.supersedes.clear();
+        let draft_successor = parsed_note(
+            "criv-draft-successor-registration",
+            r#"---
+id: ADR-0002
+kind: decision
+title: Draft successor
+status: draft
+supersedes:
+  - ADR-0001
+---
+
+# Draft successor
+"#,
+        );
+        let vault = Vault::from_parts_for_test(vec![old.clone(), draft_successor]);
+        assert!(vault.is_effective_decision(&old));
+        assert_eq!(
+            vault.patterns(),
+            &BTreeSet::from(["ADR-0001/old".to_string()])
         );
     }
 

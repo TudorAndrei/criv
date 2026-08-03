@@ -329,6 +329,121 @@ fn failed_refresh_retries_from_the_last_successful_state() {
     assert_refresh_eq("failed refresh retry", &recovered, &full_snapshot);
 }
 
+#[test]
+fn unresolved_effective_governance_keeps_last_good_state_and_recovers() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("docs/adr")).unwrap();
+    fs::create_dir_all(root.join("docs/architecture")).unwrap();
+    fs::write(
+        root.join("criv.toml"),
+        r#"[source]
+roots = ["src"]
+
+[architecture.code]
+output = "docs/architecture/04-code.c4"
+title = "Code"
+"#,
+    )
+    .unwrap();
+    fs::write(root.join("src/retired.rs"), "fn retired() {}\n").unwrap();
+    fs::write(root.join("src/current.rs"), "fn current() {}\n").unwrap();
+    fs::write(
+        root.join("docs/adr/0001-retired.md"),
+        r#"---
+id: ADR-0001
+kind: decision
+title: Retired implementation
+status: accepted
+governs:
+  - src/retired.rs
+policy:
+  patterns:
+    - id: functions
+      language: rust
+      pattern: "fn $NAME() { $$$ }"
+---
+
+# Retired implementation
+"#,
+    )
+    .unwrap();
+    let mut session = live_session(root);
+    session.refresh(root, RefreshCause::Initial).unwrap();
+    let state_before = fs::read_to_string(root.join(".criv/state.json")).unwrap();
+    let latest_before = fs::read_to_string(root.join(".criv/latest")).unwrap();
+    let architecture_before =
+        fs::read_to_string(root.join("docs/architecture/04-code.c4")).unwrap();
+    let mut snapshots_before = fs::read_dir(root.join(".criv/snapshots"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    snapshots_before.sort();
+    let previous_hash = session.previous.as_ref().unwrap().state().hash().unwrap();
+
+    fs::remove_file(root.join("src/retired.rs")).unwrap();
+    wait_for_source_change(&mut session, "governed source deletion");
+    let error = session
+        .refresh(root, RefreshCause::SourceChanged)
+        .unwrap_err();
+
+    assert!(error.to_string().contains("state publication blocked"));
+    assert!(error.to_string().contains("src/retired.rs"));
+    assert_eq!(
+        session.previous.as_ref().unwrap().state().hash().unwrap(),
+        previous_hash
+    );
+    assert_eq!(
+        fs::read_to_string(root.join(".criv/state.json")).unwrap(),
+        state_before
+    );
+    assert_eq!(
+        fs::read_to_string(root.join(".criv/latest")).unwrap(),
+        latest_before
+    );
+    assert_eq!(
+        fs::read_to_string(root.join("docs/architecture/04-code.c4")).unwrap(),
+        architecture_before
+    );
+    let mut snapshots_after = fs::read_dir(root.join(".criv/snapshots"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    snapshots_after.sort();
+    assert_eq!(snapshots_after, snapshots_before);
+
+    fs::write(
+        root.join("docs/adr/0002-successor.md"),
+        r#"---
+id: ADR-0002
+kind: decision
+title: Remove retired implementation
+status: accepted
+supersedes:
+  - ADR-0001
+governs:
+  - src/current.rs
+---
+
+# Remove retired implementation
+"#,
+    )
+    .unwrap();
+    let recovered = session.refresh(root, RefreshCause::DocsChanged).unwrap();
+    let recovered_state: Value =
+        serde_json::from_str(&fs::read_to_string(root.join(".criv/state.json")).unwrap()).unwrap();
+
+    assert_ne!(recovered.state().hash().unwrap(), previous_hash);
+    assert!(
+        recovered_state["registered-patterns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|pattern| pattern.as_str() != Some("ADR-0001/functions"))
+    );
+}
+
 fn incremental_fixture(prefix: &str) -> TempDir {
     let temp = tempfile::Builder::new()
         .prefix(&format!("criv-refresh-{prefix}-"))

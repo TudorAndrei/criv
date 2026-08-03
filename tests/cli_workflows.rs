@@ -452,6 +452,95 @@ fn consecutive_watch_once_runs_produce_the_same_snapshot() {
 }
 
 #[test]
+fn stale_effective_governance_fails_all_check_formats_and_preserves_publication() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("docs/adr")).unwrap();
+    fs::write(root.join("src/retired.rs"), "pub fn retired() {}\n").unwrap();
+    fs::write(
+        root.join("docs/adr/0999-retired.md"),
+        r#"---
+id: ADR-0999
+kind: decision
+title: Retired
+status: accepted
+governs:
+  - src/retired.rs
+---
+
+# Retired
+"#,
+    )
+    .unwrap();
+    criv(root).args(["watch", "--once"]).assert().success();
+    let state_before = fs::read(root.join(".criv/state.json")).unwrap();
+    let latest_before = fs::read(root.join(".criv/latest")).unwrap();
+    let mut snapshots_before = fs::read_dir(root.join(".criv/snapshots"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    snapshots_before.sort();
+
+    fs::remove_file(root.join("src/retired.rs")).unwrap();
+
+    criv(root)
+        .args(["check", "--filter", "unresolved-governs"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("error[unresolved-governs]"))
+        .stdout(predicate::str::contains("src/retired.rs"));
+    let json = criv(root)
+        .args([
+            "check",
+            "--format",
+            "json",
+            "--filter",
+            "unresolved-governs",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let diagnostics: Vec<serde_json::Value> = serde_json::from_slice(&json).unwrap();
+    assert_eq!(diagnostics[0]["severity"], "error");
+    assert_eq!(diagnostics[0]["code"], "unresolved-governs");
+    criv(root)
+        .args([
+            "check",
+            "--format",
+            "github",
+            "--filter",
+            "unresolved-governs",
+        ])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "::error file=docs/adr/0999-retired.md,title=criv unresolved-governs::",
+        ));
+    criv(root)
+        .args(["watch", "--once"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("state publication blocked"))
+        .stderr(predicate::str::contains("src/retired.rs"));
+
+    assert_eq!(
+        fs::read(root.join(".criv/state.json")).unwrap(),
+        state_before
+    );
+    assert_eq!(fs::read(root.join(".criv/latest")).unwrap(), latest_before);
+    let mut snapshots_after = fs::read_dir(root.join(".criv/snapshots"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    snapshots_after.sort();
+    assert_eq!(snapshots_after, snapshots_before);
+}
+
+#[test]
 fn watch_once_does_not_rebuild_while_watch_lock_is_held() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

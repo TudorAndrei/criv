@@ -720,35 +720,37 @@ fn validate_decision_note(
 }
 
 fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
-    for target in &note.targets_symbols {
-        match vault.resolve_source_target(target) {
-            SourceTargetResolution::Resolved { .. } => {
-                warn_legacy_source_target(
-                    vault,
-                    diagnostics,
-                    &note.rel_path,
-                    None,
-                    target,
-                    "target symbol",
-                );
-            }
-            SourceTargetResolution::MissingFile => {
-                diagnostics.push(error(
-                    "unresolved-target",
-                    &note.rel_path,
-                    None,
-                    format!("target symbol `{target}` does not resolve to a source file"),
-                ));
-            }
-            SourceTargetResolution::MissingFragment { path } => {
-                diagnostics.push(error(
-                    "unresolved-target",
-                    &note.rel_path,
-                    None,
-                    format!(
-                        "target symbol `{target}` resolves to `{path}` but does not resolve to a source symbol"
-                    ),
-                ));
+    if !vault.is_historical_decision(note) {
+        for target in &note.targets_symbols {
+            match vault.resolve_source_target(target) {
+                SourceTargetResolution::Resolved { .. } => {
+                    warn_legacy_source_target(
+                        vault,
+                        diagnostics,
+                        &note.rel_path,
+                        None,
+                        target,
+                        "target symbol",
+                    );
+                }
+                SourceTargetResolution::MissingFile => {
+                    diagnostics.push(error(
+                        "unresolved-target",
+                        &note.rel_path,
+                        None,
+                        format!("target symbol `{target}` does not resolve to a source file"),
+                    ));
+                }
+                SourceTargetResolution::MissingFragment { path } => {
+                    diagnostics.push(error(
+                        "unresolved-target",
+                        &note.rel_path,
+                        None,
+                        format!(
+                            "target symbol `{target}` resolves to `{path}` but does not resolve to a source symbol"
+                        ),
+                    ));
+                }
             }
         }
     }
@@ -776,35 +778,61 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
         }
     }
 
-    for (scope, has_match) in note
-        .targets_scope
-        .iter()
-        .zip(vault.source_globs_have_matches(&note.targets_scope))
-    {
-        if !has_match {
-            diagnostics.push(warning(
-                "empty-target-scope",
-                &note.rel_path,
-                None,
-                format!("target scope `{scope}` matches no source files"),
-            ));
+    if !vault.is_historical_decision(note) {
+        for (scope, has_match) in note
+            .targets_scope
+            .iter()
+            .zip(vault.source_globs_have_matches(&note.targets_scope))
+        {
+            if !has_match {
+                diagnostics.push(warning(
+                    "empty-target-scope",
+                    &note.rel_path,
+                    None,
+                    format!("target scope `{scope}` matches no source files"),
+                ));
+            }
         }
-    }
 
-    let governs = vault.effective_governs(note);
-    for (governs, has_match) in governs
-        .iter()
-        .zip(vault.source_globs_have_matches(&governs))
-    {
-        if !has_match {
+        for governs in unresolved_governs(vault, note) {
             diagnostics.push(error(
                 "unresolved-governs",
                 &note.rel_path,
                 None,
-                format!("governs glob `{}` matches no source files", governs),
+                format!("governs glob `{governs}` matches no source files"),
             ));
         }
     }
+}
+
+fn unresolved_governs(vault: &Vault, note: &Note) -> Vec<String> {
+    let governs = vault.effective_governs(note);
+    governs
+        .iter()
+        .zip(vault.source_globs_have_matches(&governs))
+        .filter(|(_, has_match)| !has_match)
+        .map(|(governs, _)| governs.clone())
+        .collect()
+}
+
+pub(crate) fn publication_blocking_diagnostics(vault: &Vault) -> Vec<Diagnostic> {
+    let mut diagnostics = vault
+        .notes
+        .iter()
+        .filter(|note| vault.is_effective_decision(note))
+        .flat_map(|note| {
+            unresolved_governs(vault, note).into_iter().map(|governs| {
+                error(
+                    "unresolved-governs",
+                    &note.rel_path,
+                    None,
+                    format!("governs glob `{governs}` matches no source files"),
+                )
+            })
+        })
+        .collect::<Vec<_>>();
+    diagnostics.sort_by(|a, b| (&a.path, a.code).cmp(&(&b.path, b.code)));
+    diagnostics
 }
 
 fn validate_c4_artifacts(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
@@ -1689,6 +1717,122 @@ governs:
                 .iter()
                 .all(|diag| diag.code != "unresolved-governs")
         );
+    }
+
+    #[test]
+    fn historical_accepted_adrs_do_not_require_current_source_bindings() {
+        let root = unique_temp_dir("criv-historical-source-bindings");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("docs/adr")).unwrap();
+        fs::write(
+            root.join("criv.toml"),
+            r#"[source]
+roots = ["src"]
+"#,
+        )
+        .unwrap();
+        fs::write(root.join("src/current.rs"), "fn current() {}\n").unwrap();
+        fs::write(
+            root.join("docs/adr/0001-old.md"),
+            r#"---
+id: ADR-0001
+kind: decision
+title: Old
+status: accepted
+governs:
+  - src/removed.rs
+targets:
+  symbols:
+    - src/removed.rs#fn:removed
+  scope:
+    - src/removed.rs
+---
+
+# Old
+"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("docs/adr/0002-successor.md"),
+            r#"---
+id: ADR-0002
+kind: decision
+title: Successor
+status: accepted
+supersedes:
+  - ADR-0001
+governs:
+  - src/current.rs
+---
+
+# Successor
+"#,
+        )
+        .unwrap();
+        let vault = Vault::load(&root).unwrap();
+
+        let diagnostics = validate(&vault);
+
+        assert!(diagnostics.iter().all(|diagnostic| {
+            diagnostic.code != "unresolved-governs"
+                && diagnostic.code != "unresolved-target"
+                && diagnostic.code != "empty-target-scope"
+        }));
+        assert!(publication_blocking_diagnostics(&vault).is_empty());
+    }
+
+    #[test]
+    fn draft_successor_does_not_suppress_active_governance_failure() {
+        let root = unique_temp_dir("criv-draft-successor-governance");
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("docs/adr")).unwrap();
+        fs::write(
+            root.join("criv.toml"),
+            r#"[source]
+roots = ["src"]
+"#,
+        )
+        .unwrap();
+        fs::write(root.join("src/current.rs"), "fn current() {}\n").unwrap();
+        fs::write(
+            root.join("docs/adr/0001-old.md"),
+            r#"---
+id: ADR-0001
+kind: decision
+title: Old
+status: accepted
+governs:
+  - src/removed.rs
+---
+
+# Old
+"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("docs/adr/0002-successor.md"),
+            r#"---
+id: ADR-0002
+kind: decision
+title: Draft successor
+status: draft
+supersedes:
+  - ADR-0001
+governs:
+  - src/current.rs
+---
+
+# Draft successor
+"#,
+        )
+        .unwrap();
+        let vault = Vault::load(&root).unwrap();
+
+        let blockers = publication_blocking_diagnostics(&vault);
+
+        assert_eq!(blockers.len(), 1);
+        assert_eq!(blockers[0].code, "unresolved-governs");
+        assert_eq!(blockers[0].path, "docs/adr/0001-old.md");
     }
 
     #[test]

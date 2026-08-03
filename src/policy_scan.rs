@@ -108,7 +108,8 @@ impl PolicyScanPlan {
 
         for note in &vault.notes {
             let reports_diagnostics = note.kind == NoteKind::Decision;
-            let active_adr_id = (note.status.as_deref() == Some("accepted"))
+            let active_adr_id = vault
+                .is_effective_decision(note)
                 .then_some(note.id.as_deref())
                 .flatten();
             if !reports_diagnostics && active_adr_id.is_none() {
@@ -378,6 +379,40 @@ governs:
                 ("ADR-0001/structs", "src/right.rs"),
             ]
         );
+    }
+
+    #[test]
+    fn superseded_accepted_policies_are_compiled_for_diagnostics_but_not_scanned() {
+        let (temp, _) = policy_fixture(&two_policy_adr());
+        fs::write(
+            temp.path().join("docs/adr/0002-successor.md"),
+            r#"---
+id: ADR-0002
+kind: decision
+title: Successor
+status: accepted
+supersedes:
+  - ADR-0001
+governs:
+  - src/**
+---
+
+# Successor
+"#,
+        )
+        .unwrap();
+        let vault = Vault::load(temp.path()).unwrap();
+        reset_work_counts();
+        structural::reset_work_counts();
+
+        let plan = PolicyScanPlan::new(&vault);
+
+        assert!(plan.owners.is_empty());
+        assert!(plan.diagnostics.is_empty());
+        assert_eq!(work_counts().definition_compilations, 2);
+        assert_eq!(work_counts().adr_scope_resolutions, 0);
+        assert!(plan.scan(temp.path(), &vault, None).unwrap().is_empty());
+        assert_eq!(structural::work_counts().ast_parses, 0);
     }
 
     #[test]

@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use crate::Result;
 use crate::architecture;
 use crate::check;
 use crate::config::Config;
@@ -8,6 +7,7 @@ use crate::source_graph::{self, SourceGraphBuild};
 use crate::source_index::{LiveSourceIndex, OneShotSourceIndex, SourceChange, SourceIndexHandle};
 use crate::state::{self, State};
 use crate::vault::Vault;
+use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) enum RefreshCause {
@@ -121,6 +121,17 @@ fn execute(
 ) -> Result<RefreshResult> {
     let mut vault =
         Vault::load_incremental_with_source_index(root, previous_graph, source_index.clone())?;
+    let blockers = check::publication_blocking_diagnostics(&vault);
+    if !blockers.is_empty() {
+        return Err(CrivError::new(format!(
+            "state publication blocked by unresolved effective ADR governance:\n{}",
+            blockers
+                .iter()
+                .map(check::Diagnostic::describe)
+                .collect::<Vec<_>>()
+                .join("\n")
+        )));
+    }
     let changed_files = vault.source_graph().changed_files().to_vec();
     if architecture::write_code_architecture(root, &vault)? {
         let refreshed_graph = vault.source_graph_build().clone();

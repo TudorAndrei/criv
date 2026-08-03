@@ -2242,6 +2242,46 @@ Consequences.
     }
 
     #[test]
+    fn accepted_successor_removes_superseded_policy_state() {
+        let root = policy_vault("criv-effective-policy-state");
+        let vault = Vault::load(&root).unwrap();
+        let (_, before) = write_state(&root, &vault).unwrap();
+        assert!(before.patterns.contains_key(PATTERN_ID));
+
+        let successor = root.join("docs/adr/0002-successor.md");
+        std::fs::write(
+            &successor,
+            r#"---
+id: ADR-0002
+kind: decision
+title: Retire the old policy
+status: accepted
+supersedes:
+  - ADR-0001
+governs:
+  - src/**
+---
+
+# Retire the old policy
+"#,
+        )
+        .unwrap();
+        let vault = Vault::load(&root).unwrap();
+        let (_, after) = write_state_incremental(
+            &root,
+            &vault,
+            Some(&before),
+            &["docs/adr/0002-successor.md".to_string()],
+        )
+        .unwrap();
+
+        assert!(!after.registered_patterns.contains(&PATTERN_ID.to_string()));
+        assert!(!after.patterns.contains_key(PATTERN_ID));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn incremental_policy_promotion_scans_every_governed_source() {
         let root = policy_vault("criv-policy-promotion");
         let policy_path = root.join("docs/adr/0002-no-debug.md");

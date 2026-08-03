@@ -720,6 +720,7 @@ digraph criv_code {
   "src/check.rs#fn:changed_set_fixture" [label="changed_set_fixture\nsrc/check.rs"];
   "src/check.rs#fn:cycles_are_detected" [label="cycles_are_detected\nsrc/check.rs"];
   "src/check.rs#fn:decision_note" [label="decision_note\nsrc/check.rs"];
+  "src/check.rs#fn:draft_successor_does_not_suppress_active_governance_failure" [label="draft_successor_does_not_suppress_active_governance_failure\nsrc/check.rs"];
   "src/check.rs#fn:duplicate_c4_alias_is_reported" [label="duplicate_c4_alias_is_reported\nsrc/check.rs"];
   "src/check.rs#fn:duplicate_c4_source_annotation_is_reported" [label="duplicate_c4_source_annotation_is_reported\nsrc/check.rs"];
   "src/check.rs#fn:empty_decision" [label="empty_decision\nsrc/check.rs"];
@@ -730,6 +731,7 @@ digraph criv_code {
   "src/check.rs#fn:github_annotation" [label="github_annotation\nsrc/check.rs"];
   "src/check.rs#fn:github_annotation_escapes_workflow_command_data" [label="github_annotation_escapes_workflow_command_data\nsrc/check.rs"];
   "src/check.rs#fn:github_annotation_omits_missing_line" [label="github_annotation_omits_missing_line\nsrc/check.rs"];
+  "src/check.rs#fn:historical_accepted_adrs_do_not_require_current_source_bindings" [label="historical_accepted_adrs_do_not_require_current_source_bindings\nsrc/check.rs"];
   "src/check.rs#fn:invalid_c4_level_is_reported_for_mixed_abstractions" [label="invalid_c4_level_is_reported_for_mixed_abstractions\nsrc/check.rs"];
   "src/check.rs#fn:invalid_c4_source_placement_is_reported" [label="invalid_c4_source_placement_is_reported\nsrc/check.rs"];
   "src/check.rs#fn:is_markdown_file" [label="is_markdown_file\nsrc/check.rs"];
@@ -745,6 +747,7 @@ digraph criv_code {
   "src/check.rs#fn:print_github" [label="print_github\nsrc/check.rs"];
   "src/check.rs#fn:print_json" [label="print_json\nsrc/check.rs"];
   "src/check.rs#fn:print_text" [label="print_text\nsrc/check.rs"];
+  "src/check.rs#fn:publication_blocking_diagnostics" [label="publication_blocking_diagnostics\nsrc/check.rs"];
   "src/check.rs#fn:relationship_to_c4_boundary_is_unresolved" [label="relationship_to_c4_boundary_is_unresolved\nsrc/check.rs"];
   "src/check.rs#fn:relative_path" [label="relative_path\nsrc/check.rs"];
   "src/check.rs#fn:rules_for_ignored_rules" [label="rules_for_ignored_rules\nsrc/check.rs"];
@@ -760,6 +763,7 @@ digraph criv_code {
   "src/check.rs#fn:unique_temp_dir" [label="unique_temp_dir\nsrc/check.rs"];
   "src/check.rs#fn:unique_temp_file" [label="unique_temp_file\nsrc/check.rs"];
   "src/check.rs#fn:unresolved_c4_relationship_is_reported" [label="unresolved_c4_relationship_is_reported\nsrc/check.rs"];
+  "src/check.rs#fn:unresolved_governs" [label="unresolved_governs\nsrc/check.rs"];
   "src/check.rs#fn:valid_c4_source_annotation_passes" [label="valid_c4_source_annotation_passes\nsrc/check.rs"];
   "src/check.rs#fn:validate" [label="validate\nsrc/check.rs"];
   "src/check.rs#fn:validate_all" [label="validate_all\nsrc/check.rs"];
@@ -1046,6 +1050,7 @@ digraph criv_code {
   "src/policy_scan.rs#fn:policy_free_accepted_adrs_resolve_no_policy_scopes" [label="policy_free_accepted_adrs_resolve_no_policy_scopes\nsrc/policy_scan.rs"];
   "src/policy_scan.rs#fn:record_work" [label="record_work\nsrc/policy_scan.rs"];
   "src/policy_scan.rs#fn:reset_work_counts" [label="reset_work_counts\nsrc/policy_scan.rs"];
+  "src/policy_scan.rs#fn:superseded_accepted_policies_are_compiled_for_diagnostics_but_not_scanned" [label="superseded_accepted_policies_are_compiled_for_diagnostics_but_not_scanned\nsrc/policy_scan.rs"];
   "src/policy_scan.rs#fn:two_policy_adr" [label="two_policy_adr\nsrc/policy_scan.rs"];
   "src/policy_scan.rs#fn:work_counts" [label="work_counts\nsrc/policy_scan.rs"];
   "src/policy_scan.rs#type:PlannedOwner" [label="PlannedOwner\nsrc/policy_scan.rs"];
@@ -1141,6 +1146,7 @@ digraph criv_code {
   "src/refresh/tests.rs#fn:refresh_work" [label="refresh_work\nsrc/refresh/tests.rs"];
   "src/refresh/tests.rs#fn:reset_refresh_work" [label="reset_refresh_work\nsrc/refresh/tests.rs"];
   "src/refresh/tests.rs#fn:rewrite_policy" [label="rewrite_policy\nsrc/refresh/tests.rs"];
+  "src/refresh/tests.rs#fn:unresolved_effective_governance_keeps_last_good_state_and_recovers" [label="unresolved_effective_governance_keeps_last_good_state_and_recovers\nsrc/refresh/tests.rs"];
   "src/refresh/tests.rs#fn:wait_for_source_change" [label="wait_for_source_change\nsrc/refresh/tests.rs"];
   "src/refresh/tests.rs#fn:wait_for_source_paths" [label="wait_for_source_paths\nsrc/refresh/tests.rs"];
   "src/refresh/tests.rs#fn:warm_one_shot_reuses_the_cached_source_graph" [label="warm_one_shot_reuses_the_cached_source_graph\nsrc/refresh/tests.rs"];
@@ -1414,6 +1420,7 @@ digraph criv_code {
   "src/source_paths.rs#fn:source_root_kind" [label="source_root_kind\nsrc/source_paths.rs"];
   "src/source_paths.rs#fn:validate_relative_source_path" [label="validate_relative_source_path\nsrc/source_paths.rs"];
   "src/source_paths.rs#type:SourceRootKind" [label="SourceRootKind\nsrc/source_paths.rs"];
+  "src/state.rs#fn:accepted_successor_removes_superseded_policy_state" [label="accepted_successor_removes_superseded_policy_state\nsrc/state.rs"];
   "src/state.rs#fn:add_c4_diagrams_to_graph" [label="add_c4_diagrams_to_graph\nsrc/state.rs"];
   "src/state.rs#fn:add_edge" [label="add_edge\nsrc/state.rs"];
   "src/state.rs#fn:add_node" [label="add_node\nsrc/state.rs"];
@@ -1612,10 +1619,12 @@ digraph criv_code {
   "src/util.rs#type:legacy/member:is_match" [label="is_match\nsrc/util.rs"];
   "src/util.rs#type:legacy/member:matching_pattern_indices_into" [label="matching_pattern_indices_into\nsrc/util.rs"];
   "src/util.rs#type:legacy/member:new" [label="new\nsrc/util.rs"];
+  "src/vault.rs#fn:accepted_successors_make_predecessors_historical_transitively" [label="accepted_successors_make_predecessors_historical_transitively\nsrc/vault.rs"];
   "src/vault.rs#fn:batch_source_globs_preserve_order_fallbacks_and_invalid_patterns" [label="batch_source_globs_preserve_order_fallbacks_and_invalid_patterns\nsrc/vault.rs"];
   "src/vault.rs#fn:c4_diagram_positions_are_file_relative" [label="c4_diagram_positions_are_file_relative\nsrc/vault.rs"];
   "src/vault.rs#fn:delimiter_line" [label="delimiter_line\nsrc/vault.rs"];
   "src/vault.rs#fn:disabled_source_index_skips_source_collection_and_graph" [label="disabled_source_index_skips_source_collection_and_graph\nsrc/vault.rs"];
+  "src/vault.rs#fn:effective_accepted_decision_ids" [label="effective_accepted_decision_ids\nsrc/vault.rs"];
   "src/vault.rs#fn:extracts_markdown_headings" [label="extracts_markdown_headings\nsrc/vault.rs"];
   "src/vault.rs#fn:frontmatter_line" [label="frontmatter_line\nsrc/vault.rs"];
   "src/vault.rs#fn:ignores_delimiter_like_or_unclosed_frontmatter" [label="ignores_delimiter_like_or_unclosed_frontmatter\nsrc/vault.rs"];
@@ -1673,7 +1682,9 @@ digraph criv_code {
   "src/vault.rs#type:index/member:effective_governs" [label="effective_governs\nsrc/vault.rs"];
   "src/vault.rs#type:index/member:from_parts_for_test" [label="from_parts_for_test\nsrc/vault.rs"];
   "src/vault.rs#type:index/member:index_link_resolutions" [label="index_link_resolutions\nsrc/vault.rs"];
+  "src/vault.rs#type:index/member:is_effective_decision" [label="is_effective_decision\nsrc/vault.rs"];
   "src/vault.rs#type:index/member:is_file_backed_note_target" [label="is_file_backed_note_target\nsrc/vault.rs"];
+  "src/vault.rs#type:index/member:is_historical_decision" [label="is_historical_decision\nsrc/vault.rs"];
   "src/vault.rs#type:index/member:load" [label="load\nsrc/vault.rs"];
   "src/vault.rs#type:index/member:load_docs_only" [label="load_docs_only\nsrc/vault.rs"];
   "src/vault.rs#type:index/member:load_incremental_with_source_index" [label="load_incremental_with_source_index\nsrc/vault.rs"];
@@ -2800,6 +2811,9 @@ digraph criv_code {
   "src/check.rs#fn:changed_scope_promotes_global_transactions_to_full_check" -> "src/check.rs#fn:changed_entry";
   "src/check.rs#fn:cycles_are_detected" -> "src/check.rs#fn:empty_decision";
   "src/check.rs#fn:decision_note" -> "src/check.rs#fn:empty_decision";
+  "src/check.rs#fn:draft_successor_does_not_suppress_active_governance_failure" -> "src/check.rs#fn:publication_blocking_diagnostics";
+  "src/check.rs#fn:draft_successor_does_not_suppress_active_governance_failure" -> "src/check.rs#fn:unique_temp_dir";
+  "src/check.rs#fn:draft_successor_does_not_suppress_active_governance_failure" -> "src/vault.rs#type:Vault";
   "src/check.rs#fn:duplicate_c4_alias_is_reported" -> "src/check.rs#fn:c4_vault";
   "src/check.rs#fn:duplicate_c4_alias_is_reported" -> "src/check.rs#fn:validate";
   "src/check.rs#fn:duplicate_c4_source_annotation_is_reported" -> "src/check.rs#fn:c4_vault";
@@ -2810,6 +2824,9 @@ digraph criv_code {
   "src/check.rs#fn:file_backed_note_links_are_portable" -> "src/check.rs#fn:validate";
   "src/check.rs#fn:file_backed_note_links_are_portable" -> "src/check.rs#fn:wiki_link";
   "src/check.rs#fn:github_annotation" -> "src/structural.rs#fn:find";
+  "src/check.rs#fn:historical_accepted_adrs_do_not_require_current_source_bindings" -> "src/check.rs#fn:unique_temp_dir";
+  "src/check.rs#fn:historical_accepted_adrs_do_not_require_current_source_bindings" -> "src/check.rs#fn:validate";
+  "src/check.rs#fn:historical_accepted_adrs_do_not_require_current_source_bindings" -> "src/vault.rs#type:Vault";
   "src/check.rs#fn:invalid_c4_level_is_reported_for_mixed_abstractions" -> "src/check.rs#fn:c4_vault";
   "src/check.rs#fn:invalid_c4_source_placement_is_reported" -> "src/check.rs#fn:c4_vault";
   "src/check.rs#fn:invalid_c4_source_placement_is_reported" -> "src/check.rs#fn:validate";
@@ -2835,6 +2852,10 @@ digraph criv_code {
   "src/check.rs#fn:previous_c4_interface_hashes" -> "src/lib.rs#type:CrivError";
   "src/check.rs#fn:previous_c4_interface_hashes" -> "src/state.rs#type:file/member:flatten";
   "src/check.rs#fn:print_json" -> "src/lib.rs#type:CrivError";
+  "src/check.rs#fn:publication_blocking_diagnostics" -> "src/check.rs#fn:error";
+  "src/check.rs#fn:publication_blocking_diagnostics" -> "src/check.rs#fn:unresolved_governs";
+  "src/check.rs#fn:publication_blocking_diagnostics" -> "src/refresh.rs#type:RefreshResult/member:vault";
+  "src/check.rs#fn:publication_blocking_diagnostics" -> "src/vault.rs#type:index/member:is_effective_decision";
   "src/check.rs#fn:relationship_to_c4_boundary_is_unresolved" -> "src/check.rs#fn:c4_vault";
   "src/check.rs#fn:relationship_to_c4_boundary_is_unresolved" -> "src/check.rs#fn:validate";
   "src/check.rs#fn:relative_path" -> "src/util.rs#fn:strip_prefix";
@@ -2866,6 +2887,9 @@ digraph criv_code {
   "src/check.rs#fn:typed_source_wikilinks_with_missing_fragments_remain_broken" -> "src/check.rs#fn:validate";
   "src/check.rs#fn:unresolved_c4_relationship_is_reported" -> "src/check.rs#fn:c4_vault";
   "src/check.rs#fn:unresolved_c4_relationship_is_reported" -> "src/check.rs#fn:validate";
+  "src/check.rs#fn:unresolved_governs" -> "src/state.rs#type:path/member:collect";
+  "src/check.rs#fn:unresolved_governs" -> "src/vault.rs#type:index/member:effective_governs";
+  "src/check.rs#fn:unresolved_governs" -> "src/vault.rs#type:index/member:source_globs_have_matches";
   "src/check.rs#fn:valid_c4_source_annotation_passes" -> "src/check.rs#fn:c4_vault";
   "src/check.rs#fn:valid_c4_source_annotation_passes" -> "src/check.rs#fn:validate";
   "src/check.rs#fn:validate" -> "src/check.rs#fn:validate_with_previous_c4_interfaces";
@@ -2937,10 +2961,11 @@ digraph criv_code {
   "src/check.rs#fn:validate_supersession" -> "src/check.rs#fn:supersession_cycles";
   "src/check.rs#fn:validate_supersession" -> "src/refresh.rs#type:RefreshResult/member:vault";
   "src/check.rs#fn:validate_targets" -> "src/check.rs#fn:error";
+  "src/check.rs#fn:validate_targets" -> "src/check.rs#fn:unresolved_governs";
   "src/check.rs#fn:validate_targets" -> "src/check.rs#fn:warn_legacy_source_target";
   "src/check.rs#fn:validate_targets" -> "src/check.rs#fn:warning";
   "src/check.rs#fn:validate_targets" -> "src/state.rs#type:path/member:insert";
-  "src/check.rs#fn:validate_targets" -> "src/vault.rs#type:index/member:effective_governs";
+  "src/check.rs#fn:validate_targets" -> "src/vault.rs#type:index/member:is_historical_decision";
   "src/check.rs#fn:validate_targets" -> "src/vault.rs#type:index/member:resolve_policy_pattern";
   "src/check.rs#fn:validate_targets" -> "src/vault.rs#type:index/member:resolve_source_target";
   "src/check.rs#fn:validate_targets" -> "src/vault.rs#type:index/member:source_globs_have_matches";
@@ -3327,12 +3352,18 @@ digraph criv_code {
   "src/policy_scan.rs#fn:policy_free_accepted_adrs_resolve_no_policy_scopes" -> "src/policy_scan.rs#fn:reset_work_counts";
   "src/policy_scan.rs#fn:policy_free_accepted_adrs_resolve_no_policy_scopes" -> "src/policy_scan.rs#type:PolicyScanPlan";
   "src/policy_scan.rs#fn:reset_work_counts" -> "src/policy_scan.rs#type:WorkCounts";
+  "src/policy_scan.rs#fn:superseded_accepted_policies_are_compiled_for_diagnostics_but_not_scanned" -> "src/policy_scan.rs#fn:policy_fixture";
+  "src/policy_scan.rs#fn:superseded_accepted_policies_are_compiled_for_diagnostics_but_not_scanned" -> "src/policy_scan.rs#fn:reset_work_counts";
+  "src/policy_scan.rs#fn:superseded_accepted_policies_are_compiled_for_diagnostics_but_not_scanned" -> "src/policy_scan.rs#fn:two_policy_adr";
+  "src/policy_scan.rs#fn:superseded_accepted_policies_are_compiled_for_diagnostics_but_not_scanned" -> "src/policy_scan.rs#type:PolicyScanPlan";
+  "src/policy_scan.rs#fn:superseded_accepted_policies_are_compiled_for_diagnostics_but_not_scanned" -> "src/vault.rs#type:Vault";
   "src/policy_scan.rs#type:note/member:new" -> "src/policy_scan.rs#fn:diagnostic_kind";
   "src/policy_scan.rs#type:note/member:new" -> "src/policy_scan.rs#fn:record_work";
   "src/policy_scan.rs#type:note/member:new" -> "src/state.rs#type:file/member:flatten";
   "src/policy_scan.rs#type:note/member:new" -> "src/state.rs#type:path/member:collect";
   "src/policy_scan.rs#type:note/member:new" -> "src/state.rs#type:path/member:insert";
   "src/policy_scan.rs#type:note/member:new" -> "src/vault.rs#type:index/member:effective_governs";
+  "src/policy_scan.rs#type:note/member:new" -> "src/vault.rs#type:index/member:is_effective_decision";
   "src/policy_scan.rs#type:note/member:new" -> "src/vault.rs#type:index/member:source_files_matching_globs";
   "src/policy_scan.rs#type:note/member:scan" -> "src/policy_scan.rs#type:ScanPaths";
   "src/policy_scan.rs#type:note/member:scan" -> "src/policy_scan.rs#type:ScanPaths/member:as_set";
@@ -3443,6 +3474,7 @@ digraph criv_code {
   "src/query.rs#fn:targets" -> "src/vault.rs#type:index/member:resolve_note";
   "src/refresh.rs#fn:execute" -> "src/check.rs#type:Diagnostic/member:is_error";
   "src/refresh.rs#fn:execute" -> "src/check.rs#type:Diagnostic/member:is_warning";
+  "src/refresh.rs#fn:execute" -> "src/lib.rs#type:CrivError";
   "src/refresh.rs#fn:execute" -> "src/refresh.rs#type:RefreshResult/member:state";
   "src/refresh.rs#fn:execute" -> "src/source_graph.rs#type:source_file/member:changed_files";
   "src/refresh.rs#fn:execute" -> "src/vault.rs#type:Vault";
@@ -3526,6 +3558,11 @@ digraph criv_code {
   "src/refresh/tests.rs#fn:reset_refresh_work" -> "src/vault.rs#type:index/member:source_graph";
   "src/refresh/tests.rs#fn:reset_refresh_work" -> "src/vault.rs#type:index/member:source_index";
   "src/refresh/tests.rs#fn:rewrite_policy" -> ".obsidian/plugins/criv/src/main.ts#type:CrivEditorDriftPlugin/member:update";
+  "src/refresh/tests.rs#fn:unresolved_effective_governance_keeps_last_good_state_and_recovers" -> "extensions/vscode-criv/src/stateStore.ts#type:WorkspaceStateStore/member:refresh";
+  "src/refresh/tests.rs#fn:unresolved_effective_governance_keeps_last_good_state_and_recovers" -> "src/adr.rs#fn:hash";
+  "src/refresh/tests.rs#fn:unresolved_effective_governance_keeps_last_good_state_and_recovers" -> "src/refresh.rs#type:RefreshResult/member:state";
+  "src/refresh/tests.rs#fn:unresolved_effective_governance_keeps_last_good_state_and_recovers" -> "src/refresh/tests.rs#fn:live_session";
+  "src/refresh/tests.rs#fn:unresolved_effective_governance_keeps_last_good_state_and_recovers" -> "src/refresh/tests.rs#fn:wait_for_source_change";
   "src/refresh/tests.rs#fn:wait_for_source_change" -> "src/refresh.rs#type:RefreshSourceIndex/member:observe_source_change";
   "src/refresh/tests.rs#fn:wait_for_source_paths" -> "scripts/performance/src/generate.rs#fn:source_paths";
   "src/refresh/tests.rs#fn:warm_one_shot_reuses_the_cached_source_graph" -> "extensions/vscode-criv/src/stateStore.ts#type:WorkspaceStateStore/member:refresh";
@@ -3980,6 +4017,10 @@ digraph criv_code {
   "src/source_paths.rs#fn:source_root_kind" -> "src/source_paths.rs#fn:canonical_source_path";
   "src/source_paths.rs#fn:source_root_kind" -> "src/source_paths.rs#fn:validate_relative_source_path";
   "src/source_paths.rs#fn:validate_relative_source_path" -> "src/lib.rs#type:CrivError";
+  "src/state.rs#fn:accepted_successor_removes_superseded_policy_state" -> "src/state.rs#fn:policy_vault";
+  "src/state.rs#fn:accepted_successor_removes_superseded_policy_state" -> "src/state.rs#fn:write_state";
+  "src/state.rs#fn:accepted_successor_removes_superseded_policy_state" -> "src/state.rs#fn:write_state_incremental";
+  "src/state.rs#fn:accepted_successor_removes_superseded_policy_state" -> "src/vault.rs#type:Vault";
   "src/state.rs#fn:add_c4_diagrams_to_graph" -> "src/c4.rs#type:C4Level/member:as_str";
   "src/state.rs#fn:add_c4_diagrams_to_graph" -> "src/state.rs#fn:add_edge";
   "src/state.rs#fn:add_c4_diagrams_to_graph" -> "src/state.rs#fn:add_node";
@@ -4341,12 +4382,19 @@ digraph criv_code {
   "src/util.rs#type:legacy/member:is_match" -> "src/util.rs#type:legacy/member:is_match";
   "src/util.rs#type:legacy/member:matching_pattern_indices_into" -> "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:clear";
   "src/util.rs#type:legacy/member:new" -> "src/state.rs#type:path/member:collect";
+  "src/vault.rs#fn:accepted_successors_make_predecessors_historical_transitively" -> "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:clear";
+  "src/vault.rs#fn:accepted_successors_make_predecessors_historical_transitively" -> "src/vault.rs#fn:parsed_note";
+  "src/vault.rs#fn:accepted_successors_make_predecessors_historical_transitively" -> "src/vault.rs#type:Vault";
   "src/vault.rs#fn:batch_source_globs_preserve_order_fallbacks_and_invalid_patterns" -> "src/vault.rs#fn:unique_temp_dir";
   "src/vault.rs#fn:batch_source_globs_preserve_order_fallbacks_and_invalid_patterns" -> "src/vault.rs#type:Vault";
   "src/vault.rs#fn:c4_diagram_positions_are_file_relative" -> "src/vault.rs#fn:parsed_note";
   "src/vault.rs#fn:delimiter_line" -> "src/structural.rs#fn:find";
   "src/vault.rs#fn:disabled_source_index_skips_source_collection_and_graph" -> "src/vault.rs#fn:unique_temp_dir";
   "src/vault.rs#fn:disabled_source_index_skips_source_collection_and_graph" -> "src/vault.rs#type:Vault";
+  "src/vault.rs#fn:effective_accepted_decision_ids" -> "src/c4.rs#type:C4Level/member:as_str";
+  "src/vault.rs#fn:effective_accepted_decision_ids" -> "src/search.rs#fn:notes";
+  "src/vault.rs#fn:effective_accepted_decision_ids" -> "src/state.rs#type:path/member:collect";
+  "src/vault.rs#fn:effective_accepted_decision_ids" -> "src/state.rs#type:path/member:insert";
   "src/vault.rs#fn:is_line_fragment" -> "src/util.rs#fn:strip_prefix";
   "src/vault.rs#fn:note_has_heading" -> "src/util.rs#fn:kebab";
   "src/vault.rs#fn:note_positions_are_file_relative_when_frontmatter_fails_to_parse" -> "src/structural.rs#fn:find";
@@ -4404,6 +4452,7 @@ digraph criv_code {
   "src/vault.rs#type:index/member:from_parts_for_test" -> "src/config.rs#type:Config";
   "src/vault.rs#type:index/member:from_parts_for_test" -> "src/source_graph.rs#type:SourceGraphBuild";
   "src/vault.rs#type:index/member:from_parts_for_test" -> "src/source_index.rs#type:SourceIndexHandle";
+  "src/vault.rs#type:index/member:from_parts_for_test" -> "src/vault.rs#fn:effective_accepted_decision_ids";
   "src/vault.rs#type:index/member:from_parts_for_test" -> "src/vault.rs#fn:registered_policy_patterns";
   "src/vault.rs#type:index/member:from_parts_for_test" -> "src/vault.rs#type:Note/member:filename_stem";
   "src/vault.rs#type:index/member:from_parts_for_test" -> "src/vault.rs#type:index/member:index_link_resolutions";
@@ -4413,6 +4462,7 @@ digraph criv_code {
   "src/vault.rs#type:index/member:is_file_backed_note_target" -> "src/c4.rs#type:C4Level/member:as_str";
   "src/vault.rs#type:index/member:is_file_backed_note_target" -> "src/vault.rs#type:Note/member:filename_stem";
   "src/vault.rs#type:index/member:is_file_backed_note_target" -> "src/vault.rs#type:index/member:resolve_note";
+  "src/vault.rs#type:index/member:is_historical_decision" -> "src/vault.rs#type:index/member:is_effective_decision";
   "src/vault.rs#type:index/member:load_with_source_facilities" -> "src/config.rs#type:Config";
   "src/vault.rs#type:index/member:load_with_source_facilities" -> "src/config.rs#type:Config/member:docs_path";
   "src/vault.rs#type:index/member:load_with_source_facilities" -> "src/refresh.rs#type:RefreshSourceIndex/member:handle";
@@ -4424,6 +4474,7 @@ digraph criv_code {
   "src/vault.rs#type:index/member:load_with_source_facilities" -> "src/source_index.rs#type:SourceIndexHandle/member:as_index";
   "src/vault.rs#type:index/member:load_with_source_facilities" -> "src/source_index.rs#type:SourceIndexHandle/member:is_enabled";
   "src/vault.rs#type:index/member:load_with_source_facilities" -> "src/util.rs#fn:walk_files";
+  "src/vault.rs#type:index/member:load_with_source_facilities" -> "src/vault.rs#fn:effective_accepted_decision_ids";
   "src/vault.rs#type:index/member:load_with_source_facilities" -> "src/vault.rs#fn:parse_note";
   "src/vault.rs#type:index/member:load_with_source_facilities" -> "src/vault.rs#fn:registered_policy_patterns";
   "src/vault.rs#type:index/member:load_with_source_facilities" -> "src/vault.rs#type:Note/member:filename_stem";
