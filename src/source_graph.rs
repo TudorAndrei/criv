@@ -18,12 +18,12 @@ const GRAPH_CACHE_SCHEMA: &str = "criv.source-graph/2";
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub(crate) struct WorkCounts {
-    pub(crate) source_reads: usize,
+    source_reads: usize,
     pub(crate) parsed_files: usize,
     pub(crate) reused_files: usize,
-    pub(crate) cache_serializations: usize,
+    cache_serializations: usize,
     pub(crate) cache_publications: usize,
-    pub(crate) published_bytes: usize,
+    published_bytes: usize,
 }
 
 #[cfg(test)]
@@ -371,7 +371,7 @@ impl InterfaceSignature {
 }
 
 impl SourceGraph {
-    pub(crate) fn build_incremental(
+    fn build_incremental(
         root: &Path,
         source_files: &[String],
         previous: Option<&Self>,

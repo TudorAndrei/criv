@@ -20,7 +20,7 @@ use crate::{c4, c4_artifact};
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub(crate) struct WorkCounts {
-    pub(crate) source_target_resolutions: usize,
+    source_target_resolutions: usize,
 }
 
 #[cfg(test)]

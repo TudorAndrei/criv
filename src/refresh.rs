@@ -112,11 +112,11 @@ fn execute(
 
 #[cfg(test)]
 impl RefreshResult {
-    pub(crate) fn vault(&self) -> &Vault {
+    fn vault(&self) -> &Vault {
         &self.vault
     }
 
-    pub(crate) fn state(&self) -> &State {
+    fn state(&self) -> &State {
         &self.state
     }
 }

@@ -92,7 +92,7 @@ struct CompiledPolicyRequest<'a> {
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub(crate) struct WorkCounts {
-    pub(crate) policy_compilations: usize,
+    policy_compilations: usize,
     pub(crate) ast_parses: usize,
 }
 

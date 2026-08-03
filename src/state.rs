@@ -35,7 +35,7 @@ struct SerializedState {
 pub(crate) struct WorkCounts {
     pub(crate) partitions_rebuilt: usize,
     pub(crate) serializations: usize,
-    pub(crate) published_bytes: usize,
+    published_bytes: usize,
 }
 
 #[cfg(test)]
