@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 
 import { C4ArtifactDiagnostics, C4PreviewManager } from "./c4Preview";
 import { CrivCheckDiagnostics } from "./checkDiagnostics";
+import { CHECK_MAX_OUTPUT_BYTES, completeCheckStdout } from "./checkOutput";
 import {
   COMMAND_OPEN_SOURCE_TARGET,
   COMMAND_OPEN_STATE_JSON,
@@ -115,13 +116,24 @@ async function runCheck(
     return;
   }
 
-  const result = await runCrivWithProgress(root, ["check", "--format", "json"], "criv check");
+  const result = await runCrivWithProgress(root, ["check", "--format", "json"], "criv check", {
+    maxOutputBytes: CHECK_MAX_OUTPUT_BYTES,
+  });
   if (!result || result.cancelled) {
     return;
   }
 
+  const stdout = completeCheckStdout(result);
+  if (stdout === undefined) {
+    checkDiagnostics.clear();
+    await vscode.window.showWarningMessage(
+      `criv check diagnostics exceeded the ${CHECK_MAX_OUTPUT_BYTES / (1024 * 1024)} MiB capture limit; diagnostics were cleared.`,
+    );
+    return;
+  }
+
   try {
-    checkDiagnostics.setFromJson(root, result.stdout);
+    checkDiagnostics.setFromJson(root, stdout);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await vscode.window.showWarningMessage(`Could not parse criv check diagnostics: ${message}`);
@@ -194,6 +206,7 @@ async function runCrivWithProgress(
   root: vscode.Uri,
   args: readonly string[],
   title: string,
+  options: { maxOutputBytes?: number } = {},
 ): Promise<CommandResult | undefined> {
   const config = crivConfiguration();
   const executableError = executablePathError(config.binaryPath);
@@ -216,6 +229,7 @@ async function runCrivWithProgress(
         return await runProcess(config.binaryPath, args, {
           cwd: root.fsPath,
           signal: controller.signal,
+          maxOutputBytes: options.maxOutputBytes,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -244,7 +258,12 @@ async function trustedCrivRoot(store: WorkspaceStateStore): Promise<vscode.Uri |
 
 function commandFailureMessage(command: string, result: CommandResult): string {
   const detail = result.stderr.trim() || result.stdout.trim() || `exit code ${result.code}`;
-  return `${command} failed: ${detail}`;
+  const truncated = [
+    result.stderrTruncated ? "stderr" : undefined,
+    result.stdoutTruncated ? "stdout" : undefined,
+  ].filter((stream): stream is string => stream !== undefined);
+  const suffix = truncated.length > 0 ? ` (${truncated.join(" and ")} truncated)` : "";
+  return `${command} failed: ${detail}${suffix}`;
 }
 
 function isCheckOnSaveDocument(document: vscode.TextDocument): boolean {

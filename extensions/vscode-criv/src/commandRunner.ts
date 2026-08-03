@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
 const DEFAULT_FORCE_KILL_AFTER_MS = 2_000;
@@ -8,6 +9,8 @@ export interface CommandResult {
   signal: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
   cancelled: boolean;
 }
 
@@ -66,8 +69,10 @@ export function runProcess(
       resolve({
         code,
         signal,
-        stdout: capturedText(stdout, stdoutState, maxOutputBytes),
-        stderr: capturedText(stderr, stderrState, maxOutputBytes),
+        stdout: capturedText(stdout, stdoutState),
+        stderr: capturedText(stderr, stderrState),
+        stdoutTruncated: stdoutState.truncated,
+        stderrTruncated: stderrState.truncated,
         cancelled,
       });
     });
@@ -95,16 +100,10 @@ function captureOutput(
   state.truncated = true;
 }
 
-function capturedText(
-  buffers: Buffer[],
-  state: { bytes: number; truncated: boolean },
-  maxOutputBytes: number,
-): string {
-  const text = Buffer.concat(buffers, state.bytes).toString("utf8");
-  if (!state.truncated) {
-    return text;
-  }
-  return `${text}\n[criv output truncated after ${maxOutputBytes} bytes]\n`;
+function capturedText(buffers: Buffer[], state: { bytes: number; truncated: boolean }): string {
+  const decoder = new StringDecoder("utf8");
+  const captured = Buffer.concat(buffers, state.bytes);
+  return state.truncated ? decoder.write(captured) : decoder.end(captured);
 }
 
 function cleanup(

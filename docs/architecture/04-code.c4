@@ -292,6 +292,7 @@ digraph criv_code {
   "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:clear" [label="clear\nextensions/vscode-criv/src/checkDiagnostics.ts"];
   "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:dispose" [label="dispose\nextensions/vscode-criv/src/checkDiagnostics.ts"];
   "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:setFromJson" [label="setFromJson\nextensions/vscode-criv/src/checkDiagnostics.ts"];
+  "extensions/vscode-criv/src/checkOutput.ts#fn:completeCheckStdout" [label="completeCheckStdout\nextensions/vscode-criv/src/checkOutput.ts"];
   "extensions/vscode-criv/src/commandRunner.ts#fn:cancel" [label="cancel\nextensions/vscode-criv/src/commandRunner.ts"];
   "extensions/vscode-criv/src/commandRunner.ts#fn:captureOutput" [label="captureOutput\nextensions/vscode-criv/src/commandRunner.ts"];
   "extensions/vscode-criv/src/commandRunner.ts#fn:capturedText" [label="capturedText\nextensions/vscode-criv/src/commandRunner.ts"];
@@ -316,6 +317,7 @@ digraph criv_code {
   "extensions/vscode-criv/src/extension.ts#fn:runCrivWithProgress" [label="runCrivWithProgress\nextensions/vscode-criv/src/extension.ts"];
   "extensions/vscode-criv/src/extension.ts#fn:runUndocumentedCodeQuery" [label="runUndocumentedCodeQuery\nextensions/vscode-criv/src/extension.ts"];
   "extensions/vscode-criv/src/extension.ts#fn:runWatchOnce" [label="runWatchOnce\nextensions/vscode-criv/src/extension.ts"];
+  "extensions/vscode-criv/src/extension.ts#fn:truncated" [label="truncated\nextensions/vscode-criv/src/extension.ts"];
   "extensions/vscode-criv/src/extension.ts#fn:trustedCrivRoot" [label="trustedCrivRoot\nextensions/vscode-criv/src/extension.ts"];
   "extensions/vscode-criv/src/extension.ts#fn:updateStatusBar" [label="updateStatusBar\nextensions/vscode-criv/src/extension.ts"];
   "extensions/vscode-criv/src/extension.ts#fn:updateSurfaces" [label="updateSurfaces\nextensions/vscode-criv/src/extension.ts"];
@@ -427,6 +429,7 @@ digraph criv_code {
   "extensions/vscode-criv/test/unit/c4Artifact.test.ts#fn:actual" [label="actual\nextensions/vscode-criv/test/unit/c4Artifact.test.ts"];
   "extensions/vscode-criv/test/unit/c4Artifact.test.ts#fn:compareDiagnostics" [label="compareDiagnostics\nextensions/vscode-criv/test/unit/c4Artifact.test.ts"];
   "extensions/vscode-criv/test/unit/c4Artifact.test.ts#fn:fixtureNames" [label="fixtureNames\nextensions/vscode-criv/test/unit/c4Artifact.test.ts"];
+  "extensions/vscode-criv/test/unit/checkOutput.test.ts#fn:result" [label="result\nextensions/vscode-criv/test/unit/checkOutput.test.ts"];
   "src/adr.rs#fn:add_wikilink_edits" [label="add_wikilink_edits\nsrc/adr.rs"];
   "src/adr.rs#fn:adr_semantic_content" [label="adr_semantic_content\nsrc/adr.rs"];
   "src/adr.rs#fn:allocates_branch_adrs_contiguously_in_original_numeric_order" [label="allocates_branch_adrs_contiguously_in_original_numeric_order\nsrc/adr.rs"];
@@ -1947,7 +1950,9 @@ digraph criv_code {
   "extensions/vscode-criv/src/extension.ts#fn:openSourceTarget" -> "extensions/vscode-criv/src/stateStore.ts#type:WorkspaceStateStore/member:lookupNode";
   "extensions/vscode-criv/src/extension.ts#fn:openStateJson" -> "extensions/vscode-criv/src/extension.ts#fn:ensureLoadedState";
   "extensions/vscode-criv/src/extension.ts#fn:openStateJson" -> "extensions/vscode-criv/src/extension.ts#fn:messageForStatus";
+  "extensions/vscode-criv/src/extension.ts#fn:runCheck" -> "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:clear";
   "extensions/vscode-criv/src/extension.ts#fn:runCheck" -> "extensions/vscode-criv/src/checkDiagnostics.ts#type:CrivCheckDiagnostics/member:setFromJson";
+  "extensions/vscode-criv/src/extension.ts#fn:runCheck" -> "extensions/vscode-criv/src/checkOutput.ts#fn:completeCheckStdout";
   "extensions/vscode-criv/src/extension.ts#fn:runCheck" -> "extensions/vscode-criv/src/extension.ts#fn:runCrivWithProgress";
   "extensions/vscode-criv/src/extension.ts#fn:runCheck" -> "extensions/vscode-criv/src/extension.ts#fn:trustedCrivRoot";
   "extensions/vscode-criv/src/extension.ts#fn:runCrivWithProgress" -> "extensions/vscode-criv/src/commandRunner.ts#fn:runProcess";
