@@ -50,19 +50,22 @@ The commands are stable:
 
 | Stage | Commands |
 |-------|----------|
-| commit | `criv watch --once`, `criv check`, `criv enforce --stage commit` |
+| commit | `criv watch --once`, `criv check --changed`, `criv enforce --stage commit` |
 | push | `criv enforce --stage push` |
 
-`watch --once` refreshes `.criv/state.json` so the `check` that follows validates
-current state. Run them in that order.
+`watch --once` refreshes `.criv/state.json` before the changed check. The
+changed check is a staged, read-only partial fast path; plain `criv check`
+remains the full manual and hosted authority per
+[[0067-staged-changes-are-a-partial-check-scope|ADR-0067]]. Run commit commands
+in the listed order.
 
 With hk, as this repository does in `hk.pkl`:
 
 ```pkl
-local criv_check = new Step {
+local criv_check_changed = new Step {
   glob = List("**/*.md", "criv.toml")
   check_first = true
-  check = "criv check"
+  check = "criv check --changed"
   fix = "criv check --fix"
 }
 
@@ -74,7 +77,7 @@ hooks {
   ["pre-commit"] {
     fix = true
     steps {
-      ["criv-check"] = criv_check
+      ["criv-check"] = criv_check_changed
       ["criv-enforce"] = criv_enforce_commit
     }
   }
@@ -90,7 +93,7 @@ pre-commit:
     criv-watch:
       run: criv watch --once
     criv-check:
-      run: criv check
+      run: criv check --changed
     criv-enforce:
       run: criv enforce --stage commit
 

@@ -143,11 +143,21 @@ Check the vault before committing documentation or code changes:
 
 ```sh
 criv check
+criv check --changed
 criv check --fix
 criv check --format json
 criv check --format github
 criv check --filter broken-link
 ```
+
+`--changed` checks the staged Git transaction. It lints changed Markdown,
+validates local facts authored by changed vault files, and scopes policy scans
+to changed sources. Changes that can alter global identity or resolution—such
+as renames, deletions, ADR edits, or configuration edits—automatically run the
+full check. A passing changed check is a pre-commit fast-path result, not a
+full-vault validity claim; plain `criv check` remains the CI and manual
+authority. `--changed` is read-only and cannot be combined with `--fix`, per
+[ADR-0067](docs/adr/0067-staged-changes-are-a-partial-check-scope.md).
 
 `--fix` applies the Markdown formatting fixes rumdl can make automatically. It
 rewrites any Markdown file `criv check` lints, anywhere inside the repository
