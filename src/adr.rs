@@ -27,6 +27,8 @@ pub(crate) struct AdrOptions {
 enum AdrCommand {
     /// Reconcile provisional ADR IDs against an integration target.
     Reconcile(ReconcileOptions),
+    #[command(about = "Reconcile exact governed source renames against an integration target")]
+    ReconcileSources(crate::source_reconcile::Options),
 }
 
 #[derive(Debug, ClapArgs)]
@@ -116,6 +118,7 @@ struct PathSnapshot {
 pub(crate) fn run(root: &Path, options: AdrOptions) -> Result<()> {
     match options.command {
         AdrCommand::Reconcile(options) => reconcile(root, options),
+        AdrCommand::ReconcileSources(options) => crate::source_reconcile::run(root, options),
     }
 }
 
@@ -448,6 +451,7 @@ fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<Reconcile
                 .collect::<BTreeMap<_, _>>()
         })
         .unwrap_or_default();
+    let history_changes = git::changes_between(root, &merge_base, "HEAD")?;
     let changes = git::changes_between_paths(root, &merge_base, "HEAD", &[&adr_prefix])?;
     let worktree_changes = git::worktree_changes_in(root, &[&adr_prefix])?;
     let worktree_moves = worktree_changes
@@ -474,6 +478,9 @@ fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<Reconcile
         .entries
         .iter()
         .filter(|entry| is_adr_path(&adr_prefix, &entry.path))
+        .filter(|entry| {
+            !crate::source_reconcile::allows_history_change(root, &history_changes, entry)
+        })
         .map(|entry| match entry.status {
             git::ChangeStatus::Added => {
                 let current_path = current_paths.get(&entry.path).cloned().or_else(|| worktree_moves.get(&entry.path).cloned()).or_else(|| {

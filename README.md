@@ -303,15 +303,13 @@ If it reports a collision, run the same command without `--check`; it renames
 the branch-local ADRs, rewrites branch-owned references, validates the vault,
 and writes an ignored `.criv/adr-reconcile.json` receipt. The receipt is local
 commit proof for that exact generated transaction; it is not allocation state
-and never makes a later reconciliation check succeed. Review and commit the
-generated change:
+and never makes a later reconciliation check succeed. The command creates the
+dedicated commit itself. Review it and validate the result:
 
 ```sh
 criv adr reconcile --base origin/main
 cargo run -- check
-git add docs src # the receipt is ignored; do not add it
-git add -u
-git commit -m "docs(adr): reconcile branch-local ADR identities"
+git show --stat --oneline HEAD
 ```
 
 Before merging, compare the target SHA printed by the command with the current
@@ -332,7 +330,8 @@ criv adr reconcile-sources --base origin/main --check
 
 If a repair is required, run the command without `--check`. It accepts only
 one-to-one Git-proven renames, rewrites exact `governs:` path scalars, validates
-the vault, and creates a dedicated
+the vault, writes an ignored `.criv/source-reconcile.json` transaction receipt,
+and creates a dedicated
 `docs(adr): reconcile renamed source scopes` commit. It does not infer directory
 moves, rewrite broad globs, or update other source-reference forms.
 

@@ -2804,6 +2804,27 @@ fn write_criv_config(root: &Path, roots: Vec<&str>, exclude: Vec<&str>, source_i
     fs::write(root.join("criv.toml"), config.to_string()).unwrap();
 }
 
+fn source_governance_adr(governs: &str) -> String {
+    format!(
+        "---\nid: ADR-0099\nkind: decision\ntitle: Source governance\nstatus: accepted\ndate: 2026-08-03\ngoverns:\n  - {governs}\n---\n\n## Source governance\n\nThe old path stays in prose: src/old.rs.\n"
+    )
+}
+
+fn source_reconcile_fixture(root: &Path, governs: &str) {
+    init_git_vault(root);
+    write_criv_config(root, vec!["src"], vec![], true);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/old.rs"), "pub fn governed() {}\n").unwrap();
+    fs::write(
+        root.join("docs/adr/0099-source-governance.md"),
+        source_governance_adr(governs),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "add governed source"]);
+    git(root, &["checkout", "-b", "topic"]);
+}
+
 fn query_fixture(root: &Path) {
     init(root);
     fs::create_dir_all(root.join("src")).unwrap();
@@ -2865,6 +2886,252 @@ title: Orphan
     .unwrap();
 
     criv(root).args(["watch", "--once"]).assert().success();
+}
+
+#[test]
+fn source_reconcile_checks_commits_and_passes_receipt_free_ci_enforcement() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    source_reconcile_fixture(root, "\"src/old.rs\"");
+    git(root, &["mv", "src/old.rs", "src/new.rs"]);
+    git(root, &["commit", "-m", "refactor: rename governed source"]);
+    let rename_head = git_stdout(root, &["rev-parse", "HEAD"]);
+
+    criv(root)
+        .args(["adr", "reconcile-sources", "--base", "main", "--check"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("src/old.rs -> src/new.rs"))
+        .stderr(predicate::str::contains(
+            "criv adr reconcile-sources --base main",
+        ));
+    assert_eq!(git_stdout(root, &["rev-parse", "HEAD"]), rename_head);
+    assert!(
+        git_stdout(root, &["status", "--porcelain"])
+            .trim()
+            .is_empty()
+    );
+
+    criv(root)
+        .args(["adr", "reconcile-sources", "--base", "main"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("source reconciliation committed"));
+
+    let adr = fs::read_to_string(root.join("docs/adr/0099-source-governance.md")).unwrap();
+    assert!(adr.contains("  - \"src/new.rs\""));
+    assert!(adr.contains("The old path stays in prose: src/old.rs."));
+    assert_eq!(
+        git_stdout(root, &["show", "-s", "--format=%s", "HEAD"]).trim(),
+        "docs(adr): reconcile renamed source scopes"
+    );
+    assert_eq!(
+        git_stdout(
+            root,
+            &["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]
+        )
+        .trim(),
+        "docs/adr/0099-source-governance.md"
+    );
+    assert!(root.join(".criv/source-reconcile.json").exists());
+    assert!(
+        git_stdout(root, &["status", "--porcelain"])
+            .trim()
+            .is_empty()
+    );
+
+    fs::remove_file(root.join(".criv/source-reconcile.json")).unwrap();
+    criv(root)
+        .env("CRIV_BASE_REF", "main")
+        .args(["enforce", "--stage", "ci"])
+        .assert()
+        .success();
+    let local_oid = git_stdout(root, &["rev-parse", "HEAD"]);
+    let remote_oid = git_stdout(root, &["rev-parse", "main"]);
+    criv(root)
+        .args([
+            "enforce",
+            "--stage",
+            "push",
+            "--pre-push",
+            "--remote-name",
+            "origin",
+            "--remote-url",
+            "unused",
+        ])
+        .write_stdin(format!(
+            "refs/heads/topic {} refs/heads/topic {}\n",
+            local_oid.trim(),
+            remote_oid.trim()
+        ))
+        .assert()
+        .success();
+
+    let clone_temp = TempDir::new().unwrap();
+    let clone_root = clone_temp.path().join("clone");
+    git(
+        root,
+        &[
+            "clone",
+            "--branch",
+            "topic",
+            root.to_str().unwrap(),
+            clone_root.to_str().unwrap(),
+        ],
+    );
+    assert!(!clone_root.join(".criv/source-reconcile.json").exists());
+    criv(&clone_root)
+        .env("CRIV_BASE_REF", "origin/main")
+        .args(["enforce", "--stage", "ci"])
+        .assert()
+        .success();
+    criv(root)
+        .args(["adr", "reconcile-sources", "--base", "main", "--check"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("no reconciliation is required"));
+}
+
+#[test]
+fn source_reconcile_refuses_deletion_and_points_to_a_successor_adr() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    source_reconcile_fixture(root, "src/old.rs");
+    git(root, &["rm", "src/old.rs"]);
+    git(root, &["commit", "-m", "refactor: delete governed source"]);
+
+    criv(root)
+        .args(["adr", "reconcile-sources", "--base", "main", "--check"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("was deleted"))
+        .stderr(predicate::str::contains("accepted ADR with `supersedes:`"));
+}
+
+#[test]
+fn source_reconcile_refuses_dirty_and_unsupported_transactions() {
+    for expected in ["dirty worktree", "block YAML sequence"] {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        source_reconcile_fixture(root, "src/old.rs");
+        if expected == "block YAML sequence" {
+            let path = root.join("docs/adr/0099-source-governance.md");
+            let contents = fs::read_to_string(&path).unwrap();
+            fs::write(
+                path,
+                contents.replace("governs:\n  - src/old.rs", "governs: [src/old.rs]"),
+            )
+            .unwrap();
+        }
+        git(root, &["mv", "src/old.rs", "src/new.rs"]);
+        git(root, &["add", "."]);
+        git(root, &["commit", "-m", "refactor: rename governed source"]);
+        if expected == "dirty worktree" {
+            fs::write(root.join("unrelated.txt"), "dirty\n").unwrap();
+        }
+
+        criv(root)
+            .args(["adr", "reconcile-sources", "--base", "main"])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(expected));
+    }
+}
+
+#[test]
+fn source_reconcile_rolls_back_validation_failure() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    source_reconcile_fixture(root, "src/old.rs");
+    git(root, &["mv", "src/old.rs", "src/new.rs"]);
+    fs::write(
+        root.join("docs/broken.md"),
+        doc("broken", "Broken", "See [[missing-note]]."),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(
+        root,
+        &["commit", "-m", "refactor: rename with known invalid doc"],
+    );
+    let before = fs::read_to_string(root.join("docs/adr/0099-source-governance.md")).unwrap();
+
+    criv(root)
+        .args(["adr", "reconcile-sources", "--base", "main"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("vault validation failed"));
+
+    assert_eq!(
+        fs::read_to_string(root.join("docs/adr/0099-source-governance.md")).unwrap(),
+        before
+    );
+    assert!(!root.join(".criv/source-reconcile.json").exists());
+    assert!(
+        git_stdout(root, &["status", "--porcelain"])
+            .trim()
+            .is_empty()
+    );
+}
+
+#[test]
+fn source_reconcile_history_proof_rejects_extra_adr_edits() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    source_reconcile_fixture(root, "src/old.rs");
+    git(root, &["mv", "src/old.rs", "src/new.rs"]);
+    git(root, &["commit", "-m", "refactor: rename governed source"]);
+    criv(root)
+        .args(["adr", "reconcile-sources", "--base", "main"])
+        .assert()
+        .success();
+    let path = root.join("docs/adr/0099-source-governance.md");
+    let contents = fs::read_to_string(&path).unwrap();
+    let modified = contents.replace("## Source governance", "## Changed governance");
+    fs::write(&path, &modified).unwrap();
+    git(root, &["add", "docs/adr/0099-source-governance.md"]);
+
+    let receipt_path = root.join(".criv/source-reconcile.json");
+    let mut receipt: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&receipt_path).unwrap()).unwrap();
+    receipt["head_sha"] = git_stdout(root, &["rev-parse", "HEAD"])
+        .trim()
+        .to_string()
+        .into();
+    receipt["files"][0]["before_hash"] = blake3::hash(contents.as_bytes())
+        .to_hex()
+        .to_string()
+        .into();
+    receipt["files"][0]["after_hash"] = blake3::hash(modified.as_bytes())
+        .to_hex()
+        .to_string()
+        .into();
+    fs::write(
+        receipt_path,
+        serde_json::to_string_pretty(&receipt).unwrap() + "\n",
+    )
+    .unwrap();
+    criv(root)
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "source reconciliation receipt does not prove",
+        ));
+
+    git(
+        root,
+        &["commit", "--no-verify", "-m", "docs: mutate accepted adr"],
+    );
+
+    criv(root)
+        .env("CRIV_BASE_REF", "main")
+        .args(["enforce", "--stage", "ci"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "published ADR content is immutable",
+        ));
 }
 
 #[test]
@@ -3153,6 +3420,35 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
         .assert()
         .failure()
         .stdout(predicate::str::contains("ADR files are immutable"));
+}
+
+#[test]
+fn source_reconcile_requires_identity_before_mutating() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    source_reconcile_fixture(root, "src/old.rs");
+    git(root, &["mv", "src/old.rs", "src/new.rs"]);
+    git(root, &["commit", "-m", "refactor: rename governed source"]);
+    git(root, &["config", "user.name", ""]);
+    git(root, &["config", "user.email", ""]);
+    let before = fs::read_to_string(root.join("docs/adr/0099-source-governance.md")).unwrap();
+
+    criv(root)
+        .args(["adr", "reconcile-sources", "--base", "main"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("commit identity is unavailable"));
+
+    assert_eq!(
+        fs::read_to_string(root.join("docs/adr/0099-source-governance.md")).unwrap(),
+        before
+    );
+    assert!(!root.join(".criv/source-reconcile.json").exists());
+    assert!(
+        git_stdout(root, &["status", "--porcelain"])
+            .trim()
+            .is_empty()
+    );
 }
 
 #[test]

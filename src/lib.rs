@@ -17,6 +17,7 @@ mod snapshots;
 mod source_graph;
 mod source_index;
 mod source_paths;
+mod source_reconcile;
 mod state;
 mod structural;
 mod util;
@@ -278,6 +279,7 @@ mod tests {
         assert!(spec.contains("cmd prune"));
         assert!(spec.contains("cmd enforce"));
         assert!(spec.contains("cmd search"));
+        assert!(spec.contains("cmd reconcile-sources"));
         assert!(spec.contains("flag --pattern-id"));
 
         let spec = usage_spec();

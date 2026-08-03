@@ -91,6 +91,11 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
         && changed_entries
             .as_ref()
             .is_some_and(|changes| crate::adr::receipt_allows_transaction(root, &changes.entries));
+    let source_receipt_is_current = crate::source_reconcile::receipt_is_current(root);
+    let source_receipt_allows_transaction = options.stage == Stage::Commit
+        && changed_entries.as_ref().is_some_and(|changes| {
+            crate::source_reconcile::receipt_allows_transaction(root, &changes.entries)
+        });
     let mut adr_violations = adr_immutability_violations(
         &vault.config.docs_dir,
         &vault.config.adr_dir,
@@ -99,6 +104,7 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
             .map(|changes| changes.entries.as_slice()),
         |entry| {
             (receipt_allows_transaction
+                || source_receipt_allows_transaction
                 || is_allowed_adr_change(root, changed_entries.as_ref(), entry))
                 || (options.stage == Stage::Ci && is_branch_local_ci_change(root, entry))
         },
@@ -106,6 +112,11 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
     if receipt_is_current && !receipt_allows_transaction {
         adr_violations.push(
             "ADR reconciliation receipt does not prove the complete staged transaction".into(),
+        );
+    }
+    if source_receipt_is_current && !source_receipt_allows_transaction {
+        adr_violations.push(
+            "source reconciliation receipt does not prove the complete staged transaction".into(),
         );
     }
     match options.stage {
@@ -412,6 +423,11 @@ fn adr_immutability_violations(
 }
 
 fn is_allowed_adr_change(root: &Path, changes: Option<&ChangedSet>, entry: &ChangedEntry) -> bool {
+    if changes
+        .is_some_and(|changes| crate::source_reconcile::allows_history_change(root, changes, entry))
+    {
+        return true;
+    }
     // A committed receipt proves the entire tree transition, including paths
     // that Git reports as modifications when ADR mappings overlap.
     if entry
