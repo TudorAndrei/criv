@@ -12,6 +12,13 @@ local cargo_clippy = (Builtins.cargo_clippy) {
 local staged_docs = new Step {
   glob = List("**/*.md", "criv.toml", ".rumdl.toml")
   check_first = true
+  check = "cargo run --quiet -- check --changed"
+  fix = "cargo run --quiet -- check --fix"
+}
+
+local full_docs = new Step {
+  glob = List("**/*.md", "criv.toml", ".rumdl.toml")
+  check_first = true
   check = "cargo run --quiet -- check"
   fix = "cargo run --quiet -- check --fix"
 }
@@ -110,7 +117,7 @@ hooks {
       ["cargo-test"] = cargo_test
       ["hawk"] = hawk
       ["cargo-audit"] = cargo_audit
-      ["criv-check"] = staged_docs
+      ["criv-check"] = full_docs
       ["criv-enforce-ci"] = enforce_ci
     }
   }
@@ -120,7 +127,7 @@ hooks {
     steps {
       ["cargo-fmt"] = cargo_fmt
       ["toml-fmt"] = toml_fmt
-      ["criv-check"] = staged_docs
+      ["criv-check"] = full_docs
     }
   }
 }

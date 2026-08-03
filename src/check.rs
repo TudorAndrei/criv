@@ -12,6 +12,9 @@ use serde::Serialize;
 
 use crate::c4::{C4ElementCategory, C4Level};
 use crate::c4_artifact::C4ArtifactFormat;
+#[cfg(test)]
+use crate::git::ChangedEntry;
+use crate::git::{ChangeStatus, ChangedSet};
 use crate::policy_scan::{PolicyDiagnostic, PolicyDiagnosticKind, PolicyScanPlan};
 use crate::state::{self, State};
 use crate::util::{GlobMatcher, is_adr_id, kebab, write_atomic_in};
@@ -36,6 +39,9 @@ pub(crate) struct CheckOptions {
     filter: Option<String>,
     #[arg(long)]
     fix: bool,
+    /// Validate safely scoped facts for the staged Git transaction.
+    #[arg(long, conflicts_with = "fix")]
+    changed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -78,7 +84,11 @@ impl Diagnostic {
 }
 
 pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
-    let mut diagnostics = validate_all_with_fix(root, options.fix)?;
+    let mut diagnostics = if options.changed {
+        validate_changed(root)?
+    } else {
+        validate_all_with_fix(root, options.fix)?
+    };
 
     if let Some(filter) = &options.filter {
         diagnostics.retain(|diag| {
@@ -91,7 +101,11 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
     match options.format {
         Format::Text => {
             print_text(&diagnostics);
-            let stale_skills = outdated_skills(root);
+            let stale_skills = if options.changed {
+                Vec::new()
+            } else {
+                outdated_skills(root)
+            };
             if !stale_skills.is_empty() {
                 let subject = if stale_skills.len() == 1 {
                     "skill is"
@@ -122,7 +136,7 @@ pub(crate) fn validate_all(root: &Path) -> Result<Vec<Diagnostic>> {
 }
 
 fn validate_all_with_fix(root: &Path, fix: bool) -> Result<Vec<Diagnostic>> {
-    let mut diagnostics = validate_markdown_format(root, fix)?;
+    let mut diagnostics = validate_markdown_format(root, fix, None)?;
     let vault = Vault::load(root)?;
     let policy_plan = PolicyScanPlan::new(&vault);
     let previous_interface_hashes = previous_c4_interface_hashes(root)?;
@@ -149,6 +163,72 @@ fn validate_all_with_fix(root: &Path, fix: bool) -> Result<Vec<Diagnostic>> {
     );
 
     Ok(diagnostics)
+}
+
+fn validate_changed(root: &Path) -> Result<Vec<Diagnostic>> {
+    let changes = crate::git::staged_changes(root)?;
+    if changes.entries.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let config = crate::config::Config::load(root)?;
+    if changed_scope_requires_full_check(&changes, &config.docs_dir, &config.adr_dir) {
+        return validate_all_with_fix(root, false);
+    }
+
+    let changed_paths = changes
+        .affected_paths()
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let mut diagnostics = validate_markdown_format(root, false, Some(&changed_paths))?;
+    let vault = Vault::load(root)?;
+    let policy_plan = PolicyScanPlan::new(&vault);
+    let previous_interface_hashes = previous_c4_interface_hashes(root)?;
+    diagnostics.extend(validate_changed_vault(
+        &vault,
+        previous_interface_hashes.as_ref(),
+        &policy_plan,
+        &changed_paths,
+    ));
+    diagnostics.extend(
+        policy_plan
+            .scan(root, &vault, Some(&changed_paths))?
+            .into_iter()
+            .map(|violation| {
+                error(
+                    "policy-violation",
+                    &violation.path,
+                    Some(violation.line),
+                    format!(
+                        "{} policy `{}` matched `{}`",
+                        violation.adr_id, violation.pattern_id, violation.text
+                    ),
+                )
+            }),
+    );
+    diagnostics.sort_by(|a, b| {
+        (&a.path, a.line.unwrap_or(0), a.code).cmp(&(&b.path, b.line.unwrap_or(0), b.code))
+    });
+    Ok(diagnostics)
+}
+
+fn changed_scope_requires_full_check(changes: &ChangedSet, docs_dir: &str, adr_dir: &str) -> bool {
+    let adr_prefix = format!(
+        "{}/{}/",
+        docs_dir.trim_end_matches('/'),
+        adr_dir.trim_matches('/')
+    );
+    changes.entries.iter().any(|entry| {
+        matches!(
+            entry.status,
+            ChangeStatus::Deleted | ChangeStatus::Renamed | ChangeStatus::Other
+        ) || [
+            &entry.path,
+            entry.previous_path.as_ref().unwrap_or(&entry.path),
+        ]
+        .into_iter()
+        .any(|path| path == "criv.toml" || path == ".rumdl.toml" || path.starts_with(&adr_prefix))
+    })
 }
 
 /// Advisory only. Governed by ADR-0053.
@@ -185,7 +265,11 @@ fn outdated_skills(root: &Path) -> Vec<&'static str> {
     stale
 }
 
-fn validate_markdown_format(root: &Path, fix: bool) -> Result<Vec<Diagnostic>> {
+fn validate_markdown_format(
+    root: &Path,
+    fix: bool,
+    changed_paths: Option<&BTreeSet<String>>,
+) -> Result<Vec<Diagnostic>> {
     let config = load_rumdl_config(root)?;
     let vault_config = crate::config::Config::load(root)?;
     let files = markdown_files(root, &config);
@@ -193,6 +277,9 @@ fn validate_markdown_format(root: &Path, fix: bool) -> Result<Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
 
     for rel_path in files {
+        if changed_paths.is_some_and(|paths| !paths.contains(&rel_path)) {
+            continue;
+        }
         let path = root.join(&rel_path);
         let mut contents = crate::util::read_to_string(&path)?;
         if fix {
@@ -430,6 +517,50 @@ fn validate_with_previous_c4_interfaces(
     diagnostics
 }
 
+fn validate_changed_vault(
+    vault: &Vault,
+    previous_interface_hashes: Option<&BTreeMap<String, String>>,
+    policy_plan: &PolicyScanPlan,
+    changed_paths: &BTreeSet<String>,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let adr_prefix = format!("{}/{}/", vault.config.docs_dir, vault.config.adr_dir);
+    let adr_readme = format!("{adr_prefix}README.md");
+
+    for note in vault
+        .notes
+        .iter()
+        .filter(|note| changed_paths.contains(&note.rel_path))
+    {
+        validate_note_local(vault, note, &adr_prefix, &adr_readme, &mut diagnostics);
+        validate_note_links(vault, note, &mut diagnostics);
+    }
+    diagnostics.extend(
+        policy_plan
+            .definition_diagnostics()
+            .iter()
+            .filter(|diagnostic| changed_paths.contains(&diagnostic.path))
+            .map(policy_diagnostic),
+    );
+    for artifact in vault
+        .c4_artifacts
+        .iter()
+        .filter(|artifact| changed_paths.contains(&artifact.rel_path))
+    {
+        validate_c4_artifact(vault, artifact, &mut diagnostics);
+    }
+    validate_c4_interface_drift_for_paths(
+        vault,
+        previous_interface_hashes,
+        Some(changed_paths),
+        &mut diagnostics,
+    );
+    diagnostics.sort_by(|a, b| {
+        (&a.path, a.line.unwrap_or(0), a.code).cmp(&(&b.path, b.line.unwrap_or(0), b.code))
+    });
+    diagnostics
+}
+
 fn policy_diagnostic(diagnostic: &PolicyDiagnostic) -> Diagnostic {
     let (code, message) = match &diagnostic.kind {
         PolicyDiagnosticKind::MissingId => (
@@ -501,49 +632,10 @@ fn validate_notes(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
     let adr_readme = format!("{adr_prefix}README.md");
 
     for note in &vault.notes {
-        if let Some(err) = &note.frontmatter_error {
-            diagnostics.push(error(
-                "invalid-frontmatter",
-                &note.rel_path,
-                None,
-                err.to_string(),
-            ));
-        }
-
+        validate_note_local(vault, note, &adr_prefix, &adr_readme, diagnostics);
         if let Some(id) = &note.id {
             ids.entry(id).or_default().push(note);
-        } else {
-            diagnostics.push(error(
-                "missing-id",
-                &note.rel_path,
-                None,
-                "note is missing required frontmatter `id`",
-            ));
         }
-
-        match note.kind {
-            NoteKind::Doc | NoteKind::Decision => {}
-            NoteKind::Unknown => diagnostics.push(error(
-                "invalid-kind",
-                &note.rel_path,
-                None,
-                "note frontmatter `kind` must be `doc` or `decision`",
-            )),
-        }
-
-        if note.kind == NoteKind::Decision {
-            validate_decision_note(vault, note, &adr_prefix, diagnostics);
-        } else if note.rel_path.starts_with(&adr_prefix) && note.rel_path != adr_readme {
-            diagnostics.push(error(
-                "adr-dir-non-decision",
-                &note.rel_path,
-                None,
-                "ADR directory may contain only `kind: decision` notes plus README.md",
-            ));
-        }
-
-        validate_targets(vault, note, diagnostics);
-        validate_c4_diagrams(vault, &note.rel_path, &note.c4_diagrams, diagnostics);
     }
 
     for (id, notes) in ids {
@@ -558,6 +650,56 @@ fn validate_notes(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
             }
         }
     }
+}
+
+fn validate_note_local(
+    vault: &Vault,
+    note: &Note,
+    adr_prefix: &str,
+    adr_readme: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if let Some(err) = &note.frontmatter_error {
+        diagnostics.push(error(
+            "invalid-frontmatter",
+            &note.rel_path,
+            None,
+            err.to_string(),
+        ));
+    }
+
+    if note.id.is_none() {
+        diagnostics.push(error(
+            "missing-id",
+            &note.rel_path,
+            None,
+            "note is missing required frontmatter `id`",
+        ));
+    }
+
+    match note.kind {
+        NoteKind::Doc | NoteKind::Decision => {}
+        NoteKind::Unknown => diagnostics.push(error(
+            "invalid-kind",
+            &note.rel_path,
+            None,
+            "note frontmatter `kind` must be `doc` or `decision`",
+        )),
+    }
+
+    if note.kind == NoteKind::Decision {
+        validate_decision_note(vault, note, adr_prefix, diagnostics);
+    } else if note.rel_path.starts_with(adr_prefix) && note.rel_path != adr_readme {
+        diagnostics.push(error(
+            "adr-dir-non-decision",
+            &note.rel_path,
+            None,
+            "ADR directory may contain only `kind: decision` notes plus README.md",
+        ));
+    }
+
+    validate_targets(vault, note, diagnostics);
+    validate_c4_diagrams(vault, &note.rel_path, &note.c4_diagrams, diagnostics);
 }
 
 fn validate_decision_note(
@@ -701,47 +843,55 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
 
 fn validate_c4_artifacts(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
     for artifact in &vault.c4_artifacts {
-        for artifact_diagnostic in &artifact.diagnostics {
+        validate_c4_artifact(vault, artifact, diagnostics);
+    }
+}
+
+fn validate_c4_artifact(
+    vault: &Vault,
+    artifact: &crate::c4_artifact::C4Artifact,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for artifact_diagnostic in &artifact.diagnostics {
+        diagnostics.push(error(
+            artifact_diagnostic.code,
+            &artifact.rel_path,
+            artifact_diagnostic.line,
+            artifact_diagnostic.message.clone(),
+        ));
+    }
+    for directive in artifact
+        .directives
+        .iter()
+        .filter(|directive| directive.key == "generated")
+    {
+        if let Some(value) = directive.value.as_deref()
+            && !matches!(value, "true" | "false")
+        {
             diagnostics.push(error(
-                artifact_diagnostic.code,
+                "invalid-c4-generated",
                 &artifact.rel_path,
-                artifact_diagnostic.line,
-                artifact_diagnostic.message.clone(),
+                Some(directive.line),
+                "criv:generated must be `true` or `false` when a value is provided",
             ));
         }
-        for directive in artifact
-            .directives
-            .iter()
-            .filter(|directive| directive.key == "generated")
-        {
-            if let Some(value) = directive.value.as_deref()
-                && !matches!(value, "true" | "false")
-            {
-                diagnostics.push(error(
-                    "invalid-c4-generated",
-                    &artifact.rel_path,
-                    Some(directive.line),
-                    "criv:generated must be `true` or `false` when a value is provided",
-                ));
-            }
-        }
-
-        if artifact.format == Some(C4ArtifactFormat::Dot) {
-            if artifact.level.is_some_and(|level| level.as_str() != "code") {
-                diagnostics.push(error(
-                    "invalid-c4-level",
-                    &artifact.rel_path,
-                    None,
-                    "DOT .c4 artifacts currently support only filename-derived Code level",
-                ));
-            }
-            if let Err(message) = validate_dot_shape(&artifact.path) {
-                diagnostics.push(error("invalid-c4-dot", &artifact.rel_path, None, message));
-            }
-        }
-
-        validate_c4_diagrams(vault, &artifact.rel_path, &artifact.diagrams, diagnostics);
     }
+
+    if artifact.format == Some(C4ArtifactFormat::Dot) {
+        if artifact.level.is_some_and(|level| level.as_str() != "code") {
+            diagnostics.push(error(
+                "invalid-c4-level",
+                &artifact.rel_path,
+                None,
+                "DOT .c4 artifacts currently support only filename-derived Code level",
+            ));
+        }
+        if let Err(message) = validate_dot_shape(&artifact.path) {
+            diagnostics.push(error("invalid-c4-dot", &artifact.rel_path, None, message));
+        }
+    }
+
+    validate_c4_diagrams(vault, &artifact.rel_path, &artifact.diagrams, diagnostics);
 }
 
 fn validate_c4_interface_drift(
@@ -749,10 +899,22 @@ fn validate_c4_interface_drift(
     previous_interface_hashes: Option<&BTreeMap<String, String>>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    validate_c4_interface_drift_for_paths(vault, previous_interface_hashes, None, diagnostics);
+}
+
+fn validate_c4_interface_drift_for_paths(
+    vault: &Vault,
+    previous_interface_hashes: Option<&BTreeMap<String, String>>,
+    changed_paths: Option<&BTreeSet<String>>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     let Some(previous_interface_hashes) = previous_interface_hashes else {
         return;
     };
     for record in state::c4_interface_hash_records(vault) {
+        if changed_paths.is_some_and(|paths| !paths.contains(&record.path)) {
+            continue;
+        }
         let Some(previous_hash) = previous_interface_hashes.get(&record.id) else {
             continue;
         };
@@ -983,24 +1145,27 @@ fn validate_pattern_collisions(vault: &Vault, diagnostics: &mut Vec<Diagnostic>)
 
 fn validate_links(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
     for note in &vault.notes {
-        for link in &note.wiki_links {
-            match vault.resolve_link(&link.target) {
-                ResolvedLink::Broken => diagnostics.push(error(
-                    "broken-link",
-                    &note.rel_path,
-                    Some(link.line),
-                    format!("wiki-link `[[{}]]` does not resolve", link.raw),
-                )),
-                ResolvedLink::Source { path, ambiguous } => {
-                    let suggestion = vault
-                        .canonical_source_target_for_path(&link.target, &path)
-                        .map(|target| {
-                            format!(
-                                "; use AST-aware source selector `{target}` for code references"
-                            )
-                        })
-                        .unwrap_or_default();
-                    diagnostics.push(warning(
+        validate_note_links(vault, note, diagnostics);
+    }
+}
+
+fn validate_note_links(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
+    for link in &note.wiki_links {
+        match vault.resolve_link(&link.target) {
+            ResolvedLink::Broken => diagnostics.push(error(
+                "broken-link",
+                &note.rel_path,
+                Some(link.line),
+                format!("wiki-link `[[{}]]` does not resolve", link.raw),
+            )),
+            ResolvedLink::Source { path, ambiguous } => {
+                let suggestion = vault
+                    .canonical_source_target_for_path(&link.target, &path)
+                    .map(|target| {
+                        format!("; use AST-aware source selector `{target}` for code references")
+                    })
+                    .unwrap_or_default();
+                diagnostics.push(warning(
                         "source-wikilink",
                         &note.rel_path,
                         Some(link.line),
@@ -1009,26 +1174,26 @@ fn validate_links(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
                             link.raw
                         ),
                     ));
-                    if ambiguous {
-                        diagnostics.push(warning(
-                            "ambiguous-source-link",
-                            &note.rel_path,
-                            Some(link.line),
-                            format!(
-                                "wiki-link `[[{}]]` resolves ambiguously; first match is `{path}`",
-                                link.raw
-                            ),
-                        ));
-                    }
+                if ambiguous {
+                    diagnostics.push(warning(
+                        "ambiguous-source-link",
+                        &note.rel_path,
+                        Some(link.line),
+                        format!(
+                            "wiki-link `[[{}]]` resolves ambiguously; first match is `{path}`",
+                            link.raw
+                        ),
+                    ));
                 }
-                ResolvedLink::Pattern { .. } => {}
-                ResolvedLink::Note { .. } => {
-                    if !vault.is_file_backed_note_target(&link.target) {
-                        let suggestion = vault
-                            .portable_note_target(&link.target)
-                            .map(|target| format!("; use `[[{target}]]` instead"))
-                            .unwrap_or_default();
-                        diagnostics.push(error(
+            }
+            ResolvedLink::Pattern { .. } => {}
+            ResolvedLink::Note { .. } => {
+                if !vault.is_file_backed_note_target(&link.target) {
+                    let suggestion = vault
+                        .portable_note_target(&link.target)
+                        .map(|target| format!("; use `[[{target}]]` instead"))
+                        .unwrap_or_default();
+                    diagnostics.push(error(
                             "non-portable-note-link",
                             &note.rel_path,
                             Some(link.line),
@@ -1037,7 +1202,6 @@ fn validate_links(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
                                 link.raw
                             ),
                         ));
-                    }
                 }
             }
         }
@@ -1264,6 +1428,70 @@ fn warning(
 mod tests {
     use super::*;
     use crate::vault::WikiLink;
+
+    fn changed_set_fixture(entries: Vec<ChangedEntry>) -> ChangedSet {
+        ChangedSet {
+            entries,
+            old_ref: Some("HEAD".into()),
+            new_ref: Some(":".into()),
+            basis: "test".into(),
+        }
+    }
+
+    fn changed_entry(
+        status: ChangeStatus,
+        path: &str,
+        previous_path: Option<&str>,
+    ) -> ChangedEntry {
+        ChangedEntry {
+            status,
+            path: path.into(),
+            previous_path: previous_path.map(str::to_string),
+            old_ref: Some("HEAD".into()),
+            new_ref: Some(":".into()),
+        }
+    }
+
+    #[test]
+    fn changed_scope_keeps_safe_additions_and_modifications_partial() {
+        let changes = changed_set_fixture(vec![
+            changed_entry(ChangeStatus::Added, "docs/guide.md", None),
+            changed_entry(ChangeStatus::Modified, "src/lib.rs", None),
+        ]);
+
+        assert!(!changed_scope_requires_full_check(&changes, "docs", "adr"));
+    }
+
+    #[test]
+    fn changed_scope_promotes_global_transactions_to_full_check() {
+        for entry in [
+            changed_entry(ChangeStatus::Deleted, "docs/guide.md", None),
+            changed_entry(ChangeStatus::Renamed, "docs/new.md", Some("docs/old.md")),
+            changed_entry(ChangeStatus::Modified, "docs/adr/0067-decision.md", None),
+            changed_entry(ChangeStatus::Modified, "criv.toml", None),
+            changed_entry(ChangeStatus::Modified, ".rumdl.toml", None),
+        ] {
+            assert!(changed_scope_requires_full_check(
+                &changed_set_fixture(vec![entry]),
+                "docs",
+                "adr"
+            ));
+        }
+    }
+
+    #[test]
+    fn affected_paths_include_both_sides_of_a_rename() {
+        let changes = changed_set_fixture(vec![changed_entry(
+            ChangeStatus::Renamed,
+            "docs/new.md",
+            Some("docs/old.md"),
+        )]);
+
+        assert_eq!(
+            changes.affected_paths(),
+            vec!["docs/new.md".to_string(), "docs/old.md".to_string()]
+        );
+    }
 
     #[test]
     fn outdated_skills_handles_missing_and_malformed_frontmatter() {

@@ -46,6 +46,201 @@ fn init_with_skills(root: &Path) {
         .success();
 }
 
+fn init_git_vault(root: &Path) {
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    init(root);
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "initial vault"]);
+}
+
+fn doc(id: &str, title: &str, body: &str) -> String {
+    format!("---\nid: {id}\nkind: doc\ntitle: {title}\n---\n\n# {title}\n\n{body}\n")
+}
+
+#[test]
+fn changed_check_fails_closed_outside_a_git_worktree() {
+    let temp = TempDir::new().unwrap();
+
+    criv(temp.path())
+        .args(["check", "--changed"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("failed to open repository"));
+}
+
+#[test]
+fn changed_check_with_no_staged_changes_skips_vault_loading_in_all_formats() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "main"]);
+
+    criv(root)
+        .args(["check", "--changed"])
+        .assert()
+        .success()
+        .stdout("criv check: ok\n");
+    criv(root)
+        .args(["check", "--changed", "--format", "json"])
+        .assert()
+        .success()
+        .stdout("[]\n");
+    criv(root)
+        .args(["check", "--changed", "--format", "github"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn changed_check_validates_added_and_modified_notes_without_global_diagnostics() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    init_git_vault(root);
+    fs::write(
+        root.join("docs/unchanged-broken.md"),
+        doc(
+            "unchanged-broken",
+            "Unchanged Broken",
+            "See [[missing-global]].",
+        ),
+    )
+    .unwrap();
+    git(root, &["add", "docs/unchanged-broken.md"]);
+    git(root, &["commit", "-m", "add known global defect"]);
+
+    fs::write(
+        root.join("docs/guide.md"),
+        doc("guide", "Guide", "See [[missing-added]]."),
+    )
+    .unwrap();
+    git(root, &["add", "docs/guide.md"]);
+    criv(root)
+        .args(["check", "--changed", "--filter", "broken-link"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("docs/guide.md"))
+        .stdout(predicate::str::contains("docs/unchanged-broken.md").not());
+
+    fs::write(
+        root.join("docs/guide.md"),
+        doc("guide", "Guide", "The added note is valid."),
+    )
+    .unwrap();
+    git(root, &["add", "docs/guide.md"]);
+    git(root, &["commit", "-m", "add valid guide"]);
+    fs::write(
+        root.join("docs/guide.md"),
+        doc("guide", "Guide", "See [[missing-modified]]."),
+    )
+    .unwrap();
+    git(root, &["add", "docs/guide.md"]);
+    criv(root)
+        .args(["check", "--changed", "--format", "json"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("missing-modified"))
+        .stdout(predicate::str::contains("missing-global").not());
+}
+
+#[test]
+fn changed_check_promotes_renames_and_deletions_to_full_validation() {
+    for operation in ["rename", "delete"] {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        init_git_vault(root);
+        fs::write(
+            root.join("docs/unchanged-broken.md"),
+            doc(
+                "unchanged-broken",
+                "Unchanged Broken",
+                "See [[missing-global]].",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            root.join("docs/change-me.md"),
+            doc("change-me", "Change Me", "Valid content."),
+        )
+        .unwrap();
+        git(root, &["add", "docs"]);
+        git(root, &["commit", "-m", "add validation fixtures"]);
+
+        match operation {
+            "rename" => git(root, &["mv", "docs/change-me.md", "docs/changed-name.md"]),
+            "delete" => git(root, &["rm", "docs/change-me.md"]),
+            _ => unreachable!(),
+        }
+
+        criv(root)
+            .args(["check", "--changed", "--filter", "broken-link"])
+            .assert()
+            .failure()
+            .stdout(predicate::str::contains("docs/unchanged-broken.md"));
+    }
+}
+
+#[test]
+fn changed_check_scans_policies_only_for_staged_sources() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    init_git_vault(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+    fs::write(
+        root.join("docs/adr/0999-no-println.md"),
+        r#"---
+id: ADR-0999
+kind: decision
+title: No println
+status: accepted
+date: 2026-08-03
+governs:
+  - src/**/*.rs
+policy:
+  patterns:
+    - id: no-println
+      language: rust
+      pattern: "println!($$$ARGS)"
+---
+
+# No println
+"#,
+    )
+    .unwrap();
+    git(root, &["add", "src/lib.rs", "docs/adr/0999-no-println.md"]);
+    git(root, &["commit", "-m", "add source policy"]);
+
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn run() {\n    println!(\"blocked\");\n}\n",
+    )
+    .unwrap();
+    git(root, &["add", "src/lib.rs"]);
+
+    criv(root)
+        .args(["check", "--changed", "--filter", "policy-violation"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("ADR-0999 policy"))
+        .stdout(predicate::str::contains("src/lib.rs:2"));
+}
+
+#[test]
+fn changed_check_is_read_only() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "main"]);
+
+    criv(root)
+        .args(["check", "--changed", "--fix"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("cannot be used with"));
+}
+
 #[test]
 fn check_nudges_only_text_output_for_stale_skills() {
     let temp = TempDir::new().unwrap();

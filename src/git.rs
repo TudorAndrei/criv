@@ -3,6 +3,7 @@
 //! Callers use criv values and errors only. `git2` objects stay in this module
 //! so a runtime subprocess alternative cannot grow beside the embedded backend.
 
+use std::collections::BTreeSet;
 use std::ops::Range;
 use std::path::Path;
 
@@ -33,6 +34,22 @@ pub(crate) enum ChangeStatus {
     Renamed,
     Copied,
     Other,
+}
+
+impl ChangedSet {
+    /// Every repository-relative path whose identity participates in this
+    /// transaction. Renames and copies include both sides so consumers cannot
+    /// accidentally ignore an old path that stopped existing.
+    pub(crate) fn affected_paths(&self) -> Vec<String> {
+        let mut paths = BTreeSet::new();
+        for entry in &self.entries {
+            paths.insert(entry.path.clone());
+            if let Some(previous) = &entry.previous_path {
+                paths.insert(previous.clone());
+            }
+        }
+        paths.into_iter().collect()
+    }
 }
 
 /// A repository opened from an explicit vault root. Its `git2` handle remains

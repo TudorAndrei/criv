@@ -66,9 +66,7 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
     let changed_files = if options.stage == Stage::Ci {
         None
     } else {
-        changed_entries
-            .as_ref()
-            .map(|changes| changed_entry_paths(&changes.entries))
+        changed_entries.as_ref().map(ChangedSet::affected_paths)
     };
     let changed_policy_files = changed_files
         .as_ref()
@@ -375,14 +373,6 @@ fn pre_push_changed_entries(
 
 fn is_zero_oid(oid: &str) -> bool {
     oid.bytes().all(|byte| byte == b'0')
-}
-
-fn changed_entry_paths(entries: &[ChangedEntry]) -> Vec<String> {
-    entries
-        .iter()
-        .filter(|entry| entry.status != ChangeStatus::Deleted)
-        .map(|entry| entry.path.clone())
-        .collect()
 }
 
 fn adr_immutability_violations(
