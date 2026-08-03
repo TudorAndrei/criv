@@ -649,14 +649,81 @@ fn query_usage_errors_are_reported() {
         .args(["query", "callers"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains(
-            "query `callers` requires <symbol>",
-        ));
-    criv(root)
+        .code(2)
+        .stderr(predicate::str::contains("required arguments"))
+        .stderr(predicate::str::contains("<SYMBOL>"));
+    let invalid = criv(root)
         .args(["query", "bogus"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("query `bogus` is not implemented"));
+        .code(2)
+        .stderr(predicate::str::contains("unrecognized subcommand 'bogus'"))
+        .stderr(predicate::str::contains("Valid query subcommands:"))
+        .stderr(predicate::str::contains("MVP").not());
+    let stderr = String::from_utf8(invalid.get_output().stderr.clone()).unwrap();
+    for name in [
+        "next-adr-id",
+        "callers",
+        "callees",
+        "attack-surface",
+        "targets",
+        "cites",
+        "cited-by",
+        "orphan-docs",
+        "references",
+        "governs",
+        "governing",
+        "coverage",
+        "nodes",
+        "c4-elements",
+        "c4-relationships",
+        "c4-code",
+        "diff",
+    ] {
+        assert!(stderr.contains(name), "missing query subcommand {name}");
+    }
+
+    criv(root)
+        .args(["query", "diff", "latest"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("required arguments"))
+        .stderr(predicate::str::contains("<REF_B>"));
+    criv(root)
+        .args(["query", "coverage", "--kind", "code"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("unexpected argument '--kind'"));
+    criv(root)
+        .args(["query", "callers", "src/lib.rs", "--without-docs"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "unexpected argument '--without-docs'",
+        ));
+    criv(root)
+        .args(["query", "coverage", "--by", "invalid"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("invalid value 'invalid'"))
+        .stderr(predicate::str::contains("module, adr"));
+    criv(root)
+        .args(["query", "nodes", "--kind", "invalid"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("invalid value 'invalid'"))
+        .stderr(predicate::str::contains("code, doc, decision"));
+    criv(root)
+        .args(["query", "coverage", "extra"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("unexpected argument 'extra'"));
 }
 
 #[test]
@@ -705,7 +772,9 @@ fn query_diff_compares_snapshots_and_reports_errors() {
         .args(["query", "diff", &hash_a])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("requires <ref-a> <ref-b>"));
+        .code(2)
+        .stderr(predicate::str::contains("required arguments"))
+        .stderr(predicate::str::contains("<REF_B>"));
     criv(root)
         .args(["query", "diff", "nonexistent", "latest"])
         .assert()

@@ -57,8 +57,7 @@ impl CrivError {
 #[command(
     name = "criv",
     version,
-    about = "Local docs-to-code knowledge graph validator and query tool",
-    after_help = "Implemented query names: next-adr-id, targets, references, cites, cited-by, governs, governing, coverage, nodes, callers, callees, attack-surface, c4-elements, c4-relationships, c4-code, diff, orphan-docs."
+    about = "Local docs-to-code knowledge graph validator and query tool"
 )]
 struct Cli {
     #[arg(long = "usage", hide = true)]
@@ -85,19 +84,20 @@ pub fn run(args: Vec<String>) -> Result<()> {
         return Ok(());
     }
 
-    let cli = match Cli::try_parse_from(std::iter::once("criv".to_string()).chain(args)) {
-        Ok(cli) => cli,
-        Err(err)
-            if matches!(
-                err.kind(),
-                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
-            ) =>
-        {
-            print!("{err}");
-            return Ok(());
-        }
-        Err(err) => return Err(CrivError::usage(err.to_string())),
-    };
+    let cli =
+        match Cli::try_parse_from(std::iter::once("criv").chain(args.iter().map(String::as_str))) {
+            Ok(cli) => cli,
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+                ) =>
+            {
+                print!("{err}");
+                return Ok(());
+            }
+            Err(err) => return Err(CrivError::usage(parse_error(&args, err))),
+        };
 
     if cli.usage {
         write_usage_spec(&mut std::io::stdout().lock());
@@ -118,6 +118,28 @@ pub fn run(args: Vec<String>) -> Result<()> {
         Some(Command::Watch(options)) => watch::run(&cwd, options),
         Some(Command::Enforce(options)) => enforce::run(&cwd, options),
     }
+}
+
+fn parse_error(args: &[String], error: clap::Error) -> String {
+    let mut message = error.to_string();
+    if error.kind() != ErrorKind::InvalidSubcommand
+        || args.first().is_none_or(|argument| argument != "query")
+    {
+        return message;
+    }
+
+    let command = Cli::command();
+    let Some(query) = command.find_subcommand("query") else {
+        return message;
+    };
+    let names = query
+        .get_subcommands()
+        .map(clap::Command::get_name)
+        .filter(|name| *name != "help")
+        .collect::<Vec<_>>()
+        .join(", ");
+    message.push_str(&format!("\nValid query subcommands: {names}\n"));
+    message
 }
 
 fn write_usage_spec(writer: &mut dyn Write) {
@@ -209,7 +231,27 @@ fn command_for_path<'a>(spec: &'a usage::Spec, path: &[&str]) -> Option<&'a usag
 
 #[cfg(test)]
 mod tests {
-    use super::{usage_help, write_usage_spec};
+    use super::{usage_help, usage_spec, write_usage_spec};
+
+    const QUERY_SUBCOMMANDS: [&str; 17] = [
+        "next-adr-id",
+        "callers",
+        "callees",
+        "attack-surface",
+        "targets",
+        "cites",
+        "cited-by",
+        "orphan-docs",
+        "references",
+        "governs",
+        "governing",
+        "coverage",
+        "nodes",
+        "c4-elements",
+        "c4-relationships",
+        "c4-code",
+        "diff",
+    ];
 
     #[test]
     fn usage_spec_includes_criv_commands() {
@@ -225,6 +267,20 @@ mod tests {
         assert!(spec.contains("cmd enforce"));
         assert!(spec.contains("cmd search"));
         assert!(spec.contains("flag --pattern-id"));
+
+        let spec = usage_spec();
+        let query = spec
+            .cmd
+            .find_subcommand("query")
+            .expect("query command should be exported");
+        let names = query
+            .subcommands
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(names, QUERY_SUBCOMMANDS);
+        assert!(query.args.is_empty());
+        assert!(query.flags.is_empty());
     }
 
     #[test]
@@ -233,6 +289,14 @@ mod tests {
         let default = usage_help(&[]).expect("default help should render");
         let query = usage_help(&["help".to_string(), "query".to_string()])
             .expect("query help should render");
+        let coverage = usage_help(&[
+            "help".to_string(),
+            "query".to_string(),
+            "coverage".to_string(),
+        ])
+        .expect("coverage help should render");
+        let nodes = usage_help(&["help".to_string(), "query".to_string(), "nodes".to_string()])
+            .expect("nodes help should render");
         let search = usage_help(&["search".to_string(), "--help".to_string()])
             .expect("search help should render");
 
@@ -241,8 +305,16 @@ mod tests {
         assert!(root.contains("Commands:"));
         assert!(!root.contains("--usage"));
         assert!(query.contains("Usage: criv query"));
-        assert!(query.contains("[OPTIONS]"));
-        assert!(query.contains("--without-docs"));
+        assert!(query.contains("<SUBCOMMAND>"));
+        for name in QUERY_SUBCOMMANDS {
+            assert!(query.contains(&format!("query {name}")));
+        }
+        assert!(coverage.contains("--by <BY>"));
+        assert!(!coverage.contains("--kind"));
+        assert!(!coverage.contains("--without-docs"));
+        assert!(nodes.contains("--kind <KIND>"));
+        assert!(nodes.contains("--without-docs"));
+        assert!(!nodes.contains("--by"));
         assert!(root.contains("enforce --stage <STAGE>"));
         assert!(!root.contains("enforce <--stage <STAGE>>"));
         assert!(search.contains("--pattern-id <PATTERN_ID>"));

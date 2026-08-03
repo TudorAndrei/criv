@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
-use clap::{Args as ClapArgs, ValueEnum};
+use clap::{Args as ClapArgs, Subcommand, ValueEnum};
 
 use crate::c4_code;
 use crate::vault::{
@@ -19,96 +19,198 @@ enum Format {
 
 #[derive(Debug, ClapArgs)]
 pub(crate) struct QueryOptions {
-    name: String,
-    #[arg()]
-    values: Vec<String>,
-    #[arg(long)]
-    by: Option<String>,
-    #[arg(long)]
-    kind: Option<String>,
-    #[arg(long)]
-    without_docs: bool,
+    #[command(subcommand)]
+    command: QueryCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum QueryCommand {
+    /// Print the next ADR id after the highest existing ADR id.
+    NextAdrId(OutputOptions),
+    /// List source symbols that call the requested symbol.
+    Callers(SymbolOptions),
+    /// List source symbols called by the requested symbol.
+    Callees(SymbolOptions),
+    /// List exported or public source symbols in the source graph.
+    AttackSurface(OutputOptions),
+    /// List source and pattern targets declared or linked by a note.
+    Targets(NoteOptions),
+    /// List notes, sources, and patterns cited by a note.
+    Cites(NoteOptions),
+    /// List notes that cite the requested note.
+    CitedBy(NoteOptions),
+    /// List documentation notes without incoming or outgoing note citations.
+    OrphanDocs(OutputOptions),
+    /// List notes that reference a source path or symbol.
+    References(SymbolOptions),
+    /// List source files governed by a decision.
+    Governs(DecisionOptions),
+    /// List decisions that govern a source path or symbol.
+    Governing(SymbolOptions),
+    /// Summarize source governance coverage.
+    Coverage(CoverageOptions),
+    /// List source, note, or decision nodes.
+    Nodes(NodesOptions),
+    /// List parsed Mermaid C4 elements from a note.
+    C4Elements(NoteOptions),
+    /// List parsed Mermaid C4 relationships from a note.
+    C4Relationships(NoteOptions),
+    /// Emit a focused Mermaid class diagram from source graph symbols and calls.
+    C4Code(PathGlobOptions),
+    /// Compare two state snapshots or git refs.
+    Diff(DiffOptions),
+}
+
+#[derive(Debug, ClapArgs)]
+struct OutputOptions {
+    /// Select text rows or a JSON array of rows.
     #[arg(long, value_enum, default_value_t = Format::Text)]
     format: Format,
 }
 
+#[derive(Debug, ClapArgs)]
+struct SymbolOptions {
+    /// Source path or symbol selector.
+    symbol: String,
+    #[command(flatten)]
+    output: OutputOptions,
+}
+
+#[derive(Debug, ClapArgs)]
+struct NoteOptions {
+    /// Note id or unique note name.
+    note_id: String,
+    #[command(flatten)]
+    output: OutputOptions,
+}
+
+#[derive(Debug, ClapArgs)]
+struct DecisionOptions {
+    /// ADR id.
+    adr_id: String,
+    #[command(flatten)]
+    output: OutputOptions,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CoverageBy {
+    Module,
+    Adr,
+}
+
+#[derive(Debug, ClapArgs)]
+struct CoverageOptions {
+    /// Group coverage rows by module or ADR.
+    #[arg(long, value_enum)]
+    by: Option<CoverageBy>,
+    #[command(flatten)]
+    output: OutputOptions,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum NodeKind {
+    Code,
+    Doc,
+    Decision,
+}
+
+#[derive(Debug, ClapArgs)]
+struct NodesOptions {
+    /// Restrict nodes to code, documentation, or decisions.
+    #[arg(long, value_enum)]
+    kind: Option<NodeKind>,
+    /// Restrict code nodes to symbols that no note references.
+    #[arg(long)]
+    without_docs: bool,
+    #[command(flatten)]
+    output: OutputOptions,
+}
+
+#[derive(Debug, ClapArgs)]
+struct PathGlobOptions {
+    /// Source path or component/module glob.
+    path_glob: String,
+    #[command(flatten)]
+    output: OutputOptions,
+}
+
+#[derive(Debug, ClapArgs)]
+struct DiffOptions {
+    /// Left snapshot hash, `latest`, or git ref.
+    ref_a: String,
+    /// Right snapshot hash, `latest`, or git ref.
+    ref_b: String,
+    #[command(flatten)]
+    output: OutputOptions,
+}
+
 pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
     let vault = Vault::load(root)?;
-    let rows = match options.name.as_str() {
-        "next-adr-id" => vec![next_adr_id(&vault)],
-        "callers" => {
-            let symbol = required_arg(&options, "symbol")?;
-            vault.source_graph().callers(symbol)
+    let (rows, format) = match options.command {
+        QueryCommand::NextAdrId(output) => (vec![next_adr_id(&vault)], output.format),
+        QueryCommand::Callers(options) => {
+            let rows = vault.source_graph().callers(&options.symbol);
+            (rows, options.output.format)
         }
-        "callees" => {
-            let symbol = required_arg(&options, "symbol")?;
-            vault.source_graph().callees(symbol)
+        QueryCommand::Callees(options) => {
+            let rows = vault.source_graph().callees(&options.symbol);
+            (rows, options.output.format)
         }
-        "attack-surface" => vault.source_graph().attack_surface(),
-        "targets" => {
-            let id = required_arg(&options, "note-id")?;
-            targets(&vault, id)?
+        QueryCommand::AttackSurface(output) => {
+            (vault.source_graph().attack_surface(), output.format)
         }
-        "cites" => {
-            let id = required_arg(&options, "note-id")?;
-            cites(&vault, id, false)?
+        QueryCommand::Targets(options) => {
+            let rows = targets(&vault, &options.note_id)?;
+            (rows, options.output.format)
         }
-        "cited-by" => {
-            let id = required_arg(&options, "note-id")?;
-            cited_by(&vault, id)?
+        QueryCommand::Cites(options) => {
+            let rows = cites(&vault, &options.note_id, false)?;
+            (rows, options.output.format)
         }
-        "orphan-docs" => orphan_docs(&vault),
-        "references" => {
-            let symbol = required_arg(&options, "symbol")?;
-            references(&vault, symbol)
+        QueryCommand::CitedBy(options) => {
+            let rows = cited_by(&vault, &options.note_id)?;
+            (rows, options.output.format)
         }
-        "governs" => {
-            let adr_id = required_arg(&options, "ADR-ID")?;
-            governs(&vault, adr_id)?
+        QueryCommand::OrphanDocs(output) => (orphan_docs(&vault), output.format),
+        QueryCommand::References(options) => {
+            let rows = references(&vault, &options.symbol);
+            (rows, options.output.format)
         }
-        "governing" => {
-            let symbol = required_arg(&options, "symbol")?;
-            governing(&vault, symbol)
+        QueryCommand::Governs(options) => {
+            let rows = governs(&vault, &options.adr_id)?;
+            (rows, options.output.format)
         }
-        "coverage" => coverage(&vault, options.by.as_deref()),
-        "nodes" => nodes(&vault, options.kind.as_deref(), options.without_docs),
-        "c4-elements" => {
-            let id = required_arg(&options, "note-id")?;
-            c4_elements(&vault, id)?
+        QueryCommand::Governing(options) => {
+            let rows = governing(&vault, &options.symbol);
+            (rows, options.output.format)
         }
-        "c4-relationships" => {
-            let id = required_arg(&options, "note-id")?;
-            c4_relationships(&vault, id)?
+        QueryCommand::Coverage(options) => {
+            let rows = coverage(&vault, options.by);
+            (rows, options.output.format)
         }
-        "c4-code" => {
-            let glob = required_arg(&options, "path-glob")?;
-            c4_code::for_glob(&vault, glob)
+        QueryCommand::Nodes(options) => {
+            let rows = nodes(&vault, options.kind, options.without_docs);
+            (rows, options.output.format)
         }
-        "diff" => {
-            let left = required_arg(&options, "ref-a")?;
-            let right = options
-                .values
-                .get(1)
-                .map(String::as_str)
-                .ok_or_else(|| CrivError::usage("query `diff` requires <ref-a> <ref-b>"))?;
-            diff(root, left, right)?
+        QueryCommand::C4Elements(options) => {
+            let rows = c4_elements(&vault, &options.note_id)?;
+            (rows, options.output.format)
         }
-        other => {
-            return Err(CrivError::usage(format!(
-                "query `{other}` is not implemented in this MVP"
-            )));
+        QueryCommand::C4Relationships(options) => {
+            let rows = c4_relationships(&vault, &options.note_id)?;
+            (rows, options.output.format)
+        }
+        QueryCommand::C4Code(options) => (
+            c4_code::for_glob(&vault, &options.path_glob),
+            options.output.format,
+        ),
+        QueryCommand::Diff(options) => {
+            let rows = diff(root, &options.ref_a, &options.ref_b)?;
+            (rows, options.output.format)
         }
     };
 
-    print_rows(&rows, options.format)
-}
-
-fn required_arg<'a>(options: &'a QueryOptions, name: &str) -> Result<&'a str> {
-    options
-        .values
-        .first()
-        .map(String::as_str)
-        .ok_or_else(|| CrivError::usage(format!("query `{}` requires <{name}>", options.name)))
+    print_rows(&rows, format)
 }
 
 fn next_adr_id(vault: &Vault) -> String {
@@ -275,18 +377,17 @@ fn governing(vault: &Vault, symbol: &str) -> Vec<String> {
     rows
 }
 
-fn coverage(vault: &Vault, by: Option<&str>) -> Vec<String> {
+fn coverage(vault: &Vault, by: Option<CoverageBy>) -> Vec<String> {
     let governed = vault
         .notes
         .iter()
         .filter(|note| note.kind == NoteKind::Decision)
         .flat_map(|note| vault.source_files_matching_globs(&vault.effective_governs(note)))
         .collect::<std::collections::BTreeSet<_>>();
-    if by == Some("module") {
-        return coverage_by_module(vault, &governed);
-    }
-    if by == Some("adr") {
-        return coverage_by_adr(vault);
+    match by {
+        Some(CoverageBy::Module) => return coverage_by_module(vault, &governed),
+        Some(CoverageBy::Adr) => return coverage_by_adr(vault),
+        None => {}
     }
     vec![
         format!("source_files={}", vault.source_files().len()),
@@ -343,10 +444,10 @@ fn coverage_by_adr(vault: &Vault) -> Vec<String> {
     rows
 }
 
-fn nodes(vault: &Vault, kind: Option<&str>, without_docs: bool) -> Vec<String> {
+fn nodes(vault: &Vault, kind: Option<NodeKind>, without_docs: bool) -> Vec<String> {
     let mut rows = Vec::new();
     match kind {
-        Some("code") => {
+        Some(NodeKind::Code) => {
             for symbol in vault.source_graph().symbols() {
                 let display = symbol.id.display();
                 if without_docs && !references(vault, &display).is_empty() {
@@ -355,14 +456,14 @@ fn nodes(vault: &Vault, kind: Option<&str>, without_docs: bool) -> Vec<String> {
                 rows.push(display);
             }
         }
-        Some("doc") => rows.extend(
+        Some(NodeKind::Doc) => rows.extend(
             vault
                 .notes
                 .iter()
                 .filter(|note| note.kind == NoteKind::Doc)
                 .map(|note| note.display_id().to_string()),
         ),
-        Some("decision") => rows.extend(
+        Some(NodeKind::Decision) => rows.extend(
             vault
                 .notes
                 .iter()
