@@ -6,11 +6,12 @@ use std::{cell::Cell, thread_local};
 
 use serde::Serialize;
 
+use crate::c4_artifact::C4Artifact;
 use crate::measurement::{self, Counter};
-use crate::source_graph::{Language, SymbolKind};
+use crate::source_graph::{Language, SourceFile, SymbolKind};
 use crate::structural;
 use crate::util::write_atomic_in;
-use crate::vault::{NoteKind, ResolvedLink, SourceTargetResolution, Vault};
+use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
 
 const STATE_SCHEMA: &str = "criv.state.v0";
@@ -24,6 +25,8 @@ pub(crate) struct State {
     patterns: BTreeMap<String, Vec<PatternMatch>>,
     #[serde(rename = "source-index")]
     source_index: Vec<SourceIndexEntry>,
+    #[serde(skip)]
+    partitions: StatePartitions,
 }
 
 struct SerializedState {
@@ -35,6 +38,11 @@ struct SerializedState {
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub(crate) struct WorkCounts {
     pub(crate) partitions_rebuilt: usize,
+    pub(crate) source_partitions_rebuilt: usize,
+    pub(crate) note_partitions_rebuilt: usize,
+    pub(crate) c4_partitions_rebuilt: usize,
+    pub(crate) policy_partitions_rebuilt: usize,
+    pub(crate) source_index_partitions_rebuilt: usize,
     pub(crate) serializations: usize,
     published_bytes: usize,
 }
@@ -43,6 +51,11 @@ pub(crate) struct WorkCounts {
 thread_local! {
     static WORK_COUNTS: Cell<WorkCounts> = const { Cell::new(WorkCounts {
         partitions_rebuilt: 0,
+        source_partitions_rebuilt: 0,
+        note_partitions_rebuilt: 0,
+        c4_partitions_rebuilt: 0,
+        policy_partitions_rebuilt: 0,
+        source_index_partitions_rebuilt: 0,
         serializations: 0,
         published_bytes: 0,
     }) };
@@ -55,6 +68,22 @@ fn record_work(update: impl FnOnce(&mut WorkCounts)) {
         update(&mut next);
         counts.set(next);
     });
+}
+
+fn record_partition_rebuilt(kind: PartitionKind) {
+    #[cfg(test)]
+    record_work(|counts| {
+        counts.partitions_rebuilt += 1;
+        match kind {
+            PartitionKind::Source => counts.source_partitions_rebuilt += 1,
+            PartitionKind::Note => counts.note_partitions_rebuilt += 1,
+            PartitionKind::C4Artifact => counts.c4_partitions_rebuilt += 1,
+            PartitionKind::Policy => counts.policy_partitions_rebuilt += 1,
+            PartitionKind::SourceIndex => counts.source_index_partitions_rebuilt += 1,
+        }
+    });
+    #[cfg(not(test))]
+    let _ = kind;
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -95,6 +124,78 @@ pub(crate) struct SourceIndexEntry {
     frecency: u32,
 }
 
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
+enum PartitionKey {
+    Source(String),
+    Note(String),
+    C4Artifact(String),
+    Policy(String),
+    SourceIndex(String),
+}
+
+#[derive(Debug, Clone, Default)]
+struct StatePartitions {
+    sources: BTreeMap<String, SourcePartition>,
+    notes: BTreeMap<String, RowPartition>,
+    c4_artifacts: BTreeMap<String, RowPartition>,
+    policies: BTreeMap<String, PolicyPartition>,
+    source_index: BTreeMap<String, SourceIndexPartition>,
+}
+
+#[derive(Debug, Clone)]
+struct PartitionMeta {
+    key: PartitionKey,
+    input_fingerprint: String,
+    dependencies: PartitionDependencies,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PartitionDependencies {
+    source_paths: BTreeSet<String>,
+    catalog_sensitive: bool,
+    policy_sensitive: bool,
+}
+
+#[derive(Debug, Clone)]
+struct SourcePartition {
+    meta: PartitionMeta,
+    code_node: Node,
+    rows: GraphRows,
+}
+
+#[derive(Debug, Clone)]
+struct RowPartition {
+    meta: PartitionMeta,
+    rows: GraphRows,
+}
+
+#[derive(Debug, Clone)]
+struct PolicyPartition {
+    meta: PartitionMeta,
+    matches: Vec<PatternMatch>,
+}
+
+#[derive(Debug, Clone)]
+struct SourceIndexPartition {
+    meta: PartitionMeta,
+    entry: SourceIndexEntry,
+}
+
+#[derive(Debug, Clone, Default)]
+struct GraphRows {
+    nodes: Vec<Node>,
+    edges: Vec<Edge>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PartitionKind {
+    Source,
+    Note,
+    C4Artifact,
+    Policy,
+    SourceIndex,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct C4InterfaceHashRecord {
     pub(crate) id: String,
@@ -117,343 +218,20 @@ impl State {
     ) -> Result<Self> {
         let _span = measurement::span("state.build");
         measurement::increment(Counter::StateBuilds);
-        #[cfg(test)]
-        record_work(|counts| counts.partitions_rebuilt += 1);
+        let partitions = StatePartitions::build(root, vault, previous, changed_files)?;
+        Ok(Self::from_partitions(partitions))
+    }
 
-        let mut graph = Graph::default();
-        let mut seen_nodes = BTreeSet::new();
-        let mut seen_edges = BTreeSet::new();
-
-        for file in vault.source_graph().files.values() {
-            add_node(
-                &mut graph,
-                &mut seen_nodes,
-                Node {
-                    id: code_node_id(&file.path),
-                    hash: String::new(),
-                    kind: "code".into(),
-                    label: format!("{} ({})", file.path, language_name(file.language)),
-                    path: Some(file.path.clone()),
-                },
-            );
-        }
-
-        for file in vault.source_graph().files.values() {
-            let file_id = code_node_id(&file.path);
-            for import in &file.imports {
-                let import_id = import_node_id(&file.path, &import.module);
-                add_node(
-                    &mut graph,
-                    &mut seen_nodes,
-                    Node {
-                        id: import_id.clone(),
-                        hash: String::new(),
-                        kind: "import".into(),
-                        label: import.module.clone(),
-                        path: Some(format!("{}#L{}", file.path, import.line)),
-                    },
-                );
-                add_edge(&mut graph, &mut seen_edges, &file_id, &import_id, "imports");
-            }
-
-            for symbol in &file.symbols {
-                let symbol_id = symbol_node_id(&symbol.id.display());
-                add_node(
-                    &mut graph,
-                    &mut seen_nodes,
-                    Node {
-                        id: symbol_id.clone(),
-                        hash: String::new(),
-                        kind: symbol_kind(symbol.kind).into(),
-                        label: symbol.name.clone(),
-                        path: Some(format!(
-                            "{}#L{}-L{}",
-                            symbol.id.path, symbol.range.start_line, symbol.range.end_line
-                        )),
-                    },
-                );
-                add_edge(
-                    &mut graph,
-                    &mut seen_edges,
-                    &file_id,
-                    &symbol_id,
-                    "contains",
-                );
-                if let Some(parent) = &symbol.parent
-                    && let Some(parent_id) = vault
-                        .source_graph()
-                        .resolve_symbol(&format!("{}#{}", symbol.id.path, parent))
-                {
-                    add_edge(
-                        &mut graph,
-                        &mut seen_edges,
-                        &symbol_node_id(&parent_id.display()),
-                        &symbol_id,
-                        "contains",
-                    );
-                }
-                for call in &symbol.calls {
-                    let target = vault
-                        .source_graph()
-                        .resolve_call(&symbol.id, &call.target)
-                        .map(|target| symbol_node_id(&target.display()))
-                        .unwrap_or_else(|| external_call_node_id(&call.target));
-                    if target.starts_with("external-call:") {
-                        add_node(
-                            &mut graph,
-                            &mut seen_nodes,
-                            Node {
-                                id: target.clone(),
-                                hash: String::new(),
-                                kind: "external-call".into(),
-                                label: call.target.clone(),
-                                path: Some(format!("{}#L{}", symbol.id.path, call.line)),
-                            },
-                        );
-                    }
-                    add_edge(&mut graph, &mut seen_edges, &symbol_id, &target, "calls");
-                }
-            }
-        }
-
-        for note in &vault.notes {
-            let kind = match note.kind {
-                NoteKind::Decision => "decision",
-                NoteKind::Doc | NoteKind::Unknown => "doc",
-            };
-            let note_id = note_node_id(note.display_id());
-            add_node(
-                &mut graph,
-                &mut seen_nodes,
-                Node {
-                    id: note_id.clone(),
-                    hash: String::new(),
-                    kind: kind.into(),
-                    label: note
-                        .title
-                        .clone()
-                        .unwrap_or_else(|| note.display_id().to_string()),
-                    path: Some(note.rel_path.clone()),
-                },
-            );
-
-            for target in &note.targets_symbols {
-                if let SourceTargetResolution::Resolved { path, .. } =
-                    vault.resolve_source_target(target)
-                {
-                    add_edge(
-                        &mut graph,
-                        &mut seen_edges,
-                        &note_id,
-                        &code_node_id(&path),
-                        "references",
-                    );
-                }
-            }
-
-            for heading in &note.headings {
-                let heading_id = format!("{note_id}#{}", crate::util::kebab(&heading.text));
-                add_node(
-                    &mut graph,
-                    &mut seen_nodes,
-                    Node {
-                        id: heading_id.clone(),
-                        hash: String::new(),
-                        kind: "doc-heading".into(),
-                        label: heading.text.clone(),
-                        path: Some(format!(
-                            "{}#L{}:H{}",
-                            note.rel_path, heading.line, heading.level
-                        )),
-                    },
-                );
-                add_edge(
-                    &mut graph,
-                    &mut seen_edges,
-                    &note_id,
-                    &heading_id,
-                    "contains",
-                );
-            }
-
-            for source_file in vault.source_files_matching_globs(&vault.effective_governs(note)) {
-                add_edge(
-                    &mut graph,
-                    &mut seen_edges,
-                    &note_id,
-                    &code_node_id(&source_file),
-                    "governs",
-                );
-            }
-
-            for superseded in &note.supersedes {
-                add_edge(
-                    &mut graph,
-                    &mut seen_edges,
-                    &note_id,
-                    &note_node_id(superseded),
-                    "supersedes",
-                );
-            }
-
-            for link in &note.wiki_links {
-                match vault.resolve_link(&link.target) {
-                    ResolvedLink::Note { id } => {
-                        add_edge(
-                            &mut graph,
-                            &mut seen_edges,
-                            &note_id,
-                            &note_node_id(&id),
-                            "cites",
-                        );
-                    }
-                    ResolvedLink::Source { path, .. } => {
-                        add_edge(
-                            &mut graph,
-                            &mut seen_edges,
-                            &note_id,
-                            &code_node_id(&path),
-                            "references",
-                        );
-                    }
-                    ResolvedLink::Pattern { id } => {
-                        let pattern_id = pattern_node_id(&id);
-                        add_node(
-                            &mut graph,
-                            &mut seen_nodes,
-                            Node {
-                                id: pattern_id.clone(),
-                                hash: String::new(),
-                                kind: "pattern".into(),
-                                label: id,
-                                path: None,
-                            },
-                        );
-                        add_edge(
-                            &mut graph,
-                            &mut seen_edges,
-                            &note_id,
-                            &pattern_id,
-                            "references",
-                        );
-                    }
-                    ResolvedLink::Broken => {}
-                }
-            }
-
-            add_c4_diagrams_to_graph(
-                &mut graph,
-                &mut seen_nodes,
-                &mut seen_edges,
-                vault,
-                &note_id,
-                &note.rel_path,
-                &note.c4_diagrams,
-            );
-        }
-
-        for artifact in &vault.c4_artifacts {
-            let artifact_id = c4_artifact_node_id(&artifact.rel_path);
-            add_node(
-                &mut graph,
-                &mut seen_nodes,
-                Node {
-                    id: artifact_id.clone(),
-                    hash: String::new(),
-                    kind: "c4-artifact".into(),
-                    label: artifact.rel_path.clone(),
-                    path: Some(artifact.rel_path.clone()),
-                },
-            );
-            add_c4_diagrams_to_graph(
-                &mut graph,
-                &mut seen_nodes,
-                &mut seen_edges,
-                vault,
-                &artifact_id,
-                &artifact.rel_path,
-                &artifact.diagrams,
-            );
-        }
-
-        let mut source_index = vault
-            .source_index()
-            .entries()?
-            .into_iter()
-            .map(|entry| SourceIndexEntry {
-                mime: mime_guess::from_path(&entry.path)
-                    .first_raw()
-                    .map(str::to_string),
-                path: entry.path,
-                frecency: entry.frecency,
-            })
-            .collect::<Vec<_>>();
-        source_index.sort_by(|left, right| left.path.cmp(&right.path));
-
-        let mut patterns = BTreeMap::new();
-        let mut pending_policy_scans = Vec::new();
-        for pattern_id in vault.patterns() {
-            if let Some((note, policy)) = vault.resolve_policy_pattern(pattern_id) {
-                pending_policy_scans.push(PendingPolicyScan {
-                    pattern_id: pattern_id.clone(),
-                    policy,
-                    paths: incremental_policy_paths(
-                        vault,
-                        vault.effective_governs(note),
-                        previous,
-                        changed_files,
-                        pattern_id,
-                    ),
-                    reused: reusable_pattern_matches(previous, changed_files, pattern_id),
-                });
-            }
-        }
-
-        let compiled_requests = pending_policy_scans
-            .iter()
-            .enumerate()
-            .filter(|(_, scan)| scan.paths.is_some())
-            .map(|(key, scan)| {
-                structural::compile_policy(scan.policy)
-                    .map(|policy| (key, policy))
-                    .map_err(CrivError::from)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let requests = compiled_requests
-            .iter()
-            .map(|(key, policy)| structural::PolicyScanRequest {
-                key: *key,
-                policy,
-                paths: pending_policy_scans[*key]
-                    .paths
-                    .as_ref()
-                    .expect("scans are filtered above"),
-            })
-            .collect::<Vec<_>>();
-        let rescanned = structural::find_policies_batch(root, vault, &requests)?;
-        for (key, scan) in pending_policy_scans.into_iter().enumerate() {
-            let mut matches = scan.reused;
-            if scan.paths.is_some() {
-                matches.extend(
-                    rescanned
-                        .get(&key)
-                        .expect("every policy scan request has a result")
-                        .iter()
-                        .map(pattern_match_from_structural),
-                );
-            }
-            sort_and_dedup_pattern_matches(&mut matches);
-            patterns.insert(scan.pattern_id, matches);
-        }
-        graph.root = graph_root(&graph);
-
-        Ok(Self {
+    fn from_partitions(partitions: StatePartitions) -> Self {
+        let (graph, patterns, source_index) = partitions.flatten();
+        Self {
             schema: STATE_SCHEMA,
             graph,
             registered_patterns: patterns.keys().cloned().collect(),
             patterns,
             source_index,
-        })
+            partitions,
+        }
     }
 
     #[cfg(test)]
@@ -474,6 +252,7 @@ impl State {
     fn serialize(&self) -> Result<SerializedState> {
         let _span = measurement::span("state.serialize");
         measurement::increment(Counter::StateSerializations);
+        let _ = &self.partitions;
         #[cfg(test)]
         record_work(|counts| counts.serializations += 1);
 
@@ -525,6 +304,573 @@ impl State {
     }
 }
 
+impl StatePartitions {
+    fn build(
+        root: &Path,
+        vault: &Vault,
+        previous: Option<&State>,
+        changed_files: &[String],
+    ) -> Result<Self> {
+        let mut partitions = Self::default();
+
+        for file in vault.source_graph().files.values() {
+            record_partition_rebuilt(PartitionKind::Source);
+            partitions
+                .sources
+                .insert(file.path.clone(), build_source_partition(vault, file));
+        }
+
+        for note in &vault.notes {
+            record_partition_rebuilt(PartitionKind::Note);
+            partitions
+                .notes
+                .insert(note.rel_path.clone(), build_note_partition(vault, note));
+        }
+
+        for artifact in &vault.c4_artifacts {
+            record_partition_rebuilt(PartitionKind::C4Artifact);
+            partitions.c4_artifacts.insert(
+                artifact.rel_path.clone(),
+                build_c4_artifact_partition(vault, artifact),
+            );
+        }
+
+        let mut source_entries = vault.source_index().entries()?;
+        source_entries.sort_by(|left, right| left.path.cmp(&right.path));
+        for entry in source_entries {
+            record_partition_rebuilt(PartitionKind::SourceIndex);
+            let state_entry = SourceIndexEntry {
+                mime: mime_guess::from_path(&entry.path)
+                    .first_raw()
+                    .map(str::to_string),
+                path: entry.path.clone(),
+                frecency: entry.frecency,
+            };
+            let meta = partition_meta(
+                PartitionKey::SourceIndex(entry.path.clone()),
+                &format!("{}\0{}\0{:?}", entry.path, entry.frecency, state_entry.mime),
+                PartitionDependencies::default(),
+            );
+            partitions.source_index.insert(
+                entry.path,
+                SourceIndexPartition {
+                    meta,
+                    entry: state_entry,
+                },
+            );
+        }
+
+        partitions.policies = build_policy_partitions(root, vault, previous, changed_files)?;
+        Ok(partitions)
+    }
+
+    fn flatten(
+        &self,
+    ) -> (
+        Graph,
+        BTreeMap<String, Vec<PatternMatch>>,
+        Vec<SourceIndexEntry>,
+    ) {
+        let mut graph = Graph::default();
+        let mut seen_nodes = BTreeSet::new();
+        let mut seen_edges = BTreeSet::new();
+
+        // Keep the public v0 ordering: every code file node precedes source details.
+        for (path, partition) in &self.sources {
+            observe_partition_meta(&partition.meta, &PartitionKey::Source(path.clone()));
+            add_node(&mut graph, &mut seen_nodes, partition.code_node.clone());
+        }
+        for partition in self.sources.values() {
+            append_graph_rows(
+                &mut graph,
+                &mut seen_nodes,
+                &mut seen_edges,
+                &partition.rows,
+            );
+        }
+        for (path, partition) in &self.notes {
+            observe_partition_meta(&partition.meta, &PartitionKey::Note(path.clone()));
+            append_graph_rows(
+                &mut graph,
+                &mut seen_nodes,
+                &mut seen_edges,
+                &partition.rows,
+            );
+        }
+        for (path, partition) in &self.c4_artifacts {
+            observe_partition_meta(&partition.meta, &PartitionKey::C4Artifact(path.clone()));
+            append_graph_rows(
+                &mut graph,
+                &mut seen_nodes,
+                &mut seen_edges,
+                &partition.rows,
+            );
+        }
+        graph.root = graph_root(&graph);
+
+        let patterns = self
+            .policies
+            .iter()
+            .map(|(id, partition)| {
+                observe_partition_meta(&partition.meta, &PartitionKey::Policy(id.clone()));
+                (id.clone(), partition.matches.clone())
+            })
+            .collect();
+        let source_index = self
+            .source_index
+            .iter()
+            .map(|(path, partition)| {
+                observe_partition_meta(&partition.meta, &PartitionKey::SourceIndex(path.clone()));
+                partition.entry.clone()
+            })
+            .collect();
+
+        (graph, patterns, source_index)
+    }
+}
+
+fn partition_meta(
+    key: PartitionKey,
+    fingerprint_input: &str,
+    dependencies: PartitionDependencies,
+) -> PartitionMeta {
+    PartitionMeta {
+        key,
+        input_fingerprint: stable_hash(fingerprint_input),
+        dependencies,
+    }
+}
+
+fn observe_partition_meta(meta: &PartitionMeta, expected_key: &PartitionKey) {
+    debug_assert_eq!(&meta.key, expected_key);
+    let _ = (
+        &meta.input_fingerprint,
+        &meta.dependencies.source_paths,
+        meta.dependencies.catalog_sensitive,
+        meta.dependencies.policy_sensitive,
+    );
+}
+
+fn append_graph_rows(
+    graph: &mut Graph,
+    seen_nodes: &mut BTreeSet<String>,
+    seen_edges: &mut BTreeSet<String>,
+    rows: &GraphRows,
+) {
+    for node in &rows.nodes {
+        add_node(graph, seen_nodes, node.clone());
+    }
+    for edge in &rows.edges {
+        add_edge(graph, seen_edges, &edge.from, &edge.to, &edge.kind);
+    }
+}
+
+fn graph_rows(graph: Graph) -> GraphRows {
+    GraphRows {
+        nodes: graph.nodes,
+        edges: graph.edges,
+    }
+}
+
+fn build_source_partition(vault: &Vault, file: &SourceFile) -> SourcePartition {
+    let mut graph = Graph::default();
+    let mut seen_nodes = BTreeSet::new();
+    let mut seen_edges = BTreeSet::new();
+    let mut dependencies = PartitionDependencies::default();
+    dependencies.source_paths.insert(file.path.clone());
+    let file_id = code_node_id(&file.path);
+
+    for import in &file.imports {
+        let import_id = import_node_id(&file.path, &import.module);
+        add_node(
+            &mut graph,
+            &mut seen_nodes,
+            Node {
+                id: import_id.clone(),
+                hash: String::new(),
+                kind: "import".into(),
+                label: import.module.clone(),
+                path: Some(format!("{}#L{}", file.path, import.line)),
+            },
+        );
+        add_edge(&mut graph, &mut seen_edges, &file_id, &import_id, "imports");
+    }
+
+    for symbol in &file.symbols {
+        let symbol_id = symbol_node_id(&symbol.id.display());
+        add_node(
+            &mut graph,
+            &mut seen_nodes,
+            Node {
+                id: symbol_id.clone(),
+                hash: String::new(),
+                kind: symbol_kind(symbol.kind).into(),
+                label: symbol.name.clone(),
+                path: Some(format!(
+                    "{}#L{}-L{}",
+                    symbol.id.path, symbol.range.start_line, symbol.range.end_line
+                )),
+            },
+        );
+        add_edge(
+            &mut graph,
+            &mut seen_edges,
+            &file_id,
+            &symbol_id,
+            "contains",
+        );
+        if let Some(parent) = &symbol.parent
+            && let Some(parent_id) = vault
+                .source_graph()
+                .resolve_symbol(&format!("{}#{}", symbol.id.path, parent))
+        {
+            dependencies.source_paths.insert(parent_id.path.clone());
+            add_edge(
+                &mut graph,
+                &mut seen_edges,
+                &symbol_node_id(&parent_id.display()),
+                &symbol_id,
+                "contains",
+            );
+        }
+        for call in &symbol.calls {
+            let resolved = vault.source_graph().resolve_call(&symbol.id, &call.target);
+            if let Some(target) = &resolved {
+                dependencies.source_paths.insert(target.path.clone());
+            } else {
+                dependencies.catalog_sensitive = true;
+            }
+            let target = resolved
+                .map(|target| symbol_node_id(&target.display()))
+                .unwrap_or_else(|| external_call_node_id(&call.target));
+            if target.starts_with("external-call:") {
+                add_node(
+                    &mut graph,
+                    &mut seen_nodes,
+                    Node {
+                        id: target.clone(),
+                        hash: String::new(),
+                        kind: "external-call".into(),
+                        label: call.target.clone(),
+                        path: Some(format!("{}#L{}", symbol.id.path, call.line)),
+                    },
+                );
+            }
+            add_edge(&mut graph, &mut seen_edges, &symbol_id, &target, "calls");
+        }
+    }
+
+    SourcePartition {
+        meta: partition_meta(
+            PartitionKey::Source(file.path.clone()),
+            &format!("{file:#?}"),
+            dependencies,
+        ),
+        code_node: Node {
+            id: file_id,
+            hash: String::new(),
+            kind: "code".into(),
+            label: format!("{} ({})", file.path, language_name(file.language)),
+            path: Some(file.path.clone()),
+        },
+        rows: graph_rows(graph),
+    }
+}
+
+fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
+    let mut graph = Graph::default();
+    let mut seen_nodes = BTreeSet::new();
+    let mut seen_edges = BTreeSet::new();
+    let mut dependencies = PartitionDependencies {
+        policy_sensitive: note.kind == NoteKind::Decision,
+        ..PartitionDependencies::default()
+    };
+    let kind = match note.kind {
+        NoteKind::Decision => "decision",
+        NoteKind::Doc | NoteKind::Unknown => "doc",
+    };
+    let note_id = note_node_id(note.display_id());
+    add_node(
+        &mut graph,
+        &mut seen_nodes,
+        Node {
+            id: note_id.clone(),
+            hash: String::new(),
+            kind: kind.into(),
+            label: note
+                .title
+                .clone()
+                .unwrap_or_else(|| note.display_id().to_string()),
+            path: Some(note.rel_path.clone()),
+        },
+    );
+
+    for target in &note.targets_symbols {
+        dependencies.catalog_sensitive = true;
+        if let SourceTargetResolution::Resolved { path, .. } = vault.resolve_source_target(target) {
+            dependencies.source_paths.insert(path.clone());
+            add_edge(
+                &mut graph,
+                &mut seen_edges,
+                &note_id,
+                &code_node_id(&path),
+                "references",
+            );
+        }
+    }
+
+    for heading in &note.headings {
+        let heading_id = format!("{note_id}#{}", crate::util::kebab(&heading.text));
+        add_node(
+            &mut graph,
+            &mut seen_nodes,
+            Node {
+                id: heading_id.clone(),
+                hash: String::new(),
+                kind: "doc-heading".into(),
+                label: heading.text.clone(),
+                path: Some(format!(
+                    "{}#L{}:H{}",
+                    note.rel_path, heading.line, heading.level
+                )),
+            },
+        );
+        add_edge(
+            &mut graph,
+            &mut seen_edges,
+            &note_id,
+            &heading_id,
+            "contains",
+        );
+    }
+
+    let governs = vault.effective_governs(note);
+    if !governs.is_empty() {
+        dependencies.catalog_sensitive = true;
+    }
+    for source_file in vault.source_files_matching_globs(&governs) {
+        dependencies.source_paths.insert(source_file.clone());
+        add_edge(
+            &mut graph,
+            &mut seen_edges,
+            &note_id,
+            &code_node_id(&source_file),
+            "governs",
+        );
+    }
+
+    for superseded in &note.supersedes {
+        add_edge(
+            &mut graph,
+            &mut seen_edges,
+            &note_id,
+            &note_node_id(superseded),
+            "supersedes",
+        );
+    }
+
+    for link in &note.wiki_links {
+        match vault.resolve_link(&link.target) {
+            ResolvedLink::Note { id } => {
+                add_edge(
+                    &mut graph,
+                    &mut seen_edges,
+                    &note_id,
+                    &note_node_id(&id),
+                    "cites",
+                );
+            }
+            ResolvedLink::Source { path, .. } => {
+                dependencies.catalog_sensitive = true;
+                dependencies.source_paths.insert(path.clone());
+                add_edge(
+                    &mut graph,
+                    &mut seen_edges,
+                    &note_id,
+                    &code_node_id(&path),
+                    "references",
+                );
+            }
+            ResolvedLink::Pattern { id } => {
+                dependencies.policy_sensitive = true;
+                let pattern_id = pattern_node_id(&id);
+                add_node(
+                    &mut graph,
+                    &mut seen_nodes,
+                    Node {
+                        id: pattern_id.clone(),
+                        hash: String::new(),
+                        kind: "pattern".into(),
+                        label: id,
+                        path: None,
+                    },
+                );
+                add_edge(
+                    &mut graph,
+                    &mut seen_edges,
+                    &note_id,
+                    &pattern_id,
+                    "references",
+                );
+            }
+            ResolvedLink::Broken => {}
+        }
+    }
+
+    if !note.c4_diagrams.is_empty() {
+        dependencies.catalog_sensitive = true;
+    }
+    add_c4_diagrams_to_graph(
+        &mut graph,
+        &mut seen_nodes,
+        &mut seen_edges,
+        vault,
+        &note_id,
+        &note.rel_path,
+        &note.c4_diagrams,
+    );
+    collect_graph_source_dependencies(&graph, &mut dependencies);
+
+    RowPartition {
+        meta: partition_meta(
+            PartitionKey::Note(note.rel_path.clone()),
+            &format!("{note:#?}"),
+            dependencies,
+        ),
+        rows: graph_rows(graph),
+    }
+}
+
+fn build_c4_artifact_partition(vault: &Vault, artifact: &C4Artifact) -> RowPartition {
+    let mut graph = Graph::default();
+    let mut seen_nodes = BTreeSet::new();
+    let mut seen_edges = BTreeSet::new();
+    let artifact_id = c4_artifact_node_id(&artifact.rel_path);
+    add_node(
+        &mut graph,
+        &mut seen_nodes,
+        Node {
+            id: artifact_id.clone(),
+            hash: String::new(),
+            kind: "c4-artifact".into(),
+            label: artifact.rel_path.clone(),
+            path: Some(artifact.rel_path.clone()),
+        },
+    );
+    add_c4_diagrams_to_graph(
+        &mut graph,
+        &mut seen_nodes,
+        &mut seen_edges,
+        vault,
+        &artifact_id,
+        &artifact.rel_path,
+        &artifact.diagrams,
+    );
+    let mut dependencies = PartitionDependencies {
+        catalog_sensitive: !artifact.diagrams.is_empty(),
+        ..PartitionDependencies::default()
+    };
+    collect_graph_source_dependencies(&graph, &mut dependencies);
+
+    RowPartition {
+        meta: partition_meta(
+            PartitionKey::C4Artifact(artifact.rel_path.clone()),
+            &format!("{artifact:#?}"),
+            dependencies,
+        ),
+        rows: graph_rows(graph),
+    }
+}
+
+fn collect_graph_source_dependencies(graph: &Graph, dependencies: &mut PartitionDependencies) {
+    for edge in &graph.edges {
+        if let Some(path) = edge.to.strip_prefix("code:") {
+            dependencies.source_paths.insert(path.to_string());
+        }
+    }
+}
+
+fn build_policy_partitions(
+    root: &Path,
+    vault: &Vault,
+    previous: Option<&State>,
+    changed_files: &[String],
+) -> Result<BTreeMap<String, PolicyPartition>> {
+    let mut pending_policy_scans = Vec::new();
+    for pattern_id in vault.patterns() {
+        if let Some((note, policy)) = vault.resolve_policy_pattern(pattern_id) {
+            pending_policy_scans.push(PendingPolicyScan {
+                pattern_id: pattern_id.clone(),
+                fingerprint_input: format!("{policy:#?}\0{:?}", vault.effective_governs(note)),
+                policy,
+                paths: incremental_policy_paths(
+                    vault,
+                    vault.effective_governs(note),
+                    previous,
+                    changed_files,
+                    pattern_id,
+                ),
+                reused: reusable_pattern_matches(previous, changed_files, pattern_id),
+            });
+        }
+    }
+
+    let compiled_requests = pending_policy_scans
+        .iter()
+        .enumerate()
+        .filter(|(_, scan)| scan.paths.is_some())
+        .map(|(key, scan)| {
+            structural::compile_policy(scan.policy)
+                .map(|policy| (key, policy))
+                .map_err(CrivError::from)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let requests = compiled_requests
+        .iter()
+        .map(|(key, policy)| structural::PolicyScanRequest {
+            key: *key,
+            policy,
+            paths: pending_policy_scans[*key]
+                .paths
+                .as_ref()
+                .expect("scans are filtered above"),
+        })
+        .collect::<Vec<_>>();
+    let rescanned = structural::find_policies_batch(root, vault, &requests)?;
+    let mut partitions = BTreeMap::new();
+    for (key, scan) in pending_policy_scans.into_iter().enumerate() {
+        let mut matches = scan.reused;
+        if scan.paths.is_some() {
+            matches.extend(
+                rescanned
+                    .get(&key)
+                    .expect("every policy scan request has a result")
+                    .iter()
+                    .map(pattern_match_from_structural),
+            );
+        }
+        sort_and_dedup_pattern_matches(&mut matches);
+        record_partition_rebuilt(PartitionKind::Policy);
+        let pattern_id = scan.pattern_id;
+        partitions.insert(
+            pattern_id.clone(),
+            PolicyPartition {
+                meta: partition_meta(
+                    PartitionKey::Policy(pattern_id),
+                    &scan.fingerprint_input,
+                    PartitionDependencies {
+                        catalog_sensitive: true,
+                        policy_sensitive: true,
+                        ..PartitionDependencies::default()
+                    },
+                ),
+                matches,
+            },
+        );
+    }
+    Ok(partitions)
+}
+
 pub(crate) fn write_state(root: &Path, vault: &Vault) -> Result<(String, State)> {
     let state = State::build(root, vault)?;
     let serialized = state.serialize()?;
@@ -558,6 +904,7 @@ pub(crate) fn work_counts() -> WorkCounts {
 
 struct PendingPolicyScan<'a> {
     pattern_id: String,
+    fingerprint_input: String,
     policy: &'a crate::vault::PolicyPattern,
     // `None` means that prior state is completely reusable. An empty set still
     // needs a batch request so invalid policy definitions retain their error
@@ -1030,7 +1377,12 @@ roots = ["src"]
         assert_eq!(
             work_counts(),
             WorkCounts {
-                partitions_rebuilt: 1,
+                partitions_rebuilt: 2,
+                source_partitions_rebuilt: 1,
+                note_partitions_rebuilt: 0,
+                c4_partitions_rebuilt: 0,
+                policy_partitions_rebuilt: 0,
+                source_index_partitions_rebuilt: 1,
                 serializations: 1,
                 published_bytes: state_contents.len() * 2 + latest.len(),
             }
@@ -1095,6 +1447,7 @@ policy:
         .unwrap();
 
         let vault = Vault::load(&root).unwrap();
+        reset_work_counts();
         let actual: serde_json::Value =
             serde_json::from_str(&State::build(&root, &vault).unwrap().to_json().unwrap()).unwrap();
         let expected: serde_json::Value =
@@ -1109,6 +1462,19 @@ policy:
             actual["patterns"]
                 .get("ADR-0002/draft-entrypoint")
                 .is_none()
+        );
+        assert_eq!(
+            work_counts(),
+            WorkCounts {
+                partitions_rebuilt: 5,
+                source_partitions_rebuilt: 1,
+                note_partitions_rebuilt: 2,
+                c4_partitions_rebuilt: 0,
+                policy_partitions_rebuilt: 1,
+                source_index_partitions_rebuilt: 1,
+                serializations: 1,
+                published_bytes: 0,
+            }
         );
         assert_eq!(
             State::build(&root, &vault).unwrap().hash().unwrap(),

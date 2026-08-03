@@ -93,8 +93,14 @@ fn generated_code_architecture_is_included_in_the_same_refresh_state() {
 
     let result = refresh.refresh(temp.path(), RefreshCause::Initial).unwrap();
 
-    assert_eq!(state::work_counts().partitions_rebuilt, 1);
-    assert_eq!(state::work_counts().serializations, 1);
+    let work = state::work_counts();
+    assert_eq!(work.partitions_rebuilt, 3);
+    assert_eq!(work.source_partitions_rebuilt, 1);
+    assert_eq!(work.note_partitions_rebuilt, 1);
+    assert_eq!(work.c4_partitions_rebuilt, 0);
+    assert_eq!(work.policy_partitions_rebuilt, 0);
+    assert_eq!(work.source_index_partitions_rebuilt, 1);
+    assert_eq!(work.serializations, 1);
     assert!(result.vault().resolve_note("architecture-code").is_some());
     let state: Value =
         serde_json::from_str(&fs::read_to_string(temp.path().join(".criv/state.json")).unwrap())
@@ -492,7 +498,28 @@ fn assert_refresh_eq(name: &str, incremental: &RefreshSnapshot, full: &RefreshSn
 }
 
 fn assert_final_work(mutation: FixtureMutation, work: RefreshWork) {
-    assert_eq!(work.state.partitions_rebuilt, 1);
+    let source_partitions = match mutation {
+        FixtureMutation::AddSource | FixtureMutation::RenameSource => 3,
+        FixtureMutation::DeleteSource => 2,
+        _ => 2,
+    };
+    let policy_partitions = if matches!(mutation, FixtureMutation::PolicyDemotion) {
+        0
+    } else {
+        1
+    };
+    assert_eq!(work.state.source_partitions_rebuilt, source_partitions);
+    assert_eq!(work.state.note_partitions_rebuilt, 2);
+    assert_eq!(work.state.c4_partitions_rebuilt, 2);
+    assert_eq!(work.state.policy_partitions_rebuilt, policy_partitions);
+    assert_eq!(
+        work.state.source_index_partitions_rebuilt,
+        source_partitions
+    );
+    assert_eq!(
+        work.state.partitions_rebuilt,
+        source_partitions * 2 + 4 + policy_partitions
+    );
     assert_eq!(work.state.serializations, 1);
 
     match mutation {
