@@ -9,6 +9,7 @@ mod enforce;
 mod git;
 mod init;
 mod query;
+mod refresh;
 mod search;
 mod source_graph;
 mod source_index;

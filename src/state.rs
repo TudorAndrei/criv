@@ -31,9 +31,29 @@ struct SerializedState {
 }
 
 #[cfg(test)]
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub(crate) struct WorkCounts {
+    pub(crate) partitions_rebuilt: usize,
+    pub(crate) serializations: usize,
+    published_bytes: usize,
+}
+
+#[cfg(test)]
 thread_local! {
-    static BUILD_COUNT: Cell<usize> = const { Cell::new(0) };
-    static SERIALIZATION_COUNT: Cell<usize> = const { Cell::new(0) };
+    static WORK_COUNTS: Cell<WorkCounts> = const { Cell::new(WorkCounts {
+        partitions_rebuilt: 0,
+        serializations: 0,
+        published_bytes: 0,
+    }) };
+}
+
+#[cfg(test)]
+fn record_work(update: impl FnOnce(&mut WorkCounts)) {
+    WORK_COUNTS.with(|counts| {
+        let mut next = counts.get();
+        update(&mut next);
+        counts.set(next);
+    });
 }
 
 #[derive(Debug, Default, Clone, Serialize)]
@@ -95,7 +115,7 @@ impl State {
         changed_files: &[String],
     ) -> Result<Self> {
         #[cfg(test)]
-        BUILD_COUNT.with(|count| count.set(count.get() + 1));
+        record_work(|counts| counts.partitions_rebuilt += 1);
 
         let mut graph = Graph::default();
         let mut seen_nodes = BTreeSet::new();
@@ -423,7 +443,7 @@ impl State {
     }
 
     #[cfg(test)]
-    fn to_json(&self) -> Result<String> {
+    pub(crate) fn to_json(&self) -> Result<String> {
         Ok(self
             .serialize()?
             .published
@@ -433,13 +453,13 @@ impl State {
     }
 
     #[cfg(test)]
-    fn hash(&self) -> Result<String> {
+    pub(crate) fn hash(&self) -> Result<String> {
         Ok(self.serialize()?.hash)
     }
 
     fn serialize(&self) -> Result<SerializedState> {
         #[cfg(test)]
-        SERIALIZATION_COUNT.with(|count| count.set(count.get() + 1));
+        record_work(|counts| counts.serializations += 1);
 
         let json = serde_json::to_string_pretty(self)
             .map_err(|err| CrivError::new(format!("failed to serialize state: {err}")))?;
@@ -455,7 +475,10 @@ impl State {
             Path::new(".criv"),
             Path::new(".criv/state.json"),
             &serialized.published,
-        )
+        )?;
+        #[cfg(test)]
+        record_work(|counts| counts.published_bytes += serialized.published.len());
+        Ok(())
     }
 
     fn write_snapshot_serialized(
@@ -470,12 +493,12 @@ impl State {
             Path::new(&snapshot),
             &serialized.published,
         )?;
-        write_atomic_in(
-            root,
-            Path::new(".criv"),
-            Path::new(".criv/latest"),
-            &format!("{}\n", serialized.hash),
-        )?;
+        let latest = format!("{}\n", serialized.hash);
+        write_atomic_in(root, Path::new(".criv"), Path::new(".criv/latest"), &latest)?;
+        #[cfg(test)]
+        record_work(|counts| {
+            counts.published_bytes += serialized.published.len() + latest.len();
+        });
         Ok(serialized.hash.clone())
     }
 }
@@ -503,16 +526,12 @@ pub(crate) fn write_state_incremental(
 
 #[cfg(test)]
 pub(crate) fn reset_work_counts() {
-    BUILD_COUNT.with(|count| count.set(0));
-    SERIALIZATION_COUNT.with(|count| count.set(0));
+    WORK_COUNTS.with(|counts| counts.set(WorkCounts::default()));
 }
 
 #[cfg(test)]
-pub(crate) fn work_counts() -> (usize, usize) {
-    (
-        BUILD_COUNT.with(Cell::get),
-        SERIALIZATION_COUNT.with(Cell::get),
-    )
+pub(crate) fn work_counts() -> WorkCounts {
+    WORK_COUNTS.with(Cell::get)
 }
 
 struct PendingPolicyScan<'a> {
@@ -966,6 +985,7 @@ roots = ["src"]
         std::fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
 
         let vault = Vault::load(&root).unwrap();
+        reset_work_counts();
         let (snapshot, _) = write_state(&root, &vault).unwrap();
 
         let state_path = root.join(".criv/state.json");
@@ -985,6 +1005,14 @@ roots = ["src"]
         assert!(state_contents.ends_with('\n'));
         let snapshot_state: serde_json::Value = serde_json::from_str(&snapshot_contents).unwrap();
         assert_eq!(snapshot_state["schema"], STATE_SCHEMA);
+        assert_eq!(
+            work_counts(),
+            WorkCounts {
+                partitions_rebuilt: 1,
+                serializations: 1,
+                published_bytes: state_contents.len() * 2 + latest.len(),
+            }
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }

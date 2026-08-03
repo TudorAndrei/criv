@@ -90,18 +90,47 @@ struct CompiledPolicyRequest<'a> {
 }
 
 #[cfg(test)]
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub(crate) struct WorkCounts {
+    policy_compilations: usize,
+    pub(crate) ast_parses: usize,
+}
+
+#[cfg(test)]
 thread_local! {
-    static BATCH_PARSE_COUNT: Cell<usize> = const { Cell::new(0) };
+    static WORK_COUNTS: Cell<WorkCounts> = const { Cell::new(WorkCounts {
+        policy_compilations: 0,
+        ast_parses: 0,
+    }) };
+}
+
+#[cfg(test)]
+fn record_work(update: impl FnOnce(&mut WorkCounts)) {
+    WORK_COUNTS.with(|counts| {
+        let mut next = counts.get();
+        update(&mut next);
+        counts.set(next);
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn reset_work_counts() {
+    WORK_COUNTS.with(|counts| counts.set(WorkCounts::default()));
+}
+
+#[cfg(test)]
+pub(crate) fn work_counts() -> WorkCounts {
+    WORK_COUNTS.with(Cell::get)
 }
 
 #[cfg(test)]
 pub(crate) fn reset_batch_parse_count() {
-    BATCH_PARSE_COUNT.with(|count| count.set(0));
+    reset_work_counts();
 }
 
 #[cfg(test)]
 pub(crate) fn batch_parse_count() -> usize {
-    BATCH_PARSE_COUNT.with(Cell::get)
+    work_counts().ast_parses
 }
 
 pub(crate) fn validate_source(source: PatternSource<'_>, language: &str) -> Result<()> {
@@ -187,6 +216,8 @@ pub(crate) fn find_policies_batch(
     for request in requests {
         let (source, language) = policy_source(request.policy)?;
         let language = parse_language(language)?;
+        #[cfg(test)]
+        record_work(|counts| counts.policy_compilations += 1);
         compiled.push(CompiledPolicyRequest {
             key: request.key,
             language,
@@ -214,7 +245,7 @@ pub(crate) fn find_policies_batch(
 
         let contents = read_source_to_string(root, source_file)?;
         #[cfg(test)]
-        BATCH_PARSE_COUNT.with(|count| count.set(count.get() + 1));
+        record_work(|counts| counts.ast_parses += 1);
         let ast = language.ast_grep(&contents);
         let root = ast.root();
         for request in requests {
@@ -561,6 +592,7 @@ all:
             },
         ];
 
+        reset_work_counts();
         let batch = find_policies_batch(temp.path(), &vault, &requests).unwrap();
 
         assert_eq!(
@@ -580,6 +612,14 @@ all:
                 .map(|row| row.path.as_str())
                 .collect::<Vec<_>>(),
             vec!["src/right.rs"]
+        );
+        assert_eq!(
+            work_counts(),
+            WorkCounts {
+                policy_compilations: 2,
+                ast_parses: 2,
+            },
+            "each policy is compiled once and each affected source is parsed once"
         );
     }
 

@@ -1,0 +1,14 @@
+[vault]
+docs = "docs"
+adr = "adr"
+
+[source]
+roots = ["src"]
+exclude = []
+
+[index]
+source = true
+
+[architecture.code]
+output = "docs/architecture/04-generated-code.c4"
+title = "Generated fixture code"
