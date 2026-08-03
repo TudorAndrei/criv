@@ -242,6 +242,29 @@ impl GitRepository {
         self.changed_set_from_diff(diff, old_ref.as_deref(), Some(commit_id))
     }
 
+    fn commits_between(&self, old_ref: &str, new_ref: &str) -> Result<Vec<String>> {
+        let old = self.commit_at(old_ref)?;
+        let new = self.commit_at(new_ref)?;
+        let mut walk = self
+            .repository
+            .revwalk()
+            .map_err(|error| CrivError::new(format!("Git revision walk failed: {error}")))?;
+        walk.set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)
+            .map_err(|error| CrivError::new(format!("Git revision walk failed: {error}")))?;
+        walk.push(new.id())
+            .map_err(|error| CrivError::new(format!("Git revision walk failed: {error}")))?;
+        walk.hide(old.id())
+            .map_err(|error| CrivError::new(format!("Git revision walk failed: {error}")))?;
+        let mut commits = walk
+            .map(|oid| {
+                oid.map(|oid| oid.to_string())
+                    .map_err(|error| CrivError::new(format!("Git revision walk failed: {error}")))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        commits.reverse();
+        Ok(commits)
+    }
+
     fn read_file_at_ref(&self, reference: &str, path: &Path) -> Result<Vec<u8>> {
         let object = self
             .repository
@@ -424,6 +447,14 @@ pub(crate) fn is_repository(root: &Path) -> Result<bool> {
 
 pub(crate) fn changes_between(root: &Path, old: &str, new: &str) -> Result<ChangedSet> {
     changes_between_paths(root, old, new, &[])
+}
+
+pub(crate) fn staged_changes(root: &Path) -> Result<ChangedSet> {
+    required_repository(root)?.changed_set(ChangedSetComparison::Staged)
+}
+
+pub(crate) fn commits_between(root: &Path, old_ref: &str, new_ref: &str) -> Result<Vec<String>> {
+    required_repository(root)?.commits_between(old_ref, new_ref)
 }
 
 pub(crate) fn changes_between_paths(
@@ -710,21 +741,97 @@ pub(crate) fn dirty_paths(root: &Path) -> Result<Vec<String>> {
     Ok(paths)
 }
 
-pub(crate) fn reset_index_paths(root: &Path, paths: &[String]) -> Result<()> {
-    if paths.is_empty() {
-        return Ok(());
-    }
+pub(crate) fn preflight_commit_identity(root: &Path) -> Result<()> {
+    commit_signature(&required_repository(root)?).map(|_| ())
+}
+
+pub(crate) fn index_tree(root: &Path) -> Result<String> {
     let repository = required_repository(root)?;
-    let target = repository
+    repository
+        .repository
+        .index()
+        .and_then(|mut index| index.write_tree())
+        .map(|oid| oid.to_string())
+        .map_err(|error| CrivError::new(format!("Git index could not be snapshotted: {error}")))
+}
+
+pub(crate) fn restore_index_tree(root: &Path, tree_id: &str) -> Result<()> {
+    let repository = required_repository(root)?;
+    let tree = repository
+        .repository
+        .find_tree(parse_oid(tree_id, "Git index tree ID")?)
+        .map_err(|error| {
+            CrivError::new(format!("Git index tree could not be restored: {error}"))
+        })?;
+    let mut index = repository
+        .repository
+        .index()
+        .map_err(|error| CrivError::new(format!("Git index could not be read: {error}")))?;
+    index
+        .read_tree(&tree)
+        .and_then(|_| index.write())
+        .map_err(|error| CrivError::new(format!("Git index could not be restored: {error}")))
+}
+
+pub(crate) fn stage_paths(root: &Path, paths: &[String]) -> Result<()> {
+    let repository = required_repository(root)?;
+    let mut index = repository
+        .repository
+        .index()
+        .map_err(|error| CrivError::new(format!("Git index could not be read: {error}")))?;
+    for path in paths {
+        if root.join(path).exists() {
+            index.add_path(Path::new(path)).map_err(|error| {
+                CrivError::new(format!("Git could not stage `{path}`: {error}"))
+            })?;
+        } else {
+            index.remove_path(Path::new(path)).map_err(|error| {
+                CrivError::new(format!("Git could not stage deletion of `{path}`: {error}"))
+            })?;
+        }
+    }
+    index
+        .write()
+        .map_err(|error| CrivError::new(format!("Git index could not be written: {error}")))
+}
+
+pub(crate) fn commit_staged(root: &Path, message: &str) -> Result<String> {
+    let repository = required_repository(root)?;
+    let signature = commit_signature(&repository)?;
+    let parent = repository
         .repository
         .head()
         .and_then(|head| head.peel_to_commit())
-        .map(|commit| commit.into_object())
         .map_err(|error| CrivError::new(format!("Git HEAD could not be read: {error}")))?;
+    let tree_id = repository
+        .repository
+        .index()
+        .and_then(|mut index| index.write_tree())
+        .map_err(|error| CrivError::new(format!("Git index tree could not be written: {error}")))?;
+    let tree = repository
+        .repository
+        .find_tree(tree_id)
+        .map_err(|error| CrivError::new(format!("Git index tree could not be read: {error}")))?;
     repository
         .repository
-        .reset_default(Some(&target), paths.iter().map(Path::new))
-        .map_err(|error| CrivError::new(format!("Git index reset failed: {error}")))
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            message,
+            &tree,
+            &[&parent],
+        )
+        .map(|oid| oid.to_string())
+        .map_err(|error| CrivError::new(format!("Git reconciliation commit failed: {error}")))
+}
+
+fn commit_signature(repository: &GitRepository) -> Result<git2::Signature<'static>> {
+    repository.repository.signature().map_err(|error| {
+        CrivError::new(format!(
+            "Git commit identity is unavailable; configure `user.name` and `user.email` before reconciliation: {error}"
+        ))
+    })
 }
 
 pub(crate) fn ref_is_stable(root: &Path, reference: &str, expected: &str) -> Result<bool> {
