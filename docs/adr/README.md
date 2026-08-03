@@ -63,3 +63,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0057-branch-local-adr-publication-and-reconciliation|ADR-0057]] - Branch-local ADR publication and reconciliation
 - [[0058-embedded-git-repository-access|ADR-0058]] - Embedded Git repository access
 - [[0059-accepted-only-adr-policy-state|ADR-0059]] - Accepted only ADR policy state
+- [[0060-parallel-hosted-validation-and-lean-local-hooks|ADR-0060]] - Parallel hosted validation and lean local hooks
