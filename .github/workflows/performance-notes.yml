@@ -1,0 +1,98 @@
+name: Performance notes
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  measure-and-publish:
+    name: Measure and publish Git note
+    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.deleted }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout pushed commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Cache Cargo
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: cargo-performance-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-performance-${{ runner.os }}-
+
+      - name: Install Rust
+        shell: bash
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --no-self-update
+          rustup default 1.97.1
+
+      - name: Build release binaries
+        run: cargo build --locked --release --package criv --package criv-perf-harness
+
+      - name: Measure canonical workloads
+        run: |
+          target/release/criv-perf-harness \
+            --repository-root . \
+            --binary target/release/criv \
+            --profile release \
+            --samples 5 \
+            --results-root performance-results
+
+      - name: Upload raw performance evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: performance-${{ github.sha }}-${{ github.run_attempt }}
+          path: performance-results
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Render performance note
+        env:
+          ARTIFACT_NAME: performance-${{ github.sha }}-${{ github.run_attempt }}
+          COMMIT: ${{ github.sha }}
+          PUSHED_REF: ${{ github.ref }}
+          WORKFLOW_ATTEMPT: ${{ github.run_attempt }}
+          WORKFLOW_RUN_ID: ${{ github.run_id }}
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          result_dir="$(find performance-results -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          test -n "$result_dir"
+          scripts/performance/render-git-note.sh \
+            "$result_dir" \
+            performance-note.json \
+            "$COMMIT" \
+            "$PUSHED_REF" \
+            "$WORKFLOW_URL" \
+            "$WORKFLOW_RUN_ID" \
+            "$WORKFLOW_ATTEMPT" \
+            "$ARTIFACT_NAME"
+
+      - name: Publish performance note
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh auth setup-git
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          scripts/performance/publish-git-note.sh \
+            performance-note.json \
+            "${{ github.sha }}" \
+            origin

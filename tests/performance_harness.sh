@@ -44,12 +44,61 @@ run_harness >"$test_root/second.out"
 
 test "$(find "$test_root/results" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "2"
 first_result="$(find "$test_root/results" -mindepth 1 -maxdepth 1 -type d | sort | head -1)"
+run_revision="$(jq -r .revision "$first_result/run.json")"
 jq -e '.schema == "criv.performance-summary.v1" and (.cases | length) == 2' \
   "$first_result/summary.json" >/dev/null
 test "$(wc -l <"$first_result/samples.jsonl" | tr -d ' ')" = "2"
 jq -e '.measurement.schema == "criv.performance-measurement.v1"' \
   "$first_result/samples.jsonl" >/dev/null
 test "$(cut -f1 "$test_root/fake.log" | sort -u | wc -l | tr -d ' ')" -ge "8"
+
+note_fixture="$test_root/note-fixture"
+mkdir -p "$note_fixture"
+jq '.samples = 3 | .dirty = false | .profile = "release"' \
+  "$first_result/run.json" >"$note_fixture/run.json"
+jq '.run.samples = 3 | .cases |= map(.successful_samples = 3)' \
+  "$first_result/summary.json" >"$note_fixture/summary.json"
+cp "$first_result/samples.jsonl" "$note_fixture/samples.jsonl"
+for sample in 2 3; do
+  sed -e "s/\"sample\":1/\"sample\":$sample/" "$first_result/samples.jsonl" \
+    >>"$note_fixture/samples.jsonl"
+done
+
+"$repository_root/scripts/performance/render-git-note.sh" \
+  "$note_fixture" \
+  "$test_root/performance-note.json" \
+  "$run_revision" \
+  "refs/heads/main" \
+  "https://github.invalid/actions/runs/123" \
+  "123" \
+  "1" \
+  "performance-fixture"
+jq -e '
+  .schema == "criv.performance-git-note.v1"
+  and .evidence.structured_measurement == true
+  and (.timings | length) == 2
+  and (.work | length) == 2
+' "$test_root/performance-note.json" >/dev/null
+
+nondeterministic="$test_root/nondeterministic"
+mkdir -p "$nondeterministic"
+cp "$note_fixture/run.json" "$note_fixture/summary.json" "$note_fixture/samples.jsonl" \
+  "$nondeterministic"
+jq -c '.measurement.counters.synthetic = 1' \
+  "$note_fixture/samples.jsonl" | head -1 >>"$nondeterministic/samples.jsonl"
+if "$repository_root/scripts/performance/render-git-note.sh" \
+  "$nondeterministic" \
+  "$test_root/nondeterministic-note.json" \
+  "$run_revision" \
+  "refs/heads/main" \
+  "https://github.invalid/actions/runs/123" \
+  "123" \
+  "1" \
+  "performance-fixture" \
+  2>/dev/null; then
+  echo "nondeterministic counters unexpectedly rendered" >&2
+  exit 1
+fi
 
 export CRIV_FAKE_FAIL_CASE="watch_once_cold"
 if run_harness >"$test_root/failure.out" 2>"$test_root/failure.err"; then
