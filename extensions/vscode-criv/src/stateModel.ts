@@ -64,7 +64,7 @@ function architectureModel(envelope: CrivStateEnvelope): CrivLikeC4Model | undef
     likec4Version: String(architecture.likec4Version ?? ""),
     revision: Number(architecture.revision ?? 0),
     model: model.raw,
-    views: model.views as { id: string; title: string }[],
+    views: model.views as { id: string; title: string; sourcePath?: string }[],
     sourceLinks: model.sourceLinks as { element: string; target: string }[],
   } as CrivLikeC4Model;
 }

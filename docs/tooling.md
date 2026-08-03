@@ -219,11 +219,12 @@ JSON diagnostics for extension manifest and language configuration files. Its
 short temporary user-data and extension-installation paths avoid macOS IPC path
 limits. Hosted CI runs this command under Xvfb; it is not part of local hooks.
 
-The extension renders named LikeC4 views from `.criv/state.json`. The preview
-webview uses packaged extension resources and does not use a CDN or a global
-LikeC4 command. Run `criv watch --once` after architecture or extension source
-changes. This keeps generated architecture state and
-`docs/architecture/04-code.c4` current.
+The extension uses a read-only LikeC4 preview as the default `.c4` editor. It
+selects the named view owned by the opened file. Use **Reopen Editor With →
+Text Editor** to edit the DSL. The preview webview uses packaged extension
+resources and does not use a CDN or a global LikeC4 command. Run `criv watch
+--once` after architecture or extension source changes. This keeps generated
+architecture state and `docs/architecture/04-code.c4` current.
 
 `npm --prefix extensions/vscode-criv run package` and `mise run
 vscode-package` build a local `vscode-criv.vsix` without publishing. The

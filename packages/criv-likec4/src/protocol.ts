@@ -35,6 +35,6 @@ export interface CrivLikeC4Model {
   likec4Version: typeof CRIV_LIKEC4_VERSION;
   revision: number;
   model: unknown;
-  views: { id: string; title: string }[];
+  views: { id: string; title: string; sourcePath?: string }[];
   sourceLinks: { element: string; target: string }[];
 }

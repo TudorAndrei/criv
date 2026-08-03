@@ -32,7 +32,7 @@ export interface CrivState {
     workspace: string;
     model: {
       raw: unknown;
-      views: { id: string; title: string }[];
+      views: { id: string; title: string; sourcePath?: string }[];
       sourceLinks: { element: string; target: string }[];
     };
   };

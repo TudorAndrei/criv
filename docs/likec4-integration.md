@@ -119,10 +119,13 @@ same LikeC4 view and styles.
 
 The Obsidian and VS Code packages are host adapters. They read criv state,
 attach a monotonic host revision, select the host color scheme, and send source
-link events to the host file API. They do not parse `.c4` source and do not
-start Node.js. Their installed browser bundles contain the renderer and its
-assets. The VS Code webview permits only its local resources under a strict
-content security policy.
+link events to the host file API. Normalized view records contain LikeC4's
+optional `sourcePath`. VS Code uses it to select the view owned by the opened
+file without parsing `.c4` source. It registers the read-only preview as the
+default `.c4` editor; **Reopen Editor With → Text Editor** exposes the DSL.
+Neither host starts Node.js. Their installed browser bundles contain the
+renderer and its assets. The VS Code webview permits only its local resources
+under a strict content security policy.
 
 After an agent saves a `.c4` file, the normal watch task validates the complete
 workspace and writes a new state model. Each host replaces the old model. A

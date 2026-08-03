@@ -272,6 +272,10 @@ model {
     technology 'TypeScript'
     link ../../extensions/vscode-criv/src/c4PreviewHtml.ts 'source'
   }
+  m_5b36e1d524fcb1b5 = module 'extensions::vscode-criv::src::c4PreviewModel' {
+    technology 'TypeScript'
+    link ../../extensions/vscode-criv/src/c4PreviewModel.ts 'source'
+  }
   m_2f843e0d78bd6803 = module 'extensions::vscode-criv::src::checkDiagnosticModel' {
     technology 'TypeScript'
     link ../../extensions/vscode-criv/src/checkDiagnosticModel.ts 'source'
@@ -355,6 +359,10 @@ model {
   m_5bb061d6a03b54e5 = module 'extensions::vscode-criv::test::unit::c4PreviewHtml.test' {
     technology 'TypeScript'
     link ../../extensions/vscode-criv/test/unit/c4PreviewHtml.test.ts 'source'
+  }
+  m_e4896377bf4f38fb = module 'extensions::vscode-criv::test::unit::c4PreviewModel.test' {
+    technology 'TypeScript'
+    link ../../extensions/vscode-criv/test/unit/c4PreviewModel.test.ts 'source'
   }
   m_7db8be017fd5c495 = module 'extensions::vscode-criv::test::unit::checkDiagnosticModel.test' {
     technology 'TypeScript'
@@ -470,8 +478,10 @@ model {
   m_d33ec22f59cf6593 -> m_58f0cf72c5907bac 'imports'
   m_db16de30f1964358 -> m_1ebc91fef0c4bac5 'imports'
   m_db16de30f1964358 -> m_2bb514f3f9c9a0dd 'imports'
+  m_db16de30f1964358 -> m_5b36e1d524fcb1b5 'imports'
   m_db16de30f1964358 -> m_d33ec22f59cf6593 'imports'
   m_db769e9b80e76e9d -> m_f347be1cc6c5fc39 'imports'
+  m_e4896377bf4f38fb -> m_5b36e1d524fcb1b5 'imports'
   m_e5534d084456caac -> m_800072ba7f45ea4b 'imports'
   m_f222ffa54dc8ec13 -> m_092d71639c73c87d 'imports'
   m_f222ffa54dc8ec13 -> m_f347be1cc6c5fc39 'imports'
@@ -546,6 +556,7 @@ views {
     include m_6b36845c1c3d33a0
     include m_db16de30f1964358
     include m_d33ec22f59cf6593
+    include m_5b36e1d524fcb1b5
     include m_2f843e0d78bd6803
     include m_c1ed4ffe7f688263
     include m_992117029078f744
@@ -566,6 +577,7 @@ views {
     include m_6bb33f4a10f41e71
     include m_bb8568799a320e94
     include m_5bb061d6a03b54e5
+    include m_e4896377bf4f38fb
     include m_7db8be017fd5c495
     include m_940bb387f9099a90
     include m_ab5092705a0bcdb6

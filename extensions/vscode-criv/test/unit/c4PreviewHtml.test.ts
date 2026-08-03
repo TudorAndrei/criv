@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildC4PreviewHtml } from "../../src/c4PreviewHtml";
+import { buildC4PreviewHtml, buildC4PreviewStatusHtml } from "../../src/c4PreviewHtml";
 
 test("builds a local LikeC4 webview with a strict default CSP", () => {
   const html = buildC4PreviewHtml({
@@ -26,4 +26,12 @@ test("builds a local LikeC4 webview with a strict default CSP", () => {
   assert.doesNotMatch(html, /https?:/);
   assert.match(html, /src="vscode-resource:\/likec4-preview\.js"/);
   assert.match(html, /LikeC4 architecture view/);
+});
+
+test("escapes unavailable-state text in the preview", () => {
+  const html = buildC4PreviewStatusHtml("vscode-resource:", "Missing <state> & model");
+
+  assert.match(html, /Missing &lt;state&gt; &amp; model/);
+  assert.doesNotMatch(html, /Missing <state>/);
+  assert.match(html, /default-src 'none'/);
 });

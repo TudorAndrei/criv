@@ -72,6 +72,18 @@
         "icon": "$(open-preview)"
       }
     ],
+    "customEditors": [
+      {
+        "viewType": "criv.c4Preview",
+        "displayName": "criv LikeC4 Preview",
+        "selector": [
+          {
+            "filenamePattern": "*.c4"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
     "views": {
       "explorer": [
         {
@@ -85,7 +97,7 @@
       "editor/title": [
         {
           "command": "criv.previewC4",
-          "when": "resourceLangId == criv-c4",
+          "when": "resourceLangId == criv-c4 && activeCustomEditorId != criv.c4Preview",
           "group": "navigation"
         }
       ],
@@ -129,11 +141,6 @@
           "scope": "machine",
           "default": false,
           "description": "Run criv check when Markdown or .c4 files are saved in a trusted workspace."
-        },
-        "criv.previewC4OnOpen": {
-          "type": "boolean",
-          "default": true,
-          "description": "Automatically open the C4 preview beside a .c4 text editor when the file becomes active."
         }
       }
     }

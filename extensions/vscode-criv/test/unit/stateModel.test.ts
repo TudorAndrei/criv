@@ -53,6 +53,44 @@ test("reads registered patterns from explicit state field", () => {
   assert.deepEqual(registeredPatterns(envelope), ["adr/source-selector", "code/entrypoint"]);
 });
 
+test("keeps LikeC4 view source ownership in host state", () => {
+  const raw = JSON.stringify({
+    schema: "criv.state.v1",
+    architecture: {
+      likec4Version: "1.59.2",
+      revision: 1,
+      model: {
+        raw: {},
+        views: [
+          {
+            id: "context",
+            title: "System context",
+            sourcePath: "01-system-context.c4",
+          },
+        ],
+        sourceLinks: [],
+      },
+    },
+  });
+  const envelope = JSON.parse(raw) as CrivStateEnvelope;
+
+  const snapshot = buildStateSnapshot(
+    raw,
+    envelope,
+    {
+      schema: "criv.state.v1",
+      node_count: 0,
+      edge_count: 0,
+      source_count: 0,
+      pattern_count: 0,
+    },
+    [],
+    [],
+  );
+
+  assert.equal(snapshot.architecture?.views[0]?.sourcePath, "01-system-context.c4");
+});
+
 test("collects c4 artifacts from source entries and graph nodes", () => {
   assert.deepEqual(
     c4Artifacts(

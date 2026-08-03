@@ -1,6 +1,11 @@
 import * as vscode from "vscode";
 
-import { C4ArtifactDiagnostics, C4PreviewManager } from "./c4Preview";
+import {
+  C4ArtifactDiagnostics,
+  C4PreviewEditorProvider,
+  C4PreviewManager,
+  C4_PREVIEW_VIEW_TYPE,
+} from "./c4Preview";
 import { CrivCheckDiagnostics } from "./checkDiagnostics";
 import { CHECK_MAX_OUTPUT_BYTES, completeCheckStdout } from "./checkOutput";
 import {
@@ -28,6 +33,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const checkDiagnostics = new CrivCheckDiagnostics();
   const c4Diagnostics = new C4ArtifactDiagnostics();
   const c4Preview = new C4PreviewManager(context, store);
+  const c4PreviewEditor = new C4PreviewEditorProvider(context, store);
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBar.command = COMMAND_REFRESH_STATE_VIEW;
 
@@ -47,6 +53,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(store.onDidChangeStatus(updateSurfaces));
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider("criv.stateView", treeProvider),
+    vscode.window.registerCustomEditorProvider(C4_PREVIEW_VIEW_TYPE, c4PreviewEditor, {
+      webviewOptions: { retainContextWhenHidden: true },
+      supportsMultipleEditorsPerDocument: true,
+    }),
   );
   registerSourceLanguageFeatures(context, store);
 
@@ -72,9 +82,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand(COMMAND_PREVIEW_C4, async () => {
       await c4Preview.open();
     }),
-    vscode.window.onDidChangeActiveTextEditor(async (editor) => {
-      await maybePreviewC4OnOpen(c4Preview, editor?.document);
-    }),
     vscode.workspace.onDidSaveTextDocument(async (document) => {
       await maybeRunCheckOnSave(store, checkDiagnostics, document);
     }),
@@ -83,7 +90,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   updateSurfaces(store.status);
   statusBar.show();
   await store.refresh();
-  await maybePreviewC4OnOpen(c4Preview, vscode.window.activeTextEditor?.document);
 }
 
 async function runWatchOnce(store: WorkspaceStateStore): Promise<void> {
@@ -185,21 +191,6 @@ async function maybeRunCheckOnSave(
     return;
   }
   await runCheck(store, checkDiagnostics);
-}
-
-async function maybePreviewC4OnOpen(
-  c4Preview: C4PreviewManager,
-  document: vscode.TextDocument | undefined,
-): Promise<void> {
-  if (
-    !crivConfiguration().previewC4OnOpen ||
-    !document ||
-    document.languageId !== "criv-c4" ||
-    document.uri.scheme !== "file"
-  ) {
-    return;
-  }
-  await c4Preview.open(document, { preserveFocus: true });
 }
 
 async function runCrivWithProgress(

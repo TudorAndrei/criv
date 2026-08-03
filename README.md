@@ -397,7 +397,8 @@ npm --prefix extensions/vscode-criv run test
 npm --prefix extensions/vscode-criv run test:integration
 ```
 
-The `.c4` preview command renders named LikeC4 views from `.criv/state.json`.
+The default `.c4` editor renders the matching named LikeC4 view from
+`.criv/state.json`. Use **Reopen Editor With → Text Editor** to edit the DSL.
 The extension packages the renderer and its assets. It does not use a global
 LikeC4 command or a network service. The `.c4` workspace remains the source of
 truth; the preview is only a projection.

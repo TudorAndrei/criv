@@ -47,6 +47,7 @@ try {
       const views = Object.values(data.views).map(view => ({
         id: view.id,
         title: view.title ?? view.id,
+        sourcePath: view.sourcePath,
       })).sort((left, right) => left.id.localeCompare(right.id));
       const normalizeSourceTarget = target => {
         const [path, fragment] = target.split('#', 2);

@@ -3,9 +3,11 @@ import type { CrivLikeC4Model } from "@criv/likec4/protocol";
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
 
-const payload = JSON.parse(
-  document.getElementById("payload")?.textContent ?? "null",
-) as { model: CrivLikeC4Model; viewId?: string; colorScheme?: "light" | "dark" } | null;
+const payload = JSON.parse(document.getElementById("payload")?.textContent ?? "null") as {
+  model: CrivLikeC4Model;
+  viewId?: string;
+  colorScheme?: "light" | "dark";
+} | null;
 const container = document.getElementById("diagram");
 if (!payload || !container) {
   throw new Error("The LikeC4 preview payload is missing.");
@@ -20,6 +22,9 @@ const select = document.getElementById("view") as HTMLSelectElement | null;
 if (select) {
   for (const view of renderer.views()) {
     select.add(new Option(view.title, view.id));
+  }
+  if (payload.viewId) {
+    select.value = payload.viewId;
   }
   select.disabled = select.options.length < 2;
   select.addEventListener("change", () => renderer.selectView(select.value));

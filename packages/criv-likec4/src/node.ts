@@ -23,7 +23,11 @@ export async function buildLikeC4Model(
     }
     const model = (await likec4.layoutedModel()).$data;
     const views = Object.values(model.views)
-      .map((view) => ({ id: view.id, title: view.title ?? view.id }))
+      .map((view) => ({
+        id: view.id,
+        title: view.title ?? view.id,
+        sourcePath: view.sourcePath,
+      }))
       .sort((left, right) => left.id.localeCompare(right.id));
     const sourceLinks = Object.values(model.elements)
       .flatMap((element) =>

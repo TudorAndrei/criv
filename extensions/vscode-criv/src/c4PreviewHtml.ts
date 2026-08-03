@@ -2,6 +2,7 @@ import type { CrivLikeC4Model } from "@criv/likec4/protocol";
 
 export interface C4PreviewPayload {
   model: CrivLikeC4Model;
+  viewId?: string;
   colorScheme: "light" | "dark";
 }
 
@@ -32,6 +33,29 @@ export function buildC4PreviewHtml(options: C4PreviewHtmlOptions): string {
 </html>`;
 }
 
+export function buildC4PreviewStatusHtml(cspSource: string, message: string): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${cspSource} 'unsafe-inline';">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>criv LikeC4 Preview</title>
+<style>html, body { height: 100%; margin: 0; } body { background: var(--vscode-editor-background); color: var(--vscode-foreground); display: grid; place-items: center; font-family: var(--vscode-font-family); } p { max-width: 42rem; padding: 24px; }</style>
+</head>
+<body><p>${escapeHtml(message)}</p></body>
+</html>`;
+}
+
 function escapeScriptJson(json: string): string {
   return json.replace(/</g, "\\u003c").replace(/>/g, "\\u003e").replace(/&/g, "\\u0026");
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
