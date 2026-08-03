@@ -72,3 +72,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0066-capability-directed-wikilink-and-query-resolution|ADR-0066]] - Capability-directed Wikilink and query resolution
 - [[0067-staged-changes-are-a-partial-check-scope|ADR-0067]] - Staged changes are a partial check scope
 - [[0068-bounded-local-snapshot-lifecycle|ADR-0068]] - Bounded local snapshot lifecycle
+- [[0069-repeatable-two-tier-performance-evidence|ADR-0069]] - Repeatable two tier performance evidence

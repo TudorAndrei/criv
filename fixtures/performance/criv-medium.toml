@@ -1,0 +1,35 @@
+schema = "criv.performance-workload.v1"
+id = "criv-medium"
+tier = "medium"
+observed_repository = "TudorAndrei/criv"
+observed_revision = "15fb402a9065d594385afc8f193ccaf381e7b59b"
+observed_date = "2026-08-03"
+notes = 77
+decisions = 68
+docs = 9
+source_files = 119
+source_bytes = 1291218
+symbols = 1515
+note_links = 177
+source_references = 35
+policies = 4
+c4_artifacts = 4
+changed_source_files = 1
+changed_file_fraction = 0.008403361344537815
+
+[extensions]
+none = 1
+c4 = 3
+css = 1
+gitignore = 1
+json = 10
+md = 14
+mjs = 13
+pkl = 1
+rs = 29
+sh = 2
+svg = 1
+toml = 8
+ts = 31
+vscodeignore = 1
+yml = 3

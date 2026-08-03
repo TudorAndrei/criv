@@ -1,0 +1,21 @@
+schema = "criv.performance-workload.v1"
+id = "barrs-small"
+tier = "small"
+observed_repository = "TudorAndrei/barrs"
+observed_revision = "4773e0d0b1f5149b9555c5dc42d8335b49740052"
+observed_date = "2026-08-03"
+notes = 23
+decisions = 18
+docs = 5
+source_files = 12
+source_bytes = 273948
+symbols = 464
+note_links = 3
+source_references = 0
+policies = 0
+c4_artifacts = 0
+changed_source_files = 1
+changed_file_fraction = 0.08333333333333333
+
+[extensions]
+rs = 12
