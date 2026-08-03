@@ -6,68 +6,51 @@ import test from "node:test";
 import {
   buildStateSnapshot,
   c4Artifacts,
-  parseStateEnvelope,
   registeredPatterns,
+  type CrivStateEnvelope,
 } from "../../src/stateModel";
 
 const stateContractRaw = readFileSync(
   resolve(__dirname, "../../../../fixtures/state/criv.state.v0.json"),
   "utf8",
 );
+const stateContract = JSON.parse(stateContractRaw) as CrivStateEnvelope;
 
-test("validates criv state schema before projection", () => {
-  const parsed = parseStateEnvelope(stateContractRaw);
-  assert.equal(parsed.ok, true);
-  if (parsed.ok) {
-    assert.equal(parsed.envelope.graph?.nodes?.length, 6);
-    assert.equal(parsed.envelope.graph?.edges?.length, 5);
-    assert.deepEqual(registeredPatterns(parsed.envelope), ["ADR-0001/entrypoint"]);
-    assert.deepEqual(parsed.envelope.patterns?.["ADR-0001/entrypoint"], [
-      {
-        file: "src/lib.rs",
-        range: "L1:C1-L1:C12",
-        captures: { BODY: "", NAME: "run" },
-      },
-    ]);
-    assert.equal(parsed.envelope.patterns?.["ADR-0002/draft-entrypoint"], undefined);
+test("builds host state from a canonical validated projection", () => {
+  assert.equal(stateContract.graph?.nodes?.length, 6);
+  assert.equal(stateContract.graph?.edges?.length, 5);
+  assert.deepEqual(registeredPatterns(stateContract), ["ADR-0001/entrypoint"]);
+  assert.deepEqual(stateContract.patterns?.["ADR-0001/entrypoint"], [
+    {
+      file: "src/lib.rs",
+      range: "L1:C1-L1:C12",
+      captures: { BODY: "", NAME: "run" },
+    },
+  ]);
+  assert.equal(stateContract.patterns?.["ADR-0002/draft-entrypoint"], undefined);
 
-    const snapshot = buildStateSnapshot(
-      stateContractRaw,
-      parsed.envelope,
-      {
-        schema: "criv.state.v0",
-        node_count: 6,
-        edge_count: 5,
-        source_count: 1,
-        pattern_count: 1,
-      },
-      [],
-      [],
-    );
-    assert.deepEqual(snapshot.registeredPatterns, ["ADR-0001/entrypoint"]);
-  }
-
-  const invalid = parseStateEnvelope(stateContractRaw.replace("criv.state.v0", "criv.state.v1"));
-  assert.equal(invalid.ok, false);
-  if (!invalid.ok) {
-    assert.match(invalid.error, /Unsupported criv state schema/);
-  }
+  const snapshot = buildStateSnapshot(
+    stateContractRaw,
+    stateContract,
+    {
+      schema: "criv.state.v0",
+      node_count: 6,
+      edge_count: 5,
+      source_count: 1,
+      pattern_count: 1,
+    },
+    [],
+    [],
+  );
+  assert.deepEqual(snapshot.registeredPatterns, ["ADR-0001/entrypoint"]);
 });
 
 test("reads registered patterns from explicit state field", () => {
-  const parsed = parseStateEnvelope(
-    JSON.stringify({
-      schema: "criv.state.v0",
-      "registered-patterns": ["adr/source-selector", "code/entrypoint"],
-    }),
-  );
-  assert.equal(parsed.ok, true);
-  if (parsed.ok) {
-    assert.deepEqual(registeredPatterns(parsed.envelope), [
-      "adr/source-selector",
-      "code/entrypoint",
-    ]);
-  }
+  const envelope: CrivStateEnvelope = {
+    schema: "criv.state.v0",
+    "registered-patterns": ["adr/source-selector", "code/entrypoint"],
+  };
+  assert.deepEqual(registeredPatterns(envelope), ["adr/source-selector", "code/entrypoint"]);
 });
 
 test("collects c4 artifacts from source entries and graph nodes", () => {
@@ -107,15 +90,11 @@ test("builds a loaded state snapshot from parsed state and wasm projections", ()
     schema: "criv.state.v0",
     "registered-patterns": ["adr/source-selector"],
   });
-  const parsed = parseStateEnvelope(raw);
-  assert.equal(parsed.ok, true);
-  if (!parsed.ok) {
-    return;
-  }
+  const envelope = JSON.parse(raw) as CrivStateEnvelope;
 
   const snapshot = buildStateSnapshot(
     raw,
-    parsed.envelope,
+    envelope,
     {
       schema: "criv.state.v0",
       node_count: 1,

@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -21,6 +20,18 @@ await esbuild.build({
 });
 
 const core = await import(pathToFileURL(outFile).href);
+const wasmPath = resolve(pluginRoot, "pkg/criv_wasm.js");
+assert.equal(existsSync(wasmPath), true, `missing compiled Wasm runtime ${wasmPath}`);
+const wasm = await import(pathToFileURL(wasmPath).href);
+
+function wasmError(action) {
+  try {
+    action();
+  } catch (error) {
+    return String(error);
+  }
+  assert.fail("expected the canonical Wasm export to reject input");
+}
 const { instance: vizInstance } = await import("@viz-js/viz");
 const c4FixtureDir = resolve(__dirname, "../../../../fixtures/c4");
 assert.equal(existsSync(c4FixtureDir), true, `missing fixture directory ${c4FixtureDir}`);
@@ -32,10 +43,10 @@ assert.equal(
 );
 const stateContractRaw = readFileSync(stateContractPath, "utf8");
 const stateContract = JSON.parse(stateContractRaw);
-assert.deepEqual(core.interpretState(stateContractRaw, "criv.state.v0"), { state: stateContract });
-assert.deepEqual(
-  core.interpretState(stateContractRaw.replace("criv.state.v0", "criv.state.v1"), "criv.state.v0"),
-  { error: "Unsupported criv state schema criv.state.v1", kind: "schema" },
+assert.deepEqual(wasm.validated_state(stateContractRaw), stateContract);
+assert.match(
+  wasmError(() => wasm.validated_state(stateContractRaw.replace("criv.state.v0", "criv.state.v1"))),
+  /unsupported criv state schema/i,
 );
 assert.equal(stateContract.graph.nodes.length, 6);
 assert.equal(stateContract.graph.edges.length, 5);
@@ -73,9 +84,10 @@ const fixture = JSON.parse(
   readFileSync(resolve(pluginRoot, "fixtures/link-resolution.json"), "utf8"),
 );
 const state = fixture.state;
+const sources = wasm.source_entries(JSON.stringify(state));
 
 for (const testCase of fixture.cases) {
-  const source = core.resolveSource(state, testCase.target);
+  const source = core.resolveSource(sources, testCase.target);
   const pattern = core.resolvePattern(state, testCase.target);
   assert.equal(source?.entry.path ?? null, testCase.source, `source for ${testCase.target}`);
   assert.equal(pattern, testCase.pattern, `pattern for ${testCase.target}`);
@@ -83,7 +95,7 @@ for (const testCase of fixture.cases) {
 
 assert.deepEqual(
   core
-    .linkedSourcesFromMarkdown("[[src/lib.rs#run]] [[lib.rs]] [[missing.rs]]", state)
+    .linkedSourcesFromMarkdown("[[src/lib.rs#run]] [[lib.rs]] [[missing.rs]]", sources)
     .map((source) => source.entry.path),
   ["src/lib.rs"],
 );
@@ -108,63 +120,18 @@ const rankedState = {
   ],
 };
 
-assert.equal(core.sourceSuggestions(rankedState, "src/lib.rs", 2)[0].path, "src/lib.rs");
 assert.equal(
-  core.sourceSuggestions(rankedState, "lib.rs", 2)[0].path,
+  wasm.suggest_source_selectors(JSON.stringify(rankedState), "src/lib.rs", 2)[0].path,
+  "src/lib.rs",
+);
+assert.equal(
+  wasm.suggest_source_selectors(JSON.stringify(rankedState), "lib.rs", 2)[0].path,
   "crates/criv-wasm/src/lib.rs",
 );
-assert.equal(core.sourceSuggestions(rankedState, "", 1)[0].path, "crates/criv-wasm/src/lib.rs");
-
-const wasmPath = resolve(__dirname, "../../../../extensions/vscode-criv/pkg/criv_wasm.js");
-if (existsSync(wasmPath)) {
-  const require = createRequire(import.meta.url);
-  const wasm = require(wasmPath);
-  const parityState = {
-    schema: "criv.state.v0",
-    graph: {
-      nodes: [
-        {
-          id: "symbol:src/lib.rs#fn:run",
-          kind: "function",
-          label: "run",
-          path: "src/lib.rs#L10-L20",
-        },
-        {
-          id: "symbol:src/main.rs#fn:start",
-          kind: "function",
-          label: "start",
-          path: "src/main.rs#L5-L9",
-        },
-      ],
-      edges: [],
-    },
-    "registered-patterns": [],
-    "source-index": [
-      { path: "src/tie-low.rs", frecency: 1 },
-      { path: "src/tie-high.rs", frecency: 50 },
-      { path: "crates/criv-wasm/src/lib.rs", frecency: 40 },
-      { path: "src/lib.rs", frecency: 5 },
-      { path: "lib.rs", frecency: 0 },
-      { path: "src/slow_lib.rs", frecency: 0 },
-      { path: "src/main.rs", frecency: 2 },
-      { path: "src/xray.ts", frecency: 7 },
-      { path: "docs/adr.md", frecency: 0 },
-    ],
-  };
-  const rawParityState = JSON.stringify(parityState);
-  for (const query of ["", "lib", "main.rs", "src/x", "slr"]) {
-    const wasmFilePaths = wasm
-      .suggest_source_selectors(rawParityState, query, 20)
-      .filter((suggestion) => suggestion.kind === "file")
-      .map((suggestion) => suggestion.path);
-    const fallbackPaths = core
-      .sourceSuggestions(parityState, query, 20)
-      .map((suggestion) => suggestion.path);
-    assert.deepEqual(wasmFilePaths, fallbackPaths, `wasm/TS source suggestion parity: ${query}`);
-  }
-} else {
-  console.warn(`Skipping wasm/TS source suggestion parity; missing ${wasmPath}`);
-}
+assert.equal(
+  wasm.suggest_source_selectors(JSON.stringify(rankedState), "", 1)[0].path,
+  "crates/criv-wasm/src/lib.rs",
+);
 
 const unsafeSourceState = {
   ...state,
@@ -178,29 +145,27 @@ const unsafeSourceState = {
   ],
 };
 
+const safeSources = wasm.source_entries(JSON.stringify(unsafeSourceState));
 assert.deepEqual(
-  core.sourceEntries(unsafeSourceState).map((entry) => entry.path),
+  safeSources.map((entry) => entry.path),
   ["src/lib.rs", "src/windows/path.rs"],
 );
-assert.equal(core.resolveSource(unsafeSourceState, "../.ssh/id_rsa"), null);
+assert.equal(core.resolveSource(safeSources, "../.ssh/id_rsa"), null);
 assert.equal(core.safeVaultPath("../.ssh/id_rsa"), null);
 assert.equal(core.safeVaultPath("/etc/passwd"), null);
 assert.equal(core.safeVaultPath("C:\\Users\\name\\.ssh\\id_rsa"), null);
 assert.equal(core.safeVaultPath("src\\lib.rs"), "src/lib.rs");
 
 const validStateRaw = JSON.stringify(state);
-assert.deepEqual(core.interpretState(validStateRaw, "criv.state.v0"), { state });
-assert.deepEqual(core.interpretState(validStateRaw, "criv.state.v1"), {
-  error: "Unsupported criv state schema criv.state.v0",
-  kind: "schema",
-});
-assert.deepEqual(core.interpretState(JSON.stringify({ graph: {} }), "criv.state.v0"), {
-  error: "Unsupported criv state schema unknown",
-  kind: "schema",
-});
-const badJson = core.interpretState("{", "criv.state.v0");
-assert.equal(badJson.kind, "parse");
-assert.match(badJson.error, /JSON|Unexpected|property name/i);
+assert.deepEqual(wasm.validated_state(validStateRaw), state);
+assert.match(
+  wasmError(() => wasm.validated_state(validStateRaw.replace("criv.state.v0", "criv.state.v1"))),
+  /unsupported criv state schema/i,
+);
+assert.match(
+  wasmError(() => wasm.validated_state("{")),
+  /invalid criv state JSON/i,
+);
 
 assert.deepEqual(core.parseLineRange("L4"), { start: 4, end: 4 });
 assert.deepEqual(core.parseLineRange("L4-L8"), { start: 4, end: 8 });
@@ -234,6 +199,7 @@ assert.deepEqual(targets, [
 const ranges = core.crivLinkRanges(
   "[[src/lib.rs]] [[missing.rs]] [[match:ADR-0001/no-block-on]]",
   state,
+  sources,
 );
 assert.deepEqual(
   ranges.map((range) => `${range.status}:${range.kind}:${range.target}`),

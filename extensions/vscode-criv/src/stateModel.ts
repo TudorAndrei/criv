@@ -1,17 +1,6 @@
-import type { CrivGraphNode, CrivSourceEntry, CrivStateSummary } from "./wasm";
+import type { CrivGraphNode, CrivSourceEntry, CrivStateSummary, CrivValidatedState } from "./wasm";
 
-export const CRIV_STATE_SCHEMA = "criv.state.v0";
-
-export interface CrivStateEnvelope {
-  schema?: unknown;
-  graph?: {
-    nodes?: unknown[];
-    edges?: unknown[];
-  };
-  "registered-patterns"?: unknown[];
-  "source-index"?: unknown[];
-  patterns?: Record<string, unknown[]>;
-}
+export type CrivStateEnvelope = CrivValidatedState;
 
 export interface CrivStateSnapshot {
   raw: string;
@@ -26,32 +15,6 @@ export interface CrivArtifactEntry {
   path: string;
   label: string;
   target: string;
-}
-
-export type ParsedStateEnvelope =
-  | { ok: true; envelope: CrivStateEnvelope }
-  | { ok: false; error: string };
-
-export function parseStateEnvelope(raw: string): ParsedStateEnvelope {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
-  }
-
-  if (!isRecord(parsed)) {
-    return { ok: false, error: "State JSON must be an object." };
-  }
-
-  if (parsed.schema !== CRIV_STATE_SCHEMA) {
-    return {
-      ok: false,
-      error: `Unsupported criv state schema: ${stringValue(parsed.schema) || "<missing>"}.`,
-    };
-  }
-
-  return { ok: true, envelope: parsed as CrivStateEnvelope };
 }
 
 export function registeredPatterns(envelope: CrivStateEnvelope): string[] {
@@ -123,8 +86,4 @@ function isC4Path(path: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function stringValue(value: unknown): string {
-  return typeof value === "string" ? value : "";
 }

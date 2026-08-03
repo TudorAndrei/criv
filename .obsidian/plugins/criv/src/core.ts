@@ -46,10 +46,6 @@ export interface CrivLinkRange {
   status: "resolved" | "unresolved";
 }
 
-export type StateInterpretation =
-  | { state: CrivState }
-  | { error: string; kind: "parse" | "schema" };
-
 export type C4ArtifactFormat = "mermaid" | "dot" | "unknown";
 export type C4ArtifactLevel = "context" | "container" | "component" | "code" | "unknown";
 
@@ -66,15 +62,13 @@ export interface C4ArtifactSummary {
   diagnostics: C4ArtifactDiagnostic[];
 }
 
-interface ScoredSource {
-  entry: SourceIndexEntry;
-  score: number;
-}
-
-export function linkedSourcesFromMarkdown(markdown: string, state: CrivState): LinkedSource[] {
+export function linkedSourcesFromMarkdown(
+  markdown: string,
+  sources: readonly SourceIndexEntry[],
+): LinkedSource[] {
   const links = Array.from(markdown.matchAll(/\[\[([^\]]+)\]\]/g))
     .map((match) => match[1] ?? "")
-    .map((target) => resolveSource(state, target))
+    .map((target) => resolveSource(sources, target))
     .filter((source): source is LinkedSource => source !== null);
   const seen = new Set<string>();
   return links.filter((source) => {
@@ -84,21 +78,6 @@ export function linkedSourcesFromMarkdown(markdown: string, state: CrivState): L
     seen.add(source.entry.path);
     return true;
   });
-}
-
-export function sourceEntries(state: CrivState | null | undefined): SourceIndexEntry[] {
-  const entries = state?.["source-index"] ?? [];
-  const seen = new Set<string>();
-  const safeEntries: SourceIndexEntry[] = [];
-  for (const entry of entries) {
-    const path = safeVaultPath(entry.path);
-    if (!path || seen.has(path)) {
-      continue;
-    }
-    seen.add(path);
-    safeEntries.push({ ...entry, path });
-  }
-  return safeEntries;
 }
 
 export function safeVaultPath(value: unknown): string | null {
@@ -127,23 +106,6 @@ export function safeVaultPath(value: unknown): string | null {
     normalized.push(segment);
   }
   return normalized.length > 0 ? normalized.join("/") : null;
-}
-
-export function interpretState(raw: string, expectedSchema: string): StateInterpretation {
-  let state: CrivState;
-  try {
-    state = JSON.parse(raw) as CrivState;
-  } catch (error) {
-    return { error: errorMessage(error), kind: "parse" };
-  }
-
-  if (state.schema !== expectedSchema) {
-    return {
-      error: `Unsupported criv state schema ${state.schema ?? "unknown"}`,
-      kind: "schema",
-    };
-  }
-  return { state };
 }
 
 export function parseLineRange(fragment: string | null): { start: number; end: number } | null {
@@ -184,49 +146,16 @@ export function addTarget(targets: string[], value: string | null | undefined): 
   }
 }
 
-/**
- * Fallback source-suggestion ranking for Obsidian when criv-wasm is unavailable.
- * Keep this scorer in sync with the wasm port; the parity test covers ASCII paths.
- */
-export function sourceSuggestions(
-  state: CrivState | null | undefined,
-  query: string,
-  limit = 20,
-): SourceIndexEntry[] {
-  const cleanQuery = query.trim().toLowerCase();
-  const entries = sourceEntries(state);
-  if (!cleanQuery) {
-    return entries
-      .slice()
-      .sort((left, right) => right.frecency - left.frecency || left.path.localeCompare(right.path))
-      .slice(0, limit);
-  }
-
-  const scored = entries
-    .map((entry): ScoredSource | null => {
-      const score = sourceMatchScore(entry.path, cleanQuery);
-      return score === null ? null : { entry, score: score + entry.frecency };
-    })
-    .filter((row): row is ScoredSource => row !== null);
-
-  return scored
-    .sort(
-      (left, right) =>
-        right.score - left.score ||
-        right.entry.frecency - left.entry.frecency ||
-        left.entry.path.localeCompare(right.entry.path),
-    )
-    .map((row) => row.entry)
-    .slice(0, limit);
-}
-
-export function resolveSource(state: CrivState, target: string): LinkedSource | null {
+export function resolveSource(
+  sources: readonly SourceIndexEntry[],
+  target: string,
+): LinkedSource | null {
   const clean = cleanTarget(target);
   const normalized = clean.split("#")[0] ?? "";
   if (!normalized || normalized.startsWith("match:")) {
     return null;
   }
-  const entry = resolveSourceEntry(state, normalized);
+  const entry = resolveSourceEntry(sources, normalized);
   if (!entry) {
     return null;
   }
@@ -294,13 +223,17 @@ export function frontmatterPatternTargets(
   return targets;
 }
 
-export function crivLinkRanges(text: string, state: CrivState): CrivLinkRange[] {
+export function crivLinkRanges(
+  text: string,
+  state: CrivState,
+  sources: readonly SourceIndexEntry[],
+): CrivLinkRange[] {
   const ranges: CrivLinkRange[] = [];
   for (const match of text.matchAll(/\[\[([^\]]+)\]\]/g)) {
     const rawTarget = match[1] ?? "";
     const from = match.index ?? 0;
     const to = from + match[0].length;
-    const source = resolveSource(state, rawTarget);
+    const source = resolveSource(sources, rawTarget);
     if (source) {
       ranges.push({ from, to, target: rawTarget, kind: "source", status: "resolved" });
       continue;
@@ -541,8 +474,10 @@ function firstNonEmptyLine(text: string): number | null {
   return index === -1 ? null : index + 1;
 }
 
-function resolveSourceEntry(state: CrivState, targetPath: string): SourceIndexEntry | null {
-  const entries = sourceEntries(state);
+function resolveSourceEntry(
+  entries: readonly SourceIndexEntry[],
+  targetPath: string,
+): SourceIndexEntry | null {
   return (
     entries.find((candidate) => candidate.path === targetPath) ??
     entries.find(
@@ -551,44 +486,6 @@ function resolveSourceEntry(state: CrivState, targetPath: string): SourceIndexEn
     ) ??
     null
   );
-}
-
-function sourceMatchScore(path: string, query: string): number | null {
-  const lowerPath = path.toLowerCase();
-  const basename = lowerPath.split("/").pop() ?? lowerPath;
-  if (lowerPath === query) {
-    return 100_000;
-  }
-  if (basename === query) {
-    return 90_000;
-  }
-  if (lowerPath.endsWith(query)) {
-    return 80_000 - lowerPath.length;
-  }
-  if (basename.startsWith(query)) {
-    return 70_000 - basename.length;
-  }
-  if (lowerPath.includes(query)) {
-    return 60_000 - lowerPath.indexOf(query) - lowerPath.length;
-  }
-  const fuzzyScore = fuzzySubsequenceScore(lowerPath, query);
-  return fuzzyScore === null ? null : 40_000 + fuzzyScore - lowerPath.length;
-}
-
-function fuzzySubsequenceScore(value: string, query: string): number | null {
-  let queryIndex = 0;
-  let score = 0;
-  let run = 0;
-  for (let index = 0; index < value.length && queryIndex < query.length; index += 1) {
-    if (value[index] !== query[queryIndex]) {
-      run = 0;
-      continue;
-    }
-    run += 1;
-    score += run * 3 + (index === 0 || value[index - 1] === "/" ? 8 : 0);
-    queryIndex += 1;
-  }
-  return queryIndex === query.length ? score : null;
 }
 
 function frontmatterPatternTarget(
@@ -633,8 +530,4 @@ function objectValue(value: unknown): Record<string, unknown> | null {
 
 function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

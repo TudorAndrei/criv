@@ -36,7 +36,6 @@ import {
   addTextTargets,
   crivLinkRanges,
   frontmatterPatternTargets,
-  interpretState,
   linkedSourcesFromMarkdown,
   looksLikeSourceOrPattern,
   parseLineRange,
@@ -47,11 +46,16 @@ import {
   resolveSource,
   sanitizeDotSvg,
   safeVaultPath,
-  sourceEntries,
-  sourceSuggestions,
   sourceTooltip,
 } from "./core";
-import { summarizeState, suggestSourceSelectors, type CrivSelectorSuggestion } from "./wasm";
+import {
+  CrivWasmLoadError,
+  sourceEntries as projectSourceEntries,
+  summarizeState,
+  suggestSourceSelectors,
+  validatedState,
+  type CrivSelectorSuggestion,
+} from "./wasm";
 
 interface CrivSettings {
   statePath: string;
@@ -101,7 +105,9 @@ interface ObsidianCommandRegistry {
 export default class CrivPlugin extends Plugin {
   settings!: CrivSettings;
   private state: CrivState | null = null;
+  private stateSources: SourceIndexEntry[] = [];
   private stateError: string | null = null;
+  private wasmFailureNotified = false;
   private hoverEl: HTMLElement | null = null;
   private hoverSourceKey: string | null = null;
   private hoverRequest = 0;
@@ -201,7 +207,8 @@ export default class CrivPlugin extends Plugin {
     try {
       const raw = await this.app.vault.adapter.read(statePath);
       return await summarizeState(raw);
-    } catch {
+    } catch (error) {
+      this.recordWasmFailure(error);
       return null;
     }
   }
@@ -210,26 +217,25 @@ export default class CrivPlugin extends Plugin {
     const statePath = this.safeStatePath();
     if (!statePath) {
       this.state = null;
+      this.stateSources = [];
       this.stateError = `Invalid criv state path ${this.settings.statePath}.`;
       return null;
     }
     try {
       const raw = await this.app.vault.adapter.read(statePath);
-      const interpreted = interpretState(raw, EXPECTED_SCHEMA);
-      if ("error" in interpreted) {
-        this.state = null;
-        this.stateError =
-          interpreted.kind === "parse"
-            ? `Could not read ${statePath}: ${interpreted.error}`
-            : interpreted.error;
-        return null;
-      }
-      this.state = interpreted.state;
+      const [state, sources] = await Promise.all([validatedState(raw), projectSourceEntries(raw)]);
+      this.state = state;
+      this.stateSources = sources;
       this.stateError = null;
-      return interpreted.state;
+      return state;
     } catch (error) {
       this.state = null;
-      this.stateError = `Could not read ${statePath}: ${errorMessage(error)}`;
+      this.stateSources = [];
+      this.recordWasmFailure(error);
+      this.stateError =
+        error instanceof CrivWasmLoadError
+          ? error.message
+          : `Could not read ${statePath}: ${errorMessage(error)}`;
       return null;
     }
   }
@@ -244,6 +250,18 @@ export default class CrivPlugin extends Plugin {
 
   cachedState(): CrivState | null {
     return this.state;
+  }
+
+  cachedSourceEntries(): readonly SourceIndexEntry[] {
+    return this.stateSources;
+  }
+
+  recordWasmFailure(error: unknown): void {
+    if (!(error instanceof CrivWasmLoadError) || this.wasmFailureNotified) {
+      return;
+    }
+    this.wasmFailureNotified = true;
+    new Notice(error.message);
   }
 
   async reloadState(): Promise<CrivState | null> {
@@ -277,13 +295,13 @@ export default class CrivPlugin extends Plugin {
     return frontmatterPatternTargets(frontmatter, state);
   }
 
-  async linkedSourcesForActiveFile(state: CrivState): Promise<LinkedSource[]> {
+  async linkedSourcesForActiveFile(): Promise<LinkedSource[]> {
     const file = this.app.workspace.getActiveFile();
     if (!file) {
       return [];
     }
     const markdown = await this.app.vault.cachedRead(file);
-    return linkedSourcesFromMarkdown(markdown, state);
+    return linkedSourcesFromMarkdown(markdown, this.stateSources);
   }
 
   async decorateLinks(el: HTMLElement, _ctx: MarkdownPostProcessorContext) {
@@ -295,7 +313,7 @@ export default class CrivPlugin extends Plugin {
       el.querySelectorAll("[data-href], a.internal-link, a[href]"),
     ) as HTMLElement[];
     for (const anchor of candidates) {
-      const source = resolveSourceFromElement(state, anchor);
+      const source = resolveSourceFromElement(this.stateSources, anchor);
       const pattern = resolvePatternFromElement(state, anchor);
       if (source) {
         anchor.addClass("criv-source-ref");
@@ -342,8 +360,8 @@ export default class CrivPlugin extends Plugin {
   }
 
   async sourceEntries(): Promise<SourceIndexEntry[]> {
-    const state = await this.getState();
-    return sourceEntries(state);
+    await this.getState();
+    return this.stateSources.slice();
   }
 
   async patternIds(): Promise<string[]> {
@@ -362,7 +380,7 @@ export default class CrivPlugin extends Plugin {
     if (!state) {
       return;
     }
-    const source = resolveSourceFromElement(state, link);
+    const source = resolveSourceFromElement(this.stateSources, link);
     if (!source) {
       return;
     }
@@ -486,7 +504,7 @@ class CrivSourceView extends ItemView {
       return;
     }
 
-    const linkedSources = await this.plugin.linkedSourcesForActiveFile(state);
+    const linkedSources = await this.plugin.linkedSourcesForActiveFile();
     const header = container.createDiv({ cls: "criv-panel-header" });
     header.createEl("h3", { text: "Linked source files" });
     header.createSpan({ text: `${linkedSources.length}` });
@@ -1030,16 +1048,17 @@ class CrivSourceSuggest extends EditorSuggest<SourceSuggestionItem> {
       return [];
     }
     // The wasm API accepts raw state JSON; the plugin currently caches the parsed state only.
-    const wasmSuggestions = await suggestSourceSelectors(JSON.stringify(state), context.query, 20);
-    if (wasmSuggestions) {
+    try {
+      const wasmSuggestions = await suggestSourceSelectors(
+        JSON.stringify(state),
+        context.query,
+        20,
+      );
       return sourceSuggestionItemsFromWasm(wasmSuggestions);
+    } catch (error) {
+      this.plugin.recordWasmFailure(error);
+      return [];
     }
-    return sourceSuggestions(state, context.query, 20).map((entry) => ({
-      insertText: entry.path,
-      label: entry.path,
-      path: entry.path,
-      detail: entry.mime,
-    }));
   }
 
   renderSuggestion(value: SourceSuggestionItem, el: HTMLElement): void {
@@ -1074,9 +1093,12 @@ function sourceSuggestionItemsFromWasm(items: CrivSelectorSuggestion[]): SourceS
   return suggestions;
 }
 
-function resolveSourceFromElement(state: CrivState, element: HTMLElement): LinkedSource | null {
+function resolveSourceFromElement(
+  sources: readonly SourceIndexEntry[],
+  element: HTMLElement,
+): LinkedSource | null {
   for (const target of linkTargets(element)) {
-    const source = resolveSource(state, target);
+    const source = resolveSource(sources, target);
     if (source) {
       return source;
     }
@@ -1437,7 +1459,7 @@ class CrivEditorDriftPlugin implements PluginValue {
     const builder = new RangeSetBuilder<Decoration>();
     for (const { from, to } of view.visibleRanges) {
       const text = view.state.sliceDoc(from, to);
-      for (const range of crivLinkRanges(text, state)) {
+      for (const range of crivLinkRanges(text, state, this.plugin.cachedSourceEntries())) {
         if (range.status !== "unresolved") {
           continue;
         }

@@ -1,3 +1,5 @@
+import type { CrivState, SourceIndexEntry } from "./core";
+
 export interface CrivStateSummary {
   schema: string;
   node_count: number;
@@ -18,72 +20,112 @@ export interface CrivSelectorSuggestion {
 }
 
 type CrivWasmModule = {
+  validated_state(raw: string): CrivState;
   summarize_state(raw: string): CrivStateSummary;
+  source_entries(raw: string): SourceIndexEntry[];
+  graph_nodes(raw: string): unknown[];
   suggest_source_selectors(raw: string, query: string, limit: number): CrivSelectorSuggestion[];
+  lookup_graph_node(raw: string, target: string): unknown;
 };
 
-let wasmModule: Promise<CrivWasmModule | null> | null = null;
-const WASM_RUNTIME_PATH = "./pkg/criv_wasm.js";
+export const CRIV_WASM_LOAD_ERROR = "criv-wasm-unavailable";
 
-export async function summarizeState(raw: string): Promise<CrivStateSummary> {
-  const wasm = await loadWasm();
-  if (wasm) {
-    return wasm.summarize_state(raw);
+export class CrivWasmLoadError extends Error {
+  readonly code = CRIV_WASM_LOAD_ERROR;
+
+  constructor(cause: unknown) {
+    super(
+      "Could not load the packaged criv Wasm runtime. Rebuild the companion and reload Obsidian.",
+    );
+    this.name = "CrivWasmLoadError";
+    (this as Error & { cause?: unknown }).cause = cause;
   }
+}
 
-  const state = JSON.parse(raw);
-  const sourcePaths = uniqueSourcePaths(state["source-index"]);
+export interface CrivWasmBridge {
+  validatedState(raw: string): Promise<CrivState>;
+  summarizeState(raw: string): Promise<CrivStateSummary>;
+  sourceEntries(raw: string): Promise<SourceIndexEntry[]>;
+  suggestSourceSelectors(
+    raw: string,
+    query: string,
+    limit: number,
+  ): Promise<CrivSelectorSuggestion[]>;
+}
+
+export type CrivWasmLoader = () => Promise<unknown>;
+
+const loadPackagedWasm = () =>
+  // @ts-expect-error wasm-pack creates this external runtime before the plugin is distributed.
+  import("./pkg/criv_wasm.js");
+const bridge = createCrivWasmBridge(loadPackagedWasm);
+
+export function createCrivWasmBridge(loader: CrivWasmLoader): CrivWasmBridge {
+  let wasmModule: Promise<CrivWasmModule> | undefined;
+  const loadWasm = (): Promise<CrivWasmModule> => {
+    wasmModule ??= loader()
+      .then(requireCrivWasmModule)
+      .catch((error: unknown) => {
+        throw error instanceof CrivWasmLoadError ? error : new CrivWasmLoadError(error);
+      });
+    return wasmModule;
+  };
+
   return {
-    schema: state.schema,
-    node_count: Array.isArray(state.graph?.nodes) ? state.graph.nodes.length : 0,
-    edge_count: Array.isArray(state.graph?.edges) ? state.graph.edges.length : 0,
-    source_count: sourcePaths.length,
-    pattern_count: Array.isArray(state["registered-patterns"])
-      ? state["registered-patterns"].length
-      : 0,
-    first_node_id: state.graph?.nodes?.[0]?.id,
-    first_edge: state.graph?.edges?.[0]
-      ? `${state.graph.edges[0].from}:${state.graph.edges[0].kind}:${state.graph.edges[0].to}`
-      : undefined,
-    first_source_path: sourcePaths[0],
+    async validatedState(raw) {
+      return (await loadWasm()).validated_state(raw);
+    },
+    async summarizeState(raw) {
+      return (await loadWasm()).summarize_state(raw);
+    },
+    async sourceEntries(raw) {
+      return (await loadWasm()).source_entries(raw);
+    },
+    async suggestSourceSelectors(raw, query, limit) {
+      return (await loadWasm()).suggest_source_selectors(raw, query, limit);
+    },
   };
 }
 
-export async function suggestSourceSelectors(
+export function validatedState(raw: string): Promise<CrivState> {
+  return bridge.validatedState(raw);
+}
+
+export function summarizeState(raw: string): Promise<CrivStateSummary> {
+  return bridge.summarizeState(raw);
+}
+
+export function sourceEntries(raw: string): Promise<SourceIndexEntry[]> {
+  return bridge.sourceEntries(raw);
+}
+
+export function suggestSourceSelectors(
   raw: string,
   query: string,
   limit: number,
-): Promise<CrivSelectorSuggestion[] | null> {
-  const wasm = await loadWasm();
-  if (!wasm) {
-    return null;
-  }
-  return wasm.suggest_source_selectors(raw, query, limit);
+): Promise<CrivSelectorSuggestion[]> {
+  return bridge.suggestSourceSelectors(raw, query, limit);
 }
 
-function uniqueSourcePaths(sourceIndex: unknown): string[] {
-  if (!Array.isArray(sourceIndex)) {
-    return [];
+function requireCrivWasmModule(value: unknown): CrivWasmModule {
+  if (!isRecord(value)) {
+    throw new Error("criv Wasm module did not export an object");
   }
-
-  const seen = new Set<string>();
-  const paths: string[] = [];
-  for (const entry of sourceIndex) {
-    const path = entry && typeof entry === "object" ? (entry as { path?: unknown }).path : null;
-    if (typeof path !== "string" || !path || seen.has(path)) {
-      continue;
+  for (const name of [
+    "validated_state",
+    "summarize_state",
+    "source_entries",
+    "graph_nodes",
+    "suggest_source_selectors",
+    "lookup_graph_node",
+  ]) {
+    if (typeof value[name] !== "function") {
+      throw new Error(`criv Wasm module is missing export ${name}`);
     }
-    seen.add(path);
-    paths.push(path);
   }
-  return paths;
+  return value as CrivWasmModule;
 }
 
-async function loadWasm(): Promise<CrivWasmModule | null> {
-  if (!wasmModule) {
-    wasmModule = import(WASM_RUNTIME_PATH)
-      .then((module) => module as CrivWasmModule)
-      .catch(() => null);
-  }
-  return wasmModule;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }

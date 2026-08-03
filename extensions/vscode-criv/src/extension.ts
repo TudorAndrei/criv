@@ -279,6 +279,7 @@ async function openStateJson(store: WorkspaceStateStore): Promise<void> {
   if (
     status.kind !== "ready" &&
     status.kind !== "missing-state" &&
+    status.kind !== "wasm-unavailable" &&
     status.kind !== "invalid-state"
   ) {
     await vscode.window.showWarningMessage(messageForStatus(status));
@@ -343,6 +344,7 @@ function messageForStatus(status: WorkspaceStateStatus): string {
       return "criv state is still loading.";
     case "missing-workspace":
     case "missing-state":
+    case "wasm-unavailable":
     case "invalid-state":
       return status.message;
   }
@@ -369,6 +371,7 @@ function updateStatusBar(statusBar: vscode.StatusBarItem, status: WorkspaceState
       return;
     case "missing-workspace":
     case "missing-state":
+    case "wasm-unavailable":
     case "invalid-state":
       statusBar.text = "$(warning) criv";
       statusBar.tooltip = status.message;

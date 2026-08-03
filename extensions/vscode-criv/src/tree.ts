@@ -43,6 +43,7 @@ export class CrivStateTreeProvider implements vscode.TreeDataProvider<CrivTreeIt
         return [new CrivTreeItem("Loading criv state", "message")];
       case "missing-workspace":
       case "missing-state":
+      case "wasm-unavailable":
       case "invalid-state":
         return [new CrivTreeItem(this.status.message, "message")];
     }

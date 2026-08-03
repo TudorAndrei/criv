@@ -9,6 +9,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const pluginRoot = resolve(__dirname, "..");
 const outFile = resolve(tmpdir(), `criv-main-test-${process.pid}.mjs`);
 const stubDir = resolve(__dirname, "stubs");
+const wasmPath = resolve(pluginRoot, "pkg/criv_wasm.js");
 
 mkdirSync(dirname(outFile), { recursive: true });
 await esbuild.build({
@@ -18,7 +19,6 @@ await esbuild.build({
   format: "esm",
   platform: "node",
   target: "node18",
-  external: ["./pkg/criv_wasm.js"],
   plugins: [aliasPlugin()],
 });
 
@@ -59,7 +59,10 @@ const validStateRaw = JSON.stringify(validState);
   });
   assert.equal(await plugin.loadState(), null);
   assert.equal(plugin.cachedState(), null);
-  assert.equal(plugin.stateStatus(), "Unsupported criv state schema criv.state.v1");
+  assert.equal(
+    plugin.stateStatus(),
+    "Could not read .criv/state.json: unsupported criv state schema: criv.state.v1",
+  );
 }
 
 {
@@ -145,6 +148,10 @@ function aliasPlugin() {
   return {
     name: "alias-stubs",
     setup(build) {
+      build.onResolve({ filter: /^\.\/pkg\/criv_wasm\.js$/ }, () => ({
+        path: wasmPath,
+        external: true,
+      }));
       for (const [moduleName, modulePath] of Object.entries(aliases)) {
         build.onResolve({ filter: new RegExp(`^${escapeRegExp(moduleName)}$`) }, () => ({
           path: modulePath,

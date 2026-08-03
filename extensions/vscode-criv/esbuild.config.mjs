@@ -12,7 +12,12 @@ const context = await esbuild.context({
   format: "cjs",
   platform: "node",
   target: "node18",
-  external: ["vscode", ...builtinModules, ...builtinModules.map((name) => `node:${name}`)],
+  external: [
+    "vscode",
+    "../pkg/criv_wasm.js",
+    ...builtinModules,
+    ...builtinModules.map((name) => `node:${name}`),
+  ],
   outfile: "dist/extension.js",
   sourcemap: production ? false : "inline",
   sourcesContent: !production,

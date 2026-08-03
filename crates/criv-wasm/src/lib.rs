@@ -6,6 +6,14 @@ use wasm_bindgen::prelude::*;
 const STATE_SCHEMA: &str = "criv.state.v0";
 
 #[wasm_bindgen]
+pub fn validated_state(raw: &str) -> Result<JsValue, JsValue> {
+    let state = decode_state_value(raw).map_err(|error| JsValue::from_str(&error))?;
+    state
+        .serialize(&serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true))
+        .map_err(|err| JsValue::from_str(&format!("failed to encode validated criv state: {err}")))
+}
+
+#[wasm_bindgen]
 pub fn summarize_state(raw: &str) -> Result<JsValue, JsValue> {
     let state = parse_state(raw)?;
     let source_paths = unique_source_paths(&state.source_index);
@@ -74,12 +82,23 @@ fn decode_state(raw: &str) -> Result<CrivState, String> {
     Ok(state)
 }
 
+fn decode_state_value(raw: &str) -> Result<serde_json::Value, String> {
+    let state = serde_json::from_str::<serde_json::Value>(raw)
+        .map_err(|err| format!("invalid criv state JSON: {err}"))?;
+    let schema = state
+        .get("schema")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("<missing>");
+    if schema != STATE_SCHEMA {
+        return Err(format!("unsupported criv state schema: {schema}"));
+    }
+    Ok(state)
+}
+
 fn unique_source_paths(source_index: &[SourceIndexEntry]) -> Vec<String> {
-    let mut seen = BTreeSet::new();
-    source_index
-        .iter()
-        .filter(|entry| !entry.path.is_empty() && seen.insert(entry.path.clone()))
-        .map(|entry| entry.path.clone())
+    unique_source_entries(source_index)
+        .into_iter()
+        .map(|entry| entry.path)
         .collect()
 }
 
@@ -87,13 +106,36 @@ fn unique_source_entries(source_index: &[SourceIndexEntry]) -> Vec<EditorSourceE
     let mut seen = BTreeSet::new();
     source_index
         .iter()
-        .filter(|entry| !entry.path.is_empty() && seen.insert(entry.path.clone()))
-        .map(|entry| EditorSourceEntry {
-            path: entry.path.clone(),
-            mime: entry.mime.clone(),
-            frecency: entry.frecency,
+        .filter_map(|entry| {
+            let path = safe_source_path(&entry.path)?;
+            seen.insert(path.clone()).then_some(EditorSourceEntry {
+                path,
+                mime: entry.mime.clone(),
+                frecency: entry.frecency,
+            })
         })
         .collect()
+}
+
+fn safe_source_path(path: &str) -> Option<String> {
+    let path = path.trim().replace('\\', "/");
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.starts_with("//")
+        || path.contains('\0')
+        || path.as_bytes().get(1) == Some(&b':')
+    {
+        return None;
+    }
+    let mut normalized = Vec::new();
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => return None,
+            segment => normalized.push(segment),
+        }
+    }
+    (!normalized.is_empty()).then(|| normalized.join("/"))
 }
 
 fn editor_graph_nodes(state: &CrivState) -> Vec<EditorGraphNode> {
@@ -370,6 +412,17 @@ mod tests {
             .replace("criv.state.v0", "criv.state.v1");
 
         assert!(decode_state(&raw).is_err());
+        assert!(decode_state_value(&raw).is_err());
+    }
+
+    #[test]
+    fn validated_state_preserves_host_consumed_fields() {
+        let state =
+            decode_state_value(include_str!("../../../fixtures/state/criv.state.v0.json")).unwrap();
+
+        assert_eq!(state["schema"], "criv.state.v0");
+        assert_eq!(state["registered-patterns"][0], "ADR-0001/entrypoint");
+        assert!(state["patterns"]["ADR-0001/entrypoint"].is_array());
     }
 
     #[test]
@@ -395,6 +448,45 @@ mod tests {
         let paths = unique_source_paths(&source_index);
         assert_eq!(paths.len(), 2);
         assert_eq!(paths, vec!["src/lib.rs", "src/main.rs"]);
+    }
+
+    #[test]
+    fn source_entries_reject_escaping_paths_and_normalize_separators() {
+        let entries = unique_source_entries(&[
+            SourceIndexEntry {
+                path: "src/lib.rs".into(),
+                mime: None,
+                frecency: 1,
+            },
+            SourceIndexEntry {
+                path: "../secret".into(),
+                mime: None,
+                frecency: 2,
+            },
+            SourceIndexEntry {
+                path: "/etc/passwd".into(),
+                mime: None,
+                frecency: 3,
+            },
+            SourceIndexEntry {
+                path: "C:\\secret".into(),
+                mime: None,
+                frecency: 4,
+            },
+            SourceIndexEntry {
+                path: "src\\windows\\path.rs".into(),
+                mime: None,
+                frecency: 5,
+            },
+        ]);
+
+        assert_eq!(
+            entries
+                .into_iter()
+                .map(|entry| entry.path)
+                .collect::<Vec<_>>(),
+            ["src/lib.rs", "src/windows/path.rs"]
+        );
     }
 
     #[test]

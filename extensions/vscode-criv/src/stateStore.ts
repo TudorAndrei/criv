@@ -1,12 +1,14 @@
 import * as vscode from "vscode";
 
-import { buildStateSnapshot, parseStateEnvelope, type CrivStateSnapshot } from "./stateModel";
+import { buildStateSnapshot, type CrivStateSnapshot } from "./stateModel";
 import {
+  CrivWasmLoadError,
   graphNodes,
   lookupGraphNode,
   sourceEntries,
   suggestSourceSelectors,
   summarizeState,
+  validatedState,
 } from "./wasm";
 
 export type WorkspaceStateStatus =
@@ -14,6 +16,7 @@ export type WorkspaceStateStatus =
   | { kind: "ready"; root: vscode.Uri; stateUri: vscode.Uri; snapshot: CrivStateSnapshot }
   | { kind: "missing-workspace"; message: string }
   | { kind: "missing-state"; root: vscode.Uri; stateUri: vscode.Uri; message: string }
+  | { kind: "wasm-unavailable"; root: vscode.Uri; stateUri: vscode.Uri; message: string }
   | { kind: "invalid-state"; root: vscode.Uri; stateUri: vscode.Uri; message: string };
 
 export class WorkspaceStateStore implements vscode.Disposable {
@@ -53,18 +56,9 @@ export class WorkspaceStateStore implements vscode.Disposable {
       });
     }
 
-    const parsed = parseStateEnvelope(raw);
-    if (!parsed.ok) {
-      return this.setStatus({
-        kind: "invalid-state",
-        root,
-        stateUri,
-        message: parsed.error,
-      });
-    }
-
     try {
-      const [summary, sources, nodes] = await Promise.all([
+      const [envelope, summary, sources, nodes] = await Promise.all([
+        validatedState(raw),
         summarizeState(raw),
         sourceEntries(raw),
         graphNodes(raw),
@@ -74,14 +68,17 @@ export class WorkspaceStateStore implements vscode.Disposable {
         kind: "ready",
         root,
         stateUri,
-        snapshot: buildStateSnapshot(raw, parsed.envelope, summary, sources, nodes),
+        snapshot: buildStateSnapshot(raw, envelope, summary, sources, nodes),
       });
     } catch (error) {
       return this.setStatus({
-        kind: "invalid-state",
+        kind: error instanceof CrivWasmLoadError ? "wasm-unavailable" : "invalid-state",
         root,
         stateUri,
-        message: `Could not read criv state projections: ${messageFromError(error)}`,
+        message:
+          error instanceof CrivWasmLoadError
+            ? error.message
+            : `Could not read criv state projections: ${messageFromError(error)}`,
       });
     }
   }
