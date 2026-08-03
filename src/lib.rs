@@ -6,6 +6,7 @@ mod c4_code;
 mod check;
 mod config;
 mod enforce;
+mod generated_skills;
 mod git;
 mod init;
 mod measurement;

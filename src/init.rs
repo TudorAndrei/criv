@@ -8,14 +8,9 @@ use std::path::Path;
 
 use clap::Args as ClapArgs;
 
-use crate::util::{
-    LinkOutcome, append_line_if_missing_in, create_dir_in, link_dir_in, write_atomic_in,
-    write_new_in,
-};
+use crate::generated_skills::{self, InstallMode, SkillPublication};
+use crate::util::{append_line_if_missing_in, create_dir_in, write_atomic_in, write_new_in};
 use crate::{CrivError, Result};
-
-const AGENT_SKILLS_DIR: &str = ".agents/skills";
-const CLAUDE_SKILLS_DIR: &str = ".claude/skills";
 
 const VSCODE_EXTENSION_ID: &str = "criv.vscode-criv";
 const VSCODE_EXTENSIONS_JSON: &str = ".vscode/extensions.json";
@@ -49,14 +44,12 @@ pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
 
     if options.force_skills {
         if !options.no_skills {
-            write_templates(
-                root,
-                templates::agent_skills(),
-                true,
-                &mut created,
-                &mut refreshed,
-            )?;
-            link_messages.push(link_claude_skills(root, true)?);
+            let report = generated_skills::install(root, InstallMode::Refresh)?;
+            collect_skill_publications(&report, &mut created, &mut refreshed);
+            link_messages.push(
+                generated_skills::describe_claude_publication(report.claude_publication())
+                    .to_string(),
+            );
         }
         print_init_result(created, refreshed, link_messages);
         return Ok(());
@@ -86,14 +79,11 @@ pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
     )?;
 
     if !options.no_skills {
-        write_templates(
-            root,
-            templates::agent_skills(),
-            options.force_skills,
-            &mut created,
-            &mut refreshed,
-        )?;
-        link_messages.push(link_claude_skills(root, options.force_skills)?);
+        let report = generated_skills::install(root, InstallMode::CreateOnly)?;
+        collect_skill_publications(&report, &mut created, &mut refreshed);
+        link_messages.push(
+            generated_skills::describe_claude_publication(report.claude_publication()).to_string(),
+        );
     }
 
     if !options.no_obsidian {
@@ -136,6 +126,20 @@ fn print_init_result(
     }
     for message in link_messages {
         println!("{message}");
+    }
+}
+
+fn collect_skill_publications(
+    report: &generated_skills::InstallReport,
+    created: &mut Vec<&'static str>,
+    refreshed: &mut Vec<&'static str>,
+) {
+    for fact in report.skill_publications() {
+        match fact.publication {
+            SkillPublication::Created => created.push(fact.path),
+            SkillPublication::Refreshed => refreshed.push(fact.path),
+            SkillPublication::Preserved => {}
+        }
     }
 }
 
@@ -203,61 +207,6 @@ fn json_pretty(value: &impl serde::Serialize, label: &str) -> Result<String> {
         .map_err(|err| CrivError::new(format!("failed to serialize {label}: {err}")))?;
     json.push('\n');
     Ok(json)
-}
-
-/// Point `.claude/skills` at `.agents/skills`. Governed by ADR-0053.
-fn link_claude_skills(root: &Path, replace_directory: bool) -> Result<String> {
-    let outcome = link_dir_in(
-        root,
-        Path::new(CLAUDE_SKILLS_DIR),
-        Path::new(AGENT_SKILLS_DIR),
-        replace_directory,
-    )?;
-    Ok(match outcome {
-        LinkOutcome::Unchanged => {
-            format!("skipped {CLAUDE_SKILLS_DIR}: already linked to {AGENT_SKILLS_DIR}")
-        }
-        LinkOutcome::Created => format!("linked {CLAUDE_SKILLS_DIR} to {AGENT_SKILLS_DIR}"),
-        LinkOutcome::Replaced => {
-            format!("replaced copied {CLAUDE_SKILLS_DIR} with a link to {AGENT_SKILLS_DIR}")
-        }
-        LinkOutcome::DirectoryInTheWay => format!(
-            "skipped {CLAUDE_SKILLS_DIR}: holds copied files; run `criv init --force-skills` to replace them with a link"
-        ),
-        LinkOutcome::Unsupported => {
-            let mut created = Vec::new();
-            let mut refreshed = Vec::new();
-            write_templates(
-                root,
-                templates::claude_skills_fallback(),
-                replace_directory,
-                &mut created,
-                &mut refreshed,
-            )?;
-            format!("copied {CLAUDE_SKILLS_DIR}: this platform does not support directory links")
-        }
-    })
-}
-
-fn write_templates(
-    root: &Path,
-    templates: &[templates::StaticTemplate],
-    force: bool,
-    created: &mut Vec<&'static str>,
-    refreshed: &mut Vec<&'static str>,
-) -> Result<()> {
-    for template in templates {
-        let contents = templates::stamped_skill(template.contents);
-        if force && root.join(template.path).exists() {
-            // Keep the same confined, symlink-safe path as create-only
-            // scaffolding; only the publication mode changes.
-            write_atomic_in(root, Path::new("."), Path::new(template.path), &contents)?;
-            refreshed.push(template.path);
-        } else if write_new_in(root, Path::new("."), Path::new(template.path), &contents)? {
-            created.push(template.path);
-        }
-    }
-    Ok(())
 }
 
 fn write_template(

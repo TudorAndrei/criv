@@ -5,11 +5,6 @@ use serde::Serialize;
 
 use crate::{CrivError, Result};
 
-pub(crate) struct StaticTemplate {
-    pub(crate) path: &'static str,
-    pub(crate) contents: &'static str,
-}
-
 pub(crate) struct TemplateFile {
     pub(crate) path: &'static str,
     pub(crate) contents: Cow<'static, str>,
@@ -49,122 +44,6 @@ pub(crate) fn adr_readme() -> Result<String> {
         "---\n{}---\n\n# Architectural Decisions\n\nAccepted decisions live in this directory as MADR-style notes named `NNNN-kebab-title.md`.\n",
         frontmatter
     ))
-}
-
-pub(crate) fn agent_skills() -> &'static [StaticTemplate] {
-    AGENT_SKILLS
-}
-
-pub(crate) fn claude_skills_fallback() -> &'static [StaticTemplate] {
-    CLAUDE_SKILLS
-}
-
-/// A stable, compact identity for the source of a generated skill.
-pub(crate) fn template_hash(contents: &str) -> String {
-    blake3::hash(normalize_newlines(contents).as_bytes()).to_hex()[..16].to_string()
-}
-
-/// Governed by ADR-0053.
-fn normalize_newlines(contents: &str) -> String {
-    contents.replace("\r\n", "\n")
-}
-
-/// Add (or replace) criv's generated-artifact marker in a skill frontmatter
-/// block. The embedded templates remain unmarked so their hashes describe the
-/// actual shipped skill content.
-pub(crate) fn stamped_skill(contents: &str) -> String {
-    let contents = unstamped_skill(&normalize_newlines(contents));
-    let marker = format!("criv-template: blake3:{}", template_hash(&contents));
-    let Some(rest) = contents.strip_prefix("---\n") else {
-        return contents.to_string();
-    };
-    let Some((frontmatter, body)) = rest.split_once("---\n") else {
-        return contents.to_string();
-    };
-
-    let mut lines: Vec<String> = frontmatter.lines().map(str::to_string).collect();
-    if let Some(index) = lines
-        .iter()
-        .position(|line| line.trim_start() == "metadata:")
-    {
-        let insert_at = lines[index + 1..]
-            .iter()
-            .position(|line| !line.starts_with(' ') && !line.starts_with('\t'))
-            .map_or(lines.len(), |offset| index + 1 + offset);
-        let marker_line = (index + 1..insert_at)
-            .find(|&line| lines[line].trim_start().starts_with("criv-template:"));
-        if let Some(marker_line) = marker_line {
-            lines[marker_line] = format!("  {marker}");
-        } else {
-            lines.insert(index + 1, format!("  {marker}"));
-        }
-    } else {
-        lines.push("metadata:".to_string());
-        lines.push(format!("  {marker}"));
-    }
-
-    format!("---\n{}\n---\n{}", lines.join("\n"), body)
-}
-
-/// Return the source template form of a skill, removing criv's generated
-/// marker and its otherwise-empty `metadata` map. This makes refresh robust if
-/// a marked skill is ever accidentally supplied as a template.
-pub(crate) fn unstamped_skill(contents: &str) -> String {
-    let normalized = normalize_newlines(contents);
-    let contents = normalized.as_str();
-    let Some(rest) = contents.strip_prefix("---\n") else {
-        return contents.to_string();
-    };
-    let Some((frontmatter, body)) = rest.split_once("---\n") else {
-        return contents.to_string();
-    };
-
-    let mut lines: Vec<String> = frontmatter.lines().map(str::to_string).collect();
-    let Some(metadata) = lines
-        .iter()
-        .position(|line| line.trim_start() == "metadata:")
-    else {
-        return contents.to_string();
-    };
-    let end = lines[metadata + 1..]
-        .iter()
-        .position(|line| !line.starts_with(' ') && !line.starts_with('\t'))
-        .map_or(lines.len(), |offset| metadata + 1 + offset);
-    let marker_lines: Vec<usize> = (metadata + 1..end)
-        .filter(|&index| lines[index].trim_start().starts_with("criv-template:"))
-        .collect();
-    let has_metadata_child =
-        (metadata + 1..end).any(|index| !lines[index].trim_start().starts_with("criv-template:"));
-    for index in marker_lines.into_iter().rev() {
-        lines.remove(index);
-    }
-
-    // Remove the metadata key if it was used solely for criv's marker.
-    if !has_metadata_child {
-        lines.remove(metadata);
-    }
-
-    format!("---\n{}\n---\n{}", lines.join("\n"), body)
-}
-
-pub(crate) fn skill_marker(contents: &str) -> Option<String> {
-    let normalized = normalize_newlines(contents);
-    let rest = normalized.strip_prefix("---\n")?;
-    let (frontmatter, _) = rest.split_once("---\n")?;
-    let mut in_metadata = false;
-    for line in frontmatter.lines() {
-        if line.trim_start() == "metadata:" {
-            in_metadata = true;
-            continue;
-        }
-        if !line.starts_with(' ') && !line.starts_with('\t') {
-            in_metadata = false;
-        }
-        if in_metadata && let Some(value) = line.trim().strip_prefix("criv-template:") {
-            return Some(value.trim().to_string());
-        }
-    }
-    None
 }
 
 pub(crate) fn obsidian_plugin() -> Result<Vec<TemplateFile>> {
@@ -496,70 +375,6 @@ fn plugin_versions() -> BTreeMap<&'static str, &'static str> {
     BTreeMap::from([("0.1.0", "1.5.0")])
 }
 
-const AGENT_SKILL_CRIV: &str = include_str!("../../assets/skills/criv/SKILL.md");
-const AGENT_SKILL_CRIV_ME: &str = include_str!("../../assets/skills/criv-me/SKILL.md");
-const AGENT_SKILL_WRITING_DECISIONS: &str =
-    include_str!("../../assets/skills/writing-decisions/SKILL.md");
-const AGENT_SKILL_REFERENCING_CODE: &str =
-    include_str!("../../assets/skills/referencing-code/SKILL.md");
-const AGENT_SKILL_CHECKING_DRIFT: &str =
-    include_str!("../../assets/skills/checking-drift/SKILL.md");
-const AGENT_SKILL_C4_AUTHORING: &str = include_str!("../../assets/skills/c4-authoring/SKILL.md");
-
-const AGENT_SKILLS: &[StaticTemplate] = &[
-    StaticTemplate {
-        path: ".agents/skills/criv/SKILL.md",
-        contents: AGENT_SKILL_CRIV,
-    },
-    StaticTemplate {
-        path: ".agents/skills/criv-me/SKILL.md",
-        contents: AGENT_SKILL_CRIV_ME,
-    },
-    StaticTemplate {
-        path: ".agents/skills/writing-decisions/SKILL.md",
-        contents: AGENT_SKILL_WRITING_DECISIONS,
-    },
-    StaticTemplate {
-        path: ".agents/skills/referencing-code/SKILL.md",
-        contents: AGENT_SKILL_REFERENCING_CODE,
-    },
-    StaticTemplate {
-        path: ".agents/skills/checking-drift/SKILL.md",
-        contents: AGENT_SKILL_CHECKING_DRIFT,
-    },
-    StaticTemplate {
-        path: ".agents/skills/c4-authoring/SKILL.md",
-        contents: AGENT_SKILL_C4_AUTHORING,
-    },
-];
-
-const CLAUDE_SKILLS: &[StaticTemplate] = &[
-    StaticTemplate {
-        path: ".claude/skills/criv/SKILL.md",
-        contents: AGENT_SKILL_CRIV,
-    },
-    StaticTemplate {
-        path: ".claude/skills/criv-me/SKILL.md",
-        contents: AGENT_SKILL_CRIV_ME,
-    },
-    StaticTemplate {
-        path: ".claude/skills/writing-decisions/SKILL.md",
-        contents: AGENT_SKILL_WRITING_DECISIONS,
-    },
-    StaticTemplate {
-        path: ".claude/skills/referencing-code/SKILL.md",
-        contents: AGENT_SKILL_REFERENCING_CODE,
-    },
-    StaticTemplate {
-        path: ".claude/skills/checking-drift/SKILL.md",
-        contents: AGENT_SKILL_CHECKING_DRIFT,
-    },
-    StaticTemplate {
-        path: ".claude/skills/c4-authoring/SKILL.md",
-        contents: AGENT_SKILL_C4_AUTHORING,
-    },
-];
-
 const PLUGIN_TS_CORE: &str = include_str!("../../.obsidian/plugins/criv/src/core.ts");
 const DEFAULT_CONFIG: &str = include_str!("fixtures/criv.toml");
 const PLUGIN_TS_MAIN: &str = include_str!("../../.obsidian/plugins/criv/src/main.ts");
@@ -588,66 +403,11 @@ if (!Object.values(versions).includes(minAppVersion)) {
 mod tests {
     use super::*;
 
-    const SKILL: &str = "---\nname: example\ndescription: Example\n---\n\n# Example\n";
-
     #[test]
     fn default_config_fixture_matches_typed_defaults() {
         let fixture: toml::Value = toml::from_str(DEFAULT_CONFIG).unwrap();
         let defaults = toml::Value::try_from(DefaultConfig::default()).unwrap();
 
         assert_eq!(fixture, defaults);
-    }
-
-    #[test]
-    fn template_hash_is_stable_and_content_sensitive() {
-        assert_eq!(template_hash(SKILL), template_hash(SKILL));
-        assert_ne!(template_hash(SKILL), template_hash("x"));
-    }
-
-    #[test]
-    fn stamped_skill_has_valid_yaml_and_is_idempotent() {
-        let stamped = stamped_skill(SKILL);
-        let frontmatter = stamped
-            .strip_prefix("---\n")
-            .and_then(|value| value.split_once("---\n"))
-            .map(|(frontmatter, _)| frontmatter)
-            .unwrap();
-        serde_norway::from_str::<serde_norway::Value>(frontmatter).unwrap();
-        assert_eq!(stamped_skill(&stamped), stamped);
-        assert_eq!(
-            skill_marker(&stamped),
-            Some(format!("blake3:{}", template_hash(SKILL)))
-        );
-    }
-
-    #[test]
-    fn stamping_recovers_a_template_that_accidentally_has_a_marker() {
-        let marked_template = stamped_skill(SKILL);
-        assert_eq!(stamped_skill(&marked_template), marked_template);
-        assert_eq!(unstamped_skill(&marked_template), SKILL);
-    }
-}
-
-#[cfg(test)]
-mod crlf_tests {
-    use super::*;
-
-    #[test]
-    fn markers_survive_crlf_checkouts() {
-        let lf = "---\nname: criv\ndescription: d\n---\n\n# criv\n";
-        let crlf = lf.replace('\n', "\r\n");
-
-        assert_eq!(
-            template_hash(lf),
-            template_hash(&crlf),
-            "hash must not depend on line endings"
-        );
-
-        let stamped = stamped_skill(&crlf);
-        assert!(
-            skill_marker(&stamped).is_some(),
-            "a CRLF checkout must still receive a marker"
-        );
-        assert_eq!(stamped, stamped_skill(lf));
     }
 }

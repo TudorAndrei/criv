@@ -104,7 +104,7 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
             let stale_skills = if options.changed {
                 Vec::new()
             } else {
-                outdated_skills(root)
+                crate::generated_skills::inventory(root).advisory_outdated_paths()
             };
             if !stale_skills.is_empty() {
                 let subject = if stale_skills.len() == 1 {
@@ -229,40 +229,6 @@ fn changed_scope_requires_full_check(changes: &ChangedSet, docs_dir: &str, adr_d
         .into_iter()
         .any(|path| path == "criv.toml" || path == ".rumdl.toml" || path.starts_with(&adr_prefix))
     })
-}
-
-/// Advisory only. Governed by ADR-0053.
-fn outdated_skills(root: &Path) -> Vec<&'static str> {
-    let templates = crate::init::templates::agent_skills().iter();
-    let mut stale = Vec::new();
-
-    let claude_skills = root.join(".claude/skills");
-    if let Ok(metadata) = fs::symlink_metadata(&claude_skills)
-        && metadata.is_dir()
-        && !metadata.file_type().is_symlink()
-    {
-        stale.push(".claude/skills");
-    }
-
-    for template in templates {
-        let path = root.join(template.path);
-        if !path.exists() {
-            continue;
-        }
-        let Ok(contents) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let expected = format!(
-            "blake3:{}",
-            crate::init::templates::template_hash(&crate::init::templates::unstamped_skill(
-                template.contents,
-            ))
-        );
-        if crate::init::templates::skill_marker(&contents).as_deref() != Some(expected.as_str()) {
-            stale.push(template.path);
-        }
-    }
-    stale
 }
 
 fn validate_markdown_format(
@@ -1491,26 +1457,6 @@ mod tests {
             changes.affected_paths(),
             vec!["docs/new.md".to_string(), "docs/old.md".to_string()]
         );
-    }
-
-    #[test]
-    fn outdated_skills_handles_missing_and_malformed_frontmatter() {
-        let root = unique_temp_file("criv-outdated-skills", "root");
-        let root = root.parent().unwrap().join("skills-root");
-        fs::create_dir_all(&root).unwrap();
-
-        assert!(outdated_skills(&root).is_empty());
-
-        let template = &crate::init::templates::agent_skills()[0];
-        let path = root.join(template.path);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, "not frontmatter\n").unwrap();
-        assert_eq!(outdated_skills(&root), vec![template.path]);
-
-        fs::write(&path, "---\nmetadata: [not valid\n---\n").unwrap();
-        assert_eq!(outdated_skills(&root), vec![template.path]);
-
-        let _ = fs::remove_dir_all(root.parent().unwrap());
     }
 
     #[test]
