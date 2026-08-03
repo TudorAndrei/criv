@@ -639,6 +639,61 @@ fn query_subcommands_cover_docs_sources_and_governance() {
 }
 
 #[test]
+fn snapshot_and_docs_queries_do_not_touch_the_source_graph_cache() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    query_fixture(root);
+    let cache_path = root.join(".criv/source-graph.json");
+    let original_cache = fs::read(&cache_path).unwrap();
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn run() {\n    helper();\n}\n\nfn helper() {}\n\npub fn added() {}\n",
+    )
+    .unwrap();
+
+    let config_path = root.join("criv.toml");
+    let valid_config = fs::read_to_string(&config_path).unwrap();
+    fs::write(&config_path, "[source\n").unwrap();
+    criv(root)
+        .args(["query", "diff", "latest", "latest"])
+        .assert()
+        .success();
+    assert_eq!(fs::read(&cache_path).unwrap(), original_cache);
+    fs::write(&config_path, valid_config).unwrap();
+
+    let docs_queries = [
+        vec!["query", "next-adr-id"],
+        vec!["query", "cited-by", "ADR-0001"],
+        vec!["query", "orphan-docs"],
+        vec!["query", "nodes", "--kind", "doc"],
+        vec!["query", "nodes", "--kind", "decision"],
+    ];
+    for args in &docs_queries {
+        criv(root).args(args).assert().success();
+        assert_eq!(fs::read(&cache_path).unwrap(), original_cache, "{args:?}");
+    }
+
+    fs::remove_file(&cache_path).unwrap();
+    criv(root)
+        .args(["query", "diff", "latest", "latest"])
+        .assert()
+        .success();
+    assert!(!cache_path.exists());
+    for args in &docs_queries {
+        criv(root).args(args).assert().success();
+        assert!(!cache_path.exists(), "{args:?}");
+    }
+
+    criv(root)
+        .args(["query", "attack-surface"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/lib.rs#fn:added"));
+    assert!(cache_path.exists());
+    assert_ne!(fs::read(cache_path).unwrap(), original_cache);
+}
+
+#[test]
 fn query_usage_errors_are_reported() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

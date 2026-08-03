@@ -165,13 +165,26 @@ pub(crate) enum SourceTargetResolution {
 impl Vault {
     pub(crate) fn load(root: &Path) -> Result<Self> {
         let cached = crate::source_graph::load_cached(root);
-        Self::load_incremental_with_source_index(root, cached.as_ref(), None)
+        Self::load_with_source_facilities(root, cached.as_ref(), None, true)
+    }
+
+    pub(crate) fn load_docs_only(root: &Path) -> Result<Self> {
+        Self::load_with_source_facilities(root, None, None, false)
     }
 
     pub(crate) fn load_incremental_with_source_index(
         root: &Path,
         previous_graph: Option<&SourceGraphBuild>,
         shared_source_index: Option<Arc<dyn SourceIndex>>,
+    ) -> Result<Self> {
+        Self::load_with_source_facilities(root, previous_graph, shared_source_index, true)
+    }
+
+    fn load_with_source_facilities(
+        root: &Path,
+        previous_graph: Option<&SourceGraphBuild>,
+        shared_source_index: Option<Arc<dyn SourceIndex>>,
+        load_sources: bool,
     ) -> Result<Self> {
         let config = Config::load(root)?;
         let docs_path = config.docs_path(root);
@@ -205,7 +218,7 @@ impl Vault {
             Vec<String>,
             Arc<dyn SourceIndex>,
             SourceGraphBuild,
-        ) = if config.source_index {
+        ) = if load_sources && config.source_index {
             let source_index: Arc<dyn SourceIndex> = match shared_source_index {
                 Some(source_index) => source_index,
                 None => Arc::new(FffSourceIndex::new(

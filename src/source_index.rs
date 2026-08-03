@@ -24,8 +24,8 @@ const SCAN_TIMEOUT: Duration = Duration::from_secs(30);
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub(crate) struct WorkCounts {
-    catalog_traversals: usize,
-    source_enumerations: usize,
+    pub(crate) catalog_traversals: usize,
+    pub(crate) source_enumerations: usize,
 }
 
 #[cfg(test)]

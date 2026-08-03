@@ -61,6 +61,42 @@ enum QueryCommand {
     Diff(DiffOptions),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueryCapability {
+    Snapshot,
+    Docs,
+    Sources,
+}
+
+impl QueryCommand {
+    fn capability(&self) -> QueryCapability {
+        match self {
+            Self::Diff(_) => QueryCapability::Snapshot,
+            Self::NextAdrId(_)
+            | Self::CitedBy(_)
+            | Self::OrphanDocs(_)
+            | Self::C4Relationships(_) => QueryCapability::Docs,
+            Self::Nodes(options)
+                if matches!(options.kind, Some(NodeKind::Doc | NodeKind::Decision)) =>
+            {
+                QueryCapability::Docs
+            }
+            Self::Callers(_)
+            | Self::Callees(_)
+            | Self::AttackSurface(_)
+            | Self::Targets(_)
+            | Self::Cites(_)
+            | Self::References(_)
+            | Self::Governs(_)
+            | Self::Governing(_)
+            | Self::Coverage(_)
+            | Self::Nodes(_)
+            | Self::C4Elements(_)
+            | Self::C4Code(_) => QueryCapability::Sources,
+        }
+    }
+}
+
 #[derive(Debug, ClapArgs)]
 struct OutputOptions {
     /// Select text rows or a JSON array of rows.
@@ -145,7 +181,12 @@ struct DiffOptions {
 }
 
 pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
-    let vault = Vault::load(root)?;
+    if let QueryCommand::Diff(options) = &options.command {
+        let rows = diff(root, &options.ref_a, &options.ref_b)?;
+        return print_rows(&rows, options.output.format);
+    }
+
+    let vault = load_query_vault(root, &options.command)?;
     let (rows, format) = match options.command {
         QueryCommand::NextAdrId(output) => (vec![next_adr_id(&vault)], output.format),
         QueryCommand::Callers(options) => {
@@ -204,13 +245,20 @@ pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
             c4_code::for_glob(&vault, &options.path_glob),
             options.output.format,
         ),
-        QueryCommand::Diff(options) => {
-            let rows = diff(root, &options.ref_a, &options.ref_b)?;
-            (rows, options.output.format)
-        }
+        QueryCommand::Diff(_) => unreachable!("snapshot queries return before vault loading"),
     };
 
     print_rows(&rows, format)
+}
+
+fn load_query_vault(root: &Path, command: &QueryCommand) -> Result<Vault> {
+    match command.capability() {
+        QueryCapability::Docs => Vault::load_docs_only(root),
+        QueryCapability::Sources => Vault::load(root),
+        QueryCapability::Snapshot => {
+            unreachable!("snapshot queries do not construct a vault")
+        }
+    }
 }
 
 fn next_adr_id(vault: &Vault) -> String {
@@ -649,6 +697,159 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
+    fn every_query_variant_declares_its_data_capability() {
+        let cases = vec![
+            (
+                QueryCommand::NextAdrId(query_output_options()),
+                QueryCapability::Docs,
+            ),
+            (
+                QueryCommand::Callers(query_symbol_options()),
+                QueryCapability::Sources,
+            ),
+            (
+                QueryCommand::Callees(query_symbol_options()),
+                QueryCapability::Sources,
+            ),
+            (
+                QueryCommand::AttackSurface(query_output_options()),
+                QueryCapability::Sources,
+            ),
+            (
+                QueryCommand::Targets(query_note_options()),
+                QueryCapability::Sources,
+            ),
+            (
+                QueryCommand::Cites(query_note_options()),
+                QueryCapability::Sources,
+            ),
+            (
+                QueryCommand::CitedBy(query_note_options()),
+                QueryCapability::Docs,
+            ),
+            (
+                QueryCommand::OrphanDocs(query_output_options()),
+                QueryCapability::Docs,
+            ),
+            (
+                QueryCommand::References(query_symbol_options()),
+                QueryCapability::Sources,
+            ),
+            (
+                QueryCommand::Governs(query_decision_options()),
+                QueryCapability::Sources,
+            ),
+            (
+                QueryCommand::Governing(query_symbol_options()),
+                QueryCapability::Sources,
+            ),
+            (
+                QueryCommand::Coverage(CoverageOptions {
+                    by: None,
+                    output: query_output_options(),
+                }),
+                QueryCapability::Sources,
+            ),
+            (
+                query_nodes_command(Some(NodeKind::Doc), false),
+                QueryCapability::Docs,
+            ),
+            (
+                query_nodes_command(Some(NodeKind::Doc), true),
+                QueryCapability::Docs,
+            ),
+            (
+                query_nodes_command(Some(NodeKind::Decision), false),
+                QueryCapability::Docs,
+            ),
+            (
+                query_nodes_command(Some(NodeKind::Code), false),
+                QueryCapability::Sources,
+            ),
+            (query_nodes_command(None, false), QueryCapability::Sources),
+            (
+                QueryCommand::C4Elements(query_note_options()),
+                QueryCapability::Sources,
+            ),
+            (
+                QueryCommand::C4Relationships(query_note_options()),
+                QueryCapability::Docs,
+            ),
+            (
+                QueryCommand::C4Code(PathGlobOptions {
+                    path_glob: "src/**".into(),
+                    output: query_output_options(),
+                }),
+                QueryCapability::Sources,
+            ),
+            (
+                QueryCommand::Diff(DiffOptions {
+                    ref_a: "latest".into(),
+                    ref_b: "latest".into(),
+                    output: query_output_options(),
+                }),
+                QueryCapability::Snapshot,
+            ),
+        ];
+
+        for (command, expected) in cases {
+            assert_eq!(command.capability(), expected, "{command:?}");
+        }
+    }
+
+    #[test]
+    fn docs_query_loading_performs_no_source_work() {
+        let temp = TempDir::new().unwrap();
+        write_query_fixture(temp.path());
+        let commands = [
+            QueryCommand::NextAdrId(query_output_options()),
+            QueryCommand::CitedBy(query_note_options()),
+            QueryCommand::OrphanDocs(query_output_options()),
+            query_nodes_command(Some(NodeKind::Doc), false),
+            query_nodes_command(Some(NodeKind::Decision), false),
+            QueryCommand::C4Relationships(query_note_options()),
+        ];
+
+        crate::source_index::reset_work_counts();
+        crate::source_graph::reset_work_counts();
+        for command in &commands {
+            let vault = load_query_vault(temp.path(), command).unwrap();
+            assert!(vault.source_files().is_empty());
+            assert!(vault.source_graph().files.is_empty());
+        }
+
+        let source_index = crate::source_index::work_counts();
+        assert_eq!(source_index.catalog_traversals, 0);
+        assert_eq!(source_index.source_enumerations, 0);
+        let source_graph = crate::source_graph::work_counts();
+        assert_eq!(source_graph.cache_loads, 0);
+        assert_eq!(source_graph.parsed_files, 0);
+        assert_eq!(source_graph.reused_files, 0);
+        assert_eq!(source_graph.cache_publications, 0);
+        assert!(!temp.path().join(".criv/source-graph.json").exists());
+    }
+
+    #[test]
+    fn source_query_loading_retains_full_vault_work() {
+        let temp = TempDir::new().unwrap();
+        write_query_fixture(temp.path());
+        let command = QueryCommand::AttackSurface(query_output_options());
+
+        crate::source_index::reset_work_counts();
+        crate::source_graph::reset_work_counts();
+        let vault = load_query_vault(temp.path(), &command).unwrap();
+
+        assert_eq!(vault.source_files().len(), 2);
+        assert_eq!(crate::source_index::work_counts().catalog_traversals, 1);
+        assert_eq!(crate::source_index::work_counts().source_enumerations, 1);
+        let source_graph = crate::source_graph::work_counts();
+        assert_eq!(source_graph.cache_loads, 1);
+        assert_eq!(source_graph.parsed_files, 2);
+        assert_eq!(source_graph.cache_publications, 1);
+        assert!(temp.path().join(".criv/source-graph.json").exists());
+    }
+
+    #[test]
     fn c4_elements_lists_resolution_status() {
         let temp = TempDir::new().unwrap();
         write_query_fixture(temp.path());
@@ -692,6 +893,41 @@ mod tests {
         assert!(!is_snapshot_hash("../../etc/passwd"));
         assert!(!is_snapshot_hash("HEAD~1"));
         assert!(!is_snapshot_hash(""));
+    }
+
+    fn query_output_options() -> OutputOptions {
+        OutputOptions {
+            format: Format::Text,
+        }
+    }
+
+    fn query_symbol_options() -> SymbolOptions {
+        SymbolOptions {
+            symbol: "src/lib.rs#fn:run".into(),
+            output: query_output_options(),
+        }
+    }
+
+    fn query_note_options() -> NoteOptions {
+        NoteOptions {
+            note_id: "c4".into(),
+            output: query_output_options(),
+        }
+    }
+
+    fn query_decision_options() -> DecisionOptions {
+        DecisionOptions {
+            adr_id: "ADR-0001".into(),
+            output: query_output_options(),
+        }
+    }
+
+    fn query_nodes_command(kind: Option<NodeKind>, without_docs: bool) -> QueryCommand {
+        QueryCommand::Nodes(NodesOptions {
+            kind,
+            without_docs,
+            output: query_output_options(),
+        })
     }
 
     fn write_query_fixture(root: &Path) {

@@ -18,6 +18,7 @@ const GRAPH_CACHE_SCHEMA: &str = "criv.source-graph/2";
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub(crate) struct WorkCounts {
+    pub(crate) cache_loads: usize,
     source_reads: usize,
     pub(crate) parsed_files: usize,
     pub(crate) reused_files: usize,
@@ -29,6 +30,7 @@ pub(crate) struct WorkCounts {
 #[cfg(test)]
 thread_local! {
     static WORK_COUNTS: Cell<WorkCounts> = const { Cell::new(WorkCounts {
+        cache_loads: 0,
         source_reads: 0,
         parsed_files: 0,
         reused_files: 0,
@@ -258,6 +260,9 @@ impl SourceGraphBuild {
 }
 
 pub(crate) fn load_cached(root: &Path) -> Option<SourceGraphBuild> {
+    #[cfg(test)]
+    record_work(|counts| counts.cache_loads += 1);
+
     let path = graph_cache_path(root);
     let contents = fs::read_to_string(path).ok()?;
     let cache = serde_json::from_str::<GraphCacheFile>(&contents).ok()?;
