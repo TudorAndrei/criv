@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, UNIX_EPOCH};
 
+#[cfg(test)]
+use std::{cell::Cell, thread_local};
+
 use fff_search::file_picker::FilePicker;
 use fff_search::{
     FFFMode, FilePickerOptions, FuzzySearchOptions, GrepSearchOptions, PaginationArgs, QueryParser,
@@ -17,6 +20,40 @@ use crate::util::{GlobMatcher, is_text_file};
 use crate::{CrivError, Result};
 
 const SCAN_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub(crate) struct WorkCounts {
+    pub(crate) catalog_traversals: usize,
+    pub(crate) source_enumerations: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    static WORK_COUNTS: Cell<WorkCounts> = const { Cell::new(WorkCounts {
+        catalog_traversals: 0,
+        source_enumerations: 0,
+    }) };
+}
+
+#[cfg(test)]
+fn record_work(update: impl FnOnce(&mut WorkCounts)) {
+    WORK_COUNTS.with(|counts| {
+        let mut next = counts.get();
+        update(&mut next);
+        counts.set(next);
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn reset_work_counts() {
+    WORK_COUNTS.with(|counts| counts.set(WorkCounts::default()));
+}
+
+#[cfg(test)]
+pub(crate) fn work_counts() -> WorkCounts {
+    WORK_COUNTS.with(Cell::get)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SourceGrepMode {
@@ -159,6 +196,9 @@ impl FffSourceIndex {
     }
 
     fn collect_source_files_now(&self) -> Result<Vec<String>> {
+        #[cfg(test)]
+        record_work(|counts| counts.source_enumerations += 1);
+
         let mut files = BTreeSet::new();
         for scoped in &self.pickers {
             files.extend(self.with_picker(scoped, |picker| {
@@ -423,6 +463,9 @@ impl SourceIndex for FffSourceIndex {
     }
 
     fn entries(&self) -> Result<Vec<IndexedSource>> {
+        #[cfg(test)]
+        record_work(|counts| counts.catalog_traversals += 1);
+
         let mut frecency_by_path = BTreeMap::new();
         for scoped in &self.pickers {
             frecency_by_path.extend(self.with_picker(scoped, |picker| {
@@ -566,6 +609,7 @@ mod tests {
             false,
         )
         .unwrap();
+        reset_work_counts();
 
         assert_eq!(index.scanned_roots(), vec![".github/workflows", "src"]);
         let entries = index
@@ -608,6 +652,14 @@ mod tests {
             .grep("[", SourceGrepMode::Regex, &[])
             .expect_err("invalid regex should fail");
         assert!(error.to_string().contains("invalid regex grep query"));
+        assert_eq!(
+            work_counts(),
+            WorkCounts {
+                catalog_traversals: 1,
+                source_enumerations: 1,
+            },
+            "the one-shot index should traverse the catalog once and reuse its enumeration"
+        );
     }
 
     #[test]

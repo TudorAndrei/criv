@@ -391,7 +391,8 @@ mod tests {
 
         let (vault, _) = rebuild(temp.path(), None, None).unwrap();
 
-        assert_eq!(state::work_counts(), (1, 1));
+        assert_eq!(state::work_counts().partitions_rebuilt, 1);
+        assert_eq!(state::work_counts().serializations, 1);
 
         assert!(vault.resolve_note("architecture-code").is_some());
         let state: Value = serde_json::from_str(

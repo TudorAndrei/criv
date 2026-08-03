@@ -2,6 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+#[cfg(test)]
+use std::{cell::Cell, thread_local};
+
 use serde::Deserialize;
 
 use crate::Result;
@@ -13,6 +16,38 @@ use crate::util::{
     markdown_headings as parse_markdown_headings, read_to_string, strip_prefix, walk_files,
 };
 use crate::{c4, c4_artifact};
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub(crate) struct WorkCounts {
+    pub(crate) source_target_resolutions: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    static WORK_COUNTS: Cell<WorkCounts> = const { Cell::new(WorkCounts {
+        source_target_resolutions: 0,
+    }) };
+}
+
+#[cfg(test)]
+fn record_work(update: impl FnOnce(&mut WorkCounts)) {
+    WORK_COUNTS.with(|counts| {
+        let mut next = counts.get();
+        update(&mut next);
+        counts.set(next);
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn reset_work_counts() {
+    WORK_COUNTS.with(|counts| counts.set(WorkCounts::default()));
+}
+
+#[cfg(test)]
+pub(crate) fn work_counts() -> WorkCounts {
+    WORK_COUNTS.with(Cell::get)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NoteKind {
@@ -297,6 +332,9 @@ impl Vault {
     }
 
     pub(crate) fn resolve_source_target(&self, target: &str) -> SourceTargetResolution {
+        #[cfg(test)]
+        record_work(|counts| counts.source_target_resolutions += 1);
+
         let target = source_target_body(target);
         let Some((path, ambiguous)) = self.resolve_source_path(source_fragment_path(target)) else {
             return SourceTargetResolution::MissingFile;
@@ -1156,6 +1194,15 @@ roots = ["src"]
 
         assert_eq!(vault.source_files(), expected);
         assert!(vault.source_graph().files.contains_key("src/lib.rs"));
+        reset_work_counts();
+        assert_eq!(
+            vault.resolve_source_target("src/lib.rs#run"),
+            SourceTargetResolution::Resolved {
+                path: "src/lib.rs".into(),
+                ambiguous: false,
+            }
+        );
+        assert_eq!(work_counts().source_target_resolutions, 1);
 
         let _ = std::fs::remove_dir_all(root);
     }

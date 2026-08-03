@@ -2,6 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
+#[cfg(test)]
+use std::{cell::Cell, thread_local};
+
 use serde::{Deserialize, Serialize};
 use tree_sitter::{Node, Parser};
 
@@ -11,6 +14,48 @@ use crate::{CrivError, Result};
 
 // Bump when parsed source graph semantics or serialized graph types change.
 const GRAPH_CACHE_SCHEMA: &str = "criv.source-graph/2";
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub(crate) struct WorkCounts {
+    pub(crate) source_reads: usize,
+    pub(crate) parsed_files: usize,
+    pub(crate) reused_files: usize,
+    pub(crate) cache_serializations: usize,
+    pub(crate) cache_publications: usize,
+    pub(crate) published_bytes: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    static WORK_COUNTS: Cell<WorkCounts> = const { Cell::new(WorkCounts {
+        source_reads: 0,
+        parsed_files: 0,
+        reused_files: 0,
+        cache_serializations: 0,
+        cache_publications: 0,
+        published_bytes: 0,
+    }) };
+}
+
+#[cfg(test)]
+fn record_work(update: impl FnOnce(&mut WorkCounts)) {
+    WORK_COUNTS.with(|counts| {
+        let mut next = counts.get();
+        update(&mut next);
+        counts.set(next);
+    });
+}
+
+#[cfg(test)]
+pub(crate) fn reset_work_counts() {
+    WORK_COUNTS.with(|counts| counts.set(WorkCounts::default()));
+}
+
+#[cfg(test)]
+pub(crate) fn work_counts() -> WorkCounts {
+    WORK_COUNTS.with(Cell::get)
+}
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct SourceGraph {
@@ -155,6 +200,8 @@ pub(crate) fn store_cached(root: &Path, graph: &SourceGraph) -> Result<()> {
         schema: GRAPH_CACHE_SCHEMA.to_string(),
         graph: graph.clone(),
     };
+    #[cfg(test)]
+    record_work(|counts| counts.cache_serializations += 1);
     let contents = serde_json::to_string_pretty(&cache)
         .map_err(|err| CrivError::new(format!("failed to serialize source graph cache: {err}")))?;
     let contents = format!("{contents}\n");
@@ -168,6 +215,11 @@ pub(crate) fn store_cached(root: &Path, graph: &SourceGraph) -> Result<()> {
         Path::new(".criv/source-graph.json"),
         &contents,
     )?;
+    #[cfg(test)]
+    record_work(|counts| {
+        counts.cache_publications += 1;
+        counts.published_bytes += contents.len();
+    });
     Ok(())
 }
 
@@ -258,6 +310,8 @@ impl SourceGraph {
     ) -> Result<Self> {
         let mut graph = Self::default();
         for source_file in source_files {
+            #[cfg(test)]
+            record_work(|counts| counts.source_reads += 1);
             let contents = read_source_to_string(root, source_file)?;
             let fingerprint = blake3::hash(contents.as_bytes()).to_hex().to_string();
             let reused = previous
@@ -266,8 +320,12 @@ impl SourceGraph {
                 })
                 .and_then(|previous| previous.files.get(source_file).cloned());
             let parsed = if let Some(parsed) = reused {
+                #[cfg(test)]
+                record_work(|counts| counts.reused_files += 1);
                 parsed
             } else {
+                #[cfg(test)]
+                record_work(|counts| counts.parsed_files += 1);
                 graph.changed_files.push(source_file.clone());
                 parse_source_file(source_file, &contents)
             };
@@ -1479,6 +1537,29 @@ mod tests {
 
         assert_eq!(fs::read_to_string(&path).unwrap(), before);
         assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+    }
+
+    #[test]
+    fn work_counts_distinguish_parse_reuse_and_cache_publication() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+        reset_work_counts();
+
+        let first = SourceGraph::build_incremental(root, &["src/lib.rs".into()], None).unwrap();
+        store_cached(root, &first).unwrap();
+        let second =
+            SourceGraph::build_incremental(root, &["src/lib.rs".into()], Some(&first)).unwrap();
+        store_cached(root, &second).unwrap();
+
+        let counts = work_counts();
+        assert_eq!(counts.source_reads, 2);
+        assert_eq!(counts.parsed_files, 1);
+        assert_eq!(counts.reused_files, 1);
+        assert_eq!(counts.cache_serializations, 2);
+        assert_eq!(counts.cache_publications, 1);
+        assert!(counts.published_bytes > 0);
     }
 
     #[test]
