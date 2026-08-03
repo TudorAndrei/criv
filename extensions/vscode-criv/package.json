@@ -148,7 +148,7 @@
     "format": "oxfmt --write src test scripts esbuild.config.mjs",
     "format:check": "oxfmt --check src test scripts esbuild.config.mjs",
     "lint": "oxlint src test scripts esbuild.config.mjs",
-    "package": "vsce package --out vscode-criv.vsix",
+    "package": "vsce package --no-dependencies --out vscode-criv.vsix",
     "test": "npm run build:wasm && npm run compile && npm run compile:unit-tests && node --test dist-test/unit/*.test.js",
     "test:integration": "npm run compile && npm run compile:integration-tests && node test/run-integration.mjs",
     "vscode:prepublish": "npm run build && npm run build:wasm",

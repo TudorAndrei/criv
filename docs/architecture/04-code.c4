@@ -372,6 +372,10 @@ model {
     technology 'TypeScript'
     link ../../extensions/vscode-criv/test/unit/configModel.test.ts 'source'
   }
+  m_73f74ff277cd06c3 = module 'extensions::vscode-criv::test::unit::packageBoundary.test' {
+    technology 'TypeScript'
+    link ../../extensions/vscode-criv/test/unit/packageBoundary.test.ts 'source'
+  }
   m_064efae6f20a0da2 = module 'extensions::vscode-criv::test::unit::sourceReferences.test' {
     technology 'TypeScript'
     link ../../extensions/vscode-criv/test/unit/sourceReferences.test.ts 'source'
@@ -566,6 +570,7 @@ views {
     include m_940bb387f9099a90
     include m_ab5092705a0bcdb6
     include m_03f1f4228e12dfea
+    include m_73f74ff277cd06c3
     include m_064efae6f20a0da2
     include m_21d2709ec94fd3d1
     include m_a7da69cac7aaf3f7
