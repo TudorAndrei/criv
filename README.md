@@ -16,6 +16,7 @@ state that other tools can read.
   references, and ADR supersession rules.
 - `criv watch --once` writes `.criv/state.json` and content-addressed local
   snapshots for downstream tools.
+- `criv state list|prune` inspects and bounds those ignored local snapshots.
 - `criv query ...` asks the graph about targets, citations (`cites`,
   `cited-by`), ADR governance (`governs`, `governing`), coverage, callers,
   callees, attack surface, C4 elements and relationships, focused C4 Code
@@ -175,6 +176,12 @@ annotation commands so diagnostics appear inline on a pull request.
 narrows the exit status as well as the output: `criv check --filter broken-link`
 exits zero when the only errors in the vault are of some other kind. Use it for
 focused local inspection, not as a gate.
+
+Local snapshots retain the latest 20 distinct state publications by default.
+Configure another positive bound with `[state] keep`, inspect snapshots with
+`criv state list`, and preview cleanup with `criv state prune --dry-run`. See
+[the local state reference](docs/state-reference.md) for the command and
+configuration contract.
 
 ADRs can enforce structural policy directly from their frontmatter:
 
