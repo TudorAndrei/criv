@@ -10,5 +10,8 @@ exclude = ["**/target/**", "**/node_modules/**"]
 source = true
 embeddings = false
 
+[state]
+keep = 20
+
 [enforce]
 stages = ["commit", "push", "ci"]

@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::source_graph::{Language, SymbolKind};
 use crate::structural;
-use crate::util::{write_atomic_if_changed_in, write_atomic_in};
+use crate::util::write_atomic_in;
 use crate::vault::{NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
 
@@ -492,23 +492,16 @@ impl State {
         Ok(())
     }
 
-    fn write_snapshot_serialized(
+    fn publish_snapshot(
         &self,
         root: &Path,
         serialized: &SerializedState,
+        keep: usize,
     ) -> Result<String> {
-        let snapshot = format!(".criv/snapshots/{}.json", serialized.hash);
-        write_atomic_if_changed_in(
-            root,
-            Path::new(".criv"),
-            Path::new(&snapshot),
-            &serialized.published,
-        )?;
-        let latest = format!("{}\n", serialized.hash);
-        write_atomic_in(root, Path::new(".criv"), Path::new(".criv/latest"), &latest)?;
+        crate::snapshots::publish(root, &serialized.hash, &serialized.published, keep)?;
         #[cfg(test)]
         record_work(|counts| {
-            counts.published_bytes += serialized.published.len() + latest.len();
+            counts.published_bytes += serialized.published.len() + serialized.hash.len() + 1;
         });
         Ok(serialized.hash.clone())
     }
@@ -518,7 +511,7 @@ pub(crate) fn write_state(root: &Path, vault: &Vault) -> Result<(String, State)>
     let state = State::build(root, vault)?;
     let serialized = state.serialize()?;
     state.write_serialized(root, &serialized)?;
-    let snapshot = state.write_snapshot_serialized(root, &serialized)?;
+    let snapshot = state.publish_snapshot(root, &serialized, vault.config.state_keep)?;
     Ok((snapshot, state))
 }
 
@@ -531,7 +524,7 @@ pub(crate) fn write_state_incremental(
     let state = State::build_incremental(root, vault, previous, changed_files)?;
     let serialized = state.serialize()?;
     state.write_serialized(root, &serialized)?;
-    let snapshot = state.write_snapshot_serialized(root, &serialized)?;
+    let snapshot = state.publish_snapshot(root, &serialized, vault.config.state_keep)?;
     Ok((snapshot, state))
 }
 

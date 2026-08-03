@@ -14,6 +14,7 @@ pub(crate) struct Config {
     pub(crate) source_exclude: Vec<String>,
     pub(crate) source_index: bool,
     pub(crate) embeddings: bool,
+    pub(crate) state_keep: usize,
     pub(crate) architecture_code: Option<ArchitectureCodeConfig>,
     pub(crate) enforce_stages: Vec<String>,
     pub(crate) import_policies: Vec<ImportPolicy>,
@@ -42,6 +43,7 @@ impl Default for Config {
             source_exclude: vec!["**/target/**".into(), "**/node_modules/**".into()],
             source_index: true,
             embeddings: false,
+            state_keep: 20,
             architecture_code: None,
             enforce_stages: vec!["commit".into(), "push".into(), "ci".into()],
             import_policies: Vec::new(),
@@ -78,6 +80,7 @@ struct RawConfig {
     vault: RawVault,
     source: RawSource,
     index: RawIndex,
+    state: RawState,
     architecture: RawArchitecture,
     enforce: RawEnforce,
     patterns: BTreeMap<String, toml::Value>,
@@ -105,6 +108,7 @@ impl RawConfig {
             source_exclude: self.source.exclude.unwrap_or(defaults.source_exclude),
             source_index: self.index.source.unwrap_or(defaults.source_index),
             embeddings: self.index.embeddings.unwrap_or(defaults.embeddings),
+            state_keep: positive_state_keep(self.state.keep.unwrap_or(defaults.state_keep))?,
             architecture_code: self
                 .architecture
                 .code
@@ -174,6 +178,19 @@ struct RawSource {
 struct RawIndex {
     source: Option<bool>,
     embeddings: Option<bool>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RawState {
+    keep: Option<usize>,
+}
+
+fn positive_state_keep(keep: usize) -> Result<usize> {
+    if keep == 0 {
+        return Err(CrivError::new("state.keep must be a positive integer"));
+    }
+    Ok(keep)
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -356,6 +373,28 @@ plugin = false
         assert_eq!(config.source_roots, vec!["src"]);
         assert!(!config.source_index);
         assert!(config.embeddings);
+    }
+
+    #[test]
+    fn parses_state_retention_and_defaults_to_twenty() {
+        assert_eq!(Config::parse(None).unwrap().state_keep, 20);
+        assert_eq!(
+            Config::parse(Some("[state]\nkeep = 7\n"))
+                .unwrap()
+                .state_keep,
+            7
+        );
+    }
+
+    #[test]
+    fn rejects_zero_and_malformed_state_retention() {
+        let zero = Config::parse(Some("[state]\nkeep = 0\n")).unwrap_err();
+        assert!(zero.to_string().contains("state.keep"));
+        assert!(zero.to_string().contains("positive integer"));
+
+        let malformed = Config::parse(Some("[state]\nkeep = \"many\"\n")).unwrap_err();
+        assert!(malformed.to_string().contains("failed to parse criv.toml"));
+        assert!(malformed.to_string().contains("keep"));
     }
 
     #[test]

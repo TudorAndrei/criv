@@ -240,6 +240,7 @@ struct DefaultConfig {
     vault: VaultConfig,
     source: SourceConfig,
     index: IndexConfig,
+    state: StateConfig,
     enforce: EnforceConfig,
 }
 
@@ -259,6 +260,7 @@ impl Default for DefaultConfig {
                 source: true,
                 embeddings: false,
             },
+            state: StateConfig { keep: 20 },
             enforce: EnforceConfig {
                 stages: vec!["commit", "push", "ci"],
             },
@@ -285,6 +287,12 @@ struct SourceConfig {
 struct IndexConfig {
     source: bool,
     embeddings: bool,
+}
+
+#[cfg(test)]
+#[derive(Debug, Serialize)]
+struct StateConfig {
+    keep: usize,
 }
 
 #[cfg(test)]

@@ -1,5 +1,4 @@
 use std::collections::BTreeSet;
-use std::fs;
 use std::path::Path;
 
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
@@ -608,19 +607,13 @@ fn diff(root: &Path, left: &str, right: &str) -> Result<Vec<String>> {
 }
 
 fn load_snapshot(root: &Path, id: &str) -> Result<serde_json::Value> {
-    let hash = if id == "latest" {
-        fs::read_to_string(root.join(".criv/latest"))?
-            .trim()
-            .to_string()
+    let local = if id == "latest" || is_snapshot_hash(id) {
+        crate::snapshots::load(root, id)?
     } else {
-        id.to_string()
+        None
     };
-    let path = is_snapshot_hash(&hash)
-        .then(|| root.join(".criv/snapshots").join(format!("{hash}.json")))
-        .filter(|path| path.exists());
-    let contents = if let Some(path) = path {
-        fs::read_to_string(&path)
-            .map_err(|err| CrivError::new(format!("failed to read snapshot `{hash}`: {err}")))?
+    let contents = if let Some(contents) = local {
+        contents
     } else {
         load_git_state(root, id)?
     };
@@ -693,6 +686,8 @@ fn print_rows(rows: &[String], format: Format) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
     use tempfile::TempDir;
 

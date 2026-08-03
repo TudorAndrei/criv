@@ -1033,6 +1033,102 @@ fn query_diff_compares_snapshots_and_reports_errors() {
 }
 
 #[test]
+fn state_commands_bound_snapshots_and_preserve_git_ref_diffing() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    query_fixture(root);
+    let original_hash = fs::read_to_string(root.join(".criv/latest"))
+        .unwrap()
+        .trim()
+        .to_string();
+
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    git(root, &["add", "-f", ".criv/state.json"]);
+    git(root, &["commit", "-m", "record durable state"]);
+
+    let mut config = fs::read_to_string(root.join("criv.toml")).unwrap();
+    config.push_str("\n[state]\nkeep = 2\n");
+    fs::write(root.join("criv.toml"), config).unwrap();
+    for source in [
+        "pub fn run() {}\npub fn second() {}\n",
+        "pub fn run() {}\npub fn third() {}\n",
+    ] {
+        fs::write(root.join("src/lib.rs"), source).unwrap();
+        criv(root).args(["watch", "--once"]).assert().success();
+    }
+
+    let listed = criv(root)
+        .args(["state", "list", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let listed: Vec<serde_json::Value> = serde_json::from_slice(&listed).unwrap();
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0]["position"], 1);
+    assert_eq!(listed[0]["latest"], true);
+    assert!(listed.iter().all(|record| record["hash"] != original_hash));
+
+    let preview = criv(root)
+        .args([
+            "state",
+            "prune",
+            "--keep",
+            "1",
+            "--dry-run",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let preview: serde_json::Value = serde_json::from_slice(&preview).unwrap();
+    assert_eq!(preview["removed"].as_array().unwrap().len(), 1);
+    assert_eq!(preview["dry_run"], true);
+    criv(root)
+        .args(["state", "list", "--format", "json"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"position\":2"));
+
+    criv(root)
+        .args(["state", "prune", "--keep", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("removed=1"))
+        .stdout(predicate::str::contains("retained=1"));
+    let after = criv(root)
+        .args(["state", "list", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(
+        serde_json::from_slice::<Vec<serde_json::Value>>(&after)
+            .unwrap()
+            .len(),
+        1
+    );
+
+    criv(root)
+        .args(["query", "diff", "HEAD", "HEAD"])
+        .assert()
+        .success();
+    criv(root)
+        .args(["state", "prune", "--keep", "0"])
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("invalid value '0'"));
+}
+
+#[test]
 fn query_diff_reads_state_from_a_git_ref() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

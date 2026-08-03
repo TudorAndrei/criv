@@ -12,6 +12,7 @@ mod policy_scan;
 mod query;
 mod refresh;
 mod search;
+mod snapshots;
 mod source_graph;
 mod source_index;
 mod source_paths;
@@ -74,6 +75,7 @@ enum Command {
     Check(check::CheckOptions),
     Query(query::QueryOptions),
     Search(search::SearchOptions),
+    State(snapshots::StateOptions),
     Watch(watch::WatchOptions),
     Enforce(enforce::EnforceOptions),
 }
@@ -116,6 +118,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
         Some(Command::Check(options)) => check::run(&cwd, options),
         Some(Command::Query(options)) => query::run(&cwd, options),
         Some(Command::Search(options)) => search::run(&cwd, options),
+        Some(Command::State(options)) => snapshots::run(&cwd, options),
         Some(Command::Watch(options)) => watch::run(&cwd, options),
         Some(Command::Enforce(options)) => enforce::run(&cwd, options),
     }
@@ -265,6 +268,9 @@ mod tests {
         assert!(spec.contains("flag --usage hide=#true"));
         assert!(spec.contains("cmd check"));
         assert!(spec.contains("cmd query"));
+        assert!(spec.contains("cmd state"));
+        assert!(spec.contains("cmd list"));
+        assert!(spec.contains("cmd prune"));
         assert!(spec.contains("cmd enforce"));
         assert!(spec.contains("cmd search"));
         assert!(spec.contains("flag --pattern-id"));

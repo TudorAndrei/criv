@@ -38,6 +38,9 @@ exclude = [
 source = true
 embeddings = false
 
+[state]
+keep = 20
+
 [architecture.code]
 output = "docs/architecture/04-code.c4"
 title = "Code diagram for criv"
