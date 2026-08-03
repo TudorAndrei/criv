@@ -320,6 +320,29 @@ or coordinator serializes this loop; criv does not reserve IDs, push, or merge.
 `criv query next-adr-id` remains checkout-local and is not an allocation
 authority.
 
+## Reconciling ADR source governance
+
+An exact source rename does not change an ADR's meaning, but its `governs:`
+path still needs to follow the file. After committing the source rename, inspect
+the repair against the integration target:
+
+```sh
+criv adr reconcile-sources --base origin/main --check
+```
+
+If a repair is required, run the command without `--check`. It accepts only
+one-to-one Git-proven renames, rewrites exact `governs:` path scalars, validates
+the vault, and creates a dedicated
+`docs(adr): reconcile renamed source scopes` commit. It does not infer directory
+moves, rewrite broad globs, or update other source-reference forms.
+
+Deletion is not a rename and cannot be reconciled mechanically. Add a new
+accepted ADR that explains the removal and lists the former decision in
+`supersedes:`. Until that successor is accepted, `criv check` and State refresh
+fail for the unresolved active scope. An accepted successor makes the former
+ADR historical and deactivates its policies; criv never writes that decision
+for you.
+
 Generate a Usage spec for completions, Markdown, or manpages:
 
 ```sh

@@ -76,3 +76,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0070-publish-push-performance-evidence-as-git-notes|ADR-0070]] - Publish push performance evidence as Git notes
 - [[0071-make-wasm-editor-projections-canonical|ADR-0071]] - Make Wasm editor projections canonical
 - [[0072-keep-performance-observation-outside-core|ADR-0072]] - Keep performance observation outside core
+- [[0073-effective-adr-governance-and-source-reconciliation|ADR-0073]] - Effective ADR governance and source reconciliation
