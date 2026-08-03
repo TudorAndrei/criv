@@ -1,95 +1,78 @@
 ---
 name: c4-authoring
-description: Use when authoring or reviewing criv C4 architecture artifacts, including Mermaid C4 blocks, standalone .c4 files, source anchors, and implementation drift expectations.
+description: LikeC4 architecture authoring and review for criv vaults. Use for .c4 models, named views, source links, generated module views, or architecture drift.
 metadata:
-  criv-template: blake3:0e8c167dd42491e5
+  criv-template: blake3:bb287f998ac3dfee
 ---
 
 # C4 authoring
 
-Use this skill when creating or reviewing C4 architecture artifacts for a criv
-vault.
+Treat `docs/architecture/` as one LikeC4 workspace. LikeC4 DSL is the only
+architecture source and LikeC4 is the renderer.
 
-## Source Of Truth
+## 1. Set the model boundary
 
-C4 artifacts are text/code first. An LLM should generate text, a human should
-review the text, and `criv check` should validate it before implementation work
-depends on it. Rendered diagrams in Obsidian, VS Code, Mermaid, Merman, or other
-viewers are projections over the source text.
+Read the existing workspace and choose one C4 level for the change:
 
-Standalone `.c4` files are a filetype convention, not a custom DSL. The file
-contains Mermaid C4 or DOT directly.
+- System Context: people, the system in scope, and external systems
+- Container: deployable or runnable parts in one software system
+- Component: major responsibilities in one container
+- Code: language modules and import relations
 
-## Levels
+Add each architectural element to the model once. Use named views to answer
+separate review questions.
 
-Keep each diagram at one C4 level:
+This step is complete when each changed element has one stable model identity
+and each planned view has one stated level and question.
 
-- System Context: people, the system in scope, and external systems.
-- Container: deployable or runnable parts inside one software system.
-- Component: major responsibilities inside one container.
-- Code: code elements that implement one component or a generated source graph.
+## 2. Author focused views
 
-Use Code diagrams sparingly for focused implementation stories. Do not turn a
-whole application into a hand-authored class diagram unless the artifact is an
-explicit generated source graph.
+Give elements readable names and short responsibilities. Give relations labels
+with meaningful verbs. Select shared model elements with LikeC4 view rules
+instead of copying model declarations.
 
-## .c4 Files
+Use a LikeC4 link titled `source` when an element maps to code:
 
-Infer format from the first meaningful non-comment line:
+```likec4
+model {
+  validator = component 'LikeC4 validator' {
+    link ../../src/likec4.rs 'source'
+  }
+}
+```
 
-- `C4Context`, `C4Container`, or `C4Component` means Mermaid C4.
-- `digraph`, `graph`, `strict digraph`, or `strict graph` means DOT.
+Resolve the path from `docs/architecture/`. Use a criv file, line, symbol, or
+pattern selector. Prefer a stable module or public interface.
 
-Use filename-derived levels:
+This step is complete when every view is readable on its own and every element
+that claims an implementation boundary has one resolvable source link.
 
-- `context.c4` or `01-context.c4`
-- `container.c4` or `02-container.c4`
-- `component.c4`, `components.c4`, or `03-components.c4`
-- `code.c4` or `04-code.c4`
+## 3. Keep Code architecture at module level
 
-Do not add extra required metadata lines for information that the file already
-communicates. `criv:format` is optional and only asserts the inferred format.
+Use language-native identities:
 
-## Mermaid C4 Rules
+- Rust crates and `mod` declarations
+- TypeScript and JavaScript modules and namespaces
+- Python modules and packages
+- Go packages
 
-Every element should have:
+Files and symbols are source detail. Module identities and import relations are
+the Code architecture. `criv watch --once` owns
+`docs/architecture/04-code.c4`; change source boundaries or generator behavior
+when that file must change.
 
-- a stable alias;
-- a readable name;
-- a short responsibility;
-- technology when the level is Container or Component and the technology is
-  known.
+This step is complete when every Code node is a language module and each view is
+focused by language or another bounded module concern.
 
-Every relationship should have a label with a meaningful verb. Prefer small,
-readable diagrams over large mixed-abstraction canvases.
+## 4. Validate the workspace
 
-## Source Anchors
+Run `criv watch --once`, then `criv check`. Inspect LikeC4 model errors,
+source-link errors, and the named views in the editor.
 
-Use `criv:source` anchors when an element maps to implementation.
+The hard cutover has one guardrail: replace Mermaid C4 and DOT artifacts with
+LikeC4 source in the same change. Compatibility readers, alternate renderers,
+and migration helpers are outside the architecture.
 
-Prefer stable interface-bearing anchors:
-
-- public or exported functions and methods;
-- structs, enums, classes, and interfaces;
-- modules, components, or files that represent a real architectural boundary.
-
-Avoid anchoring high-level C4 elements to private helper internals unless the
-diagram is a narrow Code-level view. Body-only refactors should not require a
-C4 update when the interface is unchanged, but input, output, field, variant, or
-exported member changes should trigger a diagram review.
-
-## Review Checklist
-
-Before finishing:
-
-- The title states the diagram level and scope.
-- The diagram uses one abstraction level.
-- Elements have names and responsibilities.
-- Relationships are directional and labelled.
-- Source anchors point at real implementation symbols when the diagram claims to
-  describe existing code.
-- The artifact remains useful as text without opening a visual renderer.
-
-Inspect existing diagrams with `criv query c4-elements <note-id>` and `criv
-query c4-relationships <note-id>`. Generate a focused code diagram with `criv
-query c4-code <path-glob>` when it would clarify an implementation boundary.
+The work is complete when the generated model is current, the full workspace
+passes `criv check`, all source links resolve, and every changed named view
+renders the intended boundary.

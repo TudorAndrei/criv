@@ -212,12 +212,21 @@ impl RawArchitectureCode {
             "architecture.code.output",
             &self
                 .output
-                .unwrap_or_else(|| format!("{docs_dir}/architecture/04-code.md")),
+                .unwrap_or_else(|| format!("{docs_dir}/architecture/04-code.c4")),
         )?;
         if !Path::new(&output).starts_with(Path::new(docs_dir)) {
             return Err(CrivError::new(format!(
                 "architecture.code.output must be inside vault.docs ({docs_dir})"
             )));
+        }
+        if Path::new(&output)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            != Some("c4")
+        {
+            return Err(CrivError::new(
+                "architecture.code.output must use the .c4 extension",
+            ));
         }
         Ok(ArchitectureCodeConfig {
             output,
@@ -422,7 +431,7 @@ pattern = "println!($$$ARGS)"
         let raw = toml::from_str::<RawConfig>(
             r#"
 [architecture.code]
-output = "docs/architecture/04-code.md"
+output = "docs/architecture/04-code.c4"
 title = "Code diagram for criv"
 "#,
         )
@@ -432,7 +441,7 @@ title = "Code diagram for criv"
         assert_eq!(
             config.architecture_code,
             Some(ArchitectureCodeConfig {
-                output: "docs/architecture/04-code.md".into(),
+                output: "docs/architecture/04-code.c4".into(),
                 title: "Code diagram for criv".into(),
             })
         );

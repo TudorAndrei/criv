@@ -11,7 +11,7 @@ import {
 } from "../../src/stateModel";
 
 const stateContractRaw = readFileSync(
-  resolve(__dirname, "../../../../fixtures/state/criv.state.v0.json"),
+  resolve(__dirname, "../../../../fixtures/state/criv.state.v1.json"),
   "utf8",
 );
 const stateContract = JSON.parse(stateContractRaw) as CrivStateEnvelope;
@@ -33,7 +33,7 @@ test("builds host state from a canonical validated projection", () => {
     stateContractRaw,
     stateContract,
     {
-      schema: "criv.state.v0",
+      schema: "criv.state.v1",
       node_count: 6,
       edge_count: 5,
       source_count: 1,
@@ -47,7 +47,7 @@ test("builds host state from a canonical validated projection", () => {
 
 test("reads registered patterns from explicit state field", () => {
   const envelope: CrivStateEnvelope = {
-    schema: "criv.state.v0",
+    schema: "criv.state.v1",
     "registered-patterns": ["adr/source-selector", "code/entrypoint"],
   };
   assert.deepEqual(registeredPatterns(envelope), ["adr/source-selector", "code/entrypoint"]);
@@ -87,7 +87,7 @@ test("collects c4 artifacts from source entries and graph nodes", () => {
 
 test("builds a loaded state snapshot from parsed state and wasm projections", () => {
   const raw = JSON.stringify({
-    schema: "criv.state.v0",
+    schema: "criv.state.v1",
     "registered-patterns": ["adr/source-selector"],
   });
   const envelope = JSON.parse(raw) as CrivStateEnvelope;
@@ -96,7 +96,7 @@ test("builds a loaded state snapshot from parsed state and wasm projections", ()
     raw,
     envelope,
     {
-      schema: "criv.state.v0",
+      schema: "criv.state.v1",
       node_count: 1,
       edge_count: 0,
       source_count: 1,

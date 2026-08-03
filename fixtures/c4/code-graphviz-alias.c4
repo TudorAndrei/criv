@@ -1,4 +1,0 @@
-// criv:format graphviz
-digraph G {
-  a -> b;
-}

@@ -1,5 +1,0 @@
-// criv:format mermaid
-// criv:format dot
-digraph G {
-  a -> b;
-}

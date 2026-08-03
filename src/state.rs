@@ -7,18 +7,20 @@ use std::{cell::Cell, thread_local};
 
 use serde::Serialize;
 
-use crate::c4_artifact::C4Artifact;
+use crate::c4::C4Artifact;
 use crate::source_graph::{Language, SourceFile, SymbolKind};
 use crate::structural;
 use crate::util::write_atomic_in;
 use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
 
-const STATE_SCHEMA: &str = "criv.state.v0";
+const STATE_SCHEMA: &str = "criv.state.v1";
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct State {
     schema: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    architecture: Option<LikeC4ArchitectureState>,
     graph: Graph,
     #[serde(rename = "registered-patterns")]
     registered_patterns: Vec<String>,
@@ -27,6 +29,16 @@ pub(crate) struct State {
     source_index: Vec<SourceIndexEntry>,
     #[serde(skip)]
     partitions: StatePartitions,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LikeC4ArchitectureState {
+    protocol_version: u32,
+    likec4_version: String,
+    revision: u64,
+    workspace: String,
+    model: serde_json::Value,
 }
 
 struct SerializedState {
@@ -212,10 +224,11 @@ enum PartitionKind {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct C4InterfaceHashRecord {
+pub(crate) struct ArchitectureInterfaceHashRecord {
     pub(crate) id: String,
     pub(crate) hash: String,
     pub(crate) path: String,
+    pub(crate) source_path: String,
     pub(crate) line: usize,
     pub(crate) target: String,
 }
@@ -232,13 +245,29 @@ impl State {
         changed_files: &[String],
     ) -> Result<Self> {
         let partitions = StatePartitions::build(root, vault, previous, changed_files)?;
-        Ok(Self::from_partitions(partitions))
+        let mut state = Self::from_partitions(partitions);
+        state.architecture = vault.likec4_workspace.model.clone().map(|model| {
+            add_likec4_model_to_graph(&mut state.graph, vault, &model);
+            LikeC4ArchitectureState {
+                protocol_version: 1,
+                likec4_version: vault
+                    .likec4_workspace
+                    .version
+                    .clone()
+                    .unwrap_or_else(|| "1.59.2".into()),
+                revision: 0,
+                workspace: vault.likec4_workspace.path.clone(),
+                model,
+            }
+        });
+        Ok(state)
     }
 
     fn from_partitions(partitions: StatePartitions) -> Self {
         let (graph, patterns, source_index) = partitions.flatten();
         Self {
             schema: STATE_SCHEMA,
+            architecture: None,
             graph,
             registered_patterns: patterns.keys().cloned().collect(),
             patterns,
@@ -504,7 +533,7 @@ impl StatePartitions {
                 .cloned()
                 .unwrap_or_else(|| {
                     record_partition_rebuilt(PartitionKind::C4Artifact);
-                    Arc::new(build_c4_artifact_partition(vault, artifact))
+                    Arc::new(build_c4_artifact_partition(artifact))
                 });
             partitions
                 .c4_artifacts
@@ -1023,19 +1052,6 @@ fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
         }
     }
 
-    if !note.c4_diagrams.is_empty() {
-        dependencies.catalog_sensitive = true;
-    }
-    add_c4_diagrams_to_graph(
-        &mut graph,
-        &mut seen_nodes,
-        &mut seen_edges,
-        vault,
-        &note_id,
-        &note.rel_path,
-        &note.c4_diagrams,
-    );
-    collect_c4_source_dependencies(vault, &note.c4_diagrams, &mut dependencies);
     collect_graph_source_dependencies(&graph, &mut dependencies);
 
     RowPartition {
@@ -1048,10 +1064,9 @@ fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
     }
 }
 
-fn build_c4_artifact_partition(vault: &Vault, artifact: &C4Artifact) -> RowPartition {
+fn build_c4_artifact_partition(artifact: &C4Artifact) -> RowPartition {
     let mut graph = Graph::default();
     let mut seen_nodes = BTreeSet::new();
-    let mut seen_edges = BTreeSet::new();
     let artifact_id = c4_artifact_node_id(&artifact.rel_path);
     add_node(
         &mut graph,
@@ -1059,58 +1074,18 @@ fn build_c4_artifact_partition(vault: &Vault, artifact: &C4Artifact) -> RowParti
         Node {
             id: artifact_id.clone(),
             hash: String::new(),
-            kind: "c4-artifact".into(),
+            kind: "architecture-source".into(),
             label: artifact.rel_path.clone(),
             path: Some(artifact.rel_path.clone()),
         },
     );
-    add_c4_diagrams_to_graph(
-        &mut graph,
-        &mut seen_nodes,
-        &mut seen_edges,
-        vault,
-        &artifact_id,
-        &artifact.rel_path,
-        &artifact.diagrams,
-    );
-    let mut dependencies = PartitionDependencies {
-        catalog_sensitive: !artifact.diagrams.is_empty(),
-        ..PartitionDependencies::default()
-    };
-    collect_c4_source_dependencies(vault, &artifact.diagrams, &mut dependencies);
-    collect_graph_source_dependencies(&graph, &mut dependencies);
-
     RowPartition {
         meta: partition_meta(
             PartitionKey::C4Artifact(artifact.rel_path.clone()),
             c4_artifact_input_fingerprint(artifact),
-            dependencies,
+            PartitionDependencies::default(),
         ),
         rows: graph_rows(graph),
-    }
-}
-
-fn collect_c4_source_dependencies(
-    vault: &Vault,
-    diagrams: &[crate::c4::C4Diagram],
-    dependencies: &mut PartitionDependencies,
-) {
-    for source in diagrams
-        .iter()
-        .flat_map(|diagram| &diagram.elements)
-        .filter_map(|element| element.source.as_deref())
-    {
-        dependencies.catalog_sensitive = true;
-        match vault.resolve_source_target(source) {
-            SourceTargetResolution::Resolved { path, .. }
-            | SourceTargetResolution::MissingFragment { path } => {
-                dependencies.source_paths.insert(path.clone());
-                if crate::vault::source_fragment_name(source).is_some() {
-                    dependencies.source_content_paths.insert(path);
-                }
-            }
-            SourceTargetResolution::MissingFile => {}
-        }
     }
 }
 
@@ -1121,7 +1096,7 @@ fn collect_graph_source_dependencies(graph: &Graph, dependencies: &mut Partition
         }
     }
     for node in &graph.nodes {
-        if node.kind == "c4-interface"
+        if node.kind == "architecture-interface"
             && let Some(path) = node
                 .path
                 .as_deref()
@@ -1327,189 +1302,193 @@ fn changed_paths_in_scopes(paths: &[String], scopes: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn add_c4_diagrams_to_graph(
-    graph: &mut Graph,
-    seen_nodes: &mut BTreeSet<String>,
-    seen_edges: &mut BTreeSet<String>,
+pub(crate) fn architecture_interface_hash_records(
     vault: &Vault,
-    owner_id: &str,
-    owner_path: &str,
-    diagrams: &[crate::c4::C4Diagram],
-) {
-    for diagram in diagrams {
-        let diagram_id = c4_diagram_node_id(owner_id, diagram.line);
-        add_node(
-            graph,
-            seen_nodes,
-            Node {
-                id: diagram_id.clone(),
-                hash: String::new(),
-                kind: "c4-diagram".into(),
-                label: format!("{} diagram", diagram.level.as_str()),
-                path: Some(format!("{owner_path}#L{}", diagram.line)),
-            },
-        );
-        add_edge(graph, seen_edges, owner_id, &diagram_id, "contains");
-
-        let mut element_nodes = BTreeMap::new();
-        for element in &diagram.elements {
-            let element_id = c4_element_node_id(owner_id, diagram.line, &element.alias);
-            element_nodes
-                .entry(element.alias.as_str())
-                .or_insert_with(|| element_id.clone());
-            add_node(
-                graph,
-                seen_nodes,
-                Node {
-                    id: element_id.clone(),
-                    hash: String::new(),
-                    kind: format!("c4-{}", element.category.as_str()),
-                    label: if element.label.is_empty() {
-                        element.alias.clone()
-                    } else {
-                        element.label.clone()
-                    },
-                    path: Some(format!("{owner_path}#L{}", element.line)),
-                },
-            );
-            add_edge(graph, seen_edges, owner_id, &element_id, "contains");
-            add_edge(graph, seen_edges, &diagram_id, &element_id, "contains");
-            if let Some(source) = &element.source
-                && let SourceTargetResolution::Resolved { path, .. } =
-                    vault.resolve_source_target(source)
-            {
-                add_edge(
-                    graph,
-                    seen_edges,
-                    &element_id,
-                    &code_node_id(&path),
-                    "references",
-                );
-                if let Some((target, interface_hash)) = interface_anchor_hash(vault, source, &path)
-                {
-                    let interface_id = c4_interface_node_id(&element_id);
-                    add_node(
-                        graph,
-                        seen_nodes,
-                        Node {
-                            id: interface_id.clone(),
-                            hash: String::new(),
-                            kind: "c4-interface".into(),
-                            label: interface_hash,
-                            path: Some(target),
-                        },
-                    );
-                    add_edge(
-                        graph,
-                        seen_edges,
-                        &element_id,
-                        &interface_id,
-                        "tracks-interface",
-                    );
-                }
-            }
-        }
-
-        for relationship in &diagram.relationships {
-            if let (Some(from), Some(to)) = (
-                element_nodes.get(relationship.from.as_str()),
-                element_nodes.get(relationship.to.as_str()),
-            ) {
-                let relationship_id = c4_relationship_node_id(
-                    owner_id,
-                    diagram.line,
-                    relationship.line,
-                    &relationship.from,
-                    &relationship.to,
-                );
-                add_node(
-                    graph,
-                    seen_nodes,
-                    Node {
-                        id: relationship_id.clone(),
-                        hash: String::new(),
-                        kind: "c4-relationship".into(),
-                        label: relationship.label.clone().unwrap_or_else(|| {
-                            format!("{} -> {}", relationship.from, relationship.to)
-                        }),
-                        path: Some(format!("{owner_path}#L{}", relationship.line)),
-                    },
-                );
-                add_edge(graph, seen_edges, owner_id, &relationship_id, "contains");
-                add_edge(graph, seen_edges, &diagram_id, &relationship_id, "contains");
-                add_edge(graph, seen_edges, &relationship_id, from, "from");
-                add_edge(graph, seen_edges, &relationship_id, to, "to");
-                add_edge(graph, seen_edges, from, to, "relates");
-            }
-        }
-    }
-}
-
-pub(crate) fn c4_interface_hash_records(vault: &Vault) -> Vec<C4InterfaceHashRecord> {
+) -> Vec<ArchitectureInterfaceHashRecord> {
     let mut records = Vec::new();
-    for note in &vault.notes {
-        let owner_id = note_node_id(note.display_id());
-        collect_c4_interface_hashes(
-            vault,
-            &owner_id,
-            &note.rel_path,
-            &note.c4_diagrams,
-            &mut records,
-        );
-    }
-    for artifact in &vault.c4_artifacts {
-        let owner_id = c4_artifact_node_id(&artifact.rel_path);
-        collect_c4_interface_hashes(
-            vault,
-            &owner_id,
-            &artifact.rel_path,
-            &artifact.diagrams,
-            &mut records,
-        );
-    }
+    collect_likec4_interface_hashes(vault, &mut records);
     records
 }
 
-fn collect_c4_interface_hashes(
-    vault: &Vault,
-    owner_id: &str,
-    owner_path: &str,
-    diagrams: &[crate::c4::C4Diagram],
-    records: &mut Vec<C4InterfaceHashRecord>,
-) {
-    for diagram in diagrams {
-        for element in &diagram.elements {
-            let Some(source) = &element.source else {
-                continue;
-            };
-            let SourceTargetResolution::Resolved { path, .. } = vault.resolve_source_target(source)
-            else {
-                continue;
-            };
-            let Some((target, interface_hash)) = interface_anchor_hash(vault, source, &path) else {
-                continue;
-            };
-            let element_id = c4_element_node_id(owner_id, diagram.line, &element.alias);
-            records.push(C4InterfaceHashRecord {
-                id: c4_interface_node_id(&element_id),
-                hash: interface_hash,
-                path: owner_path.to_string(),
-                line: element.line,
-                target,
-            });
-        }
-    }
-}
-
 impl State {
-    pub(crate) fn c4_interface_hashes(&self) -> BTreeMap<String, String> {
+    pub(crate) fn architecture_interface_hashes(&self) -> BTreeMap<String, String> {
         self.graph
             .nodes
             .iter()
-            .filter(|node| node.kind == "c4-interface")
+            .filter(|node| node.kind == "architecture-interface")
             .map(|node| (node.id.clone(), node.label.clone()))
             .collect()
     }
+}
+
+fn add_likec4_model_to_graph(graph: &mut Graph, vault: &Vault, model: &serde_json::Value) {
+    let mut seen_nodes = graph
+        .nodes
+        .iter()
+        .map(|node| node.id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut seen_edges = graph
+        .edges
+        .iter()
+        .map(|edge| format!("{}\0{}\0{}", edge.from, edge.to, edge.kind))
+        .collect::<BTreeSet<_>>();
+    let workspace_id = "architecture:likec4";
+    add_node(
+        graph,
+        &mut seen_nodes,
+        Node {
+            id: workspace_id.into(),
+            hash: String::new(),
+            kind: "architecture-workspace".into(),
+            label: "LikeC4 architecture".into(),
+            path: Some(vault.likec4_workspace.path.clone()),
+        },
+    );
+
+    for element in model_array(model, "elements") {
+        let Some(id) = element.get("id").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let element_id = likec4_element_node_id(id);
+        add_node(
+            graph,
+            &mut seen_nodes,
+            Node {
+                id: element_id.clone(),
+                hash: String::new(),
+                kind: "architecture-element".into(),
+                label: element
+                    .get("title")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or(id)
+                    .to_string(),
+                path: Some(vault.likec4_workspace.path.clone()),
+            },
+        );
+        add_edge(
+            graph,
+            &mut seen_edges,
+            workspace_id,
+            &element_id,
+            "contains",
+        );
+    }
+
+    for relationship in model_array(model, "relationships") {
+        let Some(source) = relationship_endpoint(relationship, "source") else {
+            continue;
+        };
+        let Some(target) = relationship_endpoint(relationship, "target") else {
+            continue;
+        };
+        add_edge(
+            graph,
+            &mut seen_edges,
+            &likec4_element_node_id(source),
+            &likec4_element_node_id(target),
+            "relates",
+        );
+    }
+
+    for link in model_array(model, "sourceLinks") {
+        let Some(element) = link.get("element").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(target) = link.get("target").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let SourceTargetResolution::Resolved { path, .. } = vault.resolve_source_target(target)
+        else {
+            continue;
+        };
+        let element_id = likec4_element_node_id(element);
+        add_edge(
+            graph,
+            &mut seen_edges,
+            &element_id,
+            &code_node_id(&path),
+            "references",
+        );
+        if let Some((target, interface_hash)) = interface_anchor_hash(vault, target, &path) {
+            let interface_id = likec4_interface_node_id(element);
+            add_node(
+                graph,
+                &mut seen_nodes,
+                Node {
+                    id: interface_id.clone(),
+                    hash: String::new(),
+                    kind: "architecture-interface".into(),
+                    label: interface_hash,
+                    path: Some(target),
+                },
+            );
+            add_edge(
+                graph,
+                &mut seen_edges,
+                &element_id,
+                &interface_id,
+                "tracks-interface",
+            );
+        }
+    }
+
+    graph.nodes.sort_by(|left, right| left.id.cmp(&right.id));
+    graph.edges.sort_by(|left, right| {
+        (&left.from, &left.to, &left.kind).cmp(&(&right.from, &right.to, &right.kind))
+    });
+    graph.root = graph_root(graph);
+}
+
+fn collect_likec4_interface_hashes(
+    vault: &Vault,
+    records: &mut Vec<ArchitectureInterfaceHashRecord>,
+) {
+    let Some(model) = &vault.likec4_workspace.model else {
+        return;
+    };
+    for link in model_array(model, "sourceLinks") {
+        let Some(element) = link.get("element").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let Some(source) = link.get("target").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let SourceTargetResolution::Resolved { path, .. } = vault.resolve_source_target(source)
+        else {
+            continue;
+        };
+        let Some((target, hash)) = interface_anchor_hash(vault, source, &path) else {
+            continue;
+        };
+        records.push(ArchitectureInterfaceHashRecord {
+            id: likec4_interface_node_id(element),
+            hash,
+            path: vault.likec4_workspace.path.clone(),
+            source_path: path,
+            line: 1,
+            target,
+        });
+    }
+}
+
+fn model_array<'a>(model: &'a serde_json::Value, key: &str) -> &'a [serde_json::Value] {
+    model
+        .get(key)
+        .and_then(serde_json::Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+}
+
+fn relationship_endpoint<'a>(relationship: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    relationship.get(key)?.get("model")?.as_str()
+}
+
+fn likec4_element_node_id(element: &str) -> String {
+    format!("architecture:element:{element}")
+}
+
+fn likec4_interface_node_id(element: &str) -> String {
+    format!("architecture:interface:{element}")
 }
 
 fn interface_anchor_hash(vault: &Vault, source: &str, path: &str) -> Option<(String, String)> {
@@ -1595,29 +1574,7 @@ fn external_call_node_id(id: &str) -> String {
 }
 
 fn c4_artifact_node_id(path: &str) -> String {
-    format!("c4-artifact:{path}")
-}
-
-fn c4_diagram_node_id(owner_id: &str, diagram_line: usize) -> String {
-    format!("{owner_id}:c4:{diagram_line}")
-}
-
-fn c4_element_node_id(owner_id: &str, diagram_line: usize, alias: &str) -> String {
-    format!("{owner_id}:c4:{diagram_line}:{alias}")
-}
-
-fn c4_interface_node_id(element_id: &str) -> String {
-    format!("{element_id}:interface")
-}
-
-fn c4_relationship_node_id(
-    owner_id: &str,
-    diagram_line: usize,
-    relationship_line: usize,
-    from: &str,
-    to: &str,
-) -> String {
-    format!("{owner_id}:c4:{diagram_line}:rel:{relationship_line}:{from}:{to}")
+    format!("architecture-source:{path}")
 }
 
 fn symbol_kind(kind: SymbolKind) -> &'static str {
@@ -1681,6 +1638,59 @@ source = false
     }
 
     #[test]
+    fn likec4_model_adds_architecture_relationships_and_source_edges() {
+        let root = unique_temp_dir("criv-likec4-graph");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("criv.toml"), "[source]\nroots = [\"src\"]\n").unwrap();
+        std::fs::write(
+            root.join("src/lib.rs"),
+            "pub fn run(input: String) -> usize { input.len() }\n",
+        )
+        .unwrap();
+        let mut vault = Vault::load(&root).unwrap();
+        vault.likec4_workspace.path = "docs/architecture".into();
+        vault.likec4_workspace.model = Some(serde_json::json!({
+            "elements": [
+                { "id": "app", "title": "Application" },
+                { "id": "app.cli", "title": "CLI" }
+            ],
+            "relationships": [{
+                "source": { "model": "app.cli" },
+                "target": { "model": "app" }
+            }],
+            "sourceLinks": [{
+                "element": "app.cli",
+                "target": "src/lib.rs#fn:run"
+            }]
+        }));
+
+        let state = State::build(&root, &vault).unwrap();
+        let json = serde_json::to_value(&state).unwrap();
+        let nodes = json["graph"]["nodes"].as_array().unwrap();
+        let edges = json["graph"]["edges"].as_array().unwrap();
+
+        assert!(nodes.iter().any(|node| {
+            node["id"] == "architecture:element:app.cli" && node["kind"] == "architecture-element"
+        }));
+        assert!(nodes.iter().any(|node| {
+            node["id"] == "architecture:interface:app.cli"
+                && node["kind"] == "architecture-interface"
+        }));
+        assert!(edges.iter().any(|edge| {
+            edge["from"] == "architecture:element:app.cli"
+                && edge["to"] == "architecture:element:app"
+                && edge["kind"] == "relates"
+        }));
+        assert!(edges.iter().any(|edge| {
+            edge["from"] == "architecture:element:app.cli"
+                && edge["to"] == "code:src/lib.rs"
+                && edge["kind"] == "references"
+        }));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn state_and_snapshot_writes_are_parseable() {
         let root = unique_temp_dir("criv-state-atomic-writes");
         std::fs::create_dir_all(root.join("src")).unwrap();
@@ -1733,7 +1743,7 @@ roots = ["src"]
     }
 
     #[test]
-    fn serialized_state_matches_the_v0_contract_fixture() {
+    fn serialized_state_matches_the_v1_contract_fixture() {
         let root = unique_temp_dir("criv-state-contract-fixture");
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::create_dir_all(root.join("docs/adr")).unwrap();
@@ -1792,7 +1802,7 @@ policy:
         let actual: serde_json::Value =
             serde_json::from_str(&State::build(&root, &vault).unwrap().to_json().unwrap()).unwrap();
         let expected: serde_json::Value =
-            serde_json::from_str(include_str!("../fixtures/state/criv.state.v0.json")).unwrap();
+            serde_json::from_str(include_str!("../fixtures/state/criv.state.v1.json")).unwrap();
 
         assert_eq!(actual, expected);
         assert_eq!(
@@ -1819,7 +1829,7 @@ policy:
         );
         assert_eq!(
             State::build(&root, &vault).unwrap().hash().unwrap(),
-            "f8c73cf18a6e2419171693357e3fed14281733b6071ea92e8c490d7e90ed64ba"
+            "9a8cfd3085e339b5237ae7bf5c3fde4bf042fbc71fd496ab2897146204b39db0"
         );
 
         let _ = std::fs::remove_dir_all(root);
@@ -1840,197 +1850,6 @@ policy:
 
         assert!(error.to_string().contains("symlinked vault path component"));
         assert!(!outside.path().join("state.json").exists());
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn c4_diagrams_are_written_to_graph_state() {
-        let root = unique_temp_dir("criv-c4-state");
-        std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::create_dir_all(root.join("docs")).unwrap();
-        std::fs::write(
-            root.join("criv.toml"),
-            r#"
-[source]
-roots = ["src"]
-"#,
-        )
-        .unwrap();
-        std::fs::write(root.join("src/main.rs"), "fn run() {}\n").unwrap();
-        std::fs::write(
-            root.join("docs/c4.md"),
-            r#"---
-id: c4
-kind: doc
-title: C4
----
-
-# C4
-
-```mermaid
-C4Container
-System_Boundary(system, "criv") {
-    Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
-    %% criv:source src/main.rs
-    Container(plugin, "Obsidian Plugin", "TypeScript", "Reads generated state")
-}
-System_Ext(github, "GitHub", "Hosts remote repositories")
-Rel(cli, plugin, "writes state for")
-```
-"#,
-        )
-        .unwrap();
-
-        let vault = Vault::load(&root).unwrap();
-        let state = State::build(&root, &vault).unwrap();
-
-        let cli_node = state
-            .graph
-            .nodes
-            .iter()
-            .find(|node| node.kind == "c4-container" && node.label == "criv CLI")
-            .expect("c4 container node");
-        let plugin_node = state
-            .graph
-            .nodes
-            .iter()
-            .find(|node| node.kind == "c4-container" && node.label == "Obsidian Plugin")
-            .expect("second c4 container node");
-        let github_node = state
-            .graph
-            .nodes
-            .iter()
-            .find(|node| node.kind == "c4-software-system" && node.label == "GitHub")
-            .expect("external software system node");
-        assert!(
-            github_node
-                .path
-                .as_deref()
-                .is_some_and(|path| path.starts_with("docs/c4.md#L"))
-        );
-        assert!(
-            !state.graph.nodes.iter().any(|node| {
-                node.kind.starts_with("c4-")
-                    && node.kind != "c4-relationship"
-                    && node.label == "criv"
-            }),
-            "boundary labels must not be emitted as architecture element nodes"
-        );
-        assert!(state.graph.edges.iter().any(|edge| {
-            edge.from == "note:c4" && edge.to == cli_node.id && edge.kind == "contains"
-        }));
-        assert!(state.graph.edges.iter().any(|edge| {
-            edge.from == cli_node.id && edge.to == "code:src/main.rs" && edge.kind == "references"
-        }));
-        assert!(state.graph.edges.iter().any(|edge| {
-            edge.from == cli_node.id && edge.to == plugin_node.id && edge.kind == "relates"
-        }));
-        let relationship_node = state
-            .graph
-            .nodes
-            .iter()
-            .find(|node| node.kind == "c4-relationship" && node.label == "writes state for")
-            .expect("labelled c4 relationship node");
-        assert!(state.graph.edges.iter().any(|edge| {
-            edge.from == "note:c4" && edge.to == relationship_node.id && edge.kind == "contains"
-        }));
-        assert!(state.graph.edges.iter().any(|edge| {
-            edge.from == relationship_node.id && edge.to == cli_node.id && edge.kind == "from"
-        }));
-        assert!(state.graph.edges.iter().any(|edge| {
-            edge.from == relationship_node.id && edge.to == plugin_node.id && edge.kind == "to"
-        }));
-
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn c4_artifacts_are_written_to_graph_state() {
-        let root = unique_temp_dir("criv-c4-artifact-state");
-        std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::create_dir_all(root.join("docs/architecture")).unwrap();
-        std::fs::write(
-            root.join("criv.toml"),
-            r#"
-[source]
-roots = ["src"]
-"#,
-        )
-        .unwrap();
-        std::fs::write(root.join("src/main.rs"), "fn run() {}\n").unwrap();
-        std::fs::write(
-            root.join("docs/architecture/02-container.c4"),
-            r#"
-C4Container
-Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
-%% criv:source src/main.rs#fn:run
-Container(plugin, "Obsidian Plugin", "TypeScript", "Reads generated state")
-Rel(cli, plugin, "writes state for")
-"#,
-        )
-        .unwrap();
-
-        let vault = Vault::load(&root).unwrap();
-        let state = State::build(&root, &vault).unwrap();
-
-        let artifact_node = state
-            .graph
-            .nodes
-            .iter()
-            .find(|node| {
-                node.kind == "c4-artifact"
-                    && node.path.as_deref() == Some("docs/architecture/02-container.c4")
-            })
-            .expect("c4 artifact node");
-        let diagram_node = state
-            .graph
-            .nodes
-            .iter()
-            .find(|node| node.kind == "c4-diagram" && node.label == "container diagram")
-            .expect("c4 diagram node");
-        let cli_node = state
-            .graph
-            .nodes
-            .iter()
-            .find(|node| node.kind == "c4-container" && node.label == "criv CLI")
-            .expect("c4 container node");
-        let relationship_node = state
-            .graph
-            .nodes
-            .iter()
-            .find(|node| node.kind == "c4-relationship" && node.label == "writes state for")
-            .expect("c4 relationship node");
-
-        assert!(state.graph.edges.iter().any(|edge| {
-            edge.from == artifact_node.id && edge.to == diagram_node.id && edge.kind == "contains"
-        }));
-        assert!(state.graph.edges.iter().any(|edge| {
-            edge.from == diagram_node.id && edge.to == cli_node.id && edge.kind == "contains"
-        }));
-        assert!(state.graph.edges.iter().any(|edge| {
-            edge.from == diagram_node.id
-                && edge.to == relationship_node.id
-                && edge.kind == "contains"
-        }));
-        assert!(state.graph.edges.iter().any(|edge| {
-            edge.from == cli_node.id && edge.to == "code:src/main.rs" && edge.kind == "references"
-        }));
-        let interface_node = state
-            .graph
-            .nodes
-            .iter()
-            .find(|node| {
-                node.kind == "c4-interface"
-                    && node.path.as_deref() == Some("src/main.rs#fn:run")
-                    && !node.label.is_empty()
-            })
-            .expect("c4 interface hash node");
-        assert!(state.graph.edges.iter().any(|edge| {
-            edge.from == cli_node.id
-                && edge.to == interface_node.id
-                && edge.kind == "tracks-interface"
-        }));
-
         let _ = std::fs::remove_dir_all(root);
     }
 

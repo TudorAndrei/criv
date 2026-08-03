@@ -98,18 +98,6 @@ impl RefreshSession {
     pub(crate) fn observe_source_change(&mut self) -> Result<SourceChange> {
         self.source_index.observe_source_change()
     }
-
-    #[cfg(test)]
-    fn source_paths(&self) -> Result<Vec<String>> {
-        Ok(self
-            .source_index
-            .handle()
-            .as_index()
-            .entries()?
-            .into_iter()
-            .map(|entry| entry.path)
-            .collect())
-    }
 }
 
 fn execute(

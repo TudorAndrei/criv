@@ -214,39 +214,39 @@ url = "https://github.com/jdx/hk/releases/download/v1.45.0/hk-x86_64-pc-windows-
 url_api = "https://api.github.com/repos/jdx/hk/releases/assets/412689659"
 
 [[tools.node]]
-version = "24.18.0"
+version = "26.5.1"
 backend = "core:node"
 
 [tools.node."platforms.linux-arm64"]
-checksum = "sha256:6b4484c2190274175df9aa8f28e2d758a819cb1c1fe6ab481e2f95b463ab8508"
-url = "https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-arm64.tar.gz"
+checksum = "sha256:21194bbf41c18d9ec277545c4d14cce8597d57a9d9f494c323d8121a25de33e8"
+url = "https://nodejs.org/dist/v26.5.1/node-v26.5.1-linux-arm64.tar.gz"
 
 [tools.node."platforms.linux-arm64-musl"]
-checksum = "sha256:b1c6c2dc31b46dd8fb2322f4fe75b07e775c5120bc37251deeea28f529d4567b"
-url = "https://unofficial-builds.nodejs.org/download/release/v24.18.0/node-v24.18.0-linux-arm64-musl.tar.gz"
+checksum = "sha256:34f620b8dad6e8c9188623e46b20f1a07283dcb1b32eba471efb08ca573444b3"
+url = "https://unofficial-builds.nodejs.org/download/release/v26.5.1/node-v26.5.1-linux-arm64-musl.tar.gz"
 
 [tools.node."platforms.linux-x64"]
-checksum = "sha256:783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8"
-url = "https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.gz"
+checksum = "sha256:2b07f09c218d473a26442bff5a90151f53f7b7c0a23bad244eda2c26303a2ba7"
+url = "https://nodejs.org/dist/v26.5.1/node-v26.5.1-linux-x64.tar.gz"
 
 [tools.node."platforms.linux-x64-musl"]
-checksum = "sha256:ea58409911e141ec6b19d9178efa2d9185a13295005b1cbf5521b3157eed1d95"
-url = "https://unofficial-builds.nodejs.org/download/release/v24.18.0/node-v24.18.0-linux-x64-musl.tar.gz"
+checksum = "sha256:95ca909bbb80688262c5b27d98ced7878bdecff2cf1f62069fa7c9c61afc0a5b"
+url = "https://unofficial-builds.nodejs.org/download/release/v26.5.1/node-v26.5.1-linux-x64-musl.tar.gz"
 
 [tools.node."platforms.macos-arm64"]
-checksum = "sha256:e1a97e14c99c803e96c7339403282ea05a499c32f8d83defe9ef5ec66f979ed1"
-url = "https://nodejs.org/dist/v24.18.0/node-v24.18.0-darwin-arm64.tar.gz"
+checksum = "sha256:f4387df0b46556516d19abf2f2d6806481ac8368aa7f9d96bafed422a56a1d01"
+url = "https://nodejs.org/dist/v26.5.1/node-v26.5.1-darwin-arm64.tar.gz"
 
 [tools.node."platforms.macos-x64"]
-checksum = "sha256:dfd0dbd3e721503434df7b7205e719f61b3a3a31b2bcf9729b8b91fea240f080"
-url = "https://nodejs.org/dist/v24.18.0/node-v24.18.0-darwin-x64.tar.gz"
+checksum = "sha256:077d5c936868dab19d21f77f1e71ce13697e80b3e86a399dcab238902a2ebf93"
+url = "https://nodejs.org/dist/v26.5.1/node-v26.5.1-darwin-x64.tar.gz"
 
 [tools.node."platforms.windows-x64"]
-checksum = "sha256:0ae68406b42d7725661da979b1403ec9926da205c6770827f33aac9d8f26e821"
-url = "https://nodejs.org/dist/v24.18.0/node-v24.18.0-win-x64.zip"
+checksum = "sha256:c432c996b95cbf7568f13a0fbb37526de84a27e3a5c520c3be15f05a9a168212"
+url = "https://nodejs.org/dist/v26.5.1/node-v26.5.1-win-x64.zip"
 
 [[tools."npm:npm"]]
-version = "11.16.0"
+version = "10.9.8"
 backend = "npm:npm"
 
 [[tools.rust]]

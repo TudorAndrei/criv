@@ -27,7 +27,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const treeProvider = new CrivStateTreeProvider();
   const checkDiagnostics = new CrivCheckDiagnostics();
   const c4Diagnostics = new C4ArtifactDiagnostics();
-  const c4Preview = new C4PreviewManager(context);
+  const c4Preview = new C4PreviewManager(context, store);
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBar.command = COMMAND_REFRESH_STATE_VIEW;
 

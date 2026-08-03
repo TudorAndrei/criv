@@ -77,3 +77,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0071-make-wasm-editor-projections-canonical|ADR-0071]] - Make Wasm editor projections canonical
 - [[0072-keep-performance-observation-outside-core|ADR-0072]] - Keep performance observation outside core
 - [[0073-effective-adr-governance-and-source-reconciliation|ADR-0073]] - Effective ADR governance and source reconciliation
+- [[0074-likec4-as-the-architecture-source-and-renderer|ADR-0074]] - LikeC4 as the architecture source and renderer

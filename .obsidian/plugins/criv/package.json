@@ -30,8 +30,7 @@
     "typescript": "6.0.3"
   },
   "dependencies": {
-    "@viz-js/viz": "^3.28.0",
-    "mermaid": "^11.16.0",
+    "@criv/likec4": "0.1.0",
     "obsidian": "1.13.1"
   },
   "allowScripts": {

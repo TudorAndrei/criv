@@ -15,8 +15,8 @@ import {
   TFile,
   WorkspaceLeaf,
 } from "obsidian";
-import mermaid from "mermaid";
-import { instance as vizInstance, type Viz } from "@viz-js/viz";
+import { CrivLikeC4Renderer } from "@criv/likec4/renderer";
+import type { CrivLikeC4Model } from "@criv/likec4/protocol";
 import { RangeSetBuilder } from "@codemirror/state";
 import {
   Decoration,
@@ -41,10 +41,8 @@ import {
   parseLineRange,
   parseC4Artifact,
   patternTooltip,
-  renderErrorsMessage,
   resolvePattern,
   resolveSource,
-  sanitizeDotSvg,
   safeVaultPath,
   sourceTooltip,
 } from "./core";
@@ -66,12 +64,10 @@ const DEFAULT_SETTINGS: CrivSettings = {
   statePath: ".criv/state.json",
   externalEditorUrl: "vscode://file/{path}",
 };
-const EXPECTED_SCHEMA = "criv.state.v0";
+const EXPECTED_SCHEMA = "criv.state.v1";
 const VIEW_TYPE = "criv-source-panel";
 const C4_VIEW_TYPE = "criv-c4-view";
 const PREVIEW_LINE_LIMIT = 80;
-let c4RenderSequence = 0;
-let c4DotRenderer: Promise<Viz> | null = null;
 const LINK_TARGET_SELECTOR = [
   "[data-href]",
   "a.internal-link",
@@ -136,7 +132,7 @@ export default class CrivPlugin extends Plugin {
     this.patchNativeSaveCommand();
     this.registerEditorExtension(crivDriftExtension(this));
     this.registerView(VIEW_TYPE, (leaf) => new CrivSourceView(leaf, this));
-    this.registerView(C4_VIEW_TYPE, (leaf) => new CrivC4View(leaf));
+    this.registerView(C4_VIEW_TYPE, (leaf) => new CrivC4View(leaf, this));
     this.registerExtensions(["c4"], C4_VIEW_TYPE);
     this.registerMarkdownPostProcessor((el, ctx) => this.decorateLinks(el, ctx));
     this.registerDomEvent(document, "mouseover", (event) => this.handleDocumentMouseOver(event));
@@ -588,15 +584,16 @@ class CrivC4View extends FileView {
   private draftSource = "";
   private sourcePath: string | null = null;
   private mode: "preview" | "source" = "preview";
-  private scale = 1;
-  private panX = 0;
-  private panY = 0;
-  private transformInitialized = false;
   private dirtyBadgeEl: HTMLElement | null = null;
   private sourceEditorEl: HTMLTextAreaElement | null = null;
   private sourceSaveHandlerRegistered = false;
+  private likec4Renderer: CrivLikeC4Renderer | null = null;
+  private revision = 0;
 
-  constructor(leaf: WorkspaceLeaf) {
+  constructor(
+    leaf: WorkspaceLeaf,
+    private plugin: CrivPlugin,
+  ) {
     super(leaf);
     this.registerSourceSaveHandler();
   }
@@ -620,7 +617,6 @@ class CrivC4View extends FileView {
     this.sourcePath = file.path;
     this.mode = "preview";
     this.sourceEditorEl = null;
-    this.resetTransformState();
     await this.render();
   }
 
@@ -630,13 +626,14 @@ class CrivC4View extends FileView {
       this.draftSource = "";
       this.sourcePath = null;
       this.sourceEditorEl = null;
-      this.resetTransformState();
     }
     await this.render();
   }
 
   async render(): Promise<void> {
     this.registerSourceSaveHandler();
+    this.likec4Renderer?.dispose();
+    this.likec4Renderer = null;
     const container = this.containerEl.children[1] as HTMLElement;
     container.empty();
     container.addClass("criv-c4-view");
@@ -695,7 +692,6 @@ class CrivC4View extends FileView {
       this.sourcePath = this.file.path;
       this.mode = "preview";
       this.sourceEditorEl = null;
-      this.resetTransformState();
     }
     return this.source;
   }
@@ -731,16 +727,6 @@ class CrivC4View extends FileView {
     if (this.mode !== "preview") {
       return;
     }
-    this.toolbarButton(toolbar, "+", "Zoom in", false, () => this.zoomBy(1.2));
-    this.toolbarButton(toolbar, "-", "Zoom out", false, () => this.zoomBy(1 / 1.2));
-    this.toolbarButton(toolbar, "Fit", "Fit diagram", false, () => this.fitPreview("contain"));
-    this.toolbarButton(toolbar, "Reset", "Reset view", false, () => {
-      this.scale = 1;
-      this.panX = 0;
-      this.panY = 0;
-      this.transformInitialized = true;
-      this.applyPreviewTransform();
-    });
   }
 
   private toolbarButton(
@@ -760,18 +746,63 @@ class CrivC4View extends FileView {
 
   private async renderPreview(
     body: HTMLElement,
-    summary: C4ArtifactSummary,
-    source: string,
+    _summary: C4ArtifactSummary,
+    _source: string,
   ): Promise<void> {
     const viewport = body.createDiv({ cls: "criv-c4-preview" });
     const surface = viewport.createDiv({ cls: "criv-c4-preview-surface" });
-    await renderC4Projection(surface, summary, source);
-    normalizePreviewSvg(surface);
-    this.bindPreviewInput(viewport);
-    this.applyPreviewTransform();
-    if (!this.transformInitialized) {
-      requestAnimationFrame(() => this.fitPreview("width"));
+    const state = await this.plugin.getState();
+    const architecture = state?.architecture;
+    if (!architecture) {
+      surface.createEl("p", {
+        cls: "criv-c4-render-error",
+        text: "Run criv watch --once to validate LikeC4 and publish the preview model.",
+      });
+      return;
     }
+    const model: CrivLikeC4Model = {
+      protocolVersion: 1,
+      likec4Version: architecture.likec4Version as "1.59.2",
+      revision: ++this.revision,
+      model: architecture.model.raw,
+      views: architecture.model.views,
+      sourceLinks: architecture.model.sourceLinks,
+    };
+    this.likec4Renderer = new CrivLikeC4Renderer(surface, {
+      colorScheme: document.body.classList.contains("theme-dark") ? "dark" : "light",
+      onOpenSource: (target) => this.plugin.openExternal(target),
+    });
+    this.likec4Renderer.replace(model);
+    this.renderLikeC4Controls();
+  }
+
+  private renderLikeC4Controls(): void {
+    const renderer = this.likec4Renderer;
+    const toolbar = this.containerEl.querySelector(".criv-c4-toolbar") as HTMLElement | null;
+    if (!renderer || !toolbar) {
+      return;
+    }
+    const views = renderer.views();
+    if (views.length > 1) {
+      const select = toolbar.createEl("select", { attr: { "aria-label": "Architecture view" } });
+      for (const view of views) {
+        select.createEl("option", { text: view.title, value: view.id });
+      }
+      select.onchange = () => renderer.selectView(select.value);
+    }
+    this.toolbarButton(toolbar, "Export SVG", "Export the current view as SVG", false, () => {
+      const svg = renderer.exportSvg();
+      if (!svg) {
+        new Notice("The LikeC4 view is not ready for export.");
+        return;
+      }
+      const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${this.file?.basename ?? "architecture"}.svg`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    });
   }
 
   private renderSourceEditor(body: HTMLElement): void {
@@ -803,106 +834,7 @@ class CrivC4View extends FileView {
     await this.app.vault.modify(this.file, value);
     this.source = value;
     this.sourcePath = this.file.path;
-    this.transformInitialized = false;
     await this.render();
-  }
-
-  private bindPreviewInput(viewport: HTMLElement): void {
-    viewport.onwheel = (event: WheelEvent) => {
-      event.preventDefault();
-      const rect = viewport.getBoundingClientRect();
-      const factor = event.deltaY < 0 ? 1.1 : 1 / 1.1;
-      this.zoomAt(factor, event.clientX - rect.left, event.clientY - rect.top);
-    };
-
-    viewport.onpointerdown = (event: PointerEvent) => {
-      if (event.button !== 0) {
-        return;
-      }
-      event.preventDefault();
-      viewport.setPointerCapture(event.pointerId);
-      const startX = event.clientX;
-      const startY = event.clientY;
-      const initialX = this.panX;
-      const initialY = this.panY;
-
-      viewport.onpointermove = (moveEvent: PointerEvent) => {
-        this.panX = initialX + moveEvent.clientX - startX;
-        this.panY = initialY + moveEvent.clientY - startY;
-        this.transformInitialized = true;
-        this.applyPreviewTransform();
-      };
-      const stopPan = () => {
-        viewport.onpointermove = null;
-        viewport.onpointerup = null;
-        viewport.onpointercancel = null;
-      };
-      viewport.onpointerup = stopPan;
-      viewport.onpointercancel = stopPan;
-    };
-  }
-
-  private zoomBy(factor: number): void {
-    const viewport = this.containerEl.querySelector(".criv-c4-preview") as HTMLElement | null;
-    if (!viewport) {
-      return;
-    }
-    this.zoomAt(factor, viewport.clientWidth / 2, viewport.clientHeight / 2);
-  }
-
-  private zoomAt(factor: number, originX: number, originY: number): void {
-    const nextScale = clamp(this.scale * factor, 0.05, 8);
-    const ratio = nextScale / this.scale;
-    this.panX = originX - (originX - this.panX) * ratio;
-    this.panY = originY - (originY - this.panY) * ratio;
-    this.scale = nextScale;
-    this.transformInitialized = true;
-    this.applyPreviewTransform();
-  }
-
-  private fitPreview(mode: "contain" | "width"): void {
-    const viewport = this.containerEl.querySelector(".criv-c4-preview") as HTMLElement | null;
-    const surface = this.containerEl.querySelector(
-      ".criv-c4-preview-surface",
-    ) as HTMLElement | null;
-    const svg = surface?.querySelector("svg") as SVGSVGElement | null;
-    if (!viewport || !surface || !svg) {
-      return;
-    }
-    const size = svgSize(svg);
-    if (!size) {
-      return;
-    }
-    const padding = 32;
-    const availableWidth = Math.max(1, viewport.clientWidth - padding * 2);
-    const availableHeight = Math.max(1, viewport.clientHeight - padding * 2);
-    const widthScale = availableWidth / size.width;
-    const containScale = Math.min(widthScale, availableHeight / size.height);
-    this.scale = mode === "width" ? clamp(widthScale, 0.35, 1.25) : clamp(containScale, 0.05, 2);
-    this.panX =
-      mode === "width" && size.width * this.scale > availableWidth
-        ? padding
-        : (viewport.clientWidth - size.width * this.scale) / 2;
-    this.panY = mode === "width" ? padding : (viewport.clientHeight - size.height * this.scale) / 2;
-    this.transformInitialized = true;
-    this.applyPreviewTransform();
-  }
-
-  private applyPreviewTransform(): void {
-    const surface = this.containerEl.querySelector(
-      ".criv-c4-preview-surface",
-    ) as HTMLElement | null;
-    if (!surface) {
-      return;
-    }
-    surface.style.transform = `translate(${this.panX}px, ${this.panY}px) scale(${this.scale})`;
-  }
-
-  private resetTransformState(): void {
-    this.scale = 1;
-    this.panX = 0;
-    this.panY = 0;
-    this.transformInitialized = false;
   }
 
   private updateDirtyBadge(): void {
@@ -921,102 +853,6 @@ class CrivC4View extends FileView {
       return false;
     });
     this.sourceSaveHandlerRegistered = true;
-  }
-}
-
-interface C4RendererAdapter {
-  render(container: HTMLElement, summary: C4ArtifactSummary, source: string): Promise<void>;
-}
-
-const sourceProjectionRenderer: C4RendererAdapter = {
-  async render(container, summary, source) {
-    container.empty();
-    container.addClass(`criv-c4-projection-${safeCssSegment(summary.format)}`);
-    const preview = container.createEl("pre");
-    preview.createEl("code", {
-      cls: `language-${summary.format === "dot" ? "dot" : "mermaid"}`,
-      text: source,
-    });
-  },
-};
-
-const mermaidRenderer: C4RendererAdapter = {
-  async render(container, summary, source) {
-    container.empty();
-    container.addClass("criv-c4-projection-mermaid");
-    const renderId = `criv-c4-${safeCssSegment(summary.level)}-${++c4RenderSequence}`;
-    mermaid.initialize({
-      securityLevel: "strict",
-      startOnLoad: false,
-      theme: "base",
-    });
-    try {
-      const result = await mermaid.render(renderId, source);
-      container.innerHTML = result.svg;
-    } catch (error) {
-      await sourceProjectionRenderer.render(container, summary, source);
-      container.createDiv({
-        cls: "criv-c4-render-error",
-        text: `Could not render Mermaid preview: ${errorMessage(error)}`,
-      });
-    }
-  },
-};
-
-const dotRenderer: C4RendererAdapter = {
-  async render(container, summary, source) {
-    container.empty();
-    container.addClass("criv-c4-projection-dot");
-    try {
-      const viz = await c4DotRendererInstance();
-      const result = viz.render(source, { engine: "dot", format: "svg" });
-      if (result.status === "failure") {
-        throw new Error(renderErrorsMessage(result.errors));
-      }
-      container.innerHTML = sanitizeDotSvg(result.output);
-      renderWarnings(container, result.errors);
-    } catch (error) {
-      await sourceProjectionRenderer.render(container, summary, source);
-      container.createDiv({
-        cls: "criv-c4-render-error",
-        text: `Could not render DOT preview: ${errorMessage(error)}`,
-      });
-    }
-  },
-};
-
-async function renderC4Projection(
-  container: HTMLElement,
-  summary: C4ArtifactSummary,
-  source: string,
-): Promise<void> {
-  if (summary.format === "mermaid") {
-    await mermaidRenderer.render(container, summary, source);
-    return;
-  }
-  if (summary.format === "dot") {
-    await dotRenderer.render(container, summary, source);
-    return;
-  }
-  await sourceProjectionRenderer.render(container, summary, source);
-}
-
-function c4DotRendererInstance(): Promise<Viz> {
-  c4DotRenderer ??= vizInstance();
-  return c4DotRenderer;
-}
-
-function renderWarnings(
-  container: HTMLElement,
-  errors: { level?: string; message: string }[],
-): void {
-  const warnings = errors.filter((error) => error.level === "warning");
-  if (warnings.length === 0) {
-    return;
-  }
-  const warningList = container.createDiv({ cls: "criv-c4-render-warning" });
-  for (const warning of warnings) {
-    warningList.createDiv({ text: warning.message });
   }
 }
 
@@ -1382,53 +1218,6 @@ function literalSet(language: string): Set<string> {
 
 function safeCssSegment(value: string): string {
   return /^[a-z0-9_-]+$/i.test(value) ? value : "text";
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-function svgSize(svg: SVGSVGElement): { width: number; height: number } | null {
-  const viewBox = svg.viewBox.baseVal;
-  if (viewBox.width > 0 && viewBox.height > 0) {
-    return { width: viewBox.width, height: viewBox.height };
-  }
-  const width = parseSvgLength(svg.getAttribute("width"));
-  const height = parseSvgLength(svg.getAttribute("height"));
-  if (width && height) {
-    return { width, height };
-  }
-  const rect = svg.getBoundingClientRect();
-  if (rect.width > 0 && rect.height > 0) {
-    return { width: rect.width, height: rect.height };
-  }
-  return null;
-}
-
-function parseSvgLength(value: string | null): number | null {
-  const match = value?.match(/^([\d.]+)/);
-  if (!match) {
-    return null;
-  }
-  const parsed = Number(match[1]);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
-}
-
-function normalizePreviewSvg(surface: HTMLElement): void {
-  const svg = surface.querySelector("svg") as SVGSVGElement | null;
-  if (!svg) {
-    return;
-  }
-  const size = svgSize(svg);
-  if (!size) {
-    return;
-  }
-  surface.style.width = `${size.width}px`;
-  surface.style.height = `${size.height}px`;
-  svg.style.width = `${size.width}px`;
-  svg.style.height = `${size.height}px`;
-  svg.removeAttribute("width");
-  svg.removeAttribute("height");
 }
 
 function errorMessage(error: unknown): string {

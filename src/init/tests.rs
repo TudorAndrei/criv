@@ -172,8 +172,9 @@ fn init_installs_c4_authoring_skill() {
     ] {
         let skill = std::fs::read_to_string(root.join(path)).unwrap();
         assert!(skill.contains("name: c4-authoring"));
-        assert!(skill.contains("Standalone `.c4` files are a filetype convention"));
-        assert!(skill.contains("Prefer stable interface-bearing anchors"));
+        assert!(skill.contains("Treat `docs/architecture/` as one LikeC4 workspace"));
+        assert!(skill.contains("Prefer a stable module or public interface"));
+        assert!(skill.contains("The work is complete when the generated model is current"));
     }
 
     let _ = std::fs::remove_dir_all(root);

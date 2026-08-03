@@ -1,0 +1,20 @@
+{
+  "name": "criv-workspace",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": [
+    "packages/criv-likec4",
+    ".obsidian/plugins/criv",
+    "extensions/vscode-criv"
+  ],
+  "engines": {
+    "node": "26.5.1"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "likec4": "1.59.2",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  }
+}

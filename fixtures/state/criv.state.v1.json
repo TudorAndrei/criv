@@ -1,5 +1,5 @@
 {
-  "schema": "criv.state.v0",
+  "schema": "criv.state.v1",
   "graph": {
     "root": "3388c6958cd047d1191c9a8a07d46847e60fbc9dd1362dbb193922a4c56ae02f",
     "nodes": [

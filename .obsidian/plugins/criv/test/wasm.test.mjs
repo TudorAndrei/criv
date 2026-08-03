@@ -10,7 +10,7 @@ const pluginRoot = resolve(__dirname, "..");
 const outFile = resolve(tmpdir(), `criv-wasm-test-${process.pid}.mjs`);
 const wasmPath = resolve(pluginRoot, "pkg/criv_wasm.js");
 const stateRaw = readFileSync(
-  resolve(__dirname, "../../../../fixtures/state/criv.state.v0.json"),
+  resolve(__dirname, "../../../../fixtures/state/criv.state.v1.json"),
   "utf8",
 );
 
@@ -28,7 +28,7 @@ const bridgeModule = await import(pathToFileURL(outFile).href);
 const compiledWasm = await import(pathToFileURL(wasmPath).href);
 const bridge = bridgeModule.createCrivWasmBridge(async () => compiledWasm);
 
-assert.equal((await bridge.validatedState(stateRaw)).schema, "criv.state.v0");
+assert.equal((await bridge.validatedState(stateRaw)).schema, "criv.state.v1");
 assert.equal((await bridge.summarizeState(stateRaw)).node_count, 6);
 assert.deepEqual(
   (await bridge.sourceEntries(stateRaw)).map((entry) => entry.path),

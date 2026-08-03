@@ -3,35 +3,27 @@ import test from "node:test";
 
 import { buildC4PreviewHtml } from "../../src/c4PreviewHtml";
 
-test("builds webview HTML with strict CSP and local script resources", () => {
+test("builds a local LikeC4 webview with a strict default CSP", () => {
   const html = buildC4PreviewHtml({
     cspSource: "vscode-resource:",
     nonce: "abc123",
-    mermaidUri: "vscode-resource:/mermaid.min.js",
-    vizUri: "vscode-resource:/viz-global.js",
-    payload: { format: "mermaid", source: "C4Context", sources: ["src/lib.rs"] },
+    rendererUri: "vscode-resource:/likec4-preview.js",
+    payload: {
+      colorScheme: "dark",
+      model: {
+        protocolVersion: 1,
+        likec4Version: "1.59.2",
+        revision: 1,
+        model: {},
+        views: [],
+        sourceLinks: [],
+      },
+    },
   });
 
   assert.match(html, /default-src 'none'/);
   assert.match(html, /script-src 'nonce-abc123' 'wasm-unsafe-eval'/);
-  assert.doesNotMatch(html, /'unsafe-eval'/);
-  assert.match(html, /src="vscode-resource:\/mermaid\.min\.js"/);
-  assert.match(html, /src="vscode-resource:\/viz-global\.js"/);
-});
-
-test("keeps source fallback and render-error surface in preview HTML", () => {
-  const html = buildC4PreviewHtml({
-    cspSource: "vscode-resource:",
-    nonce: "abc123",
-    mermaidUri: "vscode-resource:/mermaid.min.js",
-    vizUri: "vscode-resource:/viz-global.js",
-    payload: { format: "unknown", source: "<bad>", sources: [] },
-  });
-
-  assert.match(html, /Unknown \.c4 format/);
-  assert.match(html, /fallback/);
-  assert.match(html, /\\u003cbad\\u003e/);
-  assert.match(html, /function showError/);
-  assert.match(html, /node\.textContent = text/);
-  assert.doesNotMatch(html, /'<div class="error">' \+ String/);
+  assert.doesNotMatch(html, /https?:/);
+  assert.match(html, /src="vscode-resource:\/likec4-preview\.js"/);
+  assert.match(html, /LikeC4 architecture view/);
 });

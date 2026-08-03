@@ -32,6 +32,32 @@ fn normalize_newlines(contents: &str) -> String {
     contents.replace("\r\n", "\n")
 }
 
+#[cfg(unix)]
+fn write_fake_node(root: &Path, output: &str) -> TempDir {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bin = TempDir::new().unwrap();
+    let node = bin.path().join("node");
+    fs::write(
+        &node,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' '{}'\n",
+            output.replace('\'', "'\\''")
+        ),
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&node).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&node, permissions).unwrap();
+    fs::create_dir_all(root.join("node_modules/likec4")).unwrap();
+    fs::write(
+        root.join("node_modules/likec4/package.json"),
+        "{\"name\":\"likec4\",\"version\":\"1.59.2\"}\n",
+    )
+    .unwrap();
+    bin
+}
+
 fn init(root: &Path) {
     criv(root)
         .args(["init", "--no-obsidian", "--no-skills"])
@@ -53,6 +79,121 @@ fn init_git_vault(root: &Path) {
     init(root);
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "initial vault"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn check_reports_normalized_likec4_diagnostics() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    init(root);
+    fs::create_dir_all(root.join("docs/architecture")).unwrap();
+    fs::write(
+        root.join("docs/architecture/model.c4"),
+        "specification { element system }\nmodel { broken = system }\n",
+    )
+    .unwrap();
+    let bridge_output = serde_json::json!({
+        "protocolVersion": 1,
+        "nodeVersion": "26.5.1",
+        "likec4Version": "1.59.2",
+        "revision": 0,
+        "valid": false,
+        "diagnostics": [{
+            "message": "Expected an element body",
+            "file": "/outside/docs/architecture/model.c4",
+            "line": 4,
+            "range": {
+                "start": { "line": 4, "character": 2 },
+                "end": { "line": 4, "character": 8 }
+            }
+        }],
+        "model": null
+    })
+    .to_string();
+    let fake_bin = write_fake_node(root, &bridge_output);
+
+    criv(root)
+        .arg("check")
+        .env("PATH", fake_bin.path())
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "docs/architecture/model.c4:5: Expected an element body",
+        ))
+        .stdout(predicate::str::contains("invalid-likec4"));
+}
+
+#[cfg(unix)]
+#[test]
+fn check_rejects_a_likec4_bridge_with_the_wrong_node_version() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    init(root);
+    fs::create_dir_all(root.join("docs/architecture")).unwrap();
+    fs::write(
+        root.join("docs/architecture/model.c4"),
+        "specification { element system }\nmodel { system = system 'System' }\n",
+    )
+    .unwrap();
+    let bridge_output = serde_json::json!({
+        "protocolVersion": 1,
+        "nodeVersion": "24.0.0",
+        "likec4Version": "1.59.2",
+        "revision": 0,
+        "valid": true,
+        "diagnostics": [],
+        "model": null
+    })
+    .to_string();
+    let fake_bin = write_fake_node(root, &bridge_output);
+
+    criv(root)
+        .arg("check")
+        .env("PATH", fake_bin.path())
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("invalid-likec4-protocol"))
+        .stdout(predicate::str::contains("Node.js 26.5.1"));
+}
+
+#[cfg(unix)]
+#[test]
+fn check_rejects_an_unresolved_likec4_source_link() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    init(root);
+    fs::create_dir_all(root.join("docs/architecture")).unwrap();
+    fs::write(
+        root.join("docs/architecture/model.c4"),
+        "specification { element system }\nmodel { system = system 'System' }\n",
+    )
+    .unwrap();
+    let bridge_output = serde_json::json!({
+        "protocolVersion": 1,
+        "nodeVersion": "26.5.1",
+        "likec4Version": "1.59.2",
+        "revision": 0,
+        "valid": true,
+        "diagnostics": [],
+        "model": {
+            "raw": { "elements": {}, "relations": {}, "views": {} },
+            "elements": [],
+            "relationships": [],
+            "views": [],
+            "sourceLinks": [{ "element": "system", "target": "src/missing.rs" }]
+        }
+    })
+    .to_string();
+    let fake_bin = write_fake_node(root, &bridge_output);
+
+    criv(root)
+        .arg("check")
+        .env("PATH", fake_bin.path())
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("invalid-likec4-source"))
+        .stdout(predicate::str::contains("src/missing.rs"));
 }
 
 fn doc(id: &str, title: &str, body: &str) -> String {
@@ -1014,8 +1155,6 @@ fn query_usage_errors_are_reported() {
         "governing",
         "coverage",
         "nodes",
-        "c4-elements",
-        "c4-relationships",
         "c4-code",
         "diff",
     ] {
@@ -1681,18 +1820,15 @@ Range [[src/lib.rs#L1-L1]]
 }
 
 #[test]
-fn c4_standard_alignment_cli_smoke_test() {
+fn likec4_module_query_cli_smoke_test() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
 
     init(root);
     fs::create_dir_all(root.join("src")).unwrap();
     fs::create_dir_all(root.join("docs")).unwrap();
-    fs::write(
-        root.join("src/lib.rs"),
-        "pub fn run() {\n    helper();\n}\n\nfn helper() {}\n",
-    )
-    .unwrap();
+    fs::write(root.join("src/lib.rs"), "mod helper;\nuse crate::helper;\n").unwrap();
+    fs::write(root.join("src/helper.rs"), "pub fn run() {}\n").unwrap();
     write_criv_config(
         root,
         vec!["src"],
@@ -1700,101 +1836,21 @@ fn c4_standard_alignment_cli_smoke_test() {
         true,
     );
 
-    fs::write(
-        root.join("docs/c4.md"),
-        r#"---
-id: c4
-kind: doc
-title: C4 Smoke
----
+    criv(root)
+        .args(["query", "c4-code", "src/**"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("element module"))
+        .stdout(predicate::str::contains("src::helper"))
+        .stdout(predicate::str::contains("'imports'"))
+        .stdout(predicate::str::contains("classDiagram").not());
 
-## C4 Smoke
-
-```mermaid
-C4Container
-System_Boundary(system, "criv") {
-    Container(cli, "criv CLI", "Rust", "Runs local validation")
-    Container(plugin, "Obsidian Plugin", "TypeScript", "Reads generated state")
-}
-Rel(cli, plugin, "writes state for")
-```
-"#,
-    )
-    .unwrap();
-
-    criv(root).arg("check").assert().success();
     criv(root)
         .args(["query", "c4-elements", "c4"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains(
-            "alias=cli category=container kind=Container",
-        ))
-        .stdout(predicate::str::contains(
-            "alias=plugin category=container kind=Container",
-        ))
-        .stdout(predicate::str::contains("alias=system").not());
-    criv(root)
-        .args(["query", "c4-relationships", "c4"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("label=writes state for"));
-    criv(root)
-        .args(["query", "c4-code", "src/lib.rs"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("classDiagram"))
-        .stdout(predicate::str::contains("class run"))
-        .stdout(predicate::str::contains("run --> helper"));
-
-    fs::write(
-        root.join("docs/c4.md"),
-        r#"---
-id: c4
-kind: doc
-title: C4 Smoke
----
-
-## C4 Smoke
-
-```mermaid
-C4Container
-System_Boundary(system, "criv") {
-    Container(cli, "criv CLI", "Rust", "Runs local validation")
-}
-Rel(cli, system, "runs inside")
-```
-"#,
-    )
-    .unwrap();
-    criv(root)
-        .args(["check", "--filter", "unresolved-c4-relationship"])
-        .assert()
         .failure()
-        .stdout(predicate::str::contains("unresolved-c4-relationship"));
-
-    fs::write(
-        root.join("docs/c4.md"),
-        r#"---
-id: c4
-kind: doc
-title: C4 Smoke
----
-
-## C4 Smoke
-
-```mermaid
-C4Container
-Component(parser, "C4 Parser", "Rust", "Parses Mermaid C4 blocks")
-```
-"#,
-    )
-    .unwrap();
-    criv(root)
-        .args(["check", "--filter", "invalid-c4-level"])
-        .assert()
-        .failure()
-        .stdout(predicate::str::contains("invalid-c4-level"));
+        .code(2)
+        .stderr(predicate::str::contains("unrecognized subcommand"));
 }
 
 #[test]

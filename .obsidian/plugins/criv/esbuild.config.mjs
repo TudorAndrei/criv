@@ -14,6 +14,7 @@ const context = await esbuild.context({
   },
   entryPoints: ["src/main.ts"],
   bundle: true,
+  platform: "node",
   external: [
     "obsidian",
     "electron",
@@ -30,6 +31,7 @@ const context = await esbuild.context({
     "@lezer/highlight",
     "@lezer/lr",
     ...builtinModules,
+    ...builtinModules.map((name) => `node:${name}`),
   ],
   format: "cjs",
   target: "es2018",

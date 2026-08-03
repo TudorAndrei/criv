@@ -4,7 +4,11 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, UNIX_EPOCH};
 
 #[cfg(test)]
-use std::{cell::Cell, thread_local};
+use std::{
+    cell::Cell,
+    sync::{Mutex, MutexGuard},
+    thread_local,
+};
 
 use fff_search::file_picker::FilePicker;
 use fff_search::{
@@ -37,6 +41,19 @@ thread_local! {
         catalog_traversals: 0,
         source_enumerations: 0,
     }) };
+}
+
+#[cfg(test)]
+static LIVE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+static FFF_START_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn lock_live_test() -> MutexGuard<'static, ()> {
+    LIVE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(test)]
@@ -249,6 +266,10 @@ impl FffSourceIndex {
         lifetime: SourceIndexLifetime,
     ) -> Result<Self> {
         #[cfg(test)]
+        let _start_test = FFF_START_TEST_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        #[cfg(test)]
         record_work(|counts| counts.fff_starts += 1);
         let watch = lifetime == SourceIndexLifetime::Live;
         let source_roots = normalize_source_roots(source_roots);
@@ -270,8 +291,8 @@ impl FffSourceIndex {
             )
             .map_err(|err| CrivError::new(format!("failed to start fff source index: {err}")))?;
 
-            if !picker.wait_for_scan(SCAN_TIMEOUT) {
-                return Err(CrivError::new("timed out scanning source files with fff"));
+            if !picker.wait_for_indexing_complete(SCAN_TIMEOUT) {
+                return Err(CrivError::new("timed out indexing source files with fff"));
             }
             if watch && !picker.wait_for_watcher(SCAN_TIMEOUT) {
                 return Err(CrivError::new("timed out starting fff source watcher"));
@@ -873,6 +894,7 @@ mod tests {
 
     #[test]
     fn live_lifecycle_observes_add_modify_rename_and_delete() {
+        let _live_test = lock_live_test();
         let temp = TempDir::new().unwrap();
         let root = temp.path();
         fs::create_dir_all(root.join("src")).unwrap();

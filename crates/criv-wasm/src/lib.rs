@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
-const STATE_SCHEMA: &str = "criv.state.v0";
+const STATE_SCHEMA: &str = "criv.state.v1";
 
 #[wasm_bindgen]
 pub fn validated_state(raw: &str) -> Result<JsValue, JsValue> {
@@ -396,8 +396,8 @@ mod tests {
     #[test]
     fn parses_shared_state_contract_fixture() {
         let state =
-            parse_state(include_str!("../../../fixtures/state/criv.state.v0.json")).unwrap();
-        assert_eq!(state.schema, "criv.state.v0");
+            parse_state(include_str!("../../../fixtures/state/criv.state.v1.json")).unwrap();
+        assert_eq!(state.schema, "criv.state.v1");
         assert_eq!(state.graph.nodes.len(), 6);
         assert_eq!(state.graph.edges.len(), 5);
         assert_eq!(state.registered_patterns, ["ADR-0001/entrypoint"]);
@@ -408,8 +408,8 @@ mod tests {
 
     #[test]
     fn rejects_a_wrong_state_schema() {
-        let raw = include_str!("../../../fixtures/state/criv.state.v0.json")
-            .replace("criv.state.v0", "criv.state.v1");
+        let raw = include_str!("../../../fixtures/state/criv.state.v1.json")
+            .replace("criv.state.v1", "criv.state.v2");
 
         assert!(decode_state(&raw).is_err());
         assert!(decode_state_value(&raw).is_err());
@@ -418,9 +418,9 @@ mod tests {
     #[test]
     fn validated_state_preserves_host_consumed_fields() {
         let state =
-            decode_state_value(include_str!("../../../fixtures/state/criv.state.v0.json")).unwrap();
+            decode_state_value(include_str!("../../../fixtures/state/criv.state.v1.json")).unwrap();
 
-        assert_eq!(state["schema"], "criv.state.v0");
+        assert_eq!(state["schema"], "criv.state.v1");
         assert_eq!(state["registered-patterns"][0], "ADR-0001/entrypoint");
         assert!(state["patterns"]["ADR-0001/entrypoint"].is_array());
     }
@@ -599,7 +599,7 @@ mod tests {
     fn editor_state() -> CrivState {
         serde_json::from_str(
             r#"{
-              "schema": "criv.state.v0",
+              "schema": "criv.state.v1",
               "graph": {
                 "nodes": [
                   {
@@ -631,7 +631,7 @@ mod tests {
     fn selector_state() -> CrivState {
         serde_json::from_str(
             r#"{
-              "schema": "criv.state.v0",
+              "schema": "criv.state.v1",
               "graph": {
                 "nodes": [
                   {

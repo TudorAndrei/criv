@@ -19,7 +19,7 @@ fi
 if [[ "${1:-}" == "watch" ]]; then
   mkdir -p .criv/snapshots
   snapshot="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-  printf '{"schema":"criv.state.v0","graph":{"root":"","nodes":[],"edges":[]},"registered-patterns":[],"patterns":{},"source-index":[]}\n' >.criv/state.json
+  printf '{"schema":"criv.state.v1","graph":{"root":"","nodes":[],"edges":[]},"registered-patterns":[],"patterns":{},"source-index":[]}\n' >.criv/state.json
   cp .criv/state.json ".criv/snapshots/$snapshot.json"
   printf '%s\n' "$snapshot" >.criv/latest
   printf '{"schema":"criv.source-graph/2"}\n' >.criv/source-graph.json

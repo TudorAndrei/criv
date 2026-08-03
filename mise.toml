@@ -1,11 +1,11 @@
 [tools]
 rust = "1.97.1"
-node = "24"
+node = "26.5.1"
 hk = "1.45.0"
 actionlint = "1.7.12"
 "aqua:zizmorcore/zizmor" = "1.24.1"
 "cargo:wasm-pack" = "0.15.0"
-"npm:npm" = "11.16.0"
+"npm:npm" = "10.9.8"
 cocogitto = "7.0.0"
 "cargo:cargo-release" = "1.1.2"
 "cargo:cargo-audit" = "0.22.2"

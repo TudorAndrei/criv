@@ -584,6 +584,7 @@ pub(crate) fn find_wiki_links_with_lines(markdown: &str) -> Vec<(usize, String)>
     links
 }
 
+#[allow(dead_code)]
 pub(crate) fn markdown_fenced_blocks(markdown: &str) -> Vec<(usize, Option<String>, String)> {
     let mut blocks = Vec::new();
     let mut active: Option<(usize, Option<String>, String)> = None;

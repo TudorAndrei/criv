@@ -9,7 +9,7 @@ import { CRIV_WASM_LOAD_ERROR, CrivWasmLoadError, createCrivWasmBridge } from ".
 const require = createRequire(__filename);
 const compiledWasm = require(resolve(__dirname, "../../pkg/criv_wasm.js")) as unknown;
 const stateRaw = readFileSync(
-  resolve(__dirname, "../../../../fixtures/state/criv.state.v0.json"),
+  resolve(__dirname, "../../../../fixtures/state/criv.state.v1.json"),
   "utf8",
 );
 
@@ -22,7 +22,7 @@ test("uses the compiled canonical exports for validation and projections", async
   const nodes = await bridge.graphNodes(stateRaw);
   const suggestions = await bridge.suggestSourceSelectors(stateRaw, "run", 10);
 
-  assert.equal(state.schema, "criv.state.v0");
+  assert.equal(state.schema, "criv.state.v1");
   assert.equal(summary.node_count, 6);
   assert.deepEqual(
     sources.map((entry) => entry.path),
@@ -33,7 +33,7 @@ test("uses the compiled canonical exports for validation and projections", async
   assert.equal((await bridge.lookupGraphNode(stateRaw, "src/lib.rs#fn:run"))?.kind, "function");
 
   await assert.rejects(
-    bridge.validatedState(stateRaw.replace("criv.state.v0", "criv.state.v1")),
+    bridge.validatedState(stateRaw.replace("criv.state.v1", "criv.state.v2")),
     /unsupported criv state schema/i,
   );
 });

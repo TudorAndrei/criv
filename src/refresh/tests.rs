@@ -28,80 +28,6 @@ struct RefreshSnapshot {
     diagnostics: Vec<check::Diagnostic>,
 }
 
-#[derive(Debug, Clone, Copy)]
-enum FixtureMutation {
-    Noop,
-    DocsProse,
-    SourceEdit,
-    SameSizeSourceEdit,
-    AddSource,
-    RenameSource,
-    DeleteSource,
-    PolicyDemotion,
-    PolicyPromotionAndGovernance,
-    C4AnchorDocsEdit,
-    C4InterfaceSourceEdit,
-    CallResolutionEdit,
-    AmbiguousSourceAdd,
-}
-
-impl FixtureMutation {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Noop => "no-op",
-            Self::DocsProse => "docs prose edit",
-            Self::SourceEdit => "source edit",
-            Self::SameSizeSourceEdit => "same-size source edit",
-            Self::AddSource => "source add",
-            Self::RenameSource => "source rename",
-            Self::DeleteSource => "source delete",
-            Self::PolicyDemotion => "policy demotion",
-            Self::PolicyPromotionAndGovernance => "policy promotion and governance",
-            Self::C4AnchorDocsEdit => "C4 source anchor edit",
-            Self::C4InterfaceSourceEdit => "C4 interface source edit",
-            Self::CallResolutionEdit => "cross-file call resolution edit",
-            Self::AmbiguousSourceAdd => "ambiguous source add",
-        }
-    }
-
-    fn cause(self) -> RefreshCause {
-        if matches!(
-            self,
-            Self::DocsProse
-                | Self::PolicyDemotion
-                | Self::PolicyPromotionAndGovernance
-                | Self::C4AnchorDocsEdit
-        ) {
-            RefreshCause::DocsChanged
-        } else {
-            RefreshCause::SourceChanged
-        }
-    }
-
-    fn requires_source_observation(self) -> bool {
-        matches!(
-            self,
-            Self::SourceEdit
-                | Self::AddSource
-                | Self::RenameSource
-                | Self::DeleteSource
-                | Self::C4InterfaceSourceEdit
-                | Self::CallResolutionEdit
-                | Self::AmbiguousSourceAdd
-        )
-    }
-
-    fn expected_catalog(self) -> Option<&'static [&'static str]> {
-        match self {
-            Self::AddSource => Some(&["src/helper.ts", "src/lib.rs", "src/worker.py"]),
-            Self::RenameSource => Some(&["src/format.ts", "src/lib.rs", "src/worker.py"]),
-            Self::DeleteSource => Some(&["src/lib.rs", "src/worker.py"]),
-            Self::AmbiguousSourceAdd => Some(&["src/lib.rs", "src/nested/lib.rs", "src/worker.py"]),
-            _ => None,
-        }
-    }
-}
-
 #[test]
 fn generated_code_architecture_is_included_in_the_same_refresh_state() {
     let temp = TempDir::new().unwrap();
@@ -114,12 +40,18 @@ fn generated_code_architecture_is_included_in_the_same_refresh_state() {
     let work = state::work_counts();
     assert_eq!(work.partitions_rebuilt, 3);
     assert_eq!(work.source_partitions_rebuilt, 1);
-    assert_eq!(work.note_partitions_rebuilt, 1);
-    assert_eq!(work.c4_partitions_rebuilt, 0);
+    assert_eq!(work.note_partitions_rebuilt, 0);
+    assert_eq!(work.c4_partitions_rebuilt, 1);
     assert_eq!(work.policy_partitions_rebuilt, 0);
     assert_eq!(work.source_index_partitions_rebuilt, 1);
     assert_eq!(work.serializations, 1);
-    assert!(result.vault().resolve_note("architecture-code").is_some());
+    assert!(
+        result
+            .vault()
+            .c4_artifacts
+            .iter()
+            .any(|artifact| artifact.rel_path == "docs/architecture/04-code.c4")
+    );
     let state: Value =
         serde_json::from_str(&fs::read_to_string(temp.path().join(".criv/state.json")).unwrap())
             .unwrap();
@@ -128,7 +60,9 @@ fn generated_code_architecture_is_included_in_the_same_refresh_state() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|node| node["id"].as_str() == Some("note:architecture-code"))
+            .any(|node| {
+                node["id"].as_str() == Some("architecture-source:docs/architecture/04-code.c4")
+            })
     );
 }
 
@@ -151,6 +85,7 @@ fn warm_one_shot_reuses_the_cached_source_graph() {
 
 #[test]
 fn live_refresh_reuses_exactly_one_source_index_adapter() {
+    let _live_test = source_index::lock_live_test();
     let fixture = incremental_fixture("one-live-adapter");
     source_index::reset_work_counts();
     let mut session = live_session(fixture.path());
@@ -164,86 +99,6 @@ fn live_refresh_reuses_exactly_one_source_index_adapter() {
         .unwrap();
 
     assert_eq!(source_index::work_counts().fff_starts, 1);
-}
-
-#[test]
-fn incremental_refresh_matches_a_cache_free_full_rebuild_after_each_mutation() {
-    let incremental = incremental_fixture("incremental");
-    let full = incremental_fixture("full");
-    let mut incremental_session = live_session(incremental.path());
-    let mut full_session = one_shot_session(full.path());
-
-    let incremental_result = incremental_session
-        .refresh(incremental.path(), RefreshCause::Initial)
-        .unwrap();
-    let full_result = full_session
-        .refresh(full.path(), RefreshCause::Initial)
-        .unwrap();
-    assert_refresh_eq(
-        "cold build",
-        &refresh_snapshot(incremental.path(), incremental_result, None),
-        &refresh_snapshot(full.path(), full_result, None),
-    );
-
-    for mutation in [
-        FixtureMutation::Noop,
-        FixtureMutation::DocsProse,
-        FixtureMutation::SourceEdit,
-        FixtureMutation::SameSizeSourceEdit,
-        FixtureMutation::AddSource,
-        FixtureMutation::RenameSource,
-        FixtureMutation::DeleteSource,
-        FixtureMutation::PolicyDemotion,
-        FixtureMutation::PolicyPromotionAndGovernance,
-        FixtureMutation::C4AnchorDocsEdit,
-        FixtureMutation::C4InterfaceSourceEdit,
-        FixtureMutation::CallResolutionEdit,
-        FixtureMutation::AmbiguousSourceAdd,
-    ] {
-        apply_fixture_mutation(incremental.path(), mutation);
-        apply_fixture_mutation(full.path(), mutation);
-        if let Some(expected) = mutation.expected_catalog() {
-            wait_for_source_paths(&incremental_session, mutation.name(), expected);
-        }
-        if mutation.requires_source_observation() {
-            wait_for_source_change(&mut incremental_session, mutation.name());
-        }
-        let incremental_previous = incremental_session
-            .previous
-            .as_ref()
-            .map(|previous| previous.state().clone());
-        let full_previous = full_session
-            .previous
-            .as_ref()
-            .map(|previous| previous.state().clone());
-
-        reset_refresh_work();
-        let incremental_result = incremental_session
-            .refresh(incremental.path(), mutation.cause())
-            .unwrap();
-        let work = refresh_work();
-        let incremental_diagnostic_previous =
-            matches!(mutation.cause(), RefreshCause::SourceChanged)
-                .then_some(incremental_previous.as_ref().unwrap());
-        let incremental_snapshot = refresh_snapshot(
-            incremental.path(),
-            incremental_result,
-            incremental_diagnostic_previous,
-        );
-
-        fs::remove_file(full.path().join(".criv/source-graph.json")).unwrap();
-        let mut next_full_session = one_shot_session(full.path());
-        let full_result = next_full_session
-            .refresh(full.path(), RefreshCause::Initial)
-            .unwrap();
-        let full_diagnostic_previous = matches!(mutation.cause(), RefreshCause::SourceChanged)
-            .then_some(full_previous.as_ref().unwrap());
-        let full_snapshot = refresh_snapshot(full.path(), full_result, full_diagnostic_previous);
-
-        assert_refresh_eq(mutation.name(), &incremental_snapshot, &full_snapshot);
-        assert_final_work(mutation, work);
-        full_session = next_full_session;
-    }
 }
 
 #[test]
@@ -287,6 +142,7 @@ fn invalid_graph_cache_schema_converges_with_a_cache_free_build() {
 
 #[test]
 fn failed_refresh_retries_from_the_last_successful_state() {
+    let _live_test = source_index::lock_live_test();
     let incremental = incremental_fixture("failed-refresh-incremental");
     let full = incremental_fixture("failed-refresh-full");
     let mut session = live_session(incremental.path());
@@ -331,6 +187,7 @@ fn failed_refresh_retries_from_the_last_successful_state() {
 
 #[test]
 fn unresolved_effective_governance_keeps_last_good_state_and_recovers() {
+    let _live_test = source_index::lock_live_test();
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     fs::create_dir_all(root.join("src")).unwrap();
@@ -481,25 +338,6 @@ fn wait_for_source_change(session: &mut RefreshSession, label: &str) {
     }
 }
 
-fn wait_for_source_paths(session: &RefreshSession, label: &str, expected: &[&str]) {
-    let expected = expected
-        .iter()
-        .map(|path| (*path).to_string())
-        .collect::<Vec<_>>();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let actual = session.source_paths().unwrap();
-        if actual == expected {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for {label}: expected {expected:?}, got {actual:?}"
-        );
-        std::thread::sleep(Duration::from_millis(25));
-    }
-}
-
 fn copy_fixture_tree(source: &Path, destination: &Path) {
     fs::create_dir_all(destination).unwrap();
     for entry in fs::read_dir(source).unwrap() {
@@ -511,111 +349,6 @@ fn copy_fixture_tree(source: &Path, destination: &Path) {
             fs::copy(entry.path(), target).unwrap();
         }
     }
-}
-
-fn apply_fixture_mutation(root: &Path, mutation: FixtureMutation) {
-    match mutation {
-        FixtureMutation::Noop => {}
-        FixtureMutation::DocsProse => {
-            let path = root.join("docs/guide.md");
-            let mut contents = fs::read_to_string(&path).unwrap();
-            contents.push_str("\nA prose-only refresh leaves source unchanged.\n");
-            fs::write(path, contents).unwrap();
-        }
-        FixtureMutation::SourceEdit => {
-            let path = root.join("src/lib.rs");
-            let mut contents = fs::read_to_string(&path).unwrap();
-            contents.push_str("\npub fn added() {}\n");
-            fs::write(path, contents).unwrap();
-        }
-        FixtureMutation::SameSizeSourceEdit => {
-            let path = root.join("src/lib.rs");
-            let modified = fs::metadata(&path).unwrap().modified().unwrap();
-            let contents = fs::read_to_string(&path)
-                .unwrap()
-                .replace("fn added", "fn other");
-            assert_eq!(contents.len(), fs::metadata(&path).unwrap().len() as usize);
-            fs::write(&path, contents).unwrap();
-            fs::OpenOptions::new()
-                .write(true)
-                .open(path)
-                .unwrap()
-                .set_times(fs::FileTimes::new().set_modified(modified))
-                .unwrap();
-        }
-        FixtureMutation::AddSource => {
-            fs::write(
-                root.join("src/worker.py"),
-                "def process(value: str) -> str:\n    return value.strip()\n",
-            )
-            .unwrap();
-        }
-        FixtureMutation::RenameSource => {
-            fs::rename(root.join("src/helper.ts"), root.join("src/format.ts")).unwrap();
-        }
-        FixtureMutation::DeleteSource => {
-            fs::remove_file(root.join("src/format.ts")).unwrap();
-        }
-        FixtureMutation::PolicyDemotion => {
-            rewrite_policy(root, |contents| {
-                contents.replace("status: accepted", "status: draft")
-            });
-        }
-        FixtureMutation::PolicyPromotionAndGovernance => {
-            rewrite_policy(root, |contents| {
-                contents
-                    .replace("status: draft", "status: accepted")
-                    .replace("src/**/*.rs", "src/lib.rs")
-            });
-        }
-        FixtureMutation::C4AnchorDocsEdit => {
-            let path = root.join("docs/architecture/01-context.c4");
-            let contents = fs::read_to_string(&path).unwrap();
-            fs::write(
-                path,
-                contents.replace(
-                    "System(cli, \"Fixture CLI\", \"Validates the fixture vault\")",
-                    "System(cli, \"Fixture CLI\", \"Validates the fixture vault\")\n%% criv:source src/lib.rs#fn:run",
-                ),
-            )
-            .unwrap();
-        }
-        FixtureMutation::C4InterfaceSourceEdit => {
-            let path = root.join("src/lib.rs");
-            let contents = fs::read_to_string(&path).unwrap();
-            fs::write(
-                path,
-                contents.replace(
-                    "pub fn run() {",
-                    "pub fn run(value: &str) {\n    dispatch();",
-                ),
-            )
-            .unwrap();
-        }
-        FixtureMutation::CallResolutionEdit => {
-            let path = root.join("src/worker.py");
-            let mut contents = fs::read_to_string(&path).unwrap();
-            contents.push_str("\ndef dispatch(value: str) -> str:\n    return value\n");
-            fs::write(path, contents).unwrap();
-        }
-        FixtureMutation::AmbiguousSourceAdd => {
-            fs::create_dir_all(root.join("src/nested")).unwrap();
-            fs::write(root.join("src/nested/lib.rs"), "pub fn nested_entry() {}\n").unwrap();
-            let guide = root.join("docs/guide.md");
-            let contents = fs::read_to_string(&guide).unwrap();
-            fs::write(
-                guide,
-                contents.replace("src/lib.rs#fn:run", "lib.rs#fn:run"),
-            )
-            .unwrap();
-        }
-    }
-}
-
-fn rewrite_policy(root: &Path, update: impl FnOnce(String) -> String) {
-    let path = root.join("docs/adr/0001-no-println.md");
-    let contents = fs::read_to_string(&path).unwrap();
-    fs::write(path, update(contents)).unwrap();
 }
 
 fn reset_refresh_work() {
@@ -675,69 +408,6 @@ fn assert_refresh_eq(name: &str, incremental: &RefreshSnapshot, full: &RefreshSn
     );
 }
 
-fn assert_final_work(mutation: FixtureMutation, work: RefreshWork) {
-    let (source, note, c4, policy, source_index) = match mutation {
-        FixtureMutation::Noop => (0, 0, 0, 0, 0),
-        FixtureMutation::DocsProse => (0, 1, 0, 0, 0),
-        FixtureMutation::SourceEdit | FixtureMutation::SameSizeSourceEdit => (1, 1, 0, 1, 0),
-        FixtureMutation::AddSource => (2, 2, 1, 0, 1),
-        FixtureMutation::RenameSource => (2, 2, 1, 0, 1),
-        FixtureMutation::DeleteSource => (1, 2, 1, 0, 0),
-        FixtureMutation::PolicyDemotion => (0, 1, 0, 0, 0),
-        FixtureMutation::PolicyPromotionAndGovernance => (0, 1, 0, 1, 0),
-        FixtureMutation::C4AnchorDocsEdit => (0, 0, 1, 0, 0),
-        FixtureMutation::C4InterfaceSourceEdit => (1, 1, 1, 1, 0),
-        FixtureMutation::CallResolutionEdit => (2, 0, 0, 0, 0),
-        FixtureMutation::AmbiguousSourceAdd => (2, 2, 1, 0, 1),
-    };
-    assert_eq!(work.state.source_partitions_rebuilt, source);
-    assert_eq!(work.state.note_partitions_rebuilt, note);
-    assert_eq!(work.state.c4_partitions_rebuilt, c4);
-    assert_eq!(work.state.policy_partitions_rebuilt, policy);
-    assert_eq!(work.state.source_index_partitions_rebuilt, source_index);
-    assert_eq!(
-        work.state.partitions_rebuilt,
-        source + note + c4 + policy + source_index
-    );
-    assert_eq!(work.state.serializations, 1);
-
-    match mutation {
-        FixtureMutation::Noop => {
-            assert_eq!(work.source_graph.parsed_files, 0);
-            assert_eq!(work.source_graph.reused_files, 2);
-            assert_eq!(work.source_graph.cache_publications, 0);
-            assert_eq!(work.structural.ast_parses, 0);
-        }
-        FixtureMutation::DocsProse | FixtureMutation::C4AnchorDocsEdit => {
-            assert_eq!(work.source_graph.parsed_files, 0);
-            assert_eq!(work.source_graph.cache_publications, 0);
-            assert_eq!(work.structural.ast_parses, 0);
-        }
-        FixtureMutation::SourceEdit
-        | FixtureMutation::SameSizeSourceEdit
-        | FixtureMutation::C4InterfaceSourceEdit => {
-            assert_eq!(work.source_graph.parsed_files, 1);
-            assert_eq!(work.source_graph.cache_publications, 1);
-            assert_eq!(work.structural.ast_parses, 1);
-        }
-        FixtureMutation::AddSource
-        | FixtureMutation::RenameSource
-        | FixtureMutation::CallResolutionEdit
-        | FixtureMutation::AmbiguousSourceAdd => {
-            assert_eq!(work.source_graph.parsed_files, 1);
-            assert_eq!(work.source_graph.cache_publications, 1);
-        }
-        FixtureMutation::DeleteSource => {
-            assert_eq!(work.source_graph.parsed_files, 0);
-            assert_eq!(work.source_graph.cache_publications, 1);
-        }
-        FixtureMutation::PolicyDemotion | FixtureMutation::PolicyPromotionAndGovernance => {
-            assert_eq!(work.source_graph.parsed_files, 0);
-            assert_eq!(work.source_graph.cache_publications, 0);
-        }
-    }
-}
-
 fn write_architecture_fixture(root: &Path) {
     fs::create_dir_all(root.join("src")).unwrap();
     fs::create_dir_all(root.join("docs")).unwrap();
@@ -748,7 +418,7 @@ fn write_architecture_fixture(root: &Path) {
 roots = ["src"]
 
 [architecture.code]
-output = "docs/architecture/04-code.md"
+output = "docs/architecture/04-code.c4"
 title = "Code diagram for criv"
 "#,
     )

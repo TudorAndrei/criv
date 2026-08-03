@@ -1,7 +1,6 @@
 mod adr;
 mod architecture;
 mod c4;
-mod c4_artifact;
 mod c4_code;
 mod check;
 mod config;
@@ -9,6 +8,7 @@ mod enforce;
 mod generated_skills;
 mod git;
 mod init;
+mod likec4;
 mod policy_scan;
 mod query;
 mod refresh;
@@ -243,7 +243,7 @@ fn command_for_path<'a>(spec: &'a usage::Spec, path: &[&str]) -> Option<&'a usag
 mod tests {
     use super::{usage_help, usage_spec, write_usage_spec};
 
-    const QUERY_SUBCOMMANDS: [&str; 17] = [
+    const QUERY_SUBCOMMANDS: [&str; 15] = [
         "next-adr-id",
         "callers",
         "callees",
@@ -257,8 +257,6 @@ mod tests {
         "governing",
         "coverage",
         "nodes",
-        "c4-elements",
-        "c4-relationships",
         "c4-code",
         "diff",
     ];

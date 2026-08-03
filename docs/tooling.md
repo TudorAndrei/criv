@@ -219,11 +219,11 @@ JSON diagnostics for extension manifest and language configuration files. Its
 short temporary user-data and extension-installation paths avoid macOS IPC path
 limits. Hosted CI runs this command under Xvfb; it is not part of local hooks.
 
-The extension renders `.c4` previews locally: Mermaid C4 artifacts use Mermaid
-11, DOT Code artifacts use `@viz-js/viz`, and the preview webview uses packaged
-extension resources rather than CDN scripts. Run `criv watch --once` after
-changing extension source so generated architecture state and
-`docs/architecture/04-code.c4` stay current.
+The extension renders named LikeC4 views from `.criv/state.json`. The preview
+webview uses packaged extension resources and does not use a CDN or a global
+LikeC4 command. Run `criv watch --once` after architecture or extension source
+changes. This keeps generated architecture state and
+`docs/architecture/04-code.c4` current.
 
 `npm --prefix extensions/vscode-criv run package` and `mise run
 vscode-package` build a local `vscode-criv.vsix` without publishing. The

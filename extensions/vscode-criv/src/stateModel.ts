@@ -1,4 +1,5 @@
 import type { CrivGraphNode, CrivSourceEntry, CrivStateSummary, CrivValidatedState } from "./wasm";
+import type { CrivLikeC4Model } from "@criv/likec4/protocol";
 
 export type CrivStateEnvelope = CrivValidatedState;
 
@@ -9,6 +10,7 @@ export interface CrivStateSnapshot {
   graphNodes: CrivGraphNode[];
   registeredPatterns: string[];
   c4Artifacts: CrivArtifactEntry[];
+  architecture?: CrivLikeC4Model;
 }
 
 export interface CrivArtifactEntry {
@@ -44,7 +46,27 @@ export function buildStateSnapshot(
     graphNodes,
     registeredPatterns: registeredPatterns(envelope),
     c4Artifacts: c4Artifacts(sources, graphNodes),
+    architecture: architectureModel(envelope),
   };
+}
+
+function architectureModel(envelope: CrivStateEnvelope): CrivLikeC4Model | undefined {
+  const architecture = envelope.architecture;
+  if (!isRecord(architecture) || !isRecord(architecture.model)) {
+    return undefined;
+  }
+  const model = architecture.model;
+  if (!Array.isArray(model.views) || !Array.isArray(model.sourceLinks) || !("raw" in model)) {
+    return undefined;
+  }
+  return {
+    protocolVersion: 1,
+    likec4Version: String(architecture.likec4Version ?? ""),
+    revision: Number(architecture.revision ?? 0),
+    model: model.raw,
+    views: model.views as { id: string; title: string }[],
+    sourceLinks: model.sourceLinks as { element: string; target: string }[],
+  } as CrivLikeC4Model;
 }
 
 export function c4Artifacts(
