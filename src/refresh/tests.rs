@@ -39,6 +39,10 @@ enum FixtureMutation {
     DeleteSource,
     PolicyDemotion,
     PolicyPromotionAndGovernance,
+    C4AnchorDocsEdit,
+    C4InterfaceSourceEdit,
+    CallResolutionEdit,
+    AmbiguousSourceAdd,
 }
 
 impl FixtureMutation {
@@ -53,13 +57,20 @@ impl FixtureMutation {
             Self::DeleteSource => "source delete",
             Self::PolicyDemotion => "policy demotion",
             Self::PolicyPromotionAndGovernance => "policy promotion and governance",
+            Self::C4AnchorDocsEdit => "C4 source anchor edit",
+            Self::C4InterfaceSourceEdit => "C4 interface source edit",
+            Self::CallResolutionEdit => "cross-file call resolution edit",
+            Self::AmbiguousSourceAdd => "ambiguous source add",
         }
     }
 
     fn cause(self) -> RefreshCause {
         if matches!(
             self,
-            Self::DocsProse | Self::PolicyDemotion | Self::PolicyPromotionAndGovernance
+            Self::DocsProse
+                | Self::PolicyDemotion
+                | Self::PolicyPromotionAndGovernance
+                | Self::C4AnchorDocsEdit
         ) {
             RefreshCause::DocsChanged
         } else {
@@ -70,7 +81,13 @@ impl FixtureMutation {
     fn requires_source_observation(self) -> bool {
         matches!(
             self,
-            Self::SourceEdit | Self::AddSource | Self::RenameSource | Self::DeleteSource
+            Self::SourceEdit
+                | Self::AddSource
+                | Self::RenameSource
+                | Self::DeleteSource
+                | Self::C4InterfaceSourceEdit
+                | Self::CallResolutionEdit
+                | Self::AmbiguousSourceAdd
         )
     }
 
@@ -79,6 +96,7 @@ impl FixtureMutation {
             Self::AddSource => Some(&["src/helper.ts", "src/lib.rs", "src/worker.py"]),
             Self::RenameSource => Some(&["src/format.ts", "src/lib.rs", "src/worker.py"]),
             Self::DeleteSource => Some(&["src/lib.rs", "src/worker.py"]),
+            Self::AmbiguousSourceAdd => Some(&["src/lib.rs", "src/nested/lib.rs", "src/worker.py"]),
             _ => None,
         }
     }
@@ -177,6 +195,10 @@ fn incremental_refresh_matches_a_cache_free_full_rebuild_after_each_mutation() {
         FixtureMutation::DeleteSource,
         FixtureMutation::PolicyDemotion,
         FixtureMutation::PolicyPromotionAndGovernance,
+        FixtureMutation::C4AnchorDocsEdit,
+        FixtureMutation::C4InterfaceSourceEdit,
+        FixtureMutation::CallResolutionEdit,
+        FixtureMutation::AmbiguousSourceAdd,
     ] {
         apply_fixture_mutation(incremental.path(), mutation);
         apply_fixture_mutation(full.path(), mutation);
@@ -431,6 +453,47 @@ fn apply_fixture_mutation(root: &Path, mutation: FixtureMutation) {
                     .replace("src/**/*.rs", "src/lib.rs")
             });
         }
+        FixtureMutation::C4AnchorDocsEdit => {
+            let path = root.join("docs/architecture/01-context.c4");
+            let contents = fs::read_to_string(&path).unwrap();
+            fs::write(
+                path,
+                contents.replace(
+                    "System(cli, \"Fixture CLI\", \"Validates the fixture vault\")",
+                    "System(cli, \"Fixture CLI\", \"Validates the fixture vault\")\n%% criv:source src/lib.rs#fn:run",
+                ),
+            )
+            .unwrap();
+        }
+        FixtureMutation::C4InterfaceSourceEdit => {
+            let path = root.join("src/lib.rs");
+            let contents = fs::read_to_string(&path).unwrap();
+            fs::write(
+                path,
+                contents.replace(
+                    "pub fn run() {",
+                    "pub fn run(value: &str) {\n    dispatch();",
+                ),
+            )
+            .unwrap();
+        }
+        FixtureMutation::CallResolutionEdit => {
+            let path = root.join("src/worker.py");
+            let mut contents = fs::read_to_string(&path).unwrap();
+            contents.push_str("\ndef dispatch(value: str) -> str:\n    return value\n");
+            fs::write(path, contents).unwrap();
+        }
+        FixtureMutation::AmbiguousSourceAdd => {
+            fs::create_dir_all(root.join("src/nested")).unwrap();
+            fs::write(root.join("src/nested/lib.rs"), "pub fn nested_entry() {}\n").unwrap();
+            let guide = root.join("docs/guide.md");
+            let contents = fs::read_to_string(&guide).unwrap();
+            fs::write(
+                guide,
+                contents.replace("src/lib.rs#fn:run", "lib.rs#fn:run"),
+            )
+            .unwrap();
+        }
     }
 }
 
@@ -498,27 +561,28 @@ fn assert_refresh_eq(name: &str, incremental: &RefreshSnapshot, full: &RefreshSn
 }
 
 fn assert_final_work(mutation: FixtureMutation, work: RefreshWork) {
-    let source_partitions = match mutation {
-        FixtureMutation::AddSource | FixtureMutation::RenameSource => 3,
-        FixtureMutation::DeleteSource => 2,
-        _ => 2,
+    let (source, note, c4, policy, source_index) = match mutation {
+        FixtureMutation::Noop => (0, 0, 0, 0, 0),
+        FixtureMutation::DocsProse => (0, 1, 0, 0, 0),
+        FixtureMutation::SourceEdit | FixtureMutation::SameSizeSourceEdit => (1, 1, 0, 1, 0),
+        FixtureMutation::AddSource => (2, 2, 1, 0, 1),
+        FixtureMutation::RenameSource => (2, 2, 1, 0, 1),
+        FixtureMutation::DeleteSource => (1, 2, 1, 0, 0),
+        FixtureMutation::PolicyDemotion => (0, 1, 0, 0, 0),
+        FixtureMutation::PolicyPromotionAndGovernance => (0, 1, 0, 1, 0),
+        FixtureMutation::C4AnchorDocsEdit => (0, 0, 1, 0, 0),
+        FixtureMutation::C4InterfaceSourceEdit => (1, 1, 1, 1, 0),
+        FixtureMutation::CallResolutionEdit => (2, 0, 0, 0, 0),
+        FixtureMutation::AmbiguousSourceAdd => (2, 2, 1, 0, 1),
     };
-    let policy_partitions = if matches!(mutation, FixtureMutation::PolicyDemotion) {
-        0
-    } else {
-        1
-    };
-    assert_eq!(work.state.source_partitions_rebuilt, source_partitions);
-    assert_eq!(work.state.note_partitions_rebuilt, 2);
-    assert_eq!(work.state.c4_partitions_rebuilt, 2);
-    assert_eq!(work.state.policy_partitions_rebuilt, policy_partitions);
-    assert_eq!(
-        work.state.source_index_partitions_rebuilt,
-        source_partitions
-    );
+    assert_eq!(work.state.source_partitions_rebuilt, source);
+    assert_eq!(work.state.note_partitions_rebuilt, note);
+    assert_eq!(work.state.c4_partitions_rebuilt, c4);
+    assert_eq!(work.state.policy_partitions_rebuilt, policy);
+    assert_eq!(work.state.source_index_partitions_rebuilt, source_index);
     assert_eq!(
         work.state.partitions_rebuilt,
-        source_partitions * 2 + 4 + policy_partitions
+        source + note + c4 + policy + source_index
     );
     assert_eq!(work.state.serializations, 1);
 
@@ -529,17 +593,22 @@ fn assert_final_work(mutation: FixtureMutation, work: RefreshWork) {
             assert_eq!(work.source_graph.cache_publications, 0);
             assert_eq!(work.structural.ast_parses, 0);
         }
-        FixtureMutation::DocsProse => {
+        FixtureMutation::DocsProse | FixtureMutation::C4AnchorDocsEdit => {
             assert_eq!(work.source_graph.parsed_files, 0);
             assert_eq!(work.source_graph.cache_publications, 0);
-            assert_eq!(work.structural.ast_parses, 1);
+            assert_eq!(work.structural.ast_parses, 0);
         }
-        FixtureMutation::SourceEdit | FixtureMutation::SameSizeSourceEdit => {
+        FixtureMutation::SourceEdit
+        | FixtureMutation::SameSizeSourceEdit
+        | FixtureMutation::C4InterfaceSourceEdit => {
             assert_eq!(work.source_graph.parsed_files, 1);
             assert_eq!(work.source_graph.cache_publications, 1);
             assert_eq!(work.structural.ast_parses, 1);
         }
-        FixtureMutation::AddSource | FixtureMutation::RenameSource => {
+        FixtureMutation::AddSource
+        | FixtureMutation::RenameSource
+        | FixtureMutation::CallResolutionEdit
+        | FixtureMutation::AmbiguousSourceAdd => {
             assert_eq!(work.source_graph.parsed_files, 1);
             assert_eq!(work.source_graph.cache_publications, 1);
         }

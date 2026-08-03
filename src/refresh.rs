@@ -75,15 +75,15 @@ impl RefreshSession {
             .as_ref()
             .map(|previous| previous.vault.source_graph_build())
             .or(self.seed_graph.as_ref());
-        let previous_state = if matches!(cause, RefreshCause::SourceChanged) {
-            self.previous.as_ref().map(|previous| &previous.state)
-        } else {
-            None
-        };
+        let previous_state = self.previous.as_ref().map(|previous| &previous.state);
+        let diagnostic_previous_state = matches!(cause, RefreshCause::SourceChanged)
+            .then_some(previous_state)
+            .flatten();
         let next = execute(
             root,
             previous_graph,
             previous_state,
+            diagnostic_previous_state,
             self.source_index.handle(),
         )?;
 
@@ -116,6 +116,7 @@ fn execute(
     root: &Path,
     previous_graph: Option<&SourceGraphBuild>,
     previous_state: Option<&State>,
+    diagnostic_previous_state: Option<&State>,
     source_index: SourceIndexHandle,
 ) -> Result<RefreshResult> {
     let mut vault =
@@ -128,7 +129,7 @@ fn execute(
         vault.retain_source_graph_changes_from(&refreshed_graph);
     }
 
-    let diagnostics = check::validate_with_previous_state(&vault, previous_state);
+    let diagnostics = check::validate_with_previous_state(&vault, diagnostic_previous_state);
     let (snapshot, state) = match previous_state {
         Some(previous_state) => {
             state::write_state_incremental(root, &vault, Some(previous_state), &changed_files)?
