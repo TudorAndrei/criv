@@ -5,6 +5,7 @@ use std::path::Path;
 use std::{cell::Cell, thread_local};
 
 use crate::Result;
+use crate::measurement::{self, Counter};
 use crate::structural::{self, CompiledPolicy, PolicyCompileError, PolicyScanRequest};
 use crate::vault::{NoteKind, Vault};
 
@@ -103,6 +104,7 @@ fn work_counts() -> WorkCounts {
 
 impl PolicyScanPlan {
     pub(crate) fn new(vault: &Vault) -> Self {
+        let _span = measurement::span("policy.plan");
         let mut diagnostics = Vec::new();
         let mut owners = Vec::new();
 
@@ -151,6 +153,7 @@ impl PolicyScanPlan {
                     });
                 }
 
+                measurement::increment(Counter::PolicyDefinitions);
                 #[cfg(test)]
                 record_work(|counts| counts.definition_compilations += 1);
                 match structural::compile_policy(policy) {
@@ -180,6 +183,7 @@ impl PolicyScanPlan {
                 continue;
             }
 
+            measurement::increment(Counter::PolicyScopeResolutions);
             #[cfg(test)]
             record_work(|counts| counts.adr_scope_resolutions += 1);
             let paths = vault
@@ -209,6 +213,7 @@ impl PolicyScanPlan {
         vault: &Vault,
         changed_files: Option<&BTreeSet<String>>,
     ) -> Result<Vec<PolicyViolation>> {
+        let _span = measurement::span("policy.scan");
         let scan_paths = self
             .owners
             .iter()

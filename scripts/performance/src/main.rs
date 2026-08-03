@@ -19,6 +19,7 @@ use tempfile::TempDir;
 const RUN_SCHEMA: &str = "criv.performance-run.v1";
 const SAMPLE_SCHEMA: &str = "criv.performance-sample.v1";
 const SUMMARY_SCHEMA: &str = "criv.performance-summary.v1";
+const MEASUREMENT_PATH_ENV: &str = "CRIV_PERF_MEASUREMENT_PATH";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -44,6 +45,9 @@ struct Args {
     /// Permit an explicit profile other than release for harness smoke tests only.
     #[arg(long)]
     allow_non_release: bool,
+    /// Disable structured command work records for semantic-parity comparisons.
+    #[arg(long)]
+    without_measurement: bool,
     /// Restrict the run to selected command cases; repeat as needed.
     #[arg(long = "case", value_enum)]
     cases: Vec<Case>,
@@ -164,6 +168,7 @@ struct RunIdentity {
     binary: String,
     binary_digest: String,
     profile: String,
+    structured_measurement: bool,
     samples: usize,
     machine: MachineIdentity,
     manifests: Vec<ManifestIdentity>,
@@ -297,6 +302,7 @@ fn run(mut args: Args) -> Result<(), String> {
         binary: binary.display().to_string(),
         binary_digest: binary_digest.clone(),
         profile: args.profile.clone(),
+        structured_measurement: !args.without_measurement,
         samples: args.samples,
         machine,
         manifests: manifests
@@ -352,6 +358,7 @@ fn run(mut args: Args) -> Result<(), String> {
                     *case,
                     sample,
                     root.path(),
+                    !args.without_measurement,
                 )?;
                 failed |= row.exit_status != 0;
                 serde_json::to_writer(&mut raw, &row).map_err(display_error)?;
@@ -435,7 +442,15 @@ fn run_warmup(
     let root = TempDir::new().map_err(display_error)?;
     let generated = generate(root.path(), &loaded.manifest)?;
     prepare_sample(binary, root.path(), loaded, &generated, case, run_id)?;
-    let output = run_criv(binary, root.path(), case.args(), run_id, "warmup", case)?;
+    let output = run_criv(
+        binary,
+        root.path(),
+        case.args(),
+        run_id,
+        "warmup",
+        case,
+        false,
+    )?;
     if output.status.success() {
         return Ok(());
     }
@@ -457,7 +472,15 @@ fn prepare_sample(
     run_id: &str,
 ) -> Result<(), String> {
     if case.needs_seed() {
-        let output = run_criv(binary, root, &["watch", "--once"], run_id, "seed", case)?;
+        let output = run_criv(
+            binary,
+            root,
+            &["watch", "--once"],
+            run_id,
+            "seed",
+            case,
+            false,
+        )?;
         if !output.status.success() {
             return Err(format!(
                 "cache seed failed for {} {}:\nstdout:\n{}\nstderr:\n{}",
@@ -484,6 +507,7 @@ fn measure_sample(
     case: Case,
     sample: usize,
     root: &Path,
+    structured_measurement: bool,
 ) -> Result<SampleRow, String> {
     let usage_before = child_usage();
     let start = Instant::now();
@@ -494,6 +518,7 @@ fn measure_sample(
         &run.run_id,
         &sample.to_string(),
         case,
+        structured_measurement,
     )?;
     let real_seconds = start.elapsed().as_secs_f64();
     let usage_after = child_usage();
@@ -504,9 +529,22 @@ fn measure_sample(
     fs::write(result_dir.join(&stdout_path), &output.stdout).map_err(display_error)?;
     fs::write(result_dir.join(&stderr_path), &output.stderr).map_err(display_error)?;
     let measurement_path = root.join(".criv/performance-measurement.json");
-    let measurement = fs::read(&measurement_path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let measurement = if structured_measurement {
+        let measurement_bytes = fs::read(&measurement_path).map_err(|error| {
+            format!(
+                "measured command did not write {}: {error}",
+                measurement_path.display()
+            )
+        })?;
+        Some(serde_json::from_slice(&measurement_bytes).map_err(|error| {
+            format!(
+                "measured command wrote invalid JSON to {}: {error}",
+                measurement_path.display()
+            )
+        })?)
+    } else {
+        None
+    };
     Ok(SampleRow {
         schema: SAMPLE_SCHEMA,
         run_id: run.run_id.clone(),
@@ -543,14 +581,22 @@ fn run_criv(
     run_id: &str,
     sample_id: &str,
     case: Case,
+    structured_measurement: bool,
 ) -> Result<Output, String> {
-    Command::new(binary)
+    let mut command = Command::new(binary);
+    command
         .args(args)
         .current_dir(root)
         .env("CRIV_PERF_RUN_ID", run_id)
         .env("CRIV_PERF_SAMPLE_ID", sample_id)
         .env("CRIV_PERF_CASE", case.id())
-        .env("CRIV_PERF_CACHE_STATE", case.cache_state())
+        .env("CRIV_PERF_CACHE_STATE", case.cache_state());
+    if structured_measurement {
+        command.env(MEASUREMENT_PATH_ENV, ".criv/performance-measurement.json");
+    } else {
+        command.env_remove(MEASUREMENT_PATH_ENV);
+    }
+    command
         .output()
         .map_err(|error| format!("failed to execute {}: {error}", binary.display()))
 }

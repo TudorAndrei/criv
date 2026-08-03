@@ -47,6 +47,8 @@ first_result="$(find "$test_root/results" -mindepth 1 -maxdepth 1 -type d | sort
 jq -e '.schema == "criv.performance-summary.v1" and (.cases | length) == 2' \
   "$first_result/summary.json" >/dev/null
 test "$(wc -l <"$first_result/samples.jsonl" | tr -d ' ')" = "2"
+jq -e '.measurement.schema == "criv.performance-measurement.v1"' \
+  "$first_result/samples.jsonl" >/dev/null
 test "$(cut -f1 "$test_root/fake.log" | sort -u | wc -l | tr -d ' ')" -ge "8"
 
 export CRIV_FAKE_FAIL_CASE="watch_once_cold"

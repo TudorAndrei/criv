@@ -8,6 +8,7 @@ mod config;
 mod enforce;
 mod git;
 mod init;
+mod measurement;
 mod policy_scan;
 mod query;
 mod refresh;
@@ -82,6 +83,13 @@ enum Command {
 
 pub fn run(args: Vec<String>) -> Result<()> {
     let cwd = std::env::current_dir()?;
+    measurement::begin_command(&cwd);
+    let result = run_command(args, &cwd);
+    measurement::finish_command(result.is_ok());
+    result
+}
+
+fn run_command(args: Vec<String>, cwd: &std::path::Path) -> Result<()> {
     if let Some(help) = usage_help(&args) {
         print!("{help}");
         return Ok(());
@@ -113,14 +121,14 @@ pub fn run(args: Vec<String>) -> Result<()> {
             println!();
             Ok(())
         }
-        Some(Command::Init(options)) => init::run(&cwd, options),
-        Some(Command::Adr(options)) => adr::run(&cwd, options),
-        Some(Command::Check(options)) => check::run(&cwd, options),
-        Some(Command::Query(options)) => query::run(&cwd, options),
-        Some(Command::Search(options)) => search::run(&cwd, options),
-        Some(Command::State(options)) => snapshots::run(&cwd, options),
-        Some(Command::Watch(options)) => watch::run(&cwd, options),
-        Some(Command::Enforce(options)) => enforce::run(&cwd, options),
+        Some(Command::Init(options)) => init::run(cwd, options),
+        Some(Command::Adr(options)) => adr::run(cwd, options),
+        Some(Command::Check(options)) => check::run(cwd, options),
+        Some(Command::Query(options)) => query::run(cwd, options),
+        Some(Command::Search(options)) => search::run(cwd, options),
+        Some(Command::State(options)) => snapshots::run(cwd, options),
+        Some(Command::Watch(options)) => watch::run(cwd, options),
+        Some(Command::Enforce(options)) => enforce::run(cwd, options),
     }
 }
 

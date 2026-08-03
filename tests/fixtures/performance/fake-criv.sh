@@ -9,11 +9,11 @@ if [[ -n "${CRIV_FAKE_LOG:-}" ]]; then
     "${CRIV_PERF_CACHE_STATE:-missing}" >>"$CRIV_FAKE_LOG"
 fi
 
+requested_failure=false
 if [[ "${CRIV_FAKE_FAIL_CASE:-}" == "${CRIV_PERF_CASE:-}" \
   && "${CRIV_PERF_SAMPLE_ID:-}" != "warmup" \
   && "${CRIV_PERF_SAMPLE_ID:-}" != "seed" ]]; then
-  echo "requested fake failure" >&2
-  exit 7
+  requested_failure=true
 fi
 
 if [[ "${1:-}" == "watch" ]]; then
@@ -28,6 +28,22 @@ fi
 if [[ "${1:-}" == "query" && "${2:-}" == "diff" && ! -f .criv/latest ]]; then
   echo "latest does not resolve" >&2
   exit 1
+fi
+
+if [[ -n "${CRIV_PERF_MEASUREMENT_PATH:-}" ]]; then
+  mkdir -p "$(dirname "$CRIV_PERF_MEASUREMENT_PATH")"
+  measurement_success=true
+  if [[ "$requested_failure" == true ]]; then
+    measurement_success=false
+  fi
+  printf '{"schema":"criv.performance-measurement.v1","success":%s,"counters":{},"spans":{}}\n' \
+    "$measurement_success" \
+    >"$CRIV_PERF_MEASUREMENT_PATH"
+fi
+
+if [[ "$requested_failure" == true ]]; then
+  echo "requested fake failure" >&2
+  exit 7
 fi
 
 printf 'fake criv ok\n'

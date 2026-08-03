@@ -97,6 +97,10 @@ compiled, AST parses, State partitions and serializations, cache bytes, and
 published output bytes. Per-element timing is excluded because observer cost
 would dominate the small operations it attempts to explain.
 
+Canonical harness runs collect the structured record by default. Use
+`--without-measurement` only to produce the uninstrumented half of an explicit
+semantic-parity comparison; the run identity records which mode was used.
+
 Instrumentation is disabled by default. Enabling it must preserve exit status,
 stdout, stderr, generated State bytes, snapshot hash, and graph-cache bytes for
 successful and failing commands. Deterministic counters are primary evidence
