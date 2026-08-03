@@ -1,0 +1,14 @@
+[vault]
+docs = "docs"
+adr = "adr"
+
+[source]
+roots = ["src", "lib"]
+exclude = ["**/target/**", "**/node_modules/**"]
+
+[index]
+source = true
+embeddings = false
+
+[enforce]
+stages = ["commit", "push", "ci"]
