@@ -599,7 +599,7 @@ mod tests {
     fn remove_link_or_dir(path: &Path) {
         let metadata = fs::symlink_metadata(path).unwrap();
         if metadata.file_type().is_symlink() {
-            fs::remove_file(path).unwrap();
+            crate::util::remove_dir_link(path).unwrap();
         } else {
             fs::remove_dir_all(path).unwrap();
         }

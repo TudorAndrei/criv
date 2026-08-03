@@ -84,7 +84,7 @@ pub(crate) fn link_dir_in(
             if current == relative_target || resolves_to_target {
                 return Ok(LinkOutcome::Unchanged);
             }
-            fs::remove_file(&link_path)?;
+            remove_dir_link(&link_path)?;
         }
         Ok(metadata) if metadata.is_dir() => {
             if !replace_directory {
@@ -139,10 +139,27 @@ fn finish_link(
 
     #[cfg(not(windows))]
     let _ = absolute_target;
+    #[cfg(not(unix))]
+    let _ = relative_target;
 
     match result {
         Ok(()) => Ok(true),
         Err(_) => Ok(false),
+    }
+}
+
+/// Remove a directory link without traversing into its target.
+pub(crate) fn remove_dir_link(path: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        if junction::exists(path).unwrap_or(false) {
+            junction::delete(path)?;
+        }
+        fs::remove_dir(path)
+    }
+    #[cfg(not(windows))]
+    {
+        fs::remove_file(path)
     }
 }
 
