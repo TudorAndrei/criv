@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use crate::util::write_atomic_in;
 
-pub(crate) const OUTPUT_PATH_ENV: &str = "CRIV_PERF_MEASUREMENT_PATH";
+const OUTPUT_PATH_ENV: &str = "CRIV_PERF_MEASUREMENT_PATH";
 const SCHEMA: &str = "criv.performance-measurement.v1";
 
 #[derive(Debug, Clone, Copy)]

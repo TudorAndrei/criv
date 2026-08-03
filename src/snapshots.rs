@@ -153,7 +153,7 @@ pub(crate) fn load(root: &Path, id: &str) -> Result<Option<String>> {
     Ok(Some(contents))
 }
 
-pub(crate) fn list(root: &Path) -> Result<Vec<SnapshotRecord>> {
+fn list(root: &Path) -> Result<Vec<SnapshotRecord>> {
     let view = reconcile(root)?;
     Ok(records_newest_first(&view))
 }

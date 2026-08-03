@@ -84,8 +84,8 @@ pub(crate) enum InstalledSkillStatus {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub(crate) struct InstalledSkillFact {
-    pub(crate) path: &'static str,
-    pub(crate) status: InstalledSkillStatus,
+    path: &'static str,
+    status: InstalledSkillStatus,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -103,11 +103,11 @@ pub(crate) struct SkillInventory {
 }
 
 impl SkillInventory {
-    pub(crate) fn skill_statuses(&self) -> &[InstalledSkillFact] {
+    fn skill_statuses(&self) -> &[InstalledSkillFact] {
         &self.skills
     }
 
-    pub(crate) fn claude_layout(&self) -> ClaudeLayout {
+    fn claude_layout(&self) -> ClaudeLayout {
         self.claude
     }
 
