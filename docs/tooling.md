@@ -191,6 +191,15 @@ The combined build preserves the release and manual entry point by running the
 Wasm build followed by the plugin build. The Wasm command invokes `wasm-pack`
 through `mise exec cargo:wasm-pack@0.15.0`, so the repository's pinned tools are
 used rather than whichever Rust or `wasm-pack` appears first in the shell.
+It writes `criv_wasm.js`, `criv_wasm_bg.js`, and `criv_wasm_bg.wasm` under
+`.obsidian/plugins/criv/pkg/`. The plugin bundle keeps that runtime import
+external, so a distributable plugin must carry the generated `pkg/` directory
+beside `main.js`.
+
+If Obsidian reports that the criv Wasm runtime is unavailable, run the combined
+build, confirm those three runtime files exist, and reload the plugin. A state
+schema or parse error is separate: regenerate `.criv/state.json` with `criv
+watch --once` instead of rebuilding Wasm.
 
 The VS Code-compatible extension lives in `extensions/vscode-criv`. Its local
 tasks are exposed through mise and npm:
@@ -218,7 +227,15 @@ changing extension source so generated architecture state and
 
 `npm --prefix extensions/vscode-criv run package` and `mise run
 vscode-package` build a local `vscode-criv.vsix` without publishing. The
-extension metadata is kept compatible with both VS Code Marketplace and Open
+prepublish hook builds the Node.js Wasm target into
+`extensions/vscode-criv/pkg/`; the VSIX includes `criv_wasm.js` and
+`criv_wasm_bg.wasm` from that directory. If the extension reports an unavailable
+Wasm runtime, rebuild `build:wasm`, recreate the VSIX, confirm those files are
+present in the package, and reload the editor window. Regenerate invalid state
+with `criv watch --once`; do not treat a state-validation error as a runtime
+packaging failure.
+
+The extension metadata is kept compatible with both VS Code Marketplace and Open
 VSX publication, but MVP verification does not require a marketplace token or
 an Open VSX publish step. Install the VSIX explicitly with an editor CLI such
 as `code --install-extension` or `cursor --install-extension` when doing
