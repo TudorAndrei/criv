@@ -406,14 +406,25 @@ impl State {
             }
         }
 
-        let requests = pending_policy_scans
+        let compiled_requests = pending_policy_scans
             .iter()
             .enumerate()
             .filter(|(_, scan)| scan.paths.is_some())
-            .map(|(key, scan)| structural::PolicyScanRequest {
-                key,
-                policy: scan.policy,
-                paths: scan.paths.as_ref().expect("scans are filtered above"),
+            .map(|(key, scan)| {
+                structural::compile_policy(scan.policy)
+                    .map(|policy| (key, policy))
+                    .map_err(CrivError::from)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let requests = compiled_requests
+            .iter()
+            .map(|(key, policy)| structural::PolicyScanRequest {
+                key: *key,
+                policy,
+                paths: pending_policy_scans[*key]
+                    .paths
+                    .as_ref()
+                    .expect("scans are filtered above"),
             })
             .collect::<Vec<_>>();
         let rescanned = structural::find_policies_batch(root, vault, &requests)?;

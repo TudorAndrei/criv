@@ -8,6 +8,7 @@ mod config;
 mod enforce;
 mod git;
 mod init;
+mod policy_scan;
 mod query;
 mod refresh;
 mod search;

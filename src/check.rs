@@ -12,11 +12,12 @@ use serde::Serialize;
 
 use crate::c4::{C4ElementCategory, C4Level};
 use crate::c4_artifact::C4ArtifactFormat;
+use crate::policy_scan::{PolicyDiagnostic, PolicyDiagnosticKind, PolicyScanPlan};
 use crate::state::{self, State};
 use crate::util::{GlobMatcher, is_adr_id, kebab, write_atomic_in};
 use crate::vault::{
-    Note, NoteKind, PolicyPattern, ResolvedLink, SourceTargetResolution, Vault,
-    is_typed_source_target, source_target_body,
+    Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault, is_typed_source_target,
+    source_target_body,
 };
 use crate::{CrivError, Result};
 
@@ -123,19 +124,22 @@ pub(crate) fn validate_all(root: &Path) -> Result<Vec<Diagnostic>> {
 fn validate_all_with_fix(root: &Path, fix: bool) -> Result<Vec<Diagnostic>> {
     let mut diagnostics = validate_markdown_format(root, fix)?;
     let vault = Vault::load(root)?;
+    let policy_plan = PolicyScanPlan::new(&vault);
     let previous_interface_hashes = previous_c4_interface_hashes(root)?;
     diagnostics.extend(validate_with_previous_c4_interfaces(
         &vault,
         previous_interface_hashes.as_ref(),
+        &policy_plan,
     ));
     diagnostics.extend(
-        policy_violations(root, &vault)?
+        policy_plan
+            .scan(root, &vault, None)?
             .into_iter()
             .map(|violation| {
                 error(
                     "policy-violation",
                     &violation.path,
-                    violation.line,
+                    Some(violation.line),
                     format!(
                         "{} policy `{}` matched `{}`",
                         violation.adr_id, violation.pattern_id, violation.text
@@ -380,107 +384,41 @@ fn relative_path(root: &Path, path: &Path) -> String {
         .replace('\\', "/")
 }
 
-struct PolicyViolation {
-    path: String,
-    line: Option<usize>,
-    adr_id: String,
-    pattern_id: String,
-    text: String,
-}
-
-fn policy_violations(root: &Path, vault: &Vault) -> Result<Vec<PolicyViolation>> {
-    struct ScanRecord<'a> {
-        adr_id: String,
-        pattern_id: String,
-        scopes: BTreeSet<String>,
-        pattern: &'a PolicyPattern,
-    }
-
-    let mut records = Vec::new();
-    for note in &vault.notes {
-        if note.status.as_deref() != Some("accepted") {
-            continue;
-        }
-        let Some(adr_id) = &note.id else {
-            continue;
-        };
-        let scopes: BTreeSet<String> = policy_scope_files(vault, &vault.effective_governs(note))
-            .into_iter()
-            .collect();
-        for pattern in &note.policy_patterns {
-            if !crate::structural::policy_pattern_entry_is_valid(pattern) {
-                continue;
-            }
-            let Some(local_id) = pattern
-                .id
-                .as_deref()
-                .map(str::trim)
-                .filter(|id| !id.is_empty())
-            else {
-                continue;
-            };
-            records.push(ScanRecord {
-                adr_id: adr_id.clone(),
-                pattern_id: format!("{adr_id}/{local_id}"),
-                scopes: scopes.clone(),
-                pattern,
-            });
-        }
-    }
-
-    let requests = records
-        .iter()
-        .enumerate()
-        .map(|(key, record)| crate::structural::PolicyScanRequest {
-            key,
-            policy: record.pattern,
-            paths: &record.scopes,
-        })
-        .collect::<Vec<_>>();
-    let rows_by_key = crate::structural::find_policies_batch(root, vault, &requests)?;
-
-    let mut violations = Vec::new();
-    for (key, record) in records.iter().enumerate() {
-        if let Some(rows) = rows_by_key.get(&key) {
-            violations.extend(rows.iter().cloned().map(|row| PolicyViolation {
-                path: row.path,
-                line: Some(row.line),
-                adr_id: record.adr_id.clone(),
-                pattern_id: record.pattern_id.clone(),
-                text: row.text,
-            }));
-        }
-    }
-    Ok(violations)
-}
-
-fn policy_scope_files(vault: &Vault, scopes: &[String]) -> Vec<String> {
-    vault
-        .source_files_matching_globs(scopes)
-        .into_iter()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
-
+#[cfg(test)]
 pub(crate) fn validate(vault: &Vault) -> Vec<Diagnostic> {
-    validate_with_previous_c4_interfaces(vault, None)
+    let policy_plan = PolicyScanPlan::new(vault);
+    validate_with_previous_c4_interfaces(vault, None, &policy_plan)
+}
+
+pub(crate) fn validate_with_policy_plan(
+    vault: &Vault,
+    policy_plan: &PolicyScanPlan,
+) -> Vec<Diagnostic> {
+    validate_with_previous_c4_interfaces(vault, None, policy_plan)
 }
 
 pub(crate) fn validate_with_previous_state(
     vault: &Vault,
     previous: Option<&State>,
 ) -> Vec<Diagnostic> {
+    let policy_plan = PolicyScanPlan::new(vault);
     let previous_hashes = previous.map(State::c4_interface_hashes);
-    validate_with_previous_c4_interfaces(vault, previous_hashes.as_ref())
+    validate_with_previous_c4_interfaces(vault, previous_hashes.as_ref(), &policy_plan)
 }
 
 fn validate_with_previous_c4_interfaces(
     vault: &Vault,
     previous_interface_hashes: Option<&BTreeMap<String, String>>,
+    policy_plan: &PolicyScanPlan,
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     validate_notes(vault, &mut diagnostics);
+    diagnostics.extend(
+        policy_plan
+            .definition_diagnostics()
+            .iter()
+            .map(policy_diagnostic),
+    );
     validate_pattern_collisions(vault, &mut diagnostics);
     validate_links(vault, &mut diagnostics);
     validate_supersession(vault, &mut diagnostics);
@@ -490,6 +428,48 @@ fn validate_with_previous_c4_interfaces(
         (&a.path, a.line.unwrap_or(0), a.code).cmp(&(&b.path, b.line.unwrap_or(0), b.code))
     });
     diagnostics
+}
+
+fn policy_diagnostic(diagnostic: &PolicyDiagnostic) -> Diagnostic {
+    let (code, message) = match &diagnostic.kind {
+        PolicyDiagnosticKind::MissingId => (
+            "missing-policy-pattern-id",
+            "policy pattern must declare an id".to_string(),
+        ),
+        PolicyDiagnosticKind::EmptyId => (
+            "empty-policy-pattern",
+            "policy pattern id may not be empty".to_string(),
+        ),
+        PolicyDiagnosticKind::DuplicateId { id } => (
+            "duplicate-policy-pattern",
+            format!("policy pattern id `{id}` is declared more than once"),
+        ),
+        PolicyDiagnosticKind::MissingDefinition { id } => (
+            "missing-policy-pattern-definition",
+            format!("policy pattern `{id}` must declare language and pattern or rule"),
+        ),
+        PolicyDiagnosticKind::MissingLanguage { id } => (
+            "missing-policy-pattern-language",
+            format!("inline policy pattern `{id}` must declare a language"),
+        ),
+        PolicyDiagnosticKind::AmbiguousBody { id } => (
+            "ambiguous-policy-pattern-body",
+            format!("inline policy pattern `{id}` must declare either pattern or rule, not both"),
+        ),
+        PolicyDiagnosticKind::MissingBody { id } => (
+            "missing-policy-pattern-body",
+            format!("inline policy pattern `{id}` must declare pattern or rule"),
+        ),
+        PolicyDiagnosticKind::InvalidPattern { id, error } => (
+            "invalid-policy-pattern",
+            format!("inline policy pattern `{id}` does not compile: {error}"),
+        ),
+        PolicyDiagnosticKind::InvalidRule { id, error } => (
+            "invalid-policy-pattern",
+            format!("inline policy rule `{id}` does not compile: {error}"),
+        ),
+    };
+    error(code, &diagnostic.path, Some(diagnostic.line), message)
 }
 
 fn previous_c4_interface_hashes(root: &Path) -> Result<Option<BTreeMap<String, String>>> {
@@ -627,117 +607,6 @@ fn validate_decision_note(
                     "ADR filename should start with `{expected_prefix}` and follow NNNN-kebab-case-title.md"
                 ),
             ));
-        }
-    }
-
-    validate_policy_patterns(note, diagnostics);
-}
-
-fn validate_policy_patterns(note: &Note, diagnostics: &mut Vec<Diagnostic>) {
-    let mut ids = BTreeSet::new();
-    for pattern in &note.policy_patterns {
-        let Some(id) = pattern.id.as_deref() else {
-            diagnostics.push(error(
-                "missing-policy-pattern-id",
-                &note.rel_path,
-                Some(pattern.line),
-                "policy pattern must declare an id",
-            ));
-            continue;
-        };
-
-        let id = id.trim();
-        if id.is_empty() {
-            diagnostics.push(error(
-                "empty-policy-pattern",
-                &note.rel_path,
-                Some(pattern.line),
-                "policy pattern id may not be empty",
-            ));
-            continue;
-        }
-
-        if !ids.insert(id.to_string()) {
-            diagnostics.push(error(
-                "duplicate-policy-pattern",
-                &note.rel_path,
-                Some(pattern.line),
-                format!("policy pattern id `{id}` is declared more than once"),
-            ));
-        }
-
-        if !pattern.has_inline_definition() {
-            diagnostics.push(error(
-                "missing-policy-pattern-definition",
-                &note.rel_path,
-                Some(pattern.line),
-                format!("policy pattern `{id}` must declare language and pattern or rule"),
-            ));
-        } else {
-            validate_inline_policy_pattern(note, pattern, id, diagnostics);
-        }
-    }
-}
-
-fn validate_inline_policy_pattern(
-    note: &Note,
-    pattern: &PolicyPattern,
-    id: &str,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    let Some(language) = pattern
-        .language
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        diagnostics.push(error(
-            "missing-policy-pattern-language",
-            &note.rel_path,
-            Some(pattern.line),
-            format!("inline policy pattern `{id}` must declare a language"),
-        ));
-        return;
-    };
-
-    match (pattern.pattern.as_deref(), pattern.rule.as_deref()) {
-        (Some(_), Some(_)) => diagnostics.push(error(
-            "ambiguous-policy-pattern-body",
-            &note.rel_path,
-            Some(pattern.line),
-            format!("inline policy pattern `{id}` must declare either pattern or rule, not both"),
-        )),
-        (None, None) => diagnostics.push(error(
-            "missing-policy-pattern-body",
-            &note.rel_path,
-            Some(pattern.line),
-            format!("inline policy pattern `{id}` must declare pattern or rule"),
-        )),
-        (Some(pattern_body), None) => {
-            if let Err(err) = crate::structural::validate_source(
-                crate::structural::PatternSource::Pattern(pattern_body),
-                language,
-            ) {
-                diagnostics.push(error(
-                    "invalid-policy-pattern",
-                    &note.rel_path,
-                    Some(pattern.line),
-                    format!("inline policy pattern `{id}` does not compile: {err}"),
-                ));
-            }
-        }
-        (None, Some(rule_body)) => {
-            if let Err(err) = crate::structural::validate_source(
-                crate::structural::PatternSource::Rule(rule_body),
-                language,
-            ) {
-                diagnostics.push(error(
-                    "invalid-policy-pattern",
-                    &note.rel_path,
-                    Some(pattern.line),
-                    format!("inline policy rule `{id}` does not compile: {err}"),
-                ));
-            }
         }
     }
 }

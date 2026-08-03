@@ -9,6 +9,7 @@ use crate::check;
 use crate::git::{
     self, ChangeStatus, ChangedEntry, ChangedSet, ChangedSetComparison, GitRepository,
 };
+use crate::policy_scan::PolicyScanPlan;
 use crate::vault::Vault;
 use crate::{CrivError, Result};
 
@@ -39,6 +40,7 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
         ));
     }
     let vault = Vault::load(root)?;
+    let policy_plan = PolicyScanPlan::new(&vault);
     if !vault
         .config
         .enforce_stages
@@ -56,7 +58,7 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
         crate::adr::check_base(root, &base_ref)?;
     }
 
-    let diagnostics = check::validate(&vault);
+    let diagnostics = check::validate_with_policy_plan(&vault, &policy_plan);
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();
 
@@ -68,7 +70,23 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
             .as_ref()
             .map(|changes| changed_entry_paths(&changes.entries))
     };
-    let violations = policy_violations(root, &vault, changed_files.as_ref())?;
+    let changed_policy_files = changed_files
+        .as_ref()
+        .map(|paths| paths.iter().cloned().collect::<BTreeSet<_>>());
+    let violations = policy_plan
+        .scan(root, &vault, changed_policy_files.as_ref())?
+        .into_iter()
+        .map(|violation| {
+            format!(
+                "{}:{}: {} policy `{}` matched `{}`",
+                violation.path,
+                violation.line,
+                violation.adr_id,
+                violation.pattern_id,
+                violation.text
+            )
+        })
+        .collect::<Vec<_>>();
     let import_violations = import_policy_violations(&vault, changed_files.as_ref());
     let receipt_is_current = crate::adr::receipt_is_current(root);
     let receipt_allows_transaction = options.stage == Stage::Commit
@@ -154,105 +172,6 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
     }
     println!("enforcement passed");
     Ok(())
-}
-
-fn policy_violations(
-    root: &Path,
-    vault: &Vault,
-    changed_files: Option<&Vec<String>>,
-) -> Result<Vec<String>> {
-    struct ScanRecord<'a> {
-        adr_id: String,
-        pattern_id: String,
-        scopes: BTreeSet<String>,
-        pattern: &'a crate::vault::PolicyPattern,
-    }
-
-    let mut records = Vec::new();
-    for note in &vault.notes {
-        if note.status.as_deref() != Some("accepted") {
-            continue;
-        }
-        let Some(adr_id) = &note.id else {
-            continue;
-        };
-        let scopes: BTreeSet<String> =
-            policy_scan_files(vault, &vault.effective_governs(note), changed_files)
-                .into_iter()
-                .collect();
-        for pattern in &note.policy_patterns {
-            if !crate::structural::policy_pattern_entry_is_valid(pattern) {
-                continue;
-            }
-            let Some(local_id) = pattern
-                .id
-                .as_deref()
-                .map(str::trim)
-                .filter(|id| !id.is_empty())
-            else {
-                continue;
-            };
-            records.push(ScanRecord {
-                adr_id: adr_id.clone(),
-                pattern_id: format!("{adr_id}/{local_id}"),
-                scopes: scopes.clone(),
-                pattern,
-            });
-        }
-    }
-
-    let requests = records
-        .iter()
-        .enumerate()
-        .map(|(key, record)| crate::structural::PolicyScanRequest {
-            key,
-            policy: record.pattern,
-            paths: &record.scopes,
-        })
-        .collect::<Vec<_>>();
-    let rows_by_key = crate::structural::find_policies_batch(root, vault, &requests)?;
-
-    let mut violations = Vec::new();
-    for (key, record) in records.iter().enumerate() {
-        if let Some(rows) = rows_by_key.get(&key) {
-            for row in rows {
-                violations.push(format!(
-                    "{}:{}: {} policy `{pattern_id}` matched `{}`",
-                    row.path,
-                    row.line,
-                    record.adr_id,
-                    row.text,
-                    pattern_id = record.pattern_id
-                ));
-            }
-        }
-    }
-    Ok(violations)
-}
-
-fn policy_scan_files(
-    vault: &Vault,
-    scopes: &[String],
-    changed_files: Option<&Vec<String>>,
-) -> Vec<String> {
-    let files = policy_scope_files(vault, scopes);
-    let Some(changed_files) = changed_files else {
-        return files;
-    };
-    let changed = changed_files.iter().collect::<BTreeSet<_>>();
-    files
-        .into_iter()
-        .filter(|file| changed.contains(file))
-        .collect()
-}
-
-fn policy_scope_files(vault: &Vault, scopes: &[String]) -> Vec<String> {
-    vault
-        .source_files_matching_globs(scopes)
-        .into_iter()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
 }
 
 fn import_policy_violations(vault: &Vault, changed_files: Option<&Vec<String>>) -> Vec<String> {
@@ -860,37 +779,6 @@ mod tests {
         let violations = adr_immutability_violations("docs", "adr", Some(&entries), |_| true);
 
         assert!(violations.is_empty());
-    }
-
-    #[test]
-    fn policy_scan_files_intersects_changed_files_with_governed_sources() {
-        let root = tempfile::TempDir::new().unwrap();
-        std::fs::create_dir_all(root.path().join("src")).unwrap();
-        std::fs::write(
-            root.path().join("criv.toml"),
-            r#"
-[source]
-roots = ["src"]
-"#,
-        )
-        .unwrap();
-        std::fs::write(root.path().join("src/lib.rs"), "fn run() {}\n").unwrap();
-        std::fs::write(root.path().join("src/other.rs"), "fn other() {}\n").unwrap();
-        let vault = Vault::load(root.path()).unwrap();
-
-        let changed = vec!["src/lib.rs".into(), "docs/readme.md".into()];
-        assert_eq!(
-            policy_scan_files(&vault, &["src/**".into()], Some(&changed)),
-            vec!["src/lib.rs"]
-        );
-        assert_eq!(
-            policy_scan_files(&vault, &["src/other.rs#fn:other".into()], Some(&changed)),
-            Vec::<String>::new()
-        );
-        assert_eq!(
-            policy_scan_files(&vault, &["src/other.rs#fn:other".into()], None),
-            vec!["src/other.rs"]
-        );
     }
 
     fn git(root: &Path, args: &[&str]) {

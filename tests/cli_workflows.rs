@@ -1477,12 +1477,33 @@ status: accepted
 date: 2026-06-26
 policy:
   patterns:
+    - language: rust
+      pattern: "println!($$$ARGS)"
+    - id: ""
+      language: rust
+      pattern: "println!($$$ARGS)"
     - id: no-language
       pattern: "println!($$$ARGS)"
     - id: invalid-rule
       language: rust
       rule: "not: [valid"
     - id: id-only
+    - id: ambiguous
+      language: rust
+      pattern: "println!($$$ARGS)"
+      rule: "pattern: println!($$$ARGS)"
+    - id: no-body
+      language: rust
+      message: Missing a body.
+    - id: unsupported-language
+      language: not-a-language
+      pattern: "println!($$$ARGS)"
+    - id: duplicate
+      language: rust
+      pattern: "println!($$$ARGS)"
+    - id: duplicate
+      language: rust
+      pattern: "dbg!($$$ARGS)"
 ---
 
 # Inline policy validation
@@ -1494,10 +1515,18 @@ policy:
         .args(["check", "--filter", "policy-pattern"])
         .assert()
         .failure()
+        .stdout(predicate::str::contains("missing-policy-pattern-id"))
+        .stdout(predicate::str::contains("empty-policy-pattern"))
         .stdout(predicate::str::contains("missing-policy-pattern-language"))
         .stdout(predicate::str::contains("invalid-policy-pattern"))
         .stdout(predicate::str::contains(
             "missing-policy-pattern-definition",
+        ))
+        .stdout(predicate::str::contains("ambiguous-policy-pattern-body"))
+        .stdout(predicate::str::contains("missing-policy-pattern-body"))
+        .stdout(predicate::str::contains("duplicate-policy-pattern"))
+        .stdout(predicate::str::contains(
+            "unsupported ast-grep language `not-a-language`",
         ));
 }
 
@@ -1716,6 +1745,77 @@ policy:
     let state = fs::read_to_string(root.join(".criv/state.json")).unwrap();
     assert!(state.contains("ADR-0995/no-println"));
     assert!(state.contains("src/lib.rs"));
+}
+
+#[test]
+fn check_and_ci_enforcement_scan_the_same_policy_ids_and_paths() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("docs/adr")).unwrap();
+    write_criv_config(
+        root,
+        vec!["src"],
+        vec!["**/target/**", "**/node_modules/**"],
+        true,
+    );
+    fs::write(root.join("src/left.rs"), "fn left() {}\nstruct Left;\n").unwrap();
+    fs::write(root.join("src/right.rs"), "fn right() {}\nstruct Right;\n").unwrap();
+    fs::write(
+        root.join("docs/adr/0991-policy-parity.md"),
+        r#"---
+id: ADR-0991
+kind: decision
+title: Policy parity
+status: accepted
+date: 2026-08-03
+governs:
+  - src/**
+policy:
+  patterns:
+    - id: functions
+      language: rust
+      pattern: "fn $NAME() { $$$ }"
+    - id: structs
+      language: rust
+      pattern: "struct $NAME;"
+---
+
+# Policy parity
+"#,
+    )
+    .unwrap();
+
+    let check = criv(root)
+        .args(["check", "--filter", "policy-violation"])
+        .output()
+        .unwrap();
+    let enforce = criv(root)
+        .args(["enforce", "--stage", "ci"])
+        .output()
+        .unwrap();
+    assert!(!check.status.success());
+    assert!(!enforce.status.success());
+    let check_stdout = String::from_utf8(check.stdout).unwrap();
+    let enforce_stdout = String::from_utf8(enforce.stdout).unwrap();
+
+    for expected in [
+        "src/left.rs:1: ADR-0991 policy `ADR-0991/functions`",
+        "src/right.rs:1: ADR-0991 policy `ADR-0991/functions`",
+        "src/left.rs:2: ADR-0991 policy `ADR-0991/structs`",
+        "src/right.rs:2: ADR-0991 policy `ADR-0991/structs`",
+    ] {
+        assert!(
+            check_stdout.contains(expected),
+            "missing from check: {expected}"
+        );
+        assert!(
+            enforce_stdout.contains(expected),
+            "missing from enforce: {expected}"
+        );
+    }
 }
 
 #[test]
