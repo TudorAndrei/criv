@@ -21,12 +21,14 @@ use crate::{c4, c4_artifact};
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub(crate) struct WorkCounts {
     source_target_resolutions: usize,
+    link_source_resolutions: usize,
 }
 
 #[cfg(test)]
 thread_local! {
     static WORK_COUNTS: Cell<WorkCounts> = const { Cell::new(WorkCounts {
         source_target_resolutions: 0,
+        link_source_resolutions: 0,
     }) };
 }
 
@@ -142,6 +144,7 @@ pub(crate) struct Vault {
     source_index: Arc<dyn SourceIndex>,
     source_graph: SourceGraphBuild,
     patterns: BTreeSet<String>,
+    link_resolutions: BTreeMap<String, ResolvedLink>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -229,7 +232,7 @@ impl Vault {
             )
         };
 
-        Ok(Self {
+        let mut vault = Self {
             config,
             notes,
             c4_artifacts,
@@ -240,7 +243,10 @@ impl Vault {
             source_index,
             source_graph,
             patterns,
-        })
+            link_resolutions: BTreeMap::new(),
+        };
+        vault.index_link_resolutions();
+        Ok(vault)
     }
 
     pub(crate) fn resolve_note(&self, target: &str) -> Option<&Note> {
@@ -293,14 +299,16 @@ impl Vault {
     }
 
     pub(crate) fn resolve_link(&self, target: &str) -> ResolvedLink {
-        let target = target.split('|').next().unwrap_or(target).trim();
+        let target = normalized_link_target(target);
+        self.link_resolutions
+            .get(target)
+            .cloned()
+            .unwrap_or_else(|| self.resolve_link_uncached(target))
+    }
 
-        match self.resolve_source_target(target) {
-            SourceTargetResolution::Resolved { path, ambiguous } => {
-                return ResolvedLink::Source { path, ambiguous };
-            }
-            SourceTargetResolution::MissingFragment { .. } => return ResolvedLink::Broken,
-            SourceTargetResolution::MissingFile => {}
+    fn resolve_link_uncached(&self, target: &str) -> ResolvedLink {
+        if is_typed_source_target(target) {
+            return self.resolve_source_link(target);
         }
 
         if let Some(pattern_id) = pattern_link_id(target) {
@@ -325,7 +333,36 @@ impl Vault {
             };
         }
 
-        ResolvedLink::Broken
+        self.resolve_source_link(target)
+    }
+
+    fn resolve_source_link(&self, target: &str) -> ResolvedLink {
+        #[cfg(test)]
+        record_work(|counts| counts.link_source_resolutions += 1);
+
+        match self.resolve_source_target(target) {
+            SourceTargetResolution::Resolved { path, ambiguous } => {
+                ResolvedLink::Source { path, ambiguous }
+            }
+            SourceTargetResolution::MissingFile
+            | SourceTargetResolution::MissingFragment { .. } => ResolvedLink::Broken,
+        }
+    }
+
+    fn index_link_resolutions(&mut self) {
+        let targets = self
+            .notes
+            .iter()
+            .flat_map(|note| note.wiki_links.iter())
+            .map(|link| normalized_link_target(&link.target).to_string())
+            .collect::<BTreeSet<_>>();
+        self.link_resolutions = targets
+            .into_iter()
+            .map(|target| {
+                let resolution = self.resolve_link_uncached(&target);
+                (target, resolution)
+            })
+            .collect();
     }
 
     pub(crate) fn resolve_source_path(&self, path: &str) -> Option<(String, bool)> {
@@ -359,8 +396,17 @@ impl Vault {
     pub(crate) fn canonical_source_target(&self, target: &str) -> Option<String> {
         let target = source_target_body(target);
         let (path, _) = self.resolve_source_path(source_fragment_path(target))?;
+        self.canonical_source_target_for_path(target, &path)
+    }
+
+    pub(crate) fn canonical_source_target_for_path(
+        &self,
+        target: &str,
+        path: &str,
+    ) -> Option<String> {
+        let target = source_target_body(target);
         let Some(fragment) = source_fragment_name(target) else {
-            return Some(path);
+            return Some(path.to_string());
         };
         self.source_graph
             .graph()
@@ -490,7 +536,7 @@ impl Vault {
         }
         let patterns = registered_policy_patterns(&notes);
 
-        Self {
+        let mut vault = Self {
             config: Config::default(),
             notes,
             c4_artifacts: Vec::new(),
@@ -501,7 +547,10 @@ impl Vault {
             source_index: Arc::new(EmptySourceIndex),
             source_graph: SourceGraphBuild::disabled(),
             patterns,
-        }
+            link_resolutions: BTreeMap::new(),
+        };
+        vault.index_link_resolutions();
+        vault
     }
 }
 
@@ -751,6 +800,10 @@ fn pattern_link_id(target: &str) -> Option<&str> {
     target
         .split_once("#match:")
         .map(|(_, pattern_id)| pattern_id)
+}
+
+fn normalized_link_target(target: &str) -> &str {
+    target.split('|').next().unwrap_or(target).trim()
 }
 
 pub(crate) fn source_fragment_path(value: &str) -> &str {
@@ -1086,6 +1139,7 @@ policy:
         struct Case {
             target: String,
             source: Option<String>,
+            ambiguous: Option<bool>,
             pattern: Option<String>,
             note: Option<String>,
         }
@@ -1104,6 +1158,25 @@ roots = ["src"]
         )
         .unwrap();
         std::fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
+        std::fs::write(root.join("src/helper.rs"), "fn help() {}\n").unwrap();
+        std::fs::create_dir_all(root.join("src/one")).unwrap();
+        std::fs::create_dir_all(root.join("src/two")).unwrap();
+        std::fs::write(root.join("src/one/shared.rs"), "fn one() {}\n").unwrap();
+        std::fs::write(root.join("src/two/shared.rs"), "fn two() {}\n").unwrap();
+        std::fs::write(
+            root.join("docs/lib.rs.md"),
+            r#"---
+id: collision-note
+kind: doc
+title: Collision note
+---
+
+# Collision note
+
+## Existing heading
+"#,
+        )
+        .unwrap();
         std::fs::write(
             root.join("docs/adr/0001-local-cli-vault-architecture.md"),
             r#"---
@@ -1114,36 +1187,78 @@ status: accepted
 policy:
   patterns:
     - id: no-block-on
+      language: rust
+      pattern: "println!($$$ARGS)"
 ---
 
 # Local CLI vault architecture
+
+See [[lib.rs]], [[match:ADR-0001/no-block-on]], [[helper.rs#help]],
+[[helper.rs#help]], and [[source:lib.rs#run]].
 "#,
         )
         .unwrap();
 
+        reset_work_counts();
         let vault = Vault::load(&root).unwrap();
+        assert_eq!(work_counts().link_source_resolutions, 2);
+
+        let _ = crate::check::validate_with_previous_state(&vault, None);
+        let state = crate::state::State::build(&root, &vault).unwrap();
+        assert_eq!(work_counts().link_source_resolutions, 2);
+        let state = serde_json::to_value(state).unwrap();
+        let edges = state["graph"]["edges"].as_array().unwrap();
+        for (kind, target) in [
+            ("cites", "note:collision-note"),
+            ("references", "code:src/helper.rs"),
+            ("references", "pattern:ADR-0001/no-block-on"),
+        ] {
+            assert!(edges.iter().any(|edge| {
+                edge["from"] == "note:ADR-0001" && edge["kind"] == kind && edge["to"] == target
+            }));
+        }
+
+        reset_work_counts();
+        assert!(matches!(
+            vault.resolve_link("collision-note"),
+            ResolvedLink::Note { .. }
+        ));
+        assert!(matches!(
+            vault.resolve_link("ADR-0001#match:ADR-0001/no-block-on"),
+            ResolvedLink::Pattern { .. }
+        ));
+        assert_eq!(work_counts().link_source_resolutions, 0);
+
         for case in fixture.cases {
             match (
                 vault.resolve_link(&case.target),
                 case.source,
+                case.ambiguous,
                 case.pattern,
                 case.note,
             ) {
-                (ResolvedLink::Source { path, .. }, Some(expected), None, None) => {
+                (
+                    ResolvedLink::Source { path, ambiguous },
+                    Some(expected),
+                    Some(expected_ambiguous),
+                    None,
+                    None,
+                ) => {
                     assert_eq!(path, expected, "{}", case.target);
+                    assert_eq!(ambiguous, expected_ambiguous, "{}", case.target);
                 }
-                (ResolvedLink::Pattern { id }, None, Some(expected), None) => {
+                (ResolvedLink::Pattern { id }, None, None, Some(expected), None) => {
                     assert_eq!(id, expected, "{}", case.target);
                 }
-                (ResolvedLink::Note { id }, None, None, Some(expected)) => {
+                (ResolvedLink::Note { id }, None, None, None, Some(expected)) => {
                     assert_eq!(id, expected, "{}", case.target);
                     assert!(vault.resolve_note(&expected).is_some(), "{}", case.target);
                 }
-                (ResolvedLink::Broken, None, None, None) => {}
-                (actual, source, pattern, note) => {
+                (ResolvedLink::Broken, None, None, None, None) => {}
+                (actual, source, ambiguous, pattern, note) => {
                     panic!(
-                        "unexpected resolution for {}: {:?}, expected source={:?} pattern={:?} note={:?}",
-                        case.target, actual, source, pattern, note
+                        "unexpected resolution for {}: {:?}, expected source={:?} ambiguous={:?} pattern={:?} note={:?}",
+                        case.target, actual, source, ambiguous, pattern, note
                     );
                 }
             }

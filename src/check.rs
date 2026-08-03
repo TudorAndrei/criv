@@ -993,7 +993,7 @@ fn validate_links(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
                 )),
                 ResolvedLink::Source { path, ambiguous } => {
                     let suggestion = vault
-                        .canonical_source_target(&link.target)
+                        .canonical_source_target_for_path(&link.target, &path)
                         .map(|target| {
                             format!(
                                 "; use AST-aware source selector `{target}` for code references"
@@ -1411,6 +1411,42 @@ mod tests {
                     .message
                     .contains("AST-aware source selector `src/main.rs#fn:run`")
         }));
+        assert!(diagnostics.iter().all(|diag| diag.code != "broken-link"));
+    }
+
+    #[test]
+    fn typed_source_wikilinks_with_missing_fragments_remain_broken() {
+        let vault = source_note_vault("[[source:src/main.rs#missing]]", &[]);
+
+        let diagnostics = validate(&vault);
+
+        assert!(diagnostics.iter().any(|diag| diag.code == "broken-link"));
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diag| diag.code != "source-wikilink")
+        );
+    }
+
+    #[test]
+    fn ambiguous_legacy_source_wikilinks_retain_both_diagnostics() {
+        let vault = source_note_vault("[[shared.rs]]", &[]);
+
+        let diagnostics = validate(&vault);
+
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diag| diag.code == "source-wikilink"),
+            "{diagnostics:#?}"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diag| diag.code == "ambiguous-source-link"
+                    && diag.message.contains("first match is `")),
+            "{diagnostics:#?}"
+        );
         assert!(diagnostics.iter().all(|diag| diag.code != "broken-link"));
     }
 
@@ -2069,6 +2105,10 @@ roots = ["src"]
         )
         .unwrap();
         fs::write(root.join("src/main.rs"), "fn run() {}\n").unwrap();
+        fs::create_dir_all(root.join("src/one")).unwrap();
+        fs::create_dir_all(root.join("src/two")).unwrap();
+        fs::write(root.join("src/one/shared.rs"), "fn one() {}\n").unwrap();
+        fs::write(root.join("src/two/shared.rs"), "fn two() {}\n").unwrap();
         let targets = if target_symbols.is_empty() {
             String::new()
         } else {

@@ -43,36 +43,84 @@
     {
       "target": "src/lib.rs#run",
       "source": "src/lib.rs",
+      "ambiguous": false,
       "pattern": null,
       "note": null
     },
     {
       "target": "lib.rs",
+      "source": null,
+      "ambiguous": null,
+      "pattern": null,
+      "note": "collision-note"
+    },
+    {
+      "target": "lib.rs#existing-heading",
+      "source": null,
+      "ambiguous": null,
+      "pattern": null,
+      "note": "collision-note"
+    },
+    {
+      "target": "lib.rs#missing-heading",
+      "source": null,
+      "ambiguous": null,
+      "pattern": null,
+      "note": null
+    },
+    {
+      "target": "source:lib.rs#run",
       "source": "src/lib.rs",
+      "ambiguous": false,
+      "pattern": null,
+      "note": null
+    },
+    {
+      "target": "source:lib.rs#missing",
+      "source": null,
+      "ambiguous": null,
+      "pattern": null,
+      "note": null
+    },
+    {
+      "target": "helper.rs#help",
+      "source": "src/helper.rs",
+      "ambiguous": false,
+      "pattern": null,
+      "note": null
+    },
+    {
+      "target": "shared.rs",
+      "source": "src/one/shared.rs",
+      "ambiguous": true,
       "pattern": null,
       "note": null
     },
     {
       "target": "match:ADR-0001/no-block-on",
       "source": null,
+      "ambiguous": null,
       "pattern": "ADR-0001/no-block-on",
       "note": null
     },
     {
       "target": "ADR-0001#match:ADR-0001/no-block-on",
       "source": null,
+      "ambiguous": null,
       "pattern": "ADR-0001/no-block-on",
       "note": null
     },
     {
       "target": "0001-local-cli-vault-architecture|ADR-0001",
       "source": null,
+      "ambiguous": null,
       "pattern": null,
       "note": "ADR-0001"
     },
     {
       "target": "missing.rs",
       "source": null,
+      "ambiguous": null,
       "pattern": null,
       "note": null
     }
