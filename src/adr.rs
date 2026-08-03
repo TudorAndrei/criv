@@ -15,6 +15,7 @@ use crate::vault::Vault;
 use crate::{CrivError, Result};
 
 const RECEIPT_SCHEMA: &str = "criv.adr-reconcile/3";
+const RECONCILIATION_COMMIT_MESSAGE: &str = "docs(adr): reconcile provisional identifiers";
 
 #[derive(Debug, ClapArgs)]
 pub(crate) struct AdrOptions {
@@ -100,6 +101,18 @@ struct ReceiptSource {
     before_mode: String,
 }
 
+struct TransactionSnapshot {
+    index_tree: String,
+    paths: Vec<PathSnapshot>,
+    receipt: PathSnapshot,
+}
+
+struct PathSnapshot {
+    path: String,
+    contents: Option<String>,
+    permissions: Option<fs::Permissions>,
+}
+
 pub(crate) fn run(root: &Path, options: AdrOptions) -> Result<()> {
     match options.command {
         AdrCommand::Reconcile(options) => reconcile(root, options),
@@ -183,6 +196,45 @@ pub(crate) fn receipt_allows_commit(root: &Path, commit: &str) -> bool {
     receipt_tree_matches(root, &receipt, commit) && receipt_paths_match(&receipt, &entries.entries)
 }
 
+/// A combined push comparison may end at a later commit or merge. Admit only
+/// receipt paths whose exact transaction is present in the compared history
+/// and whose generated outputs have not changed since that commit.
+pub(crate) fn receipt_allows_history_change(
+    root: &Path,
+    changes: &git::ChangedSet,
+    entry: &git::ChangedEntry,
+) -> bool {
+    let Ok(receipt) = read_receipt(root) else {
+        return false;
+    };
+    let (Some(old_ref), Some(new_ref)) = (changes.old_ref.as_deref(), changes.new_ref.as_deref())
+    else {
+        return false;
+    };
+    let Ok(commits) = git::commits_between(root, old_ref, new_ref) else {
+        return false;
+    };
+    if !commits
+        .iter()
+        .any(|commit| receipt_allows_commit(root, commit))
+        || !receipt_outputs_survive(root, &receipt, new_ref)
+    {
+        return false;
+    }
+
+    let expected = receipt
+        .files
+        .iter()
+        .map(|file| file.path.as_str())
+        .chain(receipt.deletions.iter().map(String::as_str))
+        .collect::<BTreeSet<_>>();
+    expected.contains(entry.path.as_str())
+        && entry
+            .previous_path
+            .as_deref()
+            .is_none_or(|path| expected.contains(path))
+}
+
 fn receipt_common_matches(root: &Path, receipt: &Receipt) -> bool {
     receipt.schema == RECEIPT_SCHEMA
         && git::ref_is_stable(root, &receipt.base_ref, &receipt.target_sha).unwrap_or(false)
@@ -222,6 +274,33 @@ fn receipt_tree_matches(root: &Path, receipt: &Receipt, tree: &str) -> bool {
                 == Some(file.after_mode.as_str())
     }) && receipt.deletions.iter().all(|path| {
         !receipt.files.iter().any(|file| file.path == *path) && git::blob(root, tree, path).is_err()
+    })
+}
+
+fn receipt_outputs_survive(root: &Path, receipt: &Receipt, tree: &str) -> bool {
+    receipt.files.iter().all(|file| {
+        git::blob(root, tree, &file.path)
+            .map(|contents| hash(&contents) == file.after_hash)
+            .unwrap_or(false)
+            && git::file_mode(root, tree, &file.path)
+                .ok()
+                .flatten()
+                .as_deref()
+                == Some(file.after_mode.as_str())
+    }) && receipt.deletions.iter().all(|path| {
+        let final_blob = git::blob(root, tree, path);
+        let target_blob = git::blob(root, &receipt.target_sha, path);
+        match (final_blob, target_blob) {
+            (Err(_), _) => true,
+            (Ok(final_blob), Ok(target_blob)) => {
+                final_blob == target_blob
+                    && git::file_mode(root, tree, path).ok().flatten()
+                        == git::file_mode(root, &receipt.target_sha, path)
+                            .ok()
+                            .flatten()
+            }
+            (Ok(_), Err(_)) => false,
+        }
     })
 }
 
@@ -267,29 +346,48 @@ fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
             dirty.join(", ")
         )));
     }
+    git::preflight_commit_identity(root)?;
     if !git::ref_is_stable(root, &options.base, &plan.target_sha)? {
         return Err(CrivError::new(format!(
             "target ref `{}` moved since it resolved to {}; retry reconciliation",
             options.base, plan.target_sha
         )));
     }
-    if let Some(receipt) = materialized {
-        let paths = receipt
-            .files
-            .iter()
-            .map(|file| file.path.clone())
-            .chain(receipt.deletions)
-            .collect::<Vec<_>>();
-        git::reset_index_paths(root, &paths)?;
-    }
-    apply_plan(root, &plan)?;
-    if !git::ref_is_stable(root, &options.base, &plan.target_sha)? {
-        return Err(CrivError::new(format!(
-            "target ref `{}` moved during reconciliation; do not merge and retry against its new SHA",
-            options.base
-        )));
-    }
-    println!("ADR reconciliation applied; validate and commit the generated rename before merging");
+    let transaction_paths = transaction_paths(root, &plan)?;
+    let snapshot = TransactionSnapshot::capture(root, &transaction_paths)?;
+    let commit = (|| {
+        apply_plan(root, &plan)?;
+        if !git::ref_is_stable(root, &options.base, &plan.target_sha)? {
+            return Err(CrivError::new(format!(
+                "target ref `{}` moved during reconciliation; retry against its new SHA",
+                options.base
+            )));
+        }
+        // Clear any staged remnants from a previously materialized receipt as
+        // well as staging the newly planned transaction before proving it.
+        git::stage_paths(root, &transaction_paths)?;
+        let receipt = materialized_receipt(root)?;
+        let paths = receipt_paths(&receipt);
+        git::stage_paths(root, &paths)?;
+        let staged = git::staged_changes(root)?;
+        if !receipt_allows_transaction(root, &staged.entries) {
+            return Err(CrivError::new(
+                "ADR reconciliation receipt does not prove the complete staged transaction",
+            ));
+        }
+        if !git::ref_is_stable(root, &options.base, &plan.target_sha)? {
+            return Err(CrivError::new(format!(
+                "target ref `{}` moved before the reconciliation commit; retry against its new SHA",
+                options.base
+            )));
+        }
+        git::commit_staged(root, RECONCILIATION_COMMIT_MESSAGE)
+    })();
+    let commit = match commit {
+        Ok(commit) => commit,
+        Err(error) => return Err(snapshot.rollback(root, error)),
+    };
+    println!("ADR reconciliation committed: {commit}");
     Ok(())
 }
 
@@ -743,6 +841,105 @@ fn print_mapping(mappings: &[Mapping]) {
     }
 }
 
+impl TransactionSnapshot {
+    fn capture(root: &Path, paths: &[String]) -> Result<Self> {
+        Ok(Self {
+            index_tree: git::index_tree(root)?,
+            paths: paths
+                .iter()
+                .map(|path| PathSnapshot::capture(root, path))
+                .collect::<Result<Vec<_>>>()?,
+            receipt: PathSnapshot::capture(root, ".criv/adr-reconcile.json")?,
+        })
+    }
+
+    fn rollback(self, root: &Path, error: CrivError) -> CrivError {
+        let mut rollback_errors = Vec::new();
+        if let Err(rollback_error) = git::restore_index_tree(root, &self.index_tree) {
+            rollback_errors.push(rollback_error.to_string());
+        }
+        for path in self.paths {
+            if let Err(rollback_error) = path.restore(root) {
+                rollback_errors.push(rollback_error.to_string());
+            }
+        }
+        if let Err(rollback_error) = self.receipt.restore(root) {
+            rollback_errors.push(rollback_error.to_string());
+        }
+        if rollback_errors.is_empty() {
+            error
+        } else {
+            CrivError::new(format!(
+                "{error}\nADR reconciliation rollback also failed:\n{}",
+                rollback_errors.join("\n")
+            ))
+        }
+    }
+}
+
+impl PathSnapshot {
+    fn capture(root: &Path, path: &str) -> Result<Self> {
+        let absolute = root.join(path);
+        if absolute.exists() {
+            Ok(Self {
+                path: path.to_string(),
+                contents: Some(fs::read_to_string(&absolute)?),
+                permissions: Some(file_permissions_in(root, Path::new(path))?),
+            })
+        } else {
+            Ok(Self {
+                path: path.to_string(),
+                contents: None,
+                permissions: None,
+            })
+        }
+    }
+
+    fn restore(self, root: &Path) -> Result<()> {
+        match (self.contents, self.permissions) {
+            (Some(contents), Some(permissions)) => write_atomic_with_permissions_in(
+                root,
+                Path::new("."),
+                Path::new(&self.path),
+                &contents,
+                permissions,
+            ),
+            (None, None) if root.join(&self.path).exists() => {
+                remove_file_in(root, Path::new("."), Path::new(&self.path))
+            }
+            (None, None) => Ok(()),
+            _ => Err(CrivError::new(format!(
+                "cannot restore incomplete snapshot for `{}`",
+                self.path
+            ))),
+        }
+    }
+}
+
+fn transaction_paths(root: &Path, plan: &ReconcilePlan) -> Result<Vec<String>> {
+    let mut paths = rewrite_candidates(root, plan)?
+        .into_keys()
+        .collect::<BTreeSet<_>>();
+    paths.extend(
+        superseded_paths(&plan.mappings)
+            .into_iter()
+            .chain(superseded_paths(&plan.receipt_mappings))
+            .map(str::to_string),
+    );
+    Ok(paths.into_iter().collect())
+}
+
+fn receipt_paths(receipt: &Receipt) -> Vec<String> {
+    receipt
+        .files
+        .iter()
+        .map(|file| file.path.clone())
+        .chain(receipt.deletions.iter().cloned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 fn apply_plan(root: &Path, plan: &ReconcilePlan) -> Result<()> {
     let rewrite_paths = rewrite_candidates(root, plan)?;
     // Capture every source before publishing any destination. A destination
@@ -899,9 +1096,11 @@ fn materialized_receipt(root: &Path) -> Result<Receipt> {
         .collect::<BTreeSet<_>>();
     let actual = git::dirty_paths(root)?.into_iter().collect::<BTreeSet<_>>();
     if actual != expected {
-        return Err(CrivError::new(
-            "ADR reconciliation receipt does not cover every dirty worktree path",
-        ));
+        return Err(CrivError::new(format!(
+            "ADR reconciliation receipt does not cover every dirty worktree path (expected: {}; actual: {})",
+            expected.iter().cloned().collect::<Vec<_>>().join(", "),
+            actual.iter().cloned().collect::<Vec<_>>().join(", ")
+        )));
     }
     Ok(receipt)
 }
