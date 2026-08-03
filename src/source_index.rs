@@ -14,7 +14,6 @@ use fff_search::{
 use regex::Regex;
 
 use crate::config::Config;
-use crate::measurement::{self, Counter};
 use crate::source_paths::{
     SourceRootKind, canonical_source_path, read_source_to_string, source_metadata, source_root_kind,
 };
@@ -334,7 +333,6 @@ impl FffSourceIndex {
     }
 
     fn collect_source_files_now(&self) -> Result<Vec<String>> {
-        measurement::increment(Counter::SourceEnumerations);
         #[cfg(test)]
         record_work(|counts| counts.source_enumerations += 1);
 
@@ -624,7 +622,6 @@ impl SourceIndex for FffSourceIndex {
     }
 
     fn entries(&self) -> Result<Vec<IndexedSource>> {
-        measurement::increment(Counter::SourceCatalogTraversals);
         #[cfg(test)]
         record_work(|counts| counts.catalog_traversals += 1);
 

@@ -9,7 +9,6 @@ mod enforce;
 mod generated_skills;
 mod git;
 mod init;
-mod measurement;
 mod policy_scan;
 mod query;
 mod refresh;
@@ -84,10 +83,7 @@ enum Command {
 
 pub fn run(args: Vec<String>) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    measurement::begin_command(&cwd);
-    let result = run_command(args, &cwd);
-    measurement::finish_command(result.is_ok());
-    result
+    run_command(args, &cwd)
 }
 
 fn run_command(args: Vec<String>, cwd: &std::path::Path) -> Result<()> {

@@ -5,14 +5,13 @@ title: Repeatable Performance Evidence
 targets:
   symbols:
     - scripts/measure-performance.sh
-    - src/measurement.rs
 ---
 
 # Repeatable Performance Evidence
 
-Performance claims in criv use deterministic work evidence plus repeated timing
-samples from an explicit release binary. One timing run on the development
-checkout is useful for exploration but is not project evidence.
+Performance claims in criv use correctness invariants plus repeated external
+timing samples from an explicit release binary. One timing run on the
+development checkout is useful for exploration but is not project evidence.
 
 ## Canonical workloads
 
@@ -78,33 +77,28 @@ timing summaries rather than disappearing.
 
 Each run writes a new result directory. `samples.jsonl` contains one row per
 sample, preserving identity, cache state, exit status, elapsed/user/system
-seconds, output digests, generated-state and snapshot hashes when present, and
-the opt-in structured work record. `summary.json` groups compatible successful
-rows and reports sample count, minimum, median, maximum, and median absolute
-deviation without discarding raw values.
+seconds, output digests, generated-state and snapshot hashes when present.
+`summary.json` groups compatible successful rows and reports sample count,
+minimum, median, maximum, and median absolute deviation without discarding raw
+values.
 
 Cross-commit comparisons use separate result directories and freshly generated
 vaults. They compare rows only when workload digest, command case, cache state,
 sample count, profile, and machine identity match. Results are local artifacts
 and stay outside source control.
 
-## Structured work and semantic parity
+## Core boundary
 
-The harness may opt into command-local coarse spans and deterministic work
-counters through a harness-provided output path. Required counters cover note
-and source bytes read, files parsed and reused, source resolutions, policies
-compiled, AST parses, State partitions and serializations, cache bytes, and
-published output bytes. Per-element timing is excluded because observer cost
-would dominate the small operations it attempts to explain.
+The harness observes `criv` only as a subprocess. Core code contains no
+performance environment protocol, spans, counters, or measurement artifact
+writer, and the harness uses the same ordinary release binary distributed to
+users. Process resource usage and output identities are the complete runtime
+observation surface.
 
-Canonical harness runs collect the structured record by default. Use
-`--without-measurement` only to produce the uninstrumented half of an explicit
-semantic-parity comparison; the run identity records which mode was used.
-
-Instrumentation is disabled by default. Enabling it must preserve exit status,
-stdout, stderr, generated State bytes, snapshot hash, and graph-cache bytes for
-successful and failing commands. Deterministic counters are primary evidence
-for removed work; repeated wall-clock samples are supporting evidence.
+Correctness tests may count work behind `cfg(test)` to prove invariants such as
+partition reuse or a single source enumeration. Those assertions are compiled
+only for tests and are not a runtime measurement API. Repeated timing samples
+support such claims but do not identify internal operations on their own.
 
 ## Validation boundary
 
@@ -136,6 +130,5 @@ The publisher uses the workflow's scoped token, never force-pushes the notes
 ref, and retries after concurrent note updates. The job is not part of the CI
 aggregate or local hooks and does not require Docker.
 
-The governing decisions are
-[[0069-repeatable-two-tier-performance-evidence|ADR-0069]] and
-[[0070-publish-push-performance-evidence-as-git-notes|ADR-0070]].
+The governing decision is
+[[0072-keep-performance-observation-outside-core|ADR-0072]].

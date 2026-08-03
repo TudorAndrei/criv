@@ -12,7 +12,7 @@ remote="$3"
 notes_ref="refs/notes/criv-performance"
 max_attempts=5
 
-jq -e '.schema == "criv.performance-git-note.v1"' "$note_file" >/dev/null
+jq -e '.schema == "criv.performance-git-note.v2"' "$note_file" >/dev/null
 git cat-file -e "$commit^{commit}"
 
 refresh_notes_ref() {

@@ -17,7 +17,7 @@ commit="$(git -C "$source_repository" rev-parse HEAD)"
 git clone -q --bare "$source_repository" "$remote_repository"
 
 note_file="$test_root/note.json"
-printf '{"schema":"criv.performance-git-note.v1","generation":1}\n' >"$note_file"
+printf '{"schema":"criv.performance-git-note.v2","generation":1}\n' >"$note_file"
 (
   cd "$source_repository"
   "$repository_root/scripts/performance/publish-git-note.sh" \
@@ -28,7 +28,7 @@ git -C "$source_repository" fetch -q --force "$remote_repository" \
   refs/notes/criv-performance:refs/notes/criv-performance
 test "$(git -C "$source_repository" notes --ref=criv-performance show "$commit" | jq -r .generation)" = "1"
 
-printf '{"schema":"criv.performance-git-note.v1","generation":2}\n' >"$note_file"
+printf '{"schema":"criv.performance-git-note.v2","generation":2}\n' >"$note_file"
 (
   cd "$source_repository"
   "$repository_root/scripts/performance/publish-git-note.sh" \

@@ -8,7 +8,6 @@ use serde::Deserialize;
 
 use crate::Result;
 use crate::config::Config;
-use crate::measurement::{self, Counter};
 use crate::source_graph::{SourceGraph, SourceGraphBuild};
 use crate::source_index::{OneShotSourceIndex, SourceIndex, SourceIndexHandle};
 use crate::util::{
@@ -186,7 +185,6 @@ impl Vault {
         source_index: Option<SourceIndexHandle>,
         load_sources: bool,
     ) -> Result<Self> {
-        let _span = measurement::span("vault.load");
         let config = Config::load(root)?;
         let docs_path = config.docs_path(root);
         let notes = walk_files(&docs_path, Some("md"))?
@@ -230,7 +228,6 @@ impl Vault {
                 .into_iter()
                 .map(|entry| entry.path)
                 .collect::<Vec<_>>();
-            measurement::add(Counter::SourceFilesIndexed, source_files.len());
             let source_graph =
                 SourceGraphBuild::build_incremental(root, &source_files, previous_graph)?
                     .publish(root)?;
@@ -344,7 +341,6 @@ impl Vault {
     }
 
     fn resolve_source_link(&self, target: &str) -> ResolvedLink {
-        measurement::increment(Counter::SourceLinkResolutions);
         #[cfg(test)]
         record_work(|counts| counts.link_source_resolutions += 1);
 
@@ -378,7 +374,6 @@ impl Vault {
     }
 
     pub(crate) fn resolve_source_target(&self, target: &str) -> SourceTargetResolution {
-        measurement::increment(Counter::SourceTargetResolutions);
         #[cfg(test)]
         record_work(|counts| counts.source_target_resolutions += 1);
 
@@ -588,8 +583,6 @@ fn registered_policy_patterns(notes: &[Note]) -> BTreeSet<String> {
 
 fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
     let contents = read_to_string(path)?;
-    measurement::increment(Counter::NotesLoaded);
-    measurement::add(Counter::NoteBytes, contents.len());
     let rel_path = strip_prefix(path, root);
     let (frontmatter, body, frontmatter_lines) = split_frontmatter(&contents);
     let doc_rel_path = strip_prefix(path, docs_path);

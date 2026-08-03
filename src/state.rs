@@ -8,7 +8,6 @@ use std::{cell::Cell, thread_local};
 use serde::Serialize;
 
 use crate::c4_artifact::C4Artifact;
-use crate::measurement::{self, Counter};
 use crate::source_graph::{Language, SourceFile, SymbolKind};
 use crate::structural;
 use crate::util::write_atomic_in;
@@ -232,8 +231,6 @@ impl State {
         previous: Option<&State>,
         changed_files: &[String],
     ) -> Result<Self> {
-        let _span = measurement::span("state.build");
-        measurement::increment(Counter::StateBuilds);
         let partitions = StatePartitions::build(root, vault, previous, changed_files)?;
         Ok(Self::from_partitions(partitions))
     }
@@ -266,8 +263,6 @@ impl State {
     }
 
     fn serialize(&self) -> Result<SerializedState> {
-        let _span = measurement::span("state.serialize");
-        measurement::increment(Counter::StateSerializations);
         let _ = &self.partitions;
         #[cfg(test)]
         record_work(|counts| counts.serializations += 1);
@@ -281,16 +276,12 @@ impl State {
     }
 
     fn write_serialized(&self, root: &Path, serialized: &SerializedState) -> Result<()> {
-        let _span = measurement::span("state.publish");
         write_atomic_in(
             root,
             Path::new(".criv"),
             Path::new(".criv/state.json"),
             &serialized.published,
         )?;
-        measurement::increment(Counter::StatePublications);
-        measurement::add(Counter::StatePublishedBytes, serialized.published.len());
-        measurement::add(Counter::PublishedBytes, serialized.published.len());
         #[cfg(test)]
         record_work(|counts| counts.published_bytes += serialized.published.len());
         Ok(())
@@ -303,15 +294,6 @@ impl State {
         keep: usize,
     ) -> Result<String> {
         crate::snapshots::publish(root, &serialized.hash, &serialized.published, keep)?;
-        measurement::increment(Counter::StatePublications);
-        measurement::add(
-            Counter::StatePublishedBytes,
-            serialized.published.len() + serialized.hash.len() + 1,
-        );
-        measurement::add(
-            Counter::PublishedBytes,
-            serialized.published.len() + serialized.hash.len() + 1,
-        );
         #[cfg(test)]
         record_work(|counts| {
             counts.published_bytes += serialized.published.len() + serialized.hash.len() + 1;

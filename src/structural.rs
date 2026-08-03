@@ -10,7 +10,6 @@ use ast_grep_core::meta_var::MetaVariable;
 use ast_grep_core::{Doc, Matcher, NodeMatch, Pattern};
 use ast_grep_language::{Language, LanguageExt, SupportLang};
 
-use crate::measurement::{self, Counter};
 use crate::source_paths::read_source_to_string;
 use crate::util::GlobMatcher;
 use crate::vault::{PolicyPattern, Vault};
@@ -178,7 +177,6 @@ pub(crate) fn compile_policy(
         PatternSource::Pattern(_) => PolicyCompileError::InvalidPattern(error.to_string()),
         PatternSource::Rule(_) => PolicyCompileError::InvalidRule(error.to_string()),
     })?;
-    measurement::increment(Counter::PolicyCompilations);
     #[cfg(test)]
     record_work(|counts| counts.policy_compilations += 1);
     let matcher = compile(source, language).map_err(|error| match source {
@@ -282,7 +280,6 @@ pub(crate) fn find_policies_batch(
         }
 
         let contents = read_source_to_string(root, source_file)?;
-        measurement::increment(Counter::AstParses);
         #[cfg(test)]
         record_work(|counts| counts.ast_parses += 1);
         let ast = language.ast_grep(&contents);

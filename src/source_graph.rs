@@ -8,7 +8,6 @@ use std::{cell::Cell, thread_local};
 use serde::{Deserialize, Serialize};
 use tree_sitter::{Node, Parser};
 
-use crate::measurement::{self, Counter};
 use crate::source_paths::read_source_to_string;
 use crate::util::write_atomic_in;
 use crate::{CrivError, Result};
@@ -261,7 +260,6 @@ impl SourceGraphBuild {
 }
 
 pub(crate) fn load_cached(root: &Path) -> Option<SourceGraphBuild> {
-    measurement::increment(Counter::SourceGraphCacheLoads);
     #[cfg(test)]
     record_work(|counts| counts.cache_loads += 1);
 
@@ -275,12 +273,10 @@ pub(crate) fn load_cached(root: &Path) -> Option<SourceGraphBuild> {
 }
 
 fn store_cached(root: &Path, graph: &SourceGraph) -> Result<()> {
-    let _span = measurement::span("source_graph.publish");
     let cache = BorrowedGraphCacheFile {
         schema: GRAPH_CACHE_SCHEMA,
         graph,
     };
-    measurement::increment(Counter::SourceGraphCacheSerializations);
     #[cfg(test)]
     record_work(|counts| counts.cache_serializations += 1);
     let contents = serde_json::to_string_pretty(&cache)
@@ -292,9 +288,6 @@ fn store_cached(root: &Path, graph: &SourceGraph) -> Result<()> {
         Path::new(".criv/source-graph.json"),
         &contents,
     )?;
-    measurement::increment(Counter::SourceGraphCachePublications);
-    measurement::add(Counter::SourceGraphPublishedBytes, contents.len());
-    measurement::add(Counter::PublishedBytes, contents.len());
     #[cfg(test)]
     record_work(|counts| {
         counts.cache_publications += 1;
@@ -388,7 +381,6 @@ impl SourceGraph {
         source_files: &[String],
         previous: Option<&Self>,
     ) -> Result<Self> {
-        let _span = measurement::span("source_graph.build");
         let mut graph = Self::default();
         for source_file in source_files {
             #[cfg(test)]
@@ -401,12 +393,10 @@ impl SourceGraph {
                 })
                 .and_then(|previous| previous.files.get(source_file).cloned());
             let parsed = if let Some(parsed) = reused {
-                measurement::increment(Counter::SourceGraphReusedFiles);
                 #[cfg(test)]
                 record_work(|counts| counts.reused_files += 1);
                 parsed
             } else {
-                measurement::increment(Counter::SourceGraphParsedFiles);
                 #[cfg(test)]
                 record_work(|counts| counts.parsed_files += 1);
                 graph.changed_files.push(source_file.clone());

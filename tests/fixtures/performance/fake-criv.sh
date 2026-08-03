@@ -30,17 +30,6 @@ if [[ "${1:-}" == "query" && "${2:-}" == "diff" && ! -f .criv/latest ]]; then
   exit 1
 fi
 
-if [[ -n "${CRIV_PERF_MEASUREMENT_PATH:-}" ]]; then
-  mkdir -p "$(dirname "$CRIV_PERF_MEASUREMENT_PATH")"
-  measurement_success=true
-  if [[ "$requested_failure" == true ]]; then
-    measurement_success=false
-  fi
-  printf '{"schema":"criv.performance-measurement.v1","success":%s,"counters":{},"spans":{}}\n' \
-    "$measurement_success" \
-    >"$CRIV_PERF_MEASUREMENT_PATH"
-fi
-
 if [[ "$requested_failure" == true ]]; then
   echo "requested fake failure" >&2
   exit 7

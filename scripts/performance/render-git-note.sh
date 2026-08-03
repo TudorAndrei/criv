@@ -33,53 +33,27 @@ jq --null-input --sort-keys \
   --arg workflow_attempt "$workflow_attempt" \
   --arg artifact_name "$artifact_name" \
   '
-    def work_summaries:
-      [
-        $samples[]
-        | select(.exit_status == 0)
-        | {
-            key: [.workload, .case, .cache_state],
-            counters: .measurement.counters
-          }
-      ]
-      | sort_by(.key)
-      | group_by(.key)
-      | map(
-          . as $rows
-          | ($rows | map(.counters) | unique) as $counter_sets
-          | if any($rows[]; .counters == null) then
-              error("successful sample is missing structured counters for \($rows[0].key | join("/"))")
-            elif ($counter_sets | length) != 1 then
-              error("structured counters disagree for \($rows[0].key | join("/"))")
-            else
-              {
-                workload: $rows[0].key[0],
-                case: $rows[0].key[1],
-                cache_state: $rows[0].key[2],
-                successful_samples: ($rows | length),
-                counters: $counter_sets[0]
-              }
-            end
-        );
-
-    work_summaries as $work
-    | if $run[0].revision != $commit then
+    if $run[0].schema != "criv.performance-run.v2" then
+      error("unsupported performance run schema")
+    elif $summary[0].schema != "criv.performance-summary.v2" then
+      error("unsupported performance summary schema")
+    elif any($samples[]; .schema != "criv.performance-sample.v2") then
+      error("unsupported performance sample schema")
+    elif $run[0].revision != $commit then
       error("performance revision \($run[0].revision) does not match note commit \($commit)")
     elif $run[0].dirty != false then
       error("performance run must use a clean checkout")
     elif $run[0].profile != "release" then
       error("performance Git notes require a release profile")
-    elif $run[0].structured_measurement != true then
-      error("performance Git notes require structured measurement")
     elif $run[0].samples < 3 then
       error("performance Git notes require at least three samples")
+    elif any($samples[]; .run_id != $run[0].run_id or .exit_status != 0) then
+      error("raw samples must belong to the run and succeed")
     elif any($summary[0].cases[]; .failed_samples != 0 or .successful_samples != $run[0].samples) then
       error("timing summaries do not contain the declared successful sample count")
-    elif any($work[]; .successful_samples != $run[0].samples) then
-      error("work summaries do not contain the declared successful sample count")
     else
       {
-        schema: "criv.performance-git-note.v1",
+        schema: "criv.performance-git-note.v2",
         commit: $commit,
         pushed_ref: $pushed_ref,
         workflow: {
@@ -91,7 +65,7 @@ jq --null-input --sort-keys \
         evidence: {
           run_id: $run[0].run_id,
           profile: $run[0].profile,
-          structured_measurement: $run[0].structured_measurement,
+          observation: "external-subprocess",
           samples: $run[0].samples,
           binary_digest: $run[0].binary_digest,
           machine_digest: $run[0].machine.digest,
@@ -113,8 +87,7 @@ jq --null-input --sort-keys \
               user_seconds,
               system_seconds
             }
-        ],
-        work: $work
+        ]
       }
     end
   ' >"$output"

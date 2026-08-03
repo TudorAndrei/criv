@@ -1,7 +1,6 @@
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use crate::measurement::{self, Counter};
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -46,8 +45,6 @@ pub(crate) fn canonical_source_path(root: &Path, source_path: &str) -> Result<Pa
 pub(crate) fn read_source_to_string(root: &Path, source_path: &str) -> Result<String> {
     let path = canonical_source_path(root, source_path)?;
     let contents = fs::read_to_string(path)?;
-    measurement::increment(Counter::SourceReads);
-    measurement::add(Counter::SourceBytes, contents.len());
     Ok(contents)
 }
 

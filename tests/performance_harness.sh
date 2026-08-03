@@ -45,10 +45,10 @@ run_harness >"$test_root/second.out"
 test "$(find "$test_root/results" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "2"
 first_result="$(find "$test_root/results" -mindepth 1 -maxdepth 1 -type d | sort | head -1)"
 run_revision="$(jq -r .revision "$first_result/run.json")"
-jq -e '.schema == "criv.performance-summary.v1" and (.cases | length) == 2' \
+jq -e '.schema == "criv.performance-summary.v2" and (.cases | length) == 2' \
   "$first_result/summary.json" >/dev/null
 test "$(wc -l <"$first_result/samples.jsonl" | tr -d ' ')" = "2"
-jq -e '.measurement.schema == "criv.performance-measurement.v1"' \
+jq -e '.schema == "criv.performance-sample.v2" and has("measurement") == false' \
   "$first_result/samples.jsonl" >/dev/null
 test "$(cut -f1 "$test_root/fake.log" | sort -u | wc -l | tr -d ' ')" -ge "8"
 
@@ -74,21 +74,21 @@ done
   "1" \
   "performance-fixture"
 jq -e '
-  .schema == "criv.performance-git-note.v1"
-  and .evidence.structured_measurement == true
+  .schema == "criv.performance-git-note.v2"
+  and .evidence.observation == "external-subprocess"
   and (.timings | length) == 2
-  and (.work | length) == 2
+  and has("work") == false
 ' "$test_root/performance-note.json" >/dev/null
 
-nondeterministic="$test_root/nondeterministic"
-mkdir -p "$nondeterministic"
+foreign_sample="$test_root/foreign-sample"
+mkdir -p "$foreign_sample"
 cp "$note_fixture/run.json" "$note_fixture/summary.json" "$note_fixture/samples.jsonl" \
-  "$nondeterministic"
-jq -c '.measurement.counters.synthetic = 1' \
-  "$note_fixture/samples.jsonl" | head -1 >>"$nondeterministic/samples.jsonl"
+  "$foreign_sample"
+jq -c '.run_id = "another-run"' \
+  "$note_fixture/samples.jsonl" | head -1 >"$foreign_sample/samples.jsonl"
 if "$repository_root/scripts/performance/render-git-note.sh" \
-  "$nondeterministic" \
-  "$test_root/nondeterministic-note.json" \
+  "$foreign_sample" \
+  "$test_root/foreign-sample-note.json" \
   "$run_revision" \
   "refs/heads/main" \
   "https://github.invalid/actions/runs/123" \
@@ -96,7 +96,7 @@ if "$repository_root/scripts/performance/render-git-note.sh" \
   "1" \
   "performance-fixture" \
   2>/dev/null; then
-  echo "nondeterministic counters unexpectedly rendered" >&2
+  echo "foreign sample unexpectedly rendered" >&2
   exit 1
 fi
 
