@@ -272,6 +272,16 @@ fn initialize_git(root: &Path) -> Result<(), String> {
     run_git(root, &["init", "-q", "-b", "main"])?;
     run_git(root, &["config", "user.email", "performance@criv.invalid"])?;
     run_git(root, &["config", "user.name", "criv performance"])?;
+    run_git(
+        root,
+        &[
+            "commit",
+            "--allow-empty",
+            "-q",
+            "-m",
+            "generated workload baseline",
+        ],
+    )?;
     run_git(root, &["add", "."])?;
     run_git(root, &["commit", "-q", "-m", "generated workload"])
 }
@@ -366,6 +376,16 @@ mod tests {
             assert_eq!(
                 fs::read_dir(first.path().join("docs/adr")).unwrap().count(),
                 loaded.manifest.decisions
+            );
+            assert!(
+                Command::new("git")
+                    .args(["rev-parse", "--verify", "HEAD^"])
+                    .current_dir(first.path())
+                    .output()
+                    .unwrap()
+                    .status
+                    .success(),
+                "generated workloads need an explicit CI comparison base"
             );
             if loaded.manifest.c4_artifacts > 0 {
                 let c4 = fs::read_to_string(

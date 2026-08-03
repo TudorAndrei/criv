@@ -590,7 +590,12 @@ fn run_criv(
         .env("CRIV_PERF_RUN_ID", run_id)
         .env("CRIV_PERF_SAMPLE_ID", sample_id)
         .env("CRIV_PERF_CASE", case.id())
-        .env("CRIV_PERF_CACHE_STATE", case.cache_state());
+        .env("CRIV_PERF_CACHE_STATE", case.cache_state())
+        .env_remove("CRIV_BASE_REF")
+        .env_remove("GITHUB_BASE_REF");
+    if case == Case::EnforceCi {
+        command.env("CRIV_BASE_REF", "HEAD^");
+    }
     if structured_measurement {
         command.env(MEASUREMENT_PATH_ENV, ".criv/performance-measurement.json");
     } else {
