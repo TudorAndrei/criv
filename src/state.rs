@@ -443,7 +443,7 @@ impl State {
     }
 
     #[cfg(test)]
-    fn to_json(&self) -> Result<String> {
+    pub(crate) fn to_json(&self) -> Result<String> {
         Ok(self
             .serialize()?
             .published
@@ -453,7 +453,7 @@ impl State {
     }
 
     #[cfg(test)]
-    fn hash(&self) -> Result<String> {
+    pub(crate) fn hash(&self) -> Result<String> {
         Ok(self.serialize()?.hash)
     }
 

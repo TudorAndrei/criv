@@ -44,7 +44,7 @@ pub(crate) enum Severity {
     Warning,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub(crate) struct Diagnostic {
     severity: Severity,
     code: &'static str,

@@ -1,0 +1,5 @@
+%% criv:generated false
+C4Context
+Person(user, "User", "Runs the fixture")
+System(cli, "Fixture CLI", "Validates the fixture vault")
+Rel(user, cli, "Runs")

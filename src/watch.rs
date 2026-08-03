@@ -376,12 +376,69 @@ impl Drop for WatchLock {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use serde_json::Value;
     use tempfile::TempDir;
 
     use super::*;
+    use crate::{source_graph, source_index, structural, vault as vault_module};
+
+    #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+    struct RefreshWork {
+        source_index: source_index::WorkCounts,
+        source_graph: source_graph::WorkCounts,
+        vault: vault_module::WorkCounts,
+        structural: structural::WorkCounts,
+        state: state::WorkCounts,
+    }
+
+    #[derive(Debug, Eq, PartialEq)]
+    struct RefreshSnapshot {
+        source_graph: SourceGraph,
+        state_json: String,
+        state_hash: String,
+        latest: String,
+        snapshot_json: String,
+        generated_architecture: String,
+        diagnostics: Vec<check::Diagnostic>,
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum FixtureMutation {
+        Noop,
+        DocsProse,
+        SourceEdit,
+        SameSizeSourceEdit,
+        AddSource,
+        RenameSource,
+        DeleteSource,
+        PolicyDemotion,
+        PolicyPromotionAndGovernance,
+    }
+
+    impl FixtureMutation {
+        fn name(self) -> &'static str {
+            match self {
+                Self::Noop => "no-op",
+                Self::DocsProse => "docs prose edit",
+                Self::SourceEdit => "source edit",
+                Self::SameSizeSourceEdit => "same-size source edit",
+                Self::AddSource => "source add",
+                Self::RenameSource => "source rename",
+                Self::DeleteSource => "source delete",
+                Self::PolicyDemotion => "policy demotion",
+                Self::PolicyPromotionAndGovernance => "policy promotion and governance",
+            }
+        }
+
+        fn docs_changed(self) -> bool {
+            matches!(
+                self,
+                Self::DocsProse | Self::PolicyDemotion | Self::PolicyPromotionAndGovernance
+            )
+        }
+    }
 
     #[test]
     fn rebuild_includes_generated_code_architecture_in_same_run_state() {
@@ -483,6 +540,113 @@ mod tests {
     }
 
     #[test]
+    fn incremental_refresh_matches_a_clean_full_rebuild_after_each_mutation() {
+        let incremental = incremental_fixture("incremental");
+        let full = incremental_fixture("full");
+
+        let (mut incremental_vault, mut incremental_state) =
+            rebuild(incremental.path(), None, None).unwrap();
+        let (full_vault, mut full_state) = rebuild(full.path(), None, None).unwrap();
+        assert_refresh_eq(
+            "cold build",
+            &refresh_snapshot(
+                incremental.path(),
+                &incremental_vault,
+                &incremental_state,
+                None,
+            ),
+            &refresh_snapshot(full.path(), &full_vault, &full_state, None),
+        );
+
+        for mutation in [
+            FixtureMutation::Noop,
+            FixtureMutation::DocsProse,
+            FixtureMutation::SourceEdit,
+            FixtureMutation::SameSizeSourceEdit,
+            FixtureMutation::AddSource,
+            FixtureMutation::RenameSource,
+            FixtureMutation::DeleteSource,
+            FixtureMutation::PolicyDemotion,
+            FixtureMutation::PolicyPromotionAndGovernance,
+        ] {
+            apply_fixture_mutation(incremental.path(), mutation);
+            apply_fixture_mutation(full.path(), mutation);
+
+            let incremental_previous = (!mutation.docs_changed()).then_some(&incremental_state);
+            let incremental_previous_graph =
+                (!mutation.docs_changed()).then_some(incremental_vault.source_graph());
+            reset_refresh_work();
+            let (next_incremental_vault, next_incremental_state) = rebuild_incremental(
+                incremental.path(),
+                incremental_previous_graph,
+                incremental_previous,
+                None,
+            )
+            .unwrap();
+            let work = refresh_work();
+            let incremental_snapshot = refresh_snapshot(
+                incremental.path(),
+                &next_incremental_vault,
+                &next_incremental_state,
+                incremental_previous,
+            );
+
+            let full_previous = (!mutation.docs_changed()).then_some(&full_state);
+            reset_refresh_work();
+            let (next_full_vault, next_full_state) = rebuild(full.path(), None, None).unwrap();
+            let full_snapshot = refresh_snapshot(
+                full.path(),
+                &next_full_vault,
+                &next_full_state,
+                full_previous,
+            );
+
+            assert_refresh_eq(mutation.name(), &incremental_snapshot, &full_snapshot);
+            assert_characterized_work(mutation, work);
+
+            incremental_vault = next_incremental_vault;
+            incremental_state = next_incremental_state;
+            full_state = next_full_state;
+        }
+    }
+
+    #[test]
+    fn invalid_graph_cache_schema_converges_with_a_cache_free_build() {
+        let incremental = incremental_fixture("invalid-schema-incremental");
+        let full = incremental_fixture("invalid-schema-full");
+        run_once(incremental.path()).unwrap();
+        rebuild(full.path(), None, None).unwrap();
+
+        let cache_path = incremental.path().join(".criv/source-graph.json");
+        let cache = fs::read_to_string(&cache_path).unwrap();
+        fs::write(
+            &cache_path,
+            cache.replacen("criv.source-graph/2", "criv.source-graph/invalid", 1),
+        )
+        .unwrap();
+
+        reset_refresh_work();
+        let (incremental_vault, incremental_state) = run_once(incremental.path()).unwrap();
+        let work = refresh_work();
+        let incremental_snapshot = refresh_snapshot(
+            incremental.path(),
+            &incremental_vault,
+            &incremental_state,
+            None,
+        );
+        let (full_vault, full_state) = rebuild(full.path(), None, None).unwrap();
+        let full_snapshot = refresh_snapshot(full.path(), &full_vault, &full_state, None);
+
+        assert_refresh_eq(
+            "invalid graph cache schema",
+            &incremental_snapshot,
+            &full_snapshot,
+        );
+        assert_eq!(work.source_graph.parsed_files, 2);
+        assert_eq!(work.source_graph.cache_publications, 1);
+    }
+
+    #[test]
     fn lock_owner_round_trips_through_the_lock_file_format() {
         let owner = super::LockOwner::current();
 
@@ -581,6 +745,193 @@ mod tests {
         assert_eq!(contents, super::LockOwner::current().serialize());
         drop(lock);
         assert!(!root.join(".criv/watch.lock").exists());
+    }
+
+    fn incremental_fixture(prefix: &str) -> TempDir {
+        let temp = tempfile::Builder::new()
+            .prefix(&format!("criv-refresh-{prefix}-"))
+            .tempdir()
+            .unwrap();
+        copy_fixture_tree(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/incremental-refresh"),
+            temp.path(),
+        );
+        temp
+    }
+
+    fn copy_fixture_tree(source: &Path, destination: &Path) {
+        fs::create_dir_all(destination).unwrap();
+        for entry in fs::read_dir(source).unwrap() {
+            let entry = entry.unwrap();
+            let target = destination.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_fixture_tree(&entry.path(), &target);
+            } else {
+                fs::copy(entry.path(), target).unwrap();
+            }
+        }
+    }
+
+    fn apply_fixture_mutation(root: &Path, mutation: FixtureMutation) {
+        match mutation {
+            FixtureMutation::Noop => {}
+            FixtureMutation::DocsProse => {
+                let path = root.join("docs/guide.md");
+                let mut contents = fs::read_to_string(&path).unwrap();
+                contents.push_str("\nA prose-only refresh leaves source unchanged.\n");
+                fs::write(path, contents).unwrap();
+            }
+            FixtureMutation::SourceEdit => {
+                let path = root.join("src/lib.rs");
+                let mut contents = fs::read_to_string(&path).unwrap();
+                contents.push_str("\npub fn added() {}\n");
+                fs::write(path, contents).unwrap();
+            }
+            FixtureMutation::SameSizeSourceEdit => {
+                let path = root.join("src/lib.rs");
+                let modified = fs::metadata(&path).unwrap().modified().unwrap();
+                let contents = fs::read_to_string(&path)
+                    .unwrap()
+                    .replace("fn added", "fn other");
+                assert_eq!(contents.len(), fs::metadata(&path).unwrap().len() as usize);
+                fs::write(&path, contents).unwrap();
+                fs::OpenOptions::new()
+                    .write(true)
+                    .open(path)
+                    .unwrap()
+                    .set_times(fs::FileTimes::new().set_modified(modified))
+                    .unwrap();
+            }
+            FixtureMutation::AddSource => {
+                fs::write(
+                    root.join("src/worker.py"),
+                    "def process(value: str) -> str:\n    return value.strip()\n",
+                )
+                .unwrap();
+            }
+            FixtureMutation::RenameSource => {
+                fs::rename(root.join("src/helper.ts"), root.join("src/format.ts")).unwrap();
+            }
+            FixtureMutation::DeleteSource => {
+                fs::remove_file(root.join("src/format.ts")).unwrap();
+            }
+            FixtureMutation::PolicyDemotion => {
+                rewrite_policy(root, |contents| {
+                    contents.replace("status: accepted", "status: draft")
+                });
+            }
+            FixtureMutation::PolicyPromotionAndGovernance => {
+                rewrite_policy(root, |contents| {
+                    contents
+                        .replace("status: draft", "status: accepted")
+                        .replace("src/**/*.rs", "src/lib.rs")
+                });
+            }
+        }
+    }
+
+    fn rewrite_policy(root: &Path, update: impl FnOnce(String) -> String) {
+        let path = root.join("docs/adr/0001-no-println.md");
+        let contents = fs::read_to_string(&path).unwrap();
+        fs::write(path, update(contents)).unwrap();
+    }
+
+    fn reset_refresh_work() {
+        source_index::reset_work_counts();
+        source_graph::reset_work_counts();
+        vault_module::reset_work_counts();
+        structural::reset_work_counts();
+        state::reset_work_counts();
+    }
+
+    fn refresh_work() -> RefreshWork {
+        RefreshWork {
+            source_index: source_index::work_counts(),
+            source_graph: source_graph::work_counts(),
+            vault: vault_module::work_counts(),
+            structural: structural::work_counts(),
+            state: state::work_counts(),
+        }
+    }
+
+    fn refresh_snapshot(
+        root: &Path,
+        vault: &Vault,
+        state: &State,
+        previous_state: Option<&State>,
+    ) -> RefreshSnapshot {
+        let state_json = fs::read_to_string(root.join(".criv/state.json")).unwrap();
+        assert_eq!(state_json, format!("{}\n", state.to_json().unwrap()));
+        let latest = fs::read_to_string(root.join(".criv/latest")).unwrap();
+        let snapshot_json = fs::read_to_string(
+            root.join(".criv/snapshots")
+                .join(format!("{}.json", latest.trim())),
+        )
+        .unwrap();
+        assert_eq!(state_json, snapshot_json);
+
+        RefreshSnapshot {
+            source_graph: vault.source_graph().without_changed_files(),
+            state_json,
+            state_hash: state.hash().unwrap(),
+            latest,
+            snapshot_json,
+            generated_architecture: fs::read_to_string(
+                root.join("docs/architecture/04-generated-code.c4"),
+            )
+            .unwrap(),
+            diagnostics: check::validate_with_previous_state(vault, previous_state),
+        }
+    }
+
+    fn assert_refresh_eq(name: &str, incremental: &RefreshSnapshot, full: &RefreshSnapshot) {
+        assert_eq!(
+            incremental, full,
+            "{name} diverged from a clean full rebuild"
+        );
+    }
+
+    fn assert_characterized_work(mutation: FixtureMutation, work: RefreshWork) {
+        assert_eq!(
+            work.state.partitions_rebuilt,
+            1,
+            "{} should rebuild the current monolithic State partition once",
+            mutation.name()
+        );
+        assert_eq!(
+            work.state.serializations,
+            1,
+            "{} should serialize State once",
+            mutation.name()
+        );
+
+        match mutation {
+            FixtureMutation::Noop => {
+                assert_eq!(work.source_graph.parsed_files, 0);
+                assert_eq!(work.source_graph.reused_files, 2);
+                assert_eq!(work.structural.ast_parses, 0);
+            }
+            FixtureMutation::DocsProse => {
+                assert_eq!(work.source_graph.parsed_files, 2);
+                assert_eq!(work.structural.ast_parses, 1);
+            }
+            FixtureMutation::SourceEdit | FixtureMutation::SameSizeSourceEdit => {
+                assert_eq!(
+                    work.source_graph.parsed_files, 2,
+                    "the generated-architecture reload currently reparses the changed source"
+                );
+                assert_eq!(work.structural.ast_parses, 1);
+            }
+            FixtureMutation::AddSource | FixtureMutation::RenameSource => {
+                assert_eq!(work.source_graph.parsed_files, 2);
+            }
+            FixtureMutation::DeleteSource => {
+                assert_eq!(work.source_graph.parsed_files, 0);
+            }
+            FixtureMutation::PolicyDemotion | FixtureMutation::PolicyPromotionAndGovernance => {
+                assert_eq!(work.source_graph.parsed_files, 2);
+            }
+        }
     }
 
     fn write_watch_architecture_fixture(root: &Path) {

@@ -455,6 +455,13 @@ impl SourceGraph {
         &self.changed_files
     }
 
+    #[cfg(test)]
+    pub(crate) fn without_changed_files(&self) -> Self {
+        let mut graph = self.clone();
+        graph.changed_files.clear();
+        graph
+    }
+
     pub(crate) fn resolve_call(&self, caller: &SymbolId, target: &str) -> Option<SymbolId> {
         self.files
             .get(&caller.path)
