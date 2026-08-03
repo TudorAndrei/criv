@@ -1620,6 +1620,70 @@ policy:
 }
 
 #[test]
+fn non_accepted_inline_policies_remain_searchable_but_do_not_block_or_register_state() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("docs/adr")).unwrap();
+    write_criv_config(
+        root,
+        vec!["src"],
+        vec!["**/target/**", "**/node_modules/**"],
+        true,
+    );
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn run() {\n    println!(\"proposed\");\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("docs/adr/0994-draft-policy.md"),
+        r#"---
+id: ADR-0994
+kind: decision
+title: Proposed inline policy
+status: draft
+date: 2026-08-02
+governs:
+  - src/lib.rs
+policy:
+  patterns:
+    - id: no-println
+      language: rust
+      pattern: "println!($$$ARGS)"
+---
+
+# Proposed inline policy
+"#,
+    )
+    .unwrap();
+
+    criv(root)
+        .args(["check", "--filter", "policy-violation"])
+        .assert()
+        .success();
+    criv(root)
+        .args(["enforce", "--stage", "ci"])
+        .assert()
+        .success();
+    criv(root)
+        .args(["search", "--pattern-id", "ADR-0994/no-println"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/lib.rs:2"));
+    criv(root)
+        .args(["search", "--rule", "ADR-0994"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/lib.rs:2"));
+    criv(root).args(["watch", "--once"]).assert().success();
+    let state = fs::read_to_string(root.join(".criv/state.json")).unwrap();
+    assert!(!state.contains("ADR-0994/no-println"));
+}
+
+#[test]
 fn commit_enforcement_scans_staged_governed_policy_files() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

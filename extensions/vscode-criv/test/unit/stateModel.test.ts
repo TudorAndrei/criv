@@ -19,8 +19,8 @@ test("validates criv state schema before projection", () => {
   const parsed = parseStateEnvelope(stateContractRaw);
   assert.equal(parsed.ok, true);
   if (parsed.ok) {
-    assert.equal(parsed.envelope.graph?.nodes?.length, 4);
-    assert.equal(parsed.envelope.graph?.edges?.length, 3);
+    assert.equal(parsed.envelope.graph?.nodes?.length, 6);
+    assert.equal(parsed.envelope.graph?.edges?.length, 5);
     assert.deepEqual(registeredPatterns(parsed.envelope), ["ADR-0001/entrypoint"]);
     assert.deepEqual(parsed.envelope.patterns?.["ADR-0001/entrypoint"], [
       {
@@ -29,6 +29,22 @@ test("validates criv state schema before projection", () => {
         captures: { BODY: "", NAME: "run" },
       },
     ]);
+    assert.equal(parsed.envelope.patterns?.["ADR-0002/draft-entrypoint"], undefined);
+
+    const snapshot = buildStateSnapshot(
+      stateContractRaw,
+      parsed.envelope,
+      {
+        schema: "criv.state.v0",
+        node_count: 6,
+        edge_count: 5,
+        source_count: 1,
+        pattern_count: 1,
+      },
+      [],
+      [],
+    );
+    assert.deepEqual(snapshot.registeredPatterns, ["ADR-0001/entrypoint"]);
   }
 
   const invalid = parseStateEnvelope(stateContractRaw.replace("criv.state.v0", "criv.state.v1"));

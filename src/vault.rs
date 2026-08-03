@@ -161,18 +161,7 @@ impl Vault {
             }
         }
 
-        let mut patterns = BTreeSet::new();
-        for note in &notes {
-            if note.kind == NoteKind::Decision
-                && let Some(id) = &note.id
-            {
-                for pattern in &note.policy_patterns {
-                    if let Some(pattern_id) = pattern.id.as_deref() {
-                        patterns.insert(format!("{id}/{pattern_id}"));
-                    }
-                }
-            }
-        }
+        let patterns = registered_policy_patterns(&notes);
 
         let (source_files, source_index, source_graph): (
             Vec<String>,
@@ -450,19 +439,7 @@ impl Vault {
                 titles.entry(title.to_lowercase()).or_insert(index);
             }
         }
-        let patterns = notes
-            .iter()
-            .filter(|note| note.kind == NoteKind::Decision)
-            .filter_map(|note| note.id.as_deref().map(|id| (id, note)))
-            .flat_map(|(id, note)| {
-                note.policy_patterns.iter().filter_map(move |pattern| {
-                    pattern
-                        .id
-                        .as_deref()
-                        .map(|local_id| format!("{id}/{local_id}"))
-                })
-            })
-            .collect();
+        let patterns = registered_policy_patterns(&notes);
 
         Self {
             config: Config::default(),
@@ -477,6 +454,29 @@ impl Vault {
             patterns,
         }
     }
+}
+
+/// Returns the policy IDs published in generated state.
+///
+/// Policy lookup remains status-agnostic for validation, search, and wikilink
+/// resolution. State registration is deliberately narrower: only policies
+/// owned by an accepted ADR are published.
+fn registered_policy_patterns(notes: &[Note]) -> BTreeSet<String> {
+    notes
+        .iter()
+        .filter(|note| {
+            note.kind == NoteKind::Decision && note.status.as_deref() == Some("accepted")
+        })
+        .filter_map(|note| note.id.as_deref().map(|id| (id, note)))
+        .flat_map(|(id, note)| {
+            note.policy_patterns.iter().filter_map(move |pattern| {
+                pattern
+                    .id
+                    .as_deref()
+                    .map(|local_id| format!("{id}/{local_id}"))
+            })
+        })
+        .collect()
 }
 
 #[derive(Debug)]
@@ -938,6 +938,82 @@ policy:
         assert_eq!(
             note.policy_patterns[1].rule.as_deref(),
             Some("all:\n  - pattern: \"$RT.block_on($$$ARGS)\"\n")
+        );
+    }
+
+    #[test]
+    fn registers_only_accepted_decision_policy_patterns_but_resolves_all_decisions() {
+        let accepted = parsed_note(
+            "criv-accepted-policy-registration",
+            r#"---
+id: ADR-0001
+kind: decision
+title: Accepted
+status: accepted
+policy:
+  patterns:
+    - id: accepted
+---
+
+# Accepted
+"#,
+        );
+        let draft = parsed_note(
+            "criv-draft-policy-registration",
+            r#"---
+id: ADR-0002
+kind: decision
+title: Draft
+status: draft
+policy:
+  patterns:
+    - id: draft
+---
+
+# Draft
+"#,
+        );
+        let missing_status = parsed_note(
+            "criv-missing-policy-registration",
+            r#"---
+id: ADR-0003
+kind: decision
+title: Missing status
+policy:
+  patterns:
+    - id: missing-status
+---
+
+# Missing status
+"#,
+        );
+        let non_decision = parsed_note(
+            "criv-doc-policy-registration",
+            r#"---
+id: DOC-0001
+kind: doc
+title: Documentation
+status: accepted
+policy:
+  patterns:
+    - id: documentation
+---
+
+# Documentation
+"#,
+        );
+        let vault = Vault::from_parts_for_test(vec![accepted, draft, missing_status, non_decision]);
+
+        assert_eq!(
+            vault.patterns(),
+            &BTreeSet::from(["ADR-0001/accepted".to_string()])
+        );
+        assert!(vault.resolve_policy_pattern("ADR-0002/draft").is_some());
+        assert_eq!(
+            vault.resolve_link("match:ADR-0002/draft"),
+            ResolvedLink::Pattern {
+                id: "ADR-0002/draft".into()
+            }
         );
     }
 
