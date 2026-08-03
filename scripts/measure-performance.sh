@@ -99,5 +99,8 @@ echo "criv_perf	root=$root	binary=$criv_bin	revision=$revision	samples=$samples	
   run_samples "source_index_files" "$criv_bin" search --files src
   run_samples "check" "$criv_bin" check
   run_samples "enforce_ci" "$criv_bin" enforce --stage ci
+  run_samples "query_next_adr_id" "$criv_bin" query next-adr-id
+  run_samples "query_orphan_docs" "$criv_bin" query orphan-docs
+  run_samples "query_nodes_docs" "$criv_bin" query nodes --kind doc
   run_samples "diff_latest" "$criv_bin" query diff latest latest
 )
