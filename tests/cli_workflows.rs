@@ -917,6 +917,36 @@ file.rs]]
 }
 
 #[test]
+fn check_github_output_emits_workflow_annotation() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::write(
+        root.join("docs/broken.md"),
+        r#"---
+id: broken
+kind: doc
+title: Broken
+---
+
+# Broken
+
+Missing [[missing-target]]
+"#,
+    )
+    .unwrap();
+
+    criv(root)
+        .args(["check", "--format", "github", "--filter", "broken-link"])
+        .assert()
+        .failure()
+        .stdout(
+            "::error file=docs/broken.md,line=9,title=criv broken-link::wiki-link `[[missing-target]]` does not resolve\n",
+        );
+}
+
+#[test]
 fn check_fix_rewrites_fixable_markdown_in_the_docs_tree() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

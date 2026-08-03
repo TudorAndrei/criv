@@ -34,11 +34,6 @@ tools = "mise install"
 # Same fixers hk runs on a normal commit.
 fix = "mise run fix"
 
-[pre-merge]
-# The full gate: clippy, hawk, Rust tests, extension tests, criv check,
-# criv enforce --stage ci. What CI runs.
-check = "mise run check"
-
 [pre-remove]
 # Kill the branch's tmux session before the worktree disappears. Refuses to kill
 # the session it is being called from.

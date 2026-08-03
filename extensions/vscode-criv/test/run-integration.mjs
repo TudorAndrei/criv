@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,10 +10,20 @@ const extensionRoot = resolve(__dirname, "..");
 // macOS limits Unix-domain socket paths to 103 bytes. A worktree-local profile
 // can exceed that limit before VS Code starts, so give each test run a short,
 // isolated profile outside the checkout.
-const userDataDir = await mkdtemp(join(tmpdir(), "criv-vscode-"));
+const profileRoot = await mkdtemp(join(tmpdir(), "criv-vscode-"));
+const userDataDir = join(profileRoot, "u");
+const extensionsDir = join(profileRoot, "e");
 
-await runTests({
-  extensionDevelopmentPath: extensionRoot,
-  extensionTestsPath: resolve(extensionRoot, "dist-test/integration/runner.js"),
-  launchArgs: [`--user-data-dir=${userDataDir}`, resolve(extensionRoot, "../..")],
-});
+try {
+  await runTests({
+    extensionDevelopmentPath: extensionRoot,
+    extensionTestsPath: resolve(extensionRoot, "dist-test/integration/runner.js"),
+    launchArgs: [
+      `--user-data-dir=${userDataDir}`,
+      `--extensions-dir=${extensionsDir}`,
+      resolve(extensionRoot, "../.."),
+    ],
+  });
+} finally {
+  await rm(profileRoot, { recursive: true, force: true });
+}

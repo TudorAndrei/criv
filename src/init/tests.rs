@@ -18,6 +18,7 @@ fn init_writes_parseable_structured_templates() {
     .unwrap();
 
     let config = std::fs::read_to_string(root.join("criv.toml")).unwrap();
+    assert_eq!(config, include_str!("fixtures/criv.toml"));
     toml::from_str::<toml::Value>(&config).unwrap();
     assert!(!config.contains("languages"));
     assert!(!config.contains("notes ="));

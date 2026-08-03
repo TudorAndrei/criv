@@ -32,12 +32,7 @@ impl TemplateFile {
 }
 
 pub(crate) fn default_config() -> Result<String> {
-    let mut toml = toml::to_string_pretty(&DefaultConfig::default())
-        .map_err(|err| CrivError::new(format!("failed to serialize default criv.toml: {err}")))?;
-    if !toml.ends_with('\n') {
-        toml.push('\n');
-    }
-    Ok(toml)
+    Ok(DEFAULT_CONFIG.to_string())
 }
 
 pub(crate) fn default_state() -> Result<String> {
@@ -239,6 +234,7 @@ fn obsidian_app_config() -> ObsidianAppConfig {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 struct DefaultConfig {
     vault: VaultConfig,
@@ -247,6 +243,7 @@ struct DefaultConfig {
     enforce: EnforceConfig,
 }
 
+#[cfg(test)]
 impl Default for DefaultConfig {
     fn default() -> Self {
         Self {
@@ -269,24 +266,28 @@ impl Default for DefaultConfig {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 struct VaultConfig {
     docs: &'static str,
     adr: &'static str,
 }
 
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 struct SourceConfig {
     roots: Vec<&'static str>,
     exclude: Vec<&'static str>,
 }
 
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 struct IndexConfig {
     source: bool,
     embeddings: bool,
 }
 
+#[cfg(test)]
 #[derive(Debug, Serialize)]
 struct EnforceConfig {
     stages: Vec<&'static str>,
@@ -552,6 +553,7 @@ const CLAUDE_SKILLS: &[StaticTemplate] = &[
 ];
 
 const PLUGIN_TS_CORE: &str = include_str!("../../.obsidian/plugins/criv/src/core.ts");
+const DEFAULT_CONFIG: &str = include_str!("fixtures/criv.toml");
 const PLUGIN_TS_MAIN: &str = include_str!("../../.obsidian/plugins/criv/src/main.ts");
 const PLUGIN_TS_WASM: &str = include_str!("../../.obsidian/plugins/criv/src/wasm.ts");
 const PLUGIN_STYLES: &str = include_str!("../../.obsidian/plugins/criv/styles.css");
@@ -579,6 +581,14 @@ mod tests {
     use super::*;
 
     const SKILL: &str = "---\nname: example\ndescription: Example\n---\n\n# Example\n";
+
+    #[test]
+    fn default_config_fixture_matches_typed_defaults() {
+        let fixture: toml::Value = toml::from_str(DEFAULT_CONFIG).unwrap();
+        let defaults = toml::Value::try_from(DefaultConfig::default()).unwrap();
+
+        assert_eq!(fixture, defaults);
+    }
 
     #[test]
     fn template_hash_is_stable_and_content_sensitive() {
