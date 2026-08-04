@@ -2,6 +2,8 @@ name: Performance notes
 
 on:
   push:
+    paths-ignore:
+      - site/**
   workflow_dispatch:
 
 permissions:
