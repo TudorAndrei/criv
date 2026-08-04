@@ -35,6 +35,19 @@ a:link,
 a:visited { color: inherit; }
 a:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
 
+button {
+  min-height: 2.5rem;
+  padding: 0.35rem 0.75rem;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
+
 pre {
   margin: 0 0 1rem;
   padding: 0.5rem 0 0.5rem 2ch;
@@ -45,6 +58,36 @@ pre {
 
 .lead { font-size: 1.1rem; }
 .footer { margin-top: 2.5rem; }
+
+dialog {
+  box-sizing: border-box;
+  width: min(94vw, 90rem);
+  height: min(94dvh, 60rem);
+  max-width: none;
+  max-height: none;
+  padding: 1.25rem;
+  color: #1c1c1c;
+  background: #fff;
+  border: 1px solid #d8d8d8;
+}
+
+dialog::backdrop { background: rgb(0 0 0 / 0.7); }
+
+.architecture-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.architecture-dialog-header h2 { margin: 0; }
+.architecture-dialog-header form { margin: 0; }
+
+dialog likec4-view {
+  --likec4-view-max-width: 84rem;
+  --likec4-view-max-height: calc(94dvh - 8rem);
+}
 
 .skip-link {
   position: absolute;
@@ -61,4 +104,5 @@ pre {
   :root { color: #d8d8d8; background: #101010; }
   pre { border-color: #2e2e2e; }
   .skip-link { color: #101010; background: #d8d8d8; }
+  dialog { color: #d8d8d8; background: #101010; border-color: #2e2e2e; }
 }

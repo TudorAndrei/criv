@@ -84,9 +84,7 @@ for (const document of documents) {
   await writeFile(outputPath, output);
 }
 
-await mkdir(path.join(bookSource, 'architecture'), { recursive: true });
 await writeFile(path.join(bookSource, 'README.md'), `# criv documentation\n\nBrowse the documentation, architecture decisions, and repository guides.\n`);
-await writeFile(path.join(bookSource, 'architecture', 'README.md'), `# Architecture\n\nExplore the current C4 model. Select an element for its details, or open the view browser to change views.\n\n<likec4-view view-id="index" browser="true"></likec4-view>\n`);
 
 const chapters = (await markdownFiles(bookSource))
   .map(async (file) => {
@@ -97,9 +95,9 @@ const chapters = (await markdownFiles(bookSource))
 const pages = await Promise.all(chapters);
 pages.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
 
-const summary = ['# Summary', '', '[Overview](README.md)', '', '[Architecture](architecture/README.md)', '', '---', ''];
+const summary = ['# Summary', '', '[Overview](README.md)', '', '---', ''];
 for (const page of pages) {
-  if (page.relativePath === 'README.md' || page.relativePath === 'architecture/README.md') continue;
+  if (page.relativePath === 'README.md') continue;
   summary.push(`- [${page.title}](${page.relativePath})`);
 }
 await writeFile(path.join(bookSource, 'SUMMARY.md'), `${summary.join('\n')}\n`);
@@ -304,13 +302,6 @@ table th {
   outline-offset: 3px;
 }
 
-likec4-view {
-  display: block;
-  min-height: 42rem;
-  margin: 1.5rem 0;
-  outline: 1px solid var(--site-rule);
-}
-
 @media (prefers-color-scheme: dark) {
   :root {
     --site-bg: #101010;
@@ -335,10 +326,7 @@ likec4-view {
   .content {
     padding-block-start: 2rem;
   }
-}
 
-likec4-view {
-  min-height: 32rem;
 }
 `);
 
@@ -354,7 +342,6 @@ build-dir = "../../site/docs"
 
 [output.html]
 additional-css = ["architecture.css"]
-additional-js = ["likec4-webcomponent.js"]
 git-repository-icon = "fab-github"
 git-repository-url = "https://github.com/TudorAndrei/criv"
 site-url = "/criv/docs/"

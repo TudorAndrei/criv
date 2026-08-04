@@ -21,6 +21,7 @@
     <link rel="icon" href="/criv/favicon.svg" type="image/svg+xml" />
     <link rel="manifest" href="/criv/site.webmanifest" />
     <link rel="stylesheet" href="/criv/style.css" />
+    <script defer src="/criv/likec4-webcomponent.js"></script>
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
@@ -90,6 +91,10 @@ criv check</code></pre>
         You can also <a href="/criv/docs/">browse the generated documentation</a>.
       </p>
 
+      <p>
+        <button type="button" id="architecture-open">View Architecture</button>
+      </p>
+
       <h2>What criv checks</h2>
 
       <ul>
@@ -103,5 +108,22 @@ criv check</code></pre>
         · <a href="/criv/llms.txt">llms.txt</a> · MIT
       </p>
     </main>
+
+    <dialog id="architecture-dialog" aria-labelledby="architecture-title">
+      <div class="architecture-dialog-header">
+        <h2 id="architecture-title">Architecture</h2>
+        <form method="dialog">
+          <button type="submit">Close</button>
+        </form>
+      </div>
+      <likec4-view view-id="index" browser="true"></likec4-view>
+    </dialog>
+
+    <script>
+      const architectureDialog = document.querySelector('#architecture-dialog');
+      document.querySelector('#architecture-open').addEventListener('click', () => {
+        architectureDialog.showModal();
+      });
+    </script>
   </body>
 </html>

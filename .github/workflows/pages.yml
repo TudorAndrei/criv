@@ -49,7 +49,7 @@ jobs:
         run: node scripts/prepare-docs-site.mjs
 
       - name: Generate C4 web component
-        run: node_modules/.bin/likec4 gen webcomponent --output .site-build/docs-book/likec4-webcomponent.js docs/architecture
+        run: node_modules/.bin/likec4 gen webcomponent --output site/likec4-webcomponent.js docs/architecture
 
       - name: Install mise
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
