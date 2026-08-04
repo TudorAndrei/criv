@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { defaultLikeC4ViewId } from "@criv/likec4/protocol";
 import { c4NavigationTarget, preferredC4ViewId } from "../../src/c4PreviewModel";
 
 const views = [
@@ -54,8 +53,9 @@ test("returns no preference when no state view belongs to the file", () => {
   assert.equal(preferredC4ViewId("docs/architecture/model.c4", views), undefined);
 });
 
-test("uses index as the workspace fallback instead of sorted view order", () => {
-  assert.equal(defaultLikeC4ViewId(views), "index");
+test("offers no view for a file that owns none", () => {
+  assert.equal(preferredC4ViewId("docs/architecture/specification.c4", views), undefined);
+  assert.equal(preferredC4ViewId("docs/architecture/model/relationships.c4", views), undefined);
 });
 
 test("navigation targets the file that owns the selected view", () => {

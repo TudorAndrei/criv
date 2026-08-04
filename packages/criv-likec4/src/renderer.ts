@@ -4,7 +4,6 @@ import { createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import type { CrivLikeC4Model } from "./protocol.js";
-import { defaultLikeC4ViewId } from "./protocol.js";
 
 export interface CrivLikeC4RendererOptions {
   colorScheme?: "light" | "dark";
@@ -32,10 +31,8 @@ export class CrivLikeC4Renderer {
     }
     this.#revision = next.revision;
     this.#model = next;
-    this.#viewId =
-      (viewId && next.views.some((view) => view.id === viewId) ? viewId : undefined) ??
-      defaultLikeC4ViewId(next.views) ??
-      null;
+    // A file that owns no named view renders nothing. There is no fallback view.
+    this.#viewId = viewId && next.views.some((view) => view.id === viewId) ? viewId : null;
     this.#render();
     if (this.#viewId) {
       this.#options.onSelectView?.(this.#viewId);

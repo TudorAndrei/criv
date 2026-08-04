@@ -83,11 +83,18 @@ class C4PreviewSurface {
       ...status.snapshot.architecture,
       revision: ++this.revision,
     };
-    const nonce = nonceValue();
     const rememberedViewId = this.selectedViews.get(document.uri.toString());
     const viewId = model.views.some((view) => view.id === rememberedViewId)
       ? rememberedViewId
       : preferredC4ViewId(relativePath, model.views);
+    if (!viewId) {
+      webview.html = buildC4PreviewStatusHtml(
+        webview.cspSource,
+        `${relativePath} declares no named view. Open a file under ${model.workspace}/views/ to see a diagram.`,
+      );
+      return;
+    }
+    const nonce = nonceValue();
     webview.html = buildC4PreviewHtml({
       cspSource: webview.cspSource,
       nonce,

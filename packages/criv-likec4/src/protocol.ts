@@ -60,10 +60,6 @@ export function preferredLikeC4ViewId(
   })?.id;
 }
 
-export function defaultLikeC4ViewId(views: readonly CrivLikeC4View[]): string | undefined {
-  return views.find((view) => view.id === "index")?.id ?? views[0]?.id;
-}
-
 /**
  * The workspace-relative document that owns a named view, so an editor can
  * follow renderer navigation with the file it opens.
