@@ -20,5 +20,11 @@
   "allowScripts": {
     "esbuild@0.28.1": true,
     "fsevents@2.3.3": true
+  },
+  "optionalDependencies": {
+    "@oxfmt/binding-linux-arm64-gnu": "0.56.0",
+    "@oxfmt/binding-linux-x64-gnu": "0.56.0",
+    "@oxlint/binding-linux-arm64-gnu": "1.71.0",
+    "@oxlint/binding-linux-x64-gnu": "1.71.0"
   }
 }
