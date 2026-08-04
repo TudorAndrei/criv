@@ -4,6 +4,7 @@ on:
   push:
     paths-ignore:
       - site/**
+      - docs/**
   workflow_dispatch:
 
 permissions:

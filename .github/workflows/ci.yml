@@ -4,11 +4,13 @@ on:
   pull_request:
     paths-ignore:
       - site/**
+      - docs/architecture/**
   push:
     branches:
       - main
     paths-ignore:
       - site/**
+      - docs/architecture/**
 
 permissions:
   contents: read
