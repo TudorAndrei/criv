@@ -1,0 +1,18 @@
+views {
+  dynamic view refreshSession {
+    title 'Dynamic / CLI / Refresh session'
+    description 'The order of one incremental refresh after a file change.'
+
+    maintainer -> criv.cli.commandRouter 'Starts a watch session'
+    criv.cli.commandRouter -> criv.cli.refreshPipeline 'Opens the refresh loop'
+    criv.cli.refreshPipeline -> criv.cli.sourceAnalysis 'Updates the live source index'
+    criv.cli.refreshPipeline -> criv.cli.vaultLoader 'Loads the changed vault'
+    criv.cli.vaultLoader -> criv.cli.likec4Compiler 'Compiles the C4 workspace'
+    criv.cli.likec4Compiler -> criv.cli.vaultLoader 'Returns models and diagnostics'
+    criv.cli.refreshPipeline -> criv.cli.validator 'Validates documents, decisions, and references'
+    criv.cli.validator -> criv.cli.gitAccess 'Reconciles renamed source scopes'
+    criv.cli.refreshPipeline -> criv.cli.architectureExporter 'Requests configured architecture output'
+    criv.cli.refreshPipeline -> criv.cli.statePublisher 'Publishes the validated state'
+    criv.cli.statePublisher -> criv.stateStore 'Writes the envelope and retains snapshots'
+  }
+}

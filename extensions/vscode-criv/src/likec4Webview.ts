@@ -13,18 +13,25 @@ if (!payload || !container) {
   throw new Error("The LikeC4 preview payload is missing.");
 }
 const vscode = acquireVsCodeApi();
+const select = document.getElementById("view") as HTMLSelectElement | null;
 const renderer = new CrivLikeC4Renderer(container, {
   colorScheme: payload.colorScheme,
   onOpenSource: (target) => vscode.postMessage({ type: "openSource", target }),
+  onSelectView: (viewId) => {
+    if (select) {
+      select.value = viewId;
+    }
+    vscode.postMessage({ type: "selectView", viewId });
+  },
 });
 renderer.replace(payload.model, payload.viewId);
-const select = document.getElementById("view") as HTMLSelectElement | null;
 if (select) {
   for (const view of renderer.views()) {
     select.add(new Option(view.title, view.id));
   }
-  if (payload.viewId) {
-    select.value = payload.viewId;
+  const currentViewId = renderer.currentViewId();
+  if (currentViewId) {
+    select.value = currentViewId;
   }
   select.disabled = select.options.length < 2;
   select.addEventListener("change", () => renderer.selectView(select.value));

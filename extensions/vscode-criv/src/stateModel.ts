@@ -63,6 +63,7 @@ function architectureModel(envelope: CrivStateEnvelope): CrivLikeC4Model | undef
     protocolVersion: 1,
     likec4Version: String(architecture.likec4Version ?? ""),
     revision: Number(architecture.revision ?? 0),
+    workspace: String(architecture.workspace ?? ""),
     model: model.raw,
     views: model.views as { id: string; title: string; sourcePath?: string }[],
     sourceLinks: model.sourceLinks as { element: string; target: string }[],

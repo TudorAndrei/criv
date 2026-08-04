@@ -1,0 +1,28 @@
+// Code architecture for the shared renderer package. `src/index.ts` is a
+// re-export barrel and stays outside the architecture.
+model {
+  extend criv.sharedRenderer.modelContract {
+    protocolModule = module 'criv-likec4::protocol' {
+      technology 'TypeScript'
+      description 'Defines the model, diagnostic, and version contract shared by editor adapters.'
+      link ../../packages/criv-likec4/src/protocol.ts 'source'
+    }
+  }
+  extend criv.sharedRenderer.diagramRenderer {
+    rendererModule = module 'criv-likec4::renderer' {
+      technology 'TypeScript, React, and LikeC4'
+      description 'Mounts, navigates, and updates a LikeC4 diagram in an adapter-owned DOM element.'
+      link ../../packages/criv-likec4/src/renderer.ts 'source'
+    }
+  }
+  extend criv.sharedRenderer.modelCompiler {
+    nodeModule = module 'criv-likec4::node' {
+      technology 'TypeScript and Node.js'
+      description 'Compiles LikeC4 source into contract models and diagnostics.'
+      link ../../packages/criv-likec4/src/node.ts 'source'
+    }
+  }
+
+  criv.sharedRenderer.diagramRenderer.rendererModule -> criv.sharedRenderer.modelContract.protocolModule 'Reads the model contract'
+  criv.sharedRenderer.modelCompiler.nodeModule -> criv.sharedRenderer.modelContract.protocolModule 'Emits the model contract'
+}

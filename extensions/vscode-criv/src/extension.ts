@@ -258,7 +258,11 @@ function commandFailureMessage(command: string, result: CommandResult): string {
 }
 
 function isCheckOnSaveDocument(document: vscode.TextDocument): boolean {
-  return document.languageId === "markdown" || document.languageId === "criv-c4";
+  return (
+    document.languageId === "markdown" ||
+    document.languageId === "criv-c4" ||
+    document.languageId === "likec4"
+  );
 }
 
 export function deactivate(): void {

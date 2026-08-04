@@ -4,10 +4,12 @@ import { createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import type { CrivLikeC4Model } from "./protocol.js";
+import { defaultLikeC4ViewId } from "./protocol.js";
 
 export interface CrivLikeC4RendererOptions {
   colorScheme?: "light" | "dark";
   onOpenSource?: (target: string) => void;
+  onSelectView?: (viewId: string) => void;
 }
 
 export class CrivLikeC4Renderer {
@@ -30,17 +32,29 @@ export class CrivLikeC4Renderer {
     }
     this.#revision = next.revision;
     this.#model = next;
-    this.#viewId = viewId ?? next.views[0]?.id ?? null;
+    this.#viewId =
+      (viewId && next.views.some((view) => view.id === viewId) ? viewId : undefined) ??
+      defaultLikeC4ViewId(next.views) ??
+      null;
     this.#render();
+    if (this.#viewId) {
+      this.#options.onSelectView?.(this.#viewId);
+    }
     return true;
   }
 
-  selectView(viewId: string): void {
-    if (!this.#model?.views.some((view) => view.id === viewId)) {
-      return;
+  selectView(viewId: string): boolean {
+    if (!this.#model?.views.some((view) => view.id === viewId) || this.#viewId === viewId) {
+      return false;
     }
     this.#viewId = viewId;
     this.#render();
+    this.#options.onSelectView?.(viewId);
+    return true;
+  }
+
+  currentViewId(): string | null {
+    return this.#viewId;
   }
 
   views(): readonly { id: string; title: string }[] {
@@ -89,8 +103,12 @@ export class CrivLikeC4Renderer {
           pannable: true,
           zoomable: true,
           enableSearch: true,
-          browser: true,
-          onNodeClick: (event: { node: { id: string } }) => {
+          showNavigationButtons: true,
+          onNavigateTo: (viewId: string) => this.selectView(viewId),
+          onNodeClick: (event: { node: { id: string; navigateTo?: string | null } }) => {
+            if (event.node.navigateTo) {
+              return;
+            }
             const target = sourceByElement.get(event.node.id);
             if (target) {
               this.#options.onOpenSource?.(target);

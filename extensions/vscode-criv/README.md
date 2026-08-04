@@ -12,9 +12,9 @@ for VS Code API-compatible desktop editors, including VS Code and Cursor.
 - Runs trusted workspace commands for `criv watch --once`, `criv check
   --format json`, and selected read-only `criv query` flows.
 - Renders the validated LikeC4 workspace from criv state. The preview supports
-  named views, pan, zoom, search, source links, and SVG export. It is the
-  default read-only editor for `.c4` files and selects the view owned by the
-  opened file.
+  named views, drill-down navigation, navigation history, pan, zoom, search,
+  source links, and SVG export. It is the default read-only editor for `.c4`
+  files and selects the view owned by the opened file.
 
 LikeC4 owns the architecture language and its validation. The Rust CLI calls
 the pinned local LikeC4 package and publishes its layout model in criv state.
@@ -40,6 +40,12 @@ recommend the extension for a workspace, but should not install it by default.
 Use **Reopen Editor With → Text Editor** when an agent or maintainer must edit
 the LikeC4 DSL. The `criv: Preview C4 Artifact` command can open a second
 preview beside that text editor.
+
+The workspace can recommend the official `likec4.likec4-vscode` extension for
+LikeC4 syntax highlighting, completion, formatting, and language-server
+features. It does not register a competing custom editor. Criv remains the
+default validated preview and accepts both the official `likec4` language ID
+and its standalone `criv-c4` language ID.
 
 ## Development
 

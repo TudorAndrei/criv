@@ -1,0 +1,15 @@
+views {
+  view sharedRendererComponents of criv.sharedRenderer {
+    title 'Components / Shared renderer'
+    description 'The renderer package that both editor adapters embed.'
+
+    include *
+    include criv.sharedRenderer.diagramRenderer with {
+      navigateTo codeSharedRenderer
+    }
+
+    style element.tag = #external {
+      color muted
+    }
+  }
+}

@@ -1,0 +1,13 @@
+views {
+  view codeQuery of criv.cli.queryEngine {
+    title 'Code / CLI / Query and search'
+    description 'The Rust modules that answer knowledge graph and search requests.'
+
+    include *
+    include criv.cli.vaultLoader.rustVault
+    include criv.cli.sourceAnalysis.*
+    include criv.cli.gitAccess.*
+    include criv.cli.statePublisher.rustSnapshots
+    include criv.cli.architectureExporter.rustC4Code
+  }
+}

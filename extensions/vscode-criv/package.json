@@ -97,7 +97,7 @@
       "editor/title": [
         {
           "command": "criv.previewC4",
-          "when": "resourceLangId == criv-c4 && activeCustomEditorId != criv.c4Preview",
+          "when": "resourceLangId =~ /^(criv-c4|likec4)$/ && activeCustomEditorId != criv.c4Preview",
           "group": "navigation"
         }
       ],

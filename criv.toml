@@ -8,6 +8,7 @@ roots = [
   "lib",
   "scripts",
   ".github/workflows",
+  ".vscode",
   ".obsidian/plugins/criv",
   "crates/criv-wasm",
   "extensions/vscode-criv",
@@ -45,10 +46,6 @@ embeddings = false
 
 [state]
 keep = 20
-
-[architecture.code]
-output = "docs/architecture/04-code.c4"
-title = "Code diagram for criv"
 
 [enforce]
 stages = ["commit", "push", "ci"]

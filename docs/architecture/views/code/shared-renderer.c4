@@ -1,0 +1,10 @@
+views {
+  view codeSharedRenderer of criv.sharedRenderer.diagramRenderer {
+    title 'Code / Shared / LikeC4 renderer'
+    description 'The renderer module and the contract it shares with both adapters.'
+
+    include *
+    include criv.sharedRenderer.modelContract.*
+    include criv.sharedRenderer.modelCompiler.*
+  }
+}

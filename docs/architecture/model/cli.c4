@@ -1,0 +1,77 @@
+model {
+  extend criv {
+    cli = container 'criv CLI' {
+      technology 'Rust'
+      description 'Loads a repository vault, validates its content, publishes state, and answers queries.'
+      link ../../src/lib.rs 'source'
+
+      commandRouter = component 'Command router' {
+        technology 'Rust and clap'
+        description 'Parses CLI operations and sends each operation to its application workflow.'
+        link ../../src/lib.rs 'source'
+      }
+      initializer = component 'Vault initializer' {
+        technology 'Rust'
+        description 'Installs the vault scaffold, canonical configuration, and generated agent skills.'
+        link ../../src/init.rs 'source'
+      }
+      vaultLoader = component 'Vault loader' {
+        technology 'Rust'
+        description 'Loads documents, decisions, C4 artifacts, configuration, and source data into one repository model.'
+        link ../../src/vault.rs 'source'
+      }
+      gitAccess = component 'Git repository access' {
+        technology 'Rust and libgit2'
+        description 'Reads commit history, changed files, and staged scopes behind one embedded boundary.'
+        link ../../src/git.rs 'source'
+      }
+      likec4Compiler = component 'LikeC4 compiler bridge' {
+        technology 'Rust and Node.js'
+        description 'Calls the LikeC4 toolchain and returns validated models and diagnostics.'
+        link ../../src/likec4.rs 'source'
+      }
+      sourceAnalysis = component 'Source analysis' {
+        technology 'Rust, fff, and tree-sitter'
+        description 'Indexes source modules and builds language-level import, symbol, and pattern relations.'
+        link ../../src/source_index.rs 'source'
+      }
+      validator = component 'Validation engine' {
+        technology 'Rust and ast-grep'
+        description 'Checks documents, decisions, policies, C4 models, and source references.'
+        link ../../src/check.rs 'source'
+      }
+      enforcementGateway = component 'Enforcement gateway' {
+        technology 'Rust'
+        description 'Selects the change scope for each commit, push, and CI stage, and fails closed on stale scopes.'
+        link ../../src/enforce.rs 'source'
+      }
+      refreshPipeline = component 'Refresh pipeline' {
+        technology 'Rust and notify'
+        description 'Coordinates incremental loading, validation, optional architecture output, and state publication.'
+        link ../../src/refresh.rs 'source'
+      }
+      statePublisher = component 'State publisher' {
+        technology 'Rust and serde'
+        description 'Builds the validated state envelope and publishes retained content-addressed snapshots.'
+        link ../../src/state.rs 'source'
+      }
+      queryEngine = component 'Query engine' {
+        technology 'Rust'
+        description 'Searches validated state and resolves repository knowledge graph questions.'
+        link ../../src/query.rs 'source'
+      }
+      architectureExporter = component 'Architecture exporter' {
+        #optional
+        technology 'Rust and LikeC4'
+        description 'Generates a module graph when a consuming vault enables generated Code architecture.'
+        link ../../src/c4_code.rs 'source'
+      }
+    }
+
+    stateStore = dataStore 'Published state store' {
+      technology 'JSON files under .criv/'
+      description 'Holds the latest validated state envelope and the retained content-addressed snapshots.'
+      link ../../src/snapshots.rs 'source'
+    }
+  }
+}

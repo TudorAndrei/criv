@@ -1,0 +1,12 @@
+views {
+  view codeObsidianAdapter of criv.obsidianPlugin.obsidianController {
+    title 'Code / Obsidian / Adapter'
+    description 'The TypeScript modules that connect Obsidian to criv state and the renderer.'
+
+    include *
+    include criv.obsidianPlugin.obsidianState.*
+    include criv.obsidianPlugin.obsidianWasm.*
+    include criv.sharedRenderer.diagramRenderer.*
+    include criv.sharedRenderer.modelContract.*
+  }
+}

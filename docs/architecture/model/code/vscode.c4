@@ -1,0 +1,168 @@
+// Code architecture for the VS Code companion extension. `src/nodeModuleShim`
+// is a bundler shim and stays outside the architecture.
+model {
+  extend criv.vscodeExtension.vscodeController {
+    extensionModule = module 'criv-vscode::extension' {
+      technology 'TypeScript'
+      description 'Activates the extension and connects commands, state, navigation, and previews.'
+      link ../../extensions/vscode-criv/src/extension.ts 'source'
+    }
+  }
+
+  extend criv.vscodeExtension.vscodePreview {
+    previewModule = module 'criv-vscode::c4Preview' {
+      technology 'TypeScript'
+      description 'Implements the VS Code custom editor for C4 previews.'
+      link ../../extensions/vscode-criv/src/c4Preview.ts 'source'
+    }
+    previewHtmlModule = module 'criv-vscode::c4PreviewHtml' {
+      technology 'TypeScript'
+      description 'Builds the secure webview document and preview bootstrap data.'
+      link ../../extensions/vscode-criv/src/c4PreviewHtml.ts 'source'
+    }
+    previewModelModule = module 'criv-vscode::c4PreviewModel' {
+      technology 'TypeScript'
+      description 'Selects the named view owned by the opened C4 artifact.'
+      link ../../extensions/vscode-criv/src/c4PreviewModel.ts 'source'
+    }
+    webviewModule = module 'criv-vscode::likec4Webview' {
+      technology 'TypeScript'
+      description 'Mounts the shared renderer inside the webview and synchronizes navigation.'
+      link ../../extensions/vscode-criv/src/likec4Webview.ts 'source'
+    }
+  }
+
+  extend criv.vscodeExtension.vscodeState {
+    stateStoreModule = module 'criv-vscode::stateStore' {
+      technology 'TypeScript'
+      description 'Loads and broadcasts the current workspace state.'
+      link ../../extensions/vscode-criv/src/stateStore.ts 'source'
+    }
+    stateModelModule = module 'criv-vscode::stateModel' {
+      technology 'TypeScript'
+      description 'Converts validated state into extension-facing snapshots and C4 artifacts.'
+      link ../../extensions/vscode-criv/src/stateModel.ts 'source'
+    }
+    c4ArtifactModule = module 'criv-vscode::c4Artifact' {
+      technology 'TypeScript'
+      description 'Describes the opened C4 artifact and its owning workspace paths.'
+      link ../../extensions/vscode-criv/src/c4Artifact.ts 'source'
+    }
+    wasmModule = module 'criv-vscode::wasm' {
+      technology 'TypeScript and Rust WebAssembly'
+      description 'Loads the WebAssembly API used to validate and query criv state.'
+      link ../../extensions/vscode-criv/src/wasm.ts 'source'
+    }
+    configModule = module 'criv-vscode::config' {
+      technology 'TypeScript'
+      description 'Reads the extension settings for the active workspace.'
+      link ../../extensions/vscode-criv/src/config.ts 'source'
+    }
+    configModelModule = module 'criv-vscode::configModel' {
+      technology 'TypeScript'
+      description 'Defines and validates the extension settings model.'
+      link ../../extensions/vscode-criv/src/configModel.ts 'source'
+    }
+  }
+
+  extend criv.vscodeExtension.vscodeNavigation {
+    languageFeaturesModule = module 'criv-vscode::languageFeatures' {
+      technology 'TypeScript'
+      description 'Provides document links, hovers, definitions, and references.'
+      link ../../extensions/vscode-criv/src/languageFeatures.ts 'source'
+    }
+    sourceReferencesModule = module 'criv-vscode::sourceReferences' {
+      technology 'TypeScript'
+      description 'Resolves wiki-link source references against validated state.'
+      link ../../extensions/vscode-criv/src/sourceReferences.ts 'source'
+    }
+    sourceTargetModule = module 'criv-vscode::sourceTarget' {
+      technology 'TypeScript'
+      description 'Converts resolved selectors into editor locations.'
+      link ../../extensions/vscode-criv/src/sourceTarget.ts 'source'
+    }
+  }
+
+  extend criv.vscodeExtension.vscodeDiagnostics {
+    checkDiagnosticsModule = module 'criv-vscode::checkDiagnostics' {
+      technology 'TypeScript'
+      description 'Publishes criv check results as workspace diagnostics.'
+      link ../../extensions/vscode-criv/src/checkDiagnostics.ts 'source'
+    }
+    checkDiagnosticModelModule = module 'criv-vscode::checkDiagnosticModel' {
+      technology 'TypeScript'
+      description 'Parses criv check JSON into a diagnostic model.'
+      link ../../extensions/vscode-criv/src/checkDiagnosticModel.ts 'source'
+    }
+    checkOutputModule = module 'criv-vscode::checkOutput' {
+      technology 'TypeScript'
+      description 'Writes criv check output to the extension output channel.'
+      link ../../extensions/vscode-criv/src/checkOutput.ts 'source'
+    }
+  }
+
+  extend criv.vscodeExtension.vscodeCommands {
+    commandsModule = module 'criv-vscode::commands' {
+      technology 'TypeScript'
+      description 'Declares the command identifiers registered by the extension.'
+      link ../../extensions/vscode-criv/src/commands.ts 'source'
+    }
+    commandRunnerModule = module 'criv-vscode::commandRunner' {
+      technology 'TypeScript and Node.js child processes'
+      description 'Runs the criv binary in the workspace and returns its result.'
+      link ../../extensions/vscode-criv/src/commandRunner.ts 'source'
+    }
+  }
+
+  extend criv.vscodeExtension.vscodeExplorer {
+    treeModule = module 'criv-vscode::tree' {
+      technology 'TypeScript'
+      description 'Builds the vault tree from validated state.'
+      link ../../extensions/vscode-criv/src/tree.ts 'source'
+    }
+  }
+
+  // Extension activation.
+  criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodePreview.previewModule 'Registers the custom editor'
+  criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodeState.stateStoreModule 'Observes workspace state'
+  criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodeState.configModule 'Reads the extension settings'
+  criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodeNavigation.languageFeaturesModule 'Registers language features'
+  criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodeNavigation.sourceTargetModule 'Opens resolved source targets'
+  criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodeDiagnostics.checkDiagnosticsModule 'Publishes check diagnostics'
+  criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodeDiagnostics.checkOutputModule 'Writes check output'
+  criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodeCommands.commandsModule 'Registers command identifiers'
+  criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodeCommands.commandRunnerModule 'Runs criv commands'
+  criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodeExplorer.treeModule 'Registers the vault tree'
+
+  // Preview editor.
+  criv.vscodeExtension.vscodePreview.previewModule -> criv.vscodeExtension.vscodePreview.previewHtmlModule 'Builds preview documents'
+  criv.vscodeExtension.vscodePreview.previewModule -> criv.vscodeExtension.vscodePreview.previewModelModule 'Selects the initial named view'
+  criv.vscodeExtension.vscodePreview.previewModule -> criv.vscodeExtension.vscodeState.stateStoreModule 'Reads compiled C4 models'
+  criv.vscodeExtension.vscodePreview.previewModule -> criv.vscodeExtension.vscodeCommands.commandsModule 'Runs refresh commands'
+  criv.vscodeExtension.vscodePreview.webviewModule -> criv.sharedRenderer.diagramRenderer.rendererModule 'Mounts diagrams'
+  criv.vscodeExtension.vscodePreview.webviewModule -> criv.sharedRenderer.modelContract.protocolModule 'Reads the model contract'
+
+  // Workspace state.
+  criv.vscodeExtension.vscodeState.stateStoreModule -> criv.vscodeExtension.vscodeState.stateModelModule 'Builds extension snapshots'
+  criv.vscodeExtension.vscodeState.stateStoreModule -> criv.vscodeExtension.vscodeState.wasmModule 'Validates state'
+  criv.vscodeExtension.vscodeState.stateModelModule -> criv.vscodeExtension.vscodeState.wasmModule 'Projects validated state'
+  criv.vscodeExtension.vscodeState.stateModelModule -> criv.vscodeExtension.vscodeState.c4ArtifactModule 'Describes C4 artifacts'
+  criv.vscodeExtension.vscodeState.configModule -> criv.vscodeExtension.vscodeState.configModelModule 'Validates the settings model'
+
+  // Source navigation.
+  criv.vscodeExtension.vscodeNavigation.languageFeaturesModule -> criv.vscodeExtension.vscodeNavigation.sourceReferencesModule 'Resolves source references'
+  criv.vscodeExtension.vscodeNavigation.languageFeaturesModule -> criv.vscodeExtension.vscodeState.stateStoreModule 'Reads the current state'
+  criv.vscodeExtension.vscodeNavigation.languageFeaturesModule -> criv.vscodeExtension.vscodeCommands.commandsModule 'Offers command links'
+  criv.vscodeExtension.vscodeNavigation.sourceReferencesModule -> criv.vscodeExtension.vscodeState.stateModelModule 'Reads state snapshots'
+  criv.vscodeExtension.vscodeNavigation.sourceReferencesModule -> criv.vscodeExtension.vscodeState.wasmModule 'Resolves source selectors'
+
+  // Diagnostics.
+  criv.vscodeExtension.vscodeDiagnostics.checkDiagnosticsModule -> criv.vscodeExtension.vscodeDiagnostics.checkDiagnosticModelModule 'Parses check results'
+  criv.vscodeExtension.vscodeDiagnostics.checkDiagnosticsModule -> criv.vscodeExtension.vscodeNavigation.sourceTargetModule 'Anchors diagnostics to source'
+  criv.vscodeExtension.vscodeDiagnostics.checkOutputModule -> criv.vscodeExtension.vscodeCommands.commandRunnerModule 'Reads command output'
+
+  // Vault tree.
+  criv.vscodeExtension.vscodeExplorer.treeModule -> criv.vscodeExtension.vscodeState.stateStoreModule 'Observes the current state'
+  criv.vscodeExtension.vscodeExplorer.treeModule -> criv.vscodeExtension.vscodeState.stateModelModule 'Reads state snapshots'
+  criv.vscodeExtension.vscodeExplorer.treeModule -> criv.vscodeExtension.vscodeState.wasmModule 'Resolves tree selectors'
+}

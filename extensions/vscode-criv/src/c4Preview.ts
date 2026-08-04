@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
 
 import { buildC4PreviewHtml, buildC4PreviewStatusHtml } from "./c4PreviewHtml";
-import { preferredC4ViewId } from "./c4PreviewModel";
+import { c4NavigationTarget, preferredC4ViewId } from "./c4PreviewModel";
 import { COMMAND_OPEN_SOURCE_TARGET } from "./commands";
 import type { WorkspaceStateStatus, WorkspaceStateStore } from "./stateStore";
 
@@ -10,6 +10,7 @@ export const C4_PREVIEW_VIEW_TYPE = "criv.c4Preview";
 
 class C4PreviewSurface {
   private revision = 0;
+  private readonly selectedViews = new Map<string, string>();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -23,12 +24,51 @@ class C4PreviewSurface {
     };
   }
 
-  bindMessages(webview: vscode.Webview): vscode.Disposable {
+  bindMessages(
+    webview: vscode.Webview,
+    document?: vscode.TextDocument,
+    viewColumn?: vscode.ViewColumn,
+  ): vscode.Disposable {
     return webview.onDidReceiveMessage(async (message: unknown) => {
       if (isOpenSourceMessage(message)) {
         await vscode.commands.executeCommand(COMMAND_OPEN_SOURCE_TARGET, message.target);
+      } else if (document && isSelectViewMessage(message)) {
+        this.selectedViews.set(document.uri.toString(), message.viewId);
+        await this.followNavigation(document, message.viewId, viewColumn);
       }
     });
+  }
+
+  /** Open the file that owns the navigated view, so the tab tracks the diagram. */
+  private async followNavigation(
+    document: vscode.TextDocument,
+    viewId: string,
+    viewColumn: vscode.ViewColumn | undefined,
+  ): Promise<void> {
+    const status = this.store.status;
+    if (status.kind !== "ready" || !status.snapshot.architecture) {
+      return;
+    }
+    const architecture = status.snapshot.architecture;
+    const target = c4NavigationTarget(
+      vscode.workspace.asRelativePath(document.uri, false),
+      architecture.workspace,
+      viewId,
+      architecture.views,
+    );
+    if (!target) {
+      return;
+    }
+    const folder = vscode.workspace.getWorkspaceFolder(document.uri);
+    if (!folder) {
+      return;
+    }
+    await vscode.commands.executeCommand(
+      "vscode.openWith",
+      vscode.Uri.joinPath(folder.uri, target),
+      C4_PREVIEW_VIEW_TYPE,
+      { viewColumn: viewColumn ?? vscode.ViewColumn.Active, preview: false },
+    );
   }
 
   render(webview: vscode.Webview, document: vscode.TextDocument): void {
@@ -44,6 +84,10 @@ class C4PreviewSurface {
       revision: ++this.revision,
     };
     const nonce = nonceValue();
+    const rememberedViewId = this.selectedViews.get(document.uri.toString());
+    const viewId = model.views.some((view) => view.id === rememberedViewId)
+      ? rememberedViewId
+      : preferredC4ViewId(relativePath, model.views);
     webview.html = buildC4PreviewHtml({
       cspSource: webview.cspSource,
       nonce,
@@ -52,7 +96,7 @@ class C4PreviewSurface {
         .toString(),
       payload: {
         model,
-        viewId: preferredC4ViewId(relativePath, model.views),
+        viewId,
         colorScheme:
           vscode.window.activeColorTheme.kind === vscode.ColorThemeKind.Light ? "light" : "dark",
       },
@@ -77,7 +121,7 @@ export class C4PreviewEditorProvider implements vscode.CustomTextEditorProvider 
     this.surface.configure(panel.webview);
     const render = () => this.surface.render(panel.webview, document);
     const subscriptions = [
-      this.surface.bindMessages(panel.webview),
+      this.surface.bindMessages(panel.webview, document, panel.viewColumn),
       this.store.onDidChangeStatus(render),
       vscode.workspace.onDidChangeTextDocument((event) => {
         if (event.document.uri.toString() === document.uri.toString()) {
@@ -111,7 +155,7 @@ export class C4PreviewManager implements vscode.Disposable {
     document = vscode.window.activeTextEditor?.document,
     options: { preserveFocus?: boolean } = {},
   ): Promise<void> {
-    if (!document || document.languageId !== "criv-c4") {
+    if (!document || !isC4Document(document)) {
       await vscode.window.showWarningMessage("Open a .c4 file before you open its preview.");
       return;
     }
@@ -165,6 +209,23 @@ function isOpenSourceMessage(value: unknown): value is { type: "openSource"; tar
     value !== null &&
     (value as { type?: unknown }).type === "openSource" &&
     typeof (value as { target?: unknown }).target === "string"
+  );
+}
+
+function isSelectViewMessage(value: unknown): value is { type: "selectView"; viewId: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "selectView" &&
+    typeof (value as { viewId?: unknown }).viewId === "string"
+  );
+}
+
+function isC4Document(document: vscode.TextDocument): boolean {
+  return (
+    document.languageId === "criv-c4" ||
+    document.languageId === "likec4" ||
+    document.uri.path.endsWith(".c4")
   );
 }
 

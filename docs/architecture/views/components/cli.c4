@@ -1,0 +1,33 @@
+views {
+  view cliComponents of criv.cli {
+    title 'Components / CLI'
+    description 'The responsibilities inside the criv CLI and the order of the refresh workflow.'
+
+    include *
+    include criv.cli.vaultLoader with {
+      navigateTo codeVaultLoading
+    }
+    include criv.cli.refreshPipeline with {
+      navigateTo codeRefreshPipeline
+    }
+    include criv.cli.validator with {
+      navigateTo codeValidation
+    }
+    include criv.cli.queryEngine with {
+      navigateTo codeQuery
+    }
+    include criv.cli.architectureExporter with {
+      navigateTo codeArchitectureExporter
+    }
+    include criv.cli.statePublisher with {
+      navigateTo codeStatePublication
+    }
+
+    style element.tag = #external {
+      color muted
+    }
+    style element.tag = #optional {
+      color muted
+    }
+  }
+}

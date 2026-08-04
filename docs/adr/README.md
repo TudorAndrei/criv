@@ -79,3 +79,6 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0073-effective-adr-governance-and-source-reconciliation|ADR-0073]] - Effective ADR governance and source reconciliation
 - [[0074-likec4-as-the-architecture-source-and-renderer|ADR-0074]] - LikeC4 as the architecture source and renderer
 - [[0075-likec4-preview-as-the-default-c4-editor|ADR-0075]] - LikeC4 preview as the default C4 editor
+- [[0076-focused-likec4-workspace-navigation|ADR-0076]] - Focused LikeC4 workspace navigation
+- [[0077-c4-standard-alignment-for-the-likec4-workspace|ADR-0077]] - C4 standard alignment for the LikeC4 workspace
+- [[0078-the-editor-follows-preview-navigation|ADR-0078]] - The editor follows preview navigation

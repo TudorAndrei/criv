@@ -1,0 +1,11 @@
+views {
+  view codeVaultLoading of criv.cli.vaultLoader {
+    title 'Code / CLI / Vault loading'
+    description 'The Rust modules that build the repository vault.'
+
+    include *
+    include criv.cli.likec4Compiler.*
+    include criv.cli.sourceAnalysis.*
+    include criv.cli.gitAccess.*
+  }
+}

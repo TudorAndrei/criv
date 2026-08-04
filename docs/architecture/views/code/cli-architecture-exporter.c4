@@ -1,0 +1,11 @@
+views {
+  view codeArchitectureExporter of criv.cli.architectureExporter {
+    title 'Code / CLI / Architecture exporter'
+    description 'The Rust modules that render generated Code architecture.'
+
+    include *
+    include criv.cli.vaultLoader.rustVault
+    include criv.cli.vaultLoader.rustConfig
+    include criv.cli.sourceAnalysis.rustSourceGraph
+  }
+}

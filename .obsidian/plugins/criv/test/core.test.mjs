@@ -158,7 +158,6 @@ assert.deepEqual(core.parseLineRange("L8-L4"), { start: 8, end: 8 });
 assert.equal(core.parseLineRange("4-8"), null);
 assert.equal(core.parseLineRange(null), null);
 
-
 const targets = [];
 core.addTarget(targets, " src/lib.rs ");
 core.addTarget(targets, " ");

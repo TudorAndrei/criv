@@ -1,0 +1,24 @@
+views {
+  view containers of criv {
+    title 'Overview / Containers'
+    description 'The runnable parts of criv and the store they share.'
+
+    include *
+    include criv.cli with {
+      navigateTo cliComponents
+    }
+    include criv.obsidianPlugin with {
+      navigateTo obsidianComponents
+    }
+    include criv.vscodeExtension with {
+      navigateTo vscodeComponents
+    }
+    include criv.sharedRenderer with {
+      navigateTo sharedRendererComponents
+    }
+
+    style element.tag = #external {
+      color muted
+    }
+  }
+}

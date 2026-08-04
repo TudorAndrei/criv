@@ -15,6 +15,9 @@ extensions/vscode-criv/*.vsix
 hk.local.pkl
 .config/hk.local.pkl
 .claude/settings.local.json
+!/.vscode/
+!/.vscode/extensions.json
+!/.vscode/settings.json
 
 PLAN.md
 TODO.md

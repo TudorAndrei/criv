@@ -1,0 +1,11 @@
+views {
+  view codeVscodeState of criv.vscodeExtension.vscodeState {
+    title 'Code / VS Code / Workspace state'
+    description 'The TypeScript modules that load, validate, and project criv state.'
+
+    include *
+    include criv.vscodeExtension.vscodeController.*
+    include criv.vscodeExtension.vscodeNavigation.*
+    include criv.vscodeExtension.vscodeExplorer.*
+  }
+}

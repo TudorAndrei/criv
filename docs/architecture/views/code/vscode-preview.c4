@@ -1,0 +1,13 @@
+views {
+  view codeVscodePreview of criv.vscodeExtension.vscodePreview {
+    title 'Code / VS Code / Preview'
+    description 'The TypeScript modules behind the custom C4 preview editor.'
+
+    include *
+    include criv.vscodeExtension.vscodeController.*
+    include criv.vscodeExtension.vscodeState.stateStoreModule
+    include criv.vscodeExtension.vscodeCommands.commandsModule
+    include criv.sharedRenderer.diagramRenderer.*
+    include criv.sharedRenderer.modelContract.*
+  }
+}

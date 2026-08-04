@@ -1,0 +1,9 @@
+views {
+  deployment view continuousIntegration {
+    title 'Deployment / Continuous integration'
+    description 'Where criv runs on a GitHub Actions runner.'
+
+    include ci
+    include ci.**
+  }
+}

@@ -15,3 +15,12 @@ test("C4 files use the LikeC4 preview as their default editor", () => {
   assert.equal(preview.priority, "default");
   assert.deepEqual(preview.selector, [{ filenamePattern: "*.c4" }]);
 });
+
+test("the preview command supports the official LikeC4 language", () => {
+  const titleMenu = extensionPackage.contributes.menus["editor/title"] ?? [];
+  const preview = titleMenu.find((item) => item.command === "criv.previewC4");
+
+  assert.ok(preview);
+  assert.match(preview.when, /likec4/);
+  assert.match(preview.when, /criv-c4/);
+});

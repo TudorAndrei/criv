@@ -16,7 +16,7 @@ import {
   WorkspaceLeaf,
 } from "obsidian";
 import { CrivLikeC4Renderer } from "@criv/likec4/renderer";
-import type { CrivLikeC4Model } from "@criv/likec4/protocol";
+import { preferredLikeC4ViewId, type CrivLikeC4Model } from "@criv/likec4/protocol";
 import { RangeSetBuilder } from "@codemirror/state";
 import {
   Decoration,
@@ -588,6 +588,7 @@ class CrivC4View extends FileView {
   private sourceEditorEl: HTMLTextAreaElement | null = null;
   private sourceSaveHandlerRegistered = false;
   private likec4Renderer: CrivLikeC4Renderer | null = null;
+  private likec4ViewSelect: HTMLSelectElement | null = null;
   private revision = 0;
 
   constructor(
@@ -634,6 +635,7 @@ class CrivC4View extends FileView {
     this.registerSourceSaveHandler();
     this.likec4Renderer?.dispose();
     this.likec4Renderer = null;
+    this.likec4ViewSelect = null;
     const container = this.containerEl.children[1] as HTMLElement;
     container.empty();
     container.addClass("criv-c4-view");
@@ -771,8 +773,13 @@ class CrivC4View extends FileView {
     this.likec4Renderer = new CrivLikeC4Renderer(surface, {
       colorScheme: document.body.classList.contains("theme-dark") ? "dark" : "light",
       onOpenSource: (target) => this.plugin.openExternal(target),
+      onSelectView: (viewId) => {
+        if (this.likec4ViewSelect) {
+          this.likec4ViewSelect.value = viewId;
+        }
+      },
     });
-    this.likec4Renderer.replace(model);
+    this.likec4Renderer.replace(model, preferredLikeC4ViewId(this.file?.path ?? "", model.views));
     this.renderLikeC4Controls();
   }
 
@@ -788,6 +795,8 @@ class CrivC4View extends FileView {
       for (const view of views) {
         select.createEl("option", { text: view.title, value: view.id });
       }
+      this.likec4ViewSelect = select;
+      select.value = renderer.currentViewId() ?? "";
       select.onchange = () => renderer.selectView(select.value);
     }
     this.toolbarButton(toolbar, "Export SVG", "Export the current view as SVG", false, () => {

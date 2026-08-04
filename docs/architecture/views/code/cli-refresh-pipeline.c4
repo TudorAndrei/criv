@@ -1,0 +1,13 @@
+views {
+  view codeRefreshPipeline of criv.cli.refreshPipeline {
+    title 'Code / CLI / Refresh pipeline'
+    description 'The Rust modules that run one refresh session.'
+
+    include *
+    include criv.cli.vaultLoader.*
+    include criv.cli.sourceAnalysis.*
+    include criv.cli.validator.*
+    include criv.cli.architectureExporter.*
+    include criv.cli.statePublisher.*
+  }
+}
