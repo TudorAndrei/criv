@@ -1,76 +1,94 @@
 ---
 name: c4-authoring
-description: LikeC4 architecture authoring and review for criv vaults. Use for .c4 models, named views, source links, generated module views, or architecture drift.
+description: Use when authoring or reviewing the LikeC4 architecture workspace in docs/architecture — models, named views, source links, or architecture drift.
 ---
 
 # C4 authoring
 
-Treat `docs/architecture/` as one LikeC4 workspace. LikeC4 DSL is the only
-architecture source and LikeC4 is the renderer.
+`docs/architecture/` is one LikeC4 workspace. LikeC4 DSL is the only
+architecture source, and LikeC4 is the renderer.
 
-## 1. Set the model boundary
+## 1. Pick one level
 
-Read the existing workspace and choose one C4 level for the change:
+Read the workspace, then choose the level the change belongs to:
 
-- System Context: people, the system in scope, and external systems
-- Container: deployable or runnable parts in one software system
-- Component: major responsibilities in one container
-- Code: language modules and import relations
+- System Context — people, the system in scope, and external systems
+- Container — the runnable parts of one software system
+- Component — the responsibilities inside one container
+- Code — language modules and import relations
+- Dynamic — the order of one runtime workflow
+- Deployment — which process contains each container instance
 
-Add each architectural element to the model once. Use named views to answer
-separate review questions.
+Declare each element once, at one level. A store that only this system writes
+is a container of the system, not a context-level element. Tag every external
+person and system with `external` and grey it in every view, so a reader sees
+the system boundary.
 
-This step is complete when each changed element has one stable model identity
-and each planned view has one stated level and question.
+Hosting belongs to the deployment model. An adapter depends on its host
+application through the host API; a container diagram states dependency, and a
+deployment diagram states containment.
 
-## 2. Author focused views
+Model files hold elements and relationships. View files hold named views, one
+primary view each, under `views/overview/`, `views/components/`, `views/code/`,
+`views/dynamic/`, or `views/deployment/`.
 
-Give elements readable names and short responsibilities. Give relations labels
-with meaningful verbs. Select shared model elements with LikeC4 view rules
-instead of copying model declarations.
+Done when each changed element has one model identity at one level, and each
+planned view has a stated level and the question it answers.
 
-Use a LikeC4 link titled `source` when an element maps to code:
+## 2. Author the view
+
+Name an element with a noun, and put a qualifier such as "optional" in the
+description or a tag. Select shared elements with LikeC4 view rules rather than
+copying model declarations.
+
+A relationship label reads as *Source, label, Destination*: start it with a
+capital letter and a present-tense verb, and end it on the object rather than a
+preposition. Carry a `technology` when the relationship crosses a process, a
+language, or a storage boundary.
 
 ```likec4
 model {
-  validator = component 'LikeC4 validator' {
-    link ../../src/likec4.rs 'source'
+  criv.vscodeExtension -> criv.cli 'Starts check and refresh commands' {
+    technology 'Child process'
+  }
+  validator = component 'Validation engine' {
+    link ../../src/check.rs 'source'
   }
 }
 ```
 
-Resolve the path from `docs/architecture/`. Use a criv file, line, symbol, or
-pattern selector. Prefer a stable module or public interface.
+A `source` link resolves from `docs/architecture/` and accepts a criv file,
+line, symbol, or pattern selector. Point it at a stable module or public
+interface.
 
-This step is complete when every view is readable on its own and every element
-that claims an implementation boundary has one resolvable source link.
+Done when every view is readable on its own and every element that claims an
+implementation boundary has one resolvable source link.
 
 ## 3. Keep Code architecture at module level
 
-Use language-native identities:
+A Code node is a language module: a Rust crate or `mod`, a TypeScript or
+JavaScript module or namespace, a Python module or package, a Go package.
+Files and symbols are source locations for those modules.
 
-- Rust crates and `mod` declarations
-- TypeScript and JavaScript modules and namespaces
-- Python modules and packages
-- Go packages
+A hand-authored Code model must be a true roll-up of the component model: when
+a module in component A imports a module in component B, the component model
+states a relationship from A to B. Keep cross-cutting helpers, re-export
+barrels, and bundler shims outside the architecture, and name them in a comment
+at the top of the Code model file.
 
-Files and symbols are source detail. Module identities and import relations are
-the Code architecture. `criv watch --once` owns
-`docs/architecture/04-code.c4`; change source boundaries or generator behavior
-when that file must change.
+When `[architecture.code]` names a Code file, `criv watch --once` owns that
+file, and the way to change it is to change source boundaries or generator
+behaviour. Enable that setting when the roll-up cost outgrows its value.
 
-This step is complete when every Code node is a language module and each view is
-focused by language or another bounded module concern.
+Done when every Code node is a language module, every cross-component import
+has a component-level relationship, and each view is focused by language or
+another bounded module concern.
 
-## 4. Validate the workspace
+## 4. Validate
 
-Run `criv watch --once`, then `criv check`. Inspect LikeC4 model errors,
-source-link errors, and the named views in the editor.
+Run `criv watch --once`, then `criv check`, as the `checking-drift` skill
+describes. Open each changed view in the editor preview and confirm it renders
+the boundary you intended.
 
-The hard cutover has one guardrail: replace Mermaid C4 and DOT artifacts with
-LikeC4 source in the same change. Compatibility readers, alternate renderers,
-and migration helpers are outside the architecture.
-
-The work is complete when the generated model is current, the full workspace
-passes `criv check`, all source links resolve, and every changed named view
-renders the intended boundary.
+The work is complete when the vault is green, every source link resolves, and
+every changed view renders its intended boundary.

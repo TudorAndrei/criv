@@ -1,42 +1,51 @@
 ---
 name: criv-me
-description: Use when the user wants to develop a plan, make architectural or product decisions, stress-test a proposal against existing criv docs/ADRs/code, and capture settled rationale in the criv documentation graph.
+description: Use when the user wants to develop a plan, settle an architectural or product decision, or stress-test a proposal against the existing criv vault before writing anything down.
 ---
 
 # criv-me
 
-Use `criv-me` as a decision-development mode for criv vaults.
+criv-me is an interview: settle one decision at a time with the user, then
+write the settled rationale into the vault.
 
-## Grounding
+## Ground the session in the vault
 
-- Treat existing criv docs, ADRs, wiki-links, governed scopes, and source code as the decision context.
-- Start by finding relevant docs and ADRs with `rg`, `criv query`, or direct reads from `docs/`.
-- Inspect source code when it can answer a factual question. Ask the user only for intent, tradeoffs, constraints, or choices that the repo cannot determine.
-- Do not import `CONTEXT.md` conventions from other workflows. In criv, docs and ADRs already carry project language, rationale, and governance.
+The existing documents, ADRs, wiki-links, governed scopes, and source code are
+the decision context. Find the relevant ones first with `rg`, `criv query`, or
+a direct read from `docs/`. Read the source whenever it answers a factual
+question, and spend the user's attention only on intent, tradeoffs,
+constraints, and choices the repository cannot settle.
 
-## Session style
+The vault already carries the project language, rationale, and governance.
+Take those from the vault rather than from conventions of other workflows.
 
-- Interview the user one decision at a time.
-- For each question, give your recommended answer and the reasoning behind it.
-- Walk dependencies in order: clarify terms and constraints before irreversible architecture, then implementation boundaries, enforcement, tests, rollout, and documentation.
-- Challenge fuzzy or overloaded terms by proposing a precise project term.
-- Challenge claims that conflict with code, existing docs, ADRs, or governed scopes.
-- Use concrete scenarios and edge cases to expose unclear boundaries.
+## Interview
 
-## Capturing outcomes
+Ask one question at a time, and give your recommended answer with its
+reasoning inside the question.
 
-- Update criv docs inline when a settled explanation should persist.
-- Create or update an ADR only when the decision is hard to reverse, surprising without context, and the result of a real tradeoff.
-- Use the existing criv ADR format under `docs/adr/`: `id`, `kind: decision`, `title`, `status`, `date`, and relevant `governs:` scopes.
-- When a decision includes an enforceable structural rule, add an inline `policy.patterns` entry with `id`, `language`, and either `pattern` or `rule`.
-- Persistent named structural patterns exist only in ADR `policy.patterns` frontmatter. Address a named rule as `ADR-NNNN/local-id`.
-- Use `criv search --pattern-id ADR-NNNN/local-id` to inspect one named policy (its ADR's `governs` scope is the default), `criv search --rule ADR-NNNN` to inspect every policy in that ADR, and positional `criv search --lang rust 'pattern'` for ad hoc exploration.
-- Link decisions and docs to source with criv wiki-links such as `[[src/lib.rs#run]]`, `[[src/lib.rs#L10-L20]]`, `[[match:ADR-0007/pattern-id]]`, and `[[0007-content-addressed-state-and-diffing|ADR-0007]]`.
-- Prefer updating or superseding an existing ADR over creating a duplicate decision note.
+Walk the dependencies in order: terms and constraints, then irreversible
+architecture, then implementation boundaries, enforcement, tests, rollout, and
+documentation.
 
-## Validation
+Challenge a fuzzy or overloaded term by proposing a precise project term.
+Challenge a claim that conflicts with the code, a document, an ADR, or a
+governed scope. Use a concrete scenario or an edge case to expose an unclear
+boundary.
 
-- Run `criv watch --once` after docs, ADR, or code changes to refresh `.criv/state.json`.
-- Run `criv check` before declaring documentation work complete.
-- Run `criv search --rule ADR-NNNN` to inspect inline policy matches when adding or changing ADR policy patterns.
-- Run `criv enforce --stage ci` when the session changes ADR-governed code or policy patterns.
+This part is done when every settled answer is stated in the user's own
+accepted words, and each open question has an owner or a stated assumption.
+
+## Capture the outcome
+
+Write a settled explanation into the document it belongs to. Reach for a new
+ADR only when the decision is hard to reverse, surprising without its context,
+and the result of a real tradeoff; otherwise update or supersede the ADR that
+already covers the ground.
+
+The `writing-decisions` skill owns the ADR format, governs scopes, and policy
+patterns. The `referencing-code` skill owns the wiki-link forms that connect
+the decision to source.
+
+The session is complete when every settled decision is written down and the
+vault is green, as the `checking-drift` skill defines it.

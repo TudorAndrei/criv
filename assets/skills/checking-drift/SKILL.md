@@ -1,16 +1,32 @@
 ---
 name: checking-drift
-description: Use when validating whether criv documentation, ADR metadata, wiki-links, source references, and generated state still match the code.
+description: Use when criv check fails, or when validating that documents, ADR metadata, wiki-links, source references, and generated state still match the code.
 ---
 
 # Checking drift
 
-Run `criv check` after editing documentation.
-Use `criv check --fix` to apply safe Markdown fixes, and `criv check --filter
-<text>` to focus diagnostics while investigating a failure.
+Drift is the gap between what a document claims and what the code does. `criv
+check` is the whole verdict: the vault is **green** when the command prints
+`criv check: ok`. Green is the completion criterion for every criv workflow.
 
-Run `criv watch --once` after changing code or docs to refresh `.criv/state.json`.
+## Getting to green
 
-Use `criv check --format json` when an agent or script needs machine-readable diagnostics.
+1. Run `criv watch --once` to refresh `.criv/state.json`. A stale state
+   produces diagnostics that describe the previous code.
+2. Run `criv check` and read every diagnostic. Use `criv check --filter <text>`
+   to narrow the output while investigating one failure, and `criv check
+   --format json` when an agent or a script consumes the diagnostics.
+3. Run `criv check --fix` to apply the safe Markdown fixes, then check again.
+4. Run `criv enforce --stage ci` when the change touches ADR-governed source.
 
-For ADRs with inline `policy.patterns`, run `criv search --rule ADR-NNNN` to inspect matches and `criv enforce --stage ci` before finishing changes that affect governed source.
+Repeat until a run that included your change comes back green.
+
+## Reading a diagnostic
+
+Each diagnostic names a file and a rule. Correct the file it names, or correct
+the code that made the claim false. Treat a diagnostic that misreads the
+repository as a criv bug worth reporting.
+
+A governs or policy diagnostic names an ADR. Run `criv search --rule ADR-NNNN`
+to see what its patterns match today. The `writing-decisions` skill owns the
+ADR side of that fix.
