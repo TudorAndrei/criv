@@ -2,5 +2,8 @@
   "$schema": "https://likec4.dev/schemas/config.json",
   "name": "criv-architecture",
   "title": "criv architecture",
-  "implicitViews": false
+  "implicitViews": false,
+  "landingPage": {
+    "redirect": true
+  }
 }
