@@ -371,7 +371,7 @@ and delegates shared helper logic to the `criv-wasm` crate.
 Build the plugin when working on its templates or WASM helper:
 
 ```sh
-npm --prefix .obsidian/plugins/criv ci
+npm ci
 npm --prefix .obsidian/plugins/criv run build
 ```
 
@@ -391,7 +391,7 @@ native state tree and status summary, opens AST-aware source selectors, surfaces
 For local development:
 
 ```sh
-npm --prefix extensions/vscode-criv install
+npm ci
 npm --prefix extensions/vscode-criv run build
 npm --prefix extensions/vscode-criv run test
 npm --prefix extensions/vscode-criv run test:integration

@@ -47,6 +47,14 @@ jobs:
           restore-keys: |
             cargo-${{ runner.os }}-
 
+      - name: Cache npm
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.npm
+          key: npm-core-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npm-core-${{ runner.os }}-
+
       - name: Install mise tools
         uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
@@ -55,6 +63,9 @@ jobs:
 
       - name: Install Rust components
         run: rustup component add clippy rustfmt --toolchain 1.97.1
+
+      - name: Install JavaScript dependencies
+        run: npm ci --ignore-scripts
 
       - name: Emit criv annotations
         continue-on-error: true
@@ -107,7 +118,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.npm
-          key: npm-obsidian-${{ runner.os }}-${{ hashFiles('.obsidian/plugins/criv/package-lock.json') }}
+          key: npm-obsidian-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             npm-obsidian-${{ runner.os }}-
 
@@ -118,10 +129,10 @@ jobs:
           cache: true
 
       - name: Install dependencies
-        run: npm --prefix .obsidian/plugins/criv ci
+        run: npm ci
 
       - name: Audit dependencies
-        run: npm --prefix .obsidian/plugins/criv audit --audit-level=high
+        run: npm audit --workspace criv-obsidian-plugin --audit-level=high
 
       - name: Check formatting
         run: npm --prefix .obsidian/plugins/criv run format:check
@@ -149,7 +160,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.npm
-          key: npm-vscode-${{ runner.os }}-${{ hashFiles('extensions/vscode-criv/package-lock.json') }}
+          key: npm-vscode-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             npm-vscode-${{ runner.os }}-
 
@@ -160,10 +171,10 @@ jobs:
           cache: true
 
       - name: Install dependencies
-        run: npm --prefix extensions/vscode-criv ci
+        run: npm ci
 
       - name: Audit dependencies
-        run: npm --prefix extensions/vscode-criv audit --audit-level=high
+        run: npm audit --workspace vscode-criv --audit-level=high
 
       - name: Check formatting
         run: npm --prefix extensions/vscode-criv run format:check

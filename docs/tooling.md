@@ -175,10 +175,11 @@ is required. Large-workload measurement remains deferred.
 
 Obsidian and VS Code validation are hosted-CI suites rather than automatic hk
 steps. Contributors changing a companion should run its package scripts
-directly. The Obsidian companion commands are:
+directly. Run `npm ci` from the repository root first. The Obsidian companion
+commands are:
 
 ```sh
-npm --prefix .obsidian/plugins/criv audit --audit-level=high
+npm audit --workspace criv-obsidian-plugin --audit-level=high
 npm --prefix .obsidian/plugins/criv run format:check
 npm --prefix .obsidian/plugins/criv run lint
 npm --prefix .obsidian/plugins/criv test
@@ -205,7 +206,7 @@ The VS Code-compatible extension lives in `extensions/vscode-criv`. Its local
 tasks are exposed through mise and npm:
 
 ```sh
-npm --prefix extensions/vscode-criv audit --audit-level=high
+npm audit --workspace vscode-criv --audit-level=high
 npm --prefix extensions/vscode-criv run build
 npm --prefix extensions/vscode-criv run test
 npm --prefix extensions/vscode-criv run test:integration

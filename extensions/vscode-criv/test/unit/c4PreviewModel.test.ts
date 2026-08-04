@@ -45,10 +45,7 @@ test("selects a component view from its domain file", () => {
 });
 
 test("selects a Code view from its module model file", () => {
-  assert.equal(
-    preferredC4ViewId("docs/architecture/code/vscode.c4", views),
-    "codeVscodePreview",
-  );
+  assert.equal(preferredC4ViewId("docs/architecture/code/vscode.c4", views), "codeVscodePreview");
 });
 
 test("keeps navigation in a file that owns more than one focused view", () => {
@@ -89,21 +86,11 @@ test("navigation targets the file that owns the selected view", () => {
 
 test("navigation stays put when the open document already owns the view", () => {
   assert.equal(
-    c4NavigationTarget(
-      "docs/architecture/cli.c4",
-      "docs/architecture",
-      "cliComponents",
-      views,
-    ),
+    c4NavigationTarget("docs/architecture/cli.c4", "docs/architecture", "cliComponents", views),
     undefined,
   );
   assert.equal(
-    c4NavigationTarget(
-      "./docs/architecture/cli.c4",
-      "docs/architecture",
-      "cliComponents",
-      views,
-    ),
+    c4NavigationTarget("./docs/architecture/cli.c4", "docs/architecture", "cliComponents", views),
     undefined,
   );
 });
