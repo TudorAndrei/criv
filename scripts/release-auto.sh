@@ -63,7 +63,7 @@ cargo run --quiet -- enforce --stage ci
 cargo run --quiet -- watch --once
 cargo run --quiet -- query diff latest latest
 
-git add :/Cargo.toml :/Cargo.lock :/crates/criv-wasm/Cargo.toml
+git add :/Cargo.toml :/Cargo.lock ':(glob)**/Cargo.toml'
 git commit -m "chore(release): $tag"
 git tag "$tag"
 git tag "$wasm_tag"
