@@ -84,9 +84,12 @@ dialog::backdrop { background: rgb(0 0 0 / 0.7); }
 .architecture-dialog-header h2 { margin: 0; }
 .architecture-dialog-header form { margin: 0; }
 
-dialog likec4-view {
-  --likec4-view-max-width: 84rem;
-  --likec4-view-max-height: calc(94dvh - 8rem);
+.architecture-explorer {
+  display: block;
+  width: 100%;
+  height: calc(94dvh - 8rem);
+  border: 0;
+  background: #101010;
 }
 
 .skip-link {
