@@ -35,16 +35,35 @@ jobs:
           restore-keys: |
             cargo-performance-${{ runner.os }}-
 
+      - name: Cache npm
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.npm
+          key: npm-performance-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npm-performance-${{ runner.os }}-
+
+      - name: Install mise tools
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          install: true
+          cache: true
+
       - name: Install Rust
         shell: bash
         run: |
           rustup toolchain install 1.97.1 --profile minimal --no-self-update
           rustup default 1.97.1
 
+      - name: Install JavaScript dependencies
+        run: npm ci --ignore-scripts
+
       - name: Build release binaries
         run: cargo build --locked --release --package criv --package criv-perf-harness
 
       - name: Measure canonical workloads
+        env:
+          NODE_PATH: ${{ github.workspace }}/node_modules
         run: |
           target/release/criv-perf-harness \
             --repository-root . \

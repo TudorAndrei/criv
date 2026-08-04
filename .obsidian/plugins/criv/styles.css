@@ -432,22 +432,6 @@
   white-space: pre;
 }
 
-.criv-c4-projection-mermaid {
-  padding: 10px;
-}
-
-.criv-c4-projection-dot,
-.criv-c4-projection-mermaid {
-  display: block;
-}
-
-.criv-c4-projection-dot svg,
-.criv-c4-projection-mermaid svg {
-  display: block;
-  height: auto;
-  max-width: none;
-}
-
 .criv-c4-render-warning {
   border-top: 1px solid var(--background-modifier-border);
   color: var(--text-warning);

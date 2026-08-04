@@ -7,6 +7,7 @@ use std::{cell::Cell, thread_local};
 use serde::Deserialize;
 
 use crate::Result;
+use crate::c4;
 use crate::config::Config;
 use crate::source_graph::{SourceGraph, SourceGraphBuild};
 use crate::source_index::{OneShotSourceIndex, SourceIndex, SourceIndexHandle};
@@ -14,7 +15,6 @@ use crate::util::{
     GlobMatcher, find_wiki_links_with_lines, is_adr_id, kebab,
     markdown_headings as parse_markdown_headings, read_to_string, strip_prefix, walk_files,
 };
-use crate::{c4, c4_artifact};
 
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
@@ -115,7 +115,6 @@ pub(crate) struct Note {
     pub(crate) supersedes: Vec<String>,
     pub(crate) superseded_by: Vec<String>,
     pub(crate) wiki_links: Vec<WikiLink>,
-    pub(crate) c4_diagrams: Vec<c4::C4Diagram>,
     pub(crate) frontmatter_error: Option<String>,
 }
 
@@ -133,9 +132,11 @@ impl Note {
 
 #[derive(Debug)]
 pub(crate) struct Vault {
+    pub(crate) root: PathBuf,
     pub(crate) config: Config,
     pub(crate) notes: Vec<Note>,
-    pub(crate) c4_artifacts: Vec<c4_artifact::C4Artifact>,
+    pub(crate) c4_artifacts: Vec<c4::C4Artifact>,
+    pub(crate) likec4_workspace: crate::likec4::LikeC4Workspace,
     note_ids: BTreeMap<String, usize>,
     filenames: BTreeMap<String, usize>,
     titles: BTreeMap<String, usize>,
@@ -194,8 +195,14 @@ impl Vault {
             .collect::<Result<Vec<_>>>()?;
         let c4_artifacts = walk_files(&docs_path, Some("c4"))?
             .into_iter()
-            .map(|path| c4_artifact::parse_file(root, &docs_path, &path))
+            .map(|path| c4::parse_file(root, &docs_path, &path))
             .collect::<Result<Vec<_>>>()?;
+        let likec4_sources = c4_artifacts
+            .iter()
+            .filter(|artifact| artifact.format == Some(c4::C4ArtifactFormat::LikeC4))
+            .map(|artifact| artifact.path.clone())
+            .collect::<Vec<_>>();
+        let likec4_workspace = crate::likec4::load(root, &docs_path, &likec4_sources);
 
         let mut note_ids = BTreeMap::new();
         let mut filenames = BTreeMap::new();
@@ -239,9 +246,11 @@ impl Vault {
         };
 
         let mut vault = Self {
+            root: root.to_path_buf(),
             config,
             notes,
             c4_artifacts,
+            likec4_workspace,
             note_ids,
             filenames,
             titles,
@@ -557,9 +566,11 @@ impl Vault {
         let patterns = registered_policy_patterns(&notes, &effective_decisions);
 
         let mut vault = Self {
+            root: PathBuf::from("."),
             config: Config::default(),
             notes,
             c4_artifacts: Vec::new(),
+            likec4_workspace: crate::likec4::LikeC4Workspace::default(),
             note_ids,
             filenames,
             titles,
@@ -657,7 +668,6 @@ fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
             supersedes: Vec::new(),
             superseded_by: Vec::new(),
             wiki_links: Vec::new(),
-            c4_diagrams: Vec::new(),
             frontmatter_error: Some(err),
         },
     };
@@ -680,7 +690,6 @@ fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
             line: line + line_offset,
         })
         .collect();
-    note.c4_diagrams = c4::parse_diagrams(&note.body, line_offset);
     note.rel_path = rel_path;
     Ok(note)
 }
@@ -805,7 +814,6 @@ fn parse_frontmatter(
         supersedes: raw.supersedes,
         superseded_by: raw.superseded_by,
         wiki_links: Vec::new(),
-        c4_diagrams: Vec::new(),
         frontmatter_error: None,
     })
 }
@@ -1522,18 +1530,6 @@ roots = ["src"]
         assert_eq!(
             note.wiki_links[0].line,
             real_line(contents, "See [[other-note]].")
-        );
-    }
-
-    #[test]
-    fn c4_diagram_positions_are_file_relative() {
-        let contents = "---\nid: DOC-1\nkind: doc\ntitle: Doc\n---\n\n```mermaid\nC4Context\nPerson(user, \"User\")\n```\n";
-        let note = parsed_note("criv-note-lines-c4", contents);
-
-        assert_eq!(note.c4_diagrams.len(), 1);
-        assert_eq!(
-            note.c4_diagrams[0].elements[0].line,
-            real_line(contents, "Person(user, \"User\")")
         );
     }
 

@@ -1,0 +1,103 @@
+model {
+  extend criv {
+    cli = container 'criv CLI' {
+      technology 'Rust'
+      description 'Runs repository initialization, validation, refresh, enforcement, query, and search workflows.'
+      link ../../src/lib.rs 'source'
+
+      commandInterface = component 'Command interface' {
+        technology 'Rust and clap'
+        description 'Parses commands and sends each command to one application workflow.'
+        link ../../src/lib.rs 'source'
+      }
+      scaffoldInstaller = component 'Scaffold installer' {
+        technology 'Rust'
+        description 'Installs canonical vault files, configuration, editor files, and agent skills.'
+        link ../../src/init.rs 'source'
+      }
+      vaultModel = component 'Vault model' {
+        technology 'Rust'
+        description 'Loads configuration, notes, decisions, architecture sources, source data, and resolved links.'
+        link ../../src/vault.rs 'source'
+      }
+      repositoryHistory = component 'Repository history' {
+        technology 'Rust and libgit2'
+        description 'Reads commits, diffs, renames, staged files, and push scopes through one embedded Git boundary.'
+        link ../../src/git.rs 'source'
+      }
+      sourceIntelligence = component 'Source intelligence' {
+        technology 'Rust, fff, and tree-sitter'
+        description 'Indexes source files and builds module, import, symbol, call, and structural-match data.'
+        link ../../src/source_index.rs 'source'
+      }
+      architectureService = component 'Architecture service' {
+        technology 'Rust, Node.js, and LikeC4'
+        description 'Compiles the authored LikeC4 workspace and optionally generates module-level Code architecture.'
+        link ../../src/likec4.rs 'source'
+      }
+      governanceEngine = component 'Governance engine' {
+        technology 'Rust and ast-grep'
+        description 'Validates vault facts and enforces effective ADR, policy, and change-scope rules.'
+        link ../../src/check.rs 'source'
+      }
+      refreshCoordinator = component 'Refresh coordinator' {
+        technology 'Rust and notify'
+        description 'Coordinates one-shot and incremental vault loading, validation, generation, and publication.'
+        link ../../src/refresh.rs 'source'
+      }
+      statePublisher = component 'State publisher' {
+        technology 'Rust and serde'
+        description 'Builds the state envelope and publishes bounded content-addressed snapshots.'
+        link ../../src/state.rs 'source'
+      }
+      knowledgeQueries = component 'Knowledge queries' {
+        technology 'Rust'
+        description 'Answers graph questions and searches source, notes, and structural patterns.'
+        link ../../src/query.rs 'source'
+      }
+    }
+
+    stateStore = dataStore 'Published state store' {
+      technology 'JSON files under .criv/'
+      description 'Holds the latest state envelope, the source graph cache, and retained content-addressed snapshots.'
+      link ../../src/snapshots.rs 'source'
+    }
+  }
+}
+
+views {
+  global style architectureTheme
+
+  view cliComponents of criv.cli {
+    title 'Components / CLI'
+    description 'The stable responsibilities inside the CLI and their main dependencies.'
+
+    include *
+    include repository
+    include criv.stateStore
+    include
+      criv.cli.vaultModel with {
+        navigateTo codeVaultLoading
+      }
+    include
+      criv.cli.refreshCoordinator with {
+        navigateTo codeRefreshPipeline
+      }
+    include
+      criv.cli.governanceEngine with {
+        navigateTo codeValidation
+      }
+    include
+      criv.cli.knowledgeQueries with {
+        navigateTo codeQuery
+      }
+    include
+      criv.cli.architectureService with {
+        navigateTo codeArchitectureExporter
+      }
+    include
+      criv.cli.statePublisher with {
+        navigateTo codeStatePublication
+      }
+  }
+}

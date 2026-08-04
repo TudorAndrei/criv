@@ -1,22 +1,37 @@
 ---
 name: criv
-description: Use when working in a criv vault to keep docs, ADRs, source references, checks, state, and enforcement in sync with code changes.
+description: Use when working in a criv vault, refreshing criv state, looking for undocumented code, or choosing which criv skill covers a task.
 metadata:
-  criv-template: blake3:327af014c057bef3
+  criv-template: blake3:815b1e9708351b32
 ---
 
 # criv
 
-Use `criv` to keep repository documentation connected to source code.
+criv keeps repository documentation connected to source code. A vault is
+**green** when `criv check` prints `criv check: ok`. Every criv workflow ends
+green.
 
-For the full query surface, see `docs/query-reference.md`.
+## The loop
 
-Core workflow:
+- `criv watch --once` refreshes `.criv/state.json` after a code, docs, or ADR change.
+- `criv check` reports drift.
+- `criv enforce --stage ci` gates a change to ADR-governed source.
 
-- Run `criv watch --once` after code or docs changes to refresh `.criv/state.json`.
-- Run `criv check` before declaring documentation work complete.
-- Use `criv query nodes --kind code --without-docs` to find undocumented code.
-- Use `criv query coverage --by module` and `criv query coverage --by adr` to inspect documentation coverage.
-- Use `criv enforce --stage ci` before finishing changes that affect ADR-governed code.
+The `checking-drift` skill owns the flags and the failure paths.
 
-Write docs and ADRs with wiki-links to source paths, symbols, patterns, and notes.
+## Finding what is undocumented
+
+- `criv query nodes --kind code --without-docs` lists code that no document claims.
+- `criv query coverage --by module` and `criv query coverage --by adr` report coverage.
+- `docs/query-reference.md` holds the full query surface.
+
+## Which skill covers the task
+
+- `referencing-code` — wiki-link syntax from a document or ADR to source.
+- `writing-decisions` — ADR frontmatter, governs scopes, and policy patterns.
+- `checking-drift` — the check loop, its flags, and how to read a diagnostic.
+- `c4-authoring` — the LikeC4 architecture workspace.
+- `criv-me` — developing a decision with the user before writing it down.
+
+The work is complete when the change is written, `criv watch --once` has run
+after it, and the vault is green.

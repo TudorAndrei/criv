@@ -256,11 +256,16 @@ fn note_body(title: &str, links: &[String]) -> String {
 
 fn write_c4_artifacts(root: &Path, count: usize) -> Result<(), String> {
     for index in 0..count {
+        let specification = if index == 0 {
+            "specification {\n  element person\n  element softwareSystem\n}\n\n"
+        } else {
+            ""
+        };
         fs::write(
             root.join("docs/architecture")
                 .join(format!("generated-context-{index:04}.c4")),
             format!(
-                "C4Context\ntitle Generated {index:04}\nPerson(person_{index}, \"Person {index}\", \"Uses the generated system\")\nSystem(system_{index}, \"System {index}\", \"Generated system\")\nRel(person_{index}, system_{index}, \"Uses\")\n"
+                "{specification}model {{\n  person_{index} = person 'Person {index}' {{\n    description 'Uses the generated system'\n  }}\n  system_{index} = softwareSystem 'System {index}' {{\n    description 'Generated system'\n  }}\n  person_{index} -> system_{index} 'Uses'\n}}\n"
             ),
         )
         .map_err(display_error)?;
@@ -394,6 +399,8 @@ mod tests {
                         .join("docs/architecture/generated-context-0000.c4"),
                 )
                 .unwrap();
+                assert!(c4.starts_with("specification {\n"));
+                assert!(c4.contains("model {\n"));
                 assert!(c4.contains("Uses the generated system"));
             }
         }

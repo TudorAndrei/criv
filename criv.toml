@@ -8,9 +8,13 @@ roots = [
   "lib",
   "scripts",
   ".github/workflows",
+  ".vscode",
   ".obsidian/plugins/criv",
   "crates/criv-wasm",
   "extensions/vscode-criv",
+  "packages/criv-likec4",
+  "package.json",
+  "package-lock.json",
   ".gitignore",
   ".taplo.toml",
   "Cargo.toml",
@@ -21,11 +25,13 @@ roots = [
   "mise.toml",
   "README.md",
   "assets/skills",
+  "assets/likec4-bridge.mjs",
   ".agents/skills",
 ]
 exclude = [
   "**/target/**",
   "**/node_modules/**",
+  "node_modules/**",
   ".obsidian/plugins/criv/main.js",
   ".obsidian/plugins/criv/pkg/**",
   "extensions/vscode-criv/dist/**",
@@ -40,10 +46,6 @@ embeddings = false
 
 [state]
 keep = 20
-
-[architecture.code]
-output = "docs/architecture/04-code.c4"
-title = "Code diagram for criv"
 
 [enforce]
 stages = ["commit", "push", "ci"]

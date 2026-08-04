@@ -11,12 +11,14 @@ for VS Code API-compatible desktop editors, including VS Code and Cursor.
   diagnostics for Markdown and `.c4` files.
 - Runs trusted workspace commands for `criv watch --once`, `criv check
   --format json`, and selected read-only `criv query` flows.
-- Renders standalone `.c4` files in a read-only preview using Mermaid 11 for
-  Mermaid C4 and `@viz-js/viz` for DOT Code artifacts. The preview opens beside
-  `.c4` editors by default and is also available from the editor title button.
+- Renders the validated LikeC4 workspace from criv state. The preview supports
+  named views, drill-down navigation, navigation history, pan, zoom, search,
+  source links, and SVG export. It is the default read-only editor for `.c4`
+  files and selects the view owned by the opened file.
 
-The Rust CLI remains authoritative for graph generation and validation. The
-extension consumes generated criv state and uses the packaged WASM helper for
+LikeC4 owns the architecture language and its validation. The Rust CLI calls
+the pinned local LikeC4 package and publishes its layout model in criv state.
+The extension consumes that model and uses the packaged WASM helper for other
 editor-local state lookups.
 
 ## Compatibility
@@ -34,6 +36,16 @@ cursor --install-extension extensions/vscode-criv/vscode-criv.vsix
 
 Direct installation is an explicit editor-level action. `criv init` should
 recommend the extension for a workspace, but should not install it by default.
+
+Use **Reopen Editor With → Text Editor** when an agent or maintainer must edit
+the LikeC4 DSL. The `criv: Preview C4 Artifact` command can open a second
+preview beside that text editor.
+
+The workspace can recommend the official `likec4.likec4-vscode` extension for
+LikeC4 syntax highlighting, completion, formatting, and language-server
+features. It does not register a competing custom editor. Criv remains the
+default validated preview and accepts both the official `likec4` language ID
+and its standalone `criv-c4` language ID.
 
 ## Development
 

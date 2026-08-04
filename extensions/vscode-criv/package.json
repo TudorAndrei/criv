@@ -72,6 +72,18 @@
         "icon": "$(open-preview)"
       }
     ],
+    "customEditors": [
+      {
+        "viewType": "criv.c4Preview",
+        "displayName": "criv LikeC4 Preview",
+        "selector": [
+          {
+            "filenamePattern": "*.c4"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
     "views": {
       "explorer": [
         {
@@ -85,7 +97,7 @@
       "editor/title": [
         {
           "command": "criv.previewC4",
-          "when": "resourceLangId == criv-c4",
+          "when": "resourceLangId =~ /^(criv-c4|likec4)$/ && activeCustomEditorId != criv.c4Preview",
           "group": "navigation"
         }
       ],
@@ -129,11 +141,6 @@
           "scope": "machine",
           "default": false,
           "description": "Run criv check when Markdown or .c4 files are saved in a trusted workspace."
-        },
-        "criv.previewC4OnOpen": {
-          "type": "boolean",
-          "default": true,
-          "description": "Automatically open the C4 preview beside a .c4 text editor when the file becomes active."
         }
       }
     }
@@ -145,14 +152,13 @@
     "compile": "npm run check-types && node esbuild.config.mjs",
     "compile:integration-tests": "esbuild test/integration/runner.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist-test/integration/runner.js",
     "compile:unit-tests": "esbuild test/unit/*.test.ts --bundle --platform=node --format=cjs --target=node18 --external:../pkg/criv_wasm.js --outdir=dist-test/unit",
-    "copy:webview-assets": "node scripts/copy-webview-assets.mjs",
     "format": "oxfmt --write src test scripts esbuild.config.mjs",
     "format:check": "oxfmt --check src test scripts esbuild.config.mjs",
     "lint": "oxlint src test scripts esbuild.config.mjs",
-    "package": "vsce package --out vscode-criv.vsix",
+    "package": "vsce package --no-dependencies --out vscode-criv.vsix",
     "test": "npm run build:wasm && npm run compile && npm run compile:unit-tests && node --test dist-test/unit/*.test.js",
     "test:integration": "npm run compile && npm run compile:integration-tests && node test/run-integration.mjs",
-    "vscode:prepublish": "npm run build && npm run build:wasm && npm run copy:webview-assets",
+    "vscode:prepublish": "npm run build && npm run build:wasm",
     "watch": "node esbuild.config.mjs --watch"
   },
   "devDependencies": {
@@ -166,11 +172,6 @@
     "typescript": "6.0.3"
   },
   "dependencies": {
-    "@viz-js/viz": "^3.28.0",
-    "mermaid": "^11.16.0"
-  },
-  "allowScripts": {
-    "esbuild@0.28.1": true,
-    "fsevents@2.3.3": true
+    "@criv/likec4": "0.1.0"
   }
 }

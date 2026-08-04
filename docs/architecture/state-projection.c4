@@ -1,0 +1,36 @@
+model {
+  extend criv {
+    stateProjection = container 'State projection library' {
+      technology 'Rust compiled to WebAssembly'
+      description 'Validates the published state contract and projects safe editor-facing data.'
+      link ../../crates/criv-wasm/src/lib.rs 'source'
+
+      stateDecoder = component 'State decoder' {
+        technology 'Rust and serde'
+        description 'Rejects invalid JSON and unsupported state schemas.'
+        link ../../crates/criv-wasm/src/lib.rs#validated_state 'source'
+      }
+      graphProjection = component 'Graph projection' {
+        technology 'Rust and WebAssembly'
+        description 'Builds summaries, source entries, and editor graph nodes from validated state.'
+        link ../../crates/criv-wasm/src/lib.rs#graph_nodes 'source'
+      }
+      selectorProjection = component 'Selector projection' {
+        technology 'Rust and WebAssembly'
+        description 'Suggests safe source selectors and resolves graph-node lookups.'
+        link ../../crates/criv-wasm/src/lib.rs#suggest_source_selectors 'source'
+      }
+    }
+  }
+}
+
+views {
+  global style architectureTheme
+
+  view stateProjectionComponents of criv.stateProjection {
+    title 'Components / State projection'
+    description 'How the shared WebAssembly library validates state and returns safe editor data.'
+
+    include *
+  }
+}

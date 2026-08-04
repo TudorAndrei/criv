@@ -1,0 +1,82 @@
+// Where each deployable container instance runs on a workstation or CI runner.
+deployment {
+  workstation = environment 'Developer workstation' {
+    description 'The macOS, Linux, or Windows machine that holds the working tree.'
+
+    terminal = device 'Terminal' {
+      crivProcess = process 'criv process' {
+        technology 'Native binary'
+        instanceOf criv.cli
+      }
+    }
+
+    obsidianApp = device 'Obsidian desktop application' {
+      obsidianProcess = process 'Plugin sandbox' {
+        technology 'Electron renderer process'
+        instanceOf criv.obsidianPlugin
+        instanceOf criv.sharedRenderer
+        instanceOf criv.stateProjection
+      }
+    }
+
+    vscodeApp = device 'VS Code-compatible editor' {
+      extensionHost = process 'Extension host' {
+        technology 'Node.js process'
+        instanceOf criv.vscodeExtension
+        instanceOf criv.stateProjection
+      }
+      webviewProcess = process 'Preview webview' {
+        technology 'Chromium renderer process'
+        instanceOf criv.sharedRenderer
+      }
+    }
+
+    workingTree = device 'Working tree' {
+      description 'The checked-out repository on the local file system.'
+      stateFiles = process 'State files' {
+        technology 'JSON under .criv/'
+        instanceOf criv.stateStore
+      }
+    }
+  }
+
+  ci = environment 'GitHub Actions runner' {
+    description 'The hosted runner that validates each push and pull request.'
+
+    runner = device 'Hosted runner' {
+      ciProcess = process 'criv process' {
+        technology 'Released binary'
+        instanceOf criv.cli
+      }
+      ciWorkingTree = process 'Checked-out repository' {
+        technology 'Ephemeral file system'
+        instanceOf criv.stateStore
+      }
+    }
+  }
+
+  crivProcess -> stateFiles 'Writes the validated state and snapshots'
+  obsidianProcess -> stateFiles 'Reads the validated state'
+  extensionHost -> stateFiles 'Reads the validated state'
+  extensionHost -> crivProcess 'Starts check and refresh commands'
+  extensionHost -> webviewProcess 'Sends compiled models and view selections'
+  ciProcess -> ciWorkingTree 'Writes the validated state'
+}
+
+views {
+  deployment view developerWorkstation {
+    title 'Deployment / Developer workstation'
+    description 'Where each criv container runs on a maintainer machine, and which host process owns it.'
+
+    include workstation
+    include workstation.**
+  }
+
+  deployment view continuousIntegration {
+    title 'Deployment / Continuous integration'
+    description 'Where criv runs on a GitHub Actions runner.'
+
+    include ci
+    include ci.**
+  }
+}

@@ -1,0 +1,104 @@
+{
+  "schema": "criv.state.v1",
+  "graph": {
+    "root": "3388c6958cd047d1191c9a8a07d46847e60fbc9dd1362dbb193922a4c56ae02f",
+    "nodes": [
+      {
+        "id": "code:src/lib.rs",
+        "hash": "b8d8a28f8ad24895bf455f9fbb24d1a40ea2c94cbc7a0ac0d853344c86492483",
+        "kind": "code",
+        "label": "src/lib.rs (rust)",
+        "path": "src/lib.rs"
+      },
+      {
+        "id": "symbol:src/lib.rs#fn:run",
+        "hash": "69ab2410ac5921ba170347d0d1d63773b959c8c989eef24ea25cc378aa25666b",
+        "kind": "function",
+        "label": "run",
+        "path": "src/lib.rs#L1-L1"
+      },
+      {
+        "id": "note:ADR-0001",
+        "hash": "53055971aada5bc58e9e4ddd9cff09d093ab12a7a9a0288257e9331dcb4e77cf",
+        "kind": "decision",
+        "label": "Entrypoint",
+        "path": "docs/adr/0001-entrypoint.md"
+      },
+      {
+        "id": "note:ADR-0001#entrypoint",
+        "hash": "587434e159011ee2a085f5fce6e765870b195b7247966a6775b84153f0131668",
+        "kind": "doc-heading",
+        "label": "Entrypoint",
+        "path": "docs/adr/0001-entrypoint.md#L15:H1"
+      },
+      {
+        "id": "note:ADR-0002",
+        "hash": "f931ad4ee10e1a6fc54e53c4fb7ea0de8e1f73b1fd75548930dbc53e3f96da7d",
+        "kind": "decision",
+        "label": "Draft Entrypoint",
+        "path": "docs/adr/0002-draft-entrypoint.md"
+      },
+      {
+        "id": "note:ADR-0002#draft-entrypoint",
+        "hash": "9cafac6179f32402bb096fcd1b858875f8f2473d4df0fb4b1af42fe88504ba78",
+        "kind": "doc-heading",
+        "label": "Draft Entrypoint",
+        "path": "docs/adr/0002-draft-entrypoint.md#L15:H1"
+      }
+    ],
+    "edges": [
+      {
+        "from": "code:src/lib.rs",
+        "to": "symbol:src/lib.rs#fn:run",
+        "kind": "contains",
+        "hash": "113fbed7438b74327e2c72284d65d5cc30d7365fde741c138810be001344c43d"
+      },
+      {
+        "from": "note:ADR-0001",
+        "to": "note:ADR-0001#entrypoint",
+        "kind": "contains",
+        "hash": "c0b57e0655aec5764894349e766ef37221f085cdd080460373b825983ca3455b"
+      },
+      {
+        "from": "note:ADR-0001",
+        "to": "code:src/lib.rs",
+        "kind": "governs",
+        "hash": "6c1587c6d44c802b93d9f7224c5ebf9dc42e010556a18c04340525565fb9ae98"
+      },
+      {
+        "from": "note:ADR-0002",
+        "to": "note:ADR-0002#draft-entrypoint",
+        "kind": "contains",
+        "hash": "21fe1e781737cebcd5cb73871170fb33f1e5fbd3a1c19cfa135f14f1b8dbd158"
+      },
+      {
+        "from": "note:ADR-0002",
+        "to": "code:src/lib.rs",
+        "kind": "governs",
+        "hash": "d663db82dd6945c981d7a8e6792d2c70b802c90ccc708b2ca89a35779eade57d"
+      }
+    ]
+  },
+  "registered-patterns": [
+    "ADR-0001/entrypoint"
+  ],
+  "patterns": {
+    "ADR-0001/entrypoint": [
+      {
+        "file": "src/lib.rs",
+        "range": "L1:C1-L1:C12",
+        "captures": {
+          "BODY": "",
+          "NAME": "run"
+        }
+      }
+    ]
+  },
+  "source-index": [
+    {
+      "path": "src/lib.rs",
+      "mime": "text/x-rust",
+      "frecency": 0
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -32,10 +32,7 @@ function wasmError(action) {
   }
   assert.fail("expected the canonical Wasm export to reject input");
 }
-const { instance: vizInstance } = await import("@viz-js/viz");
-const c4FixtureDir = resolve(__dirname, "../../../../fixtures/c4");
-assert.equal(existsSync(c4FixtureDir), true, `missing fixture directory ${c4FixtureDir}`);
-const stateContractPath = resolve(__dirname, "../../../../fixtures/state/criv.state.v0.json");
+const stateContractPath = resolve(__dirname, "../../../../fixtures/state/criv.state.v1.json");
 assert.equal(
   existsSync(stateContractPath),
   true,
@@ -45,7 +42,7 @@ const stateContractRaw = readFileSync(stateContractPath, "utf8");
 const stateContract = JSON.parse(stateContractRaw);
 assert.deepEqual(wasm.validated_state(stateContractRaw), stateContract);
 assert.match(
-  wasmError(() => wasm.validated_state(stateContractRaw.replace("criv.state.v0", "criv.state.v1"))),
+  wasmError(() => wasm.validated_state(stateContractRaw.replace("criv.state.v1", "criv.state.v2"))),
   /unsupported criv state schema/i,
 );
 assert.equal(stateContract.graph.nodes.length, 6);
@@ -66,19 +63,6 @@ assert.equal(
   "ADR-0001/entrypoint",
 );
 assert.equal(core.resolvePattern(stateContract, "match:ADR-0002/draft-entrypoint"), null);
-const c4Expected = JSON.parse(readFileSync(resolve(c4FixtureDir, "expected.json"), "utf8"));
-const c4FixtureNames = readdirSync(c4FixtureDir).filter((name) => name.endsWith(".c4"));
-assert.ok(c4FixtureNames.length > 0, "expected shared C4 fixtures");
-for (const fixtureName of c4FixtureNames) {
-  const summary = core.parseC4Artifact(
-    fixtureName,
-    readFileSync(resolve(c4FixtureDir, fixtureName), "utf8"),
-  );
-  const actual = summary.diagnostics
-    .map(({ code, line }) => ({ code, line }))
-    .sort(compareDiagnostics);
-  assert.deepEqual(actual, c4Expected[fixtureName] ?? [], `diagnostics for ${fixtureName}`);
-}
 
 const fixture = JSON.parse(
   readFileSync(resolve(pluginRoot, "fixtures/link-resolution.json"), "utf8"),
@@ -159,7 +143,7 @@ assert.equal(core.safeVaultPath("src\\lib.rs"), "src/lib.rs");
 const validStateRaw = JSON.stringify(state);
 assert.deepEqual(wasm.validated_state(validStateRaw), state);
 assert.match(
-  wasmError(() => wasm.validated_state(validStateRaw.replace("criv.state.v0", "criv.state.v1"))),
+  wasmError(() => wasm.validated_state(validStateRaw.replace("criv.state.v1", "criv.state.v2"))),
   /unsupported criv state schema/i,
 );
 assert.match(
@@ -173,12 +157,6 @@ assert.deepEqual(core.parseLineRange("l4-8"), { start: 4, end: 8 });
 assert.deepEqual(core.parseLineRange("L8-L4"), { start: 8, end: 8 });
 assert.equal(core.parseLineRange("4-8"), null);
 assert.equal(core.parseLineRange(null), null);
-
-assert.equal(
-  core.renderErrorsMessage([{ message: "first" }, { level: "warning", message: "second" }]),
-  "first; second",
-);
-assert.equal(core.renderErrorsMessage([]), "Graphviz render failed");
 
 const targets = [];
 core.addTarget(targets, " src/lib.rs ");
@@ -210,100 +188,15 @@ assert.deepEqual(
   ],
 );
 
-const sanitizedSyntheticSvg = core.sanitizeDotSvg(
-  `<?xml version="1.0"?>
-<!DOCTYPE svg>
-<svg onload="alert(1)">
-  <script>alert(1)</script>
-  <foreignObject><div onclick="alert(1)">unsafe</div></foreignObject>
-  <a xlink:href="javascript:alert(1)" href="https://example.com" target="_blank">
-    <text onclick='alert(1)'>safe label</text>
-  </a>
-</svg>`,
+const likec4Summary = core.parseC4Artifact(
+  "docs/architecture/model.c4",
+  "specification { element system }\nmodel { app = system 'App' }\n",
 );
-assert.equal(sanitizedSyntheticSvg.includes("safe label"), true);
-assert.equal(/<\s*script\b/i.test(sanitizedSyntheticSvg), false);
-assert.equal(/<\s*foreignObject\b/i.test(sanitizedSyntheticSvg), false);
-assert.equal(/\s+on[a-z0-9_-]+\s*=/i.test(sanitizedSyntheticSvg), false);
-assert.equal(/\s+(?:href|xlink:href|target)\s*=/i.test(sanitizedSyntheticSvg), false);
-assert.equal(/<!DOCTYPE/i.test(sanitizedSyntheticSvg), false);
+assert.equal(likec4Summary.format, "likec4");
+assert.deepEqual(likec4Summary.diagnostics, []);
 
-const viz = await vizInstance();
-const vizResult = viz.render(
-  `digraph {
-  a [label="onload=alert(1)", URL="javascript:alert(1)", tooltip="tooltip text"];
-}`,
-  { engine: "dot", format: "svg" },
-);
-assert.equal(vizResult.status, "success");
-assert.equal(vizResult.output.includes("javascript:alert(1)"), true);
-const sanitizedVizSvg = core.sanitizeDotSvg(vizResult.output);
-assert.equal(sanitizedVizSvg.includes("javascript:alert(1)"), false);
-assert.equal(/\s+(?:href|xlink:href|target)\s*=/i.test(sanitizedVizSvg), false);
-assert.equal(sanitizedVizSvg.includes("tooltip text"), true);
-assert.equal(sanitizedVizSvg.includes("onload=alert(1)"), true);
-
-assert.deepEqual(
-  core.parseC4Artifact(
-    "docs/architecture/02-container.c4",
-    `C4Container
-Container(cli, "criv CLI", "Rust", "Runs checks")
-%% criv:source src/lib.rs#run
-`,
-  ).diagnostics,
-  [],
-);
-
-assert.equal(
-  core.parseC4Artifact(
-    "docs/architecture/04-code.c4",
-    `// criv:generated true
-digraph criv_code {
-  cli -> vault;
-}
-`,
-  ).format,
-  "dot",
-);
-
-const c4Mismatch = core.parseC4Artifact(
-  "docs/architecture/01-context.c4",
-  `%% criv:format dot
-C4Container
-Container(cli, "criv CLI", "Rust", "Runs checks")
-`,
-);
-assert.deepEqual(
-  c4Mismatch.diagnostics.map((diagnostic) => diagnostic.code),
-  ["mismatched-c4-format", "mismatched-c4-level"],
-);
-
-const c4BadDirective = core.parseC4Artifact(
-  "docs/architecture/diagram.c4",
-  `%% criv:level code
-flowchart TD
-  a --> b
-`,
-);
-assert.deepEqual(
-  c4BadDirective.diagnostics.map((diagnostic) => diagnostic.code),
-  ["missing-c4-level", "unknown-c4-directive", "unknown-c4-format"],
-);
-
-const pluginC4FixtureDir = resolve(pluginRoot, "fixtures/c4");
-for (const fixtureName of readdirSync(pluginC4FixtureDir).filter((name) => name.endsWith(".c4"))) {
-  const fixturePath = resolve(pluginC4FixtureDir, fixtureName);
-  const summary = core.parseC4Artifact(
-    `docs/architecture/${fixtureName}`,
-    readFileSync(fixturePath, "utf8"),
-  );
-  assert.deepEqual(summary.diagnostics, [], `diagnostics for ${fixtureName}`);
-  assert.equal(summary.format, "mermaid", `format for ${fixtureName}`);
-}
-
-function compareDiagnostics(left, right) {
-  return (
-    left.code.localeCompare(right.code) ||
-    (left.line ?? Number.MAX_SAFE_INTEGER) - (right.line ?? Number.MAX_SAFE_INTEGER)
-  );
+for (const legacySource of ["C4Context", "digraph architecture { a -> b }"]) {
+  const summary = core.parseC4Artifact("docs/architecture/model.c4", legacySource);
+  assert.equal(summary.format, "unknown");
+  assert.equal(summary.diagnostics[0].code, "unknown-c4-format");
 }

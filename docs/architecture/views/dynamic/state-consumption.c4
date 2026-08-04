@@ -1,0 +1,17 @@
+views {
+  global style architectureTheme
+
+  dynamic view stateConsumption {
+    title 'Dynamic / Editors / Open an architecture view'
+    description 'How VS Code opens the named view owned by one file without parsing LikeC4 source.'
+
+    maintainer -> criv.vscodeExtension.vscodePreview 'Opens an architecture file that owns a view'
+    criv.vscodeExtension.vscodePreview -> criv.vscodeExtension.vscodeState 'Requests the current architecture model'
+    criv.vscodeExtension.vscodeState -> criv.stateStore 'Reads the published state'
+    criv.vscodeExtension.vscodeState -> criv.stateProjection 'Validates and projects the state'
+    criv.stateProjection -> criv.vscodeExtension.vscodeState 'Returns the architecture model and view ownership'
+    criv.vscodeExtension.vscodeState -> criv.vscodeExtension.vscodePreview 'Returns the compiled model'
+    criv.vscodeExtension.vscodePreview -> criv.sharedRenderer.diagramRenderer 'Mounts the file-owned named view'
+    criv.sharedRenderer.diagramRenderer -> criv.vscodeExtension.vscodePreview 'Reports view navigation'
+  }
+}

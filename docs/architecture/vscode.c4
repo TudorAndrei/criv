@@ -1,0 +1,68 @@
+model {
+  extend criv {
+    vscodeExtension = container 'VS Code companion extension' {
+      technology 'TypeScript and VS Code API'
+      description 'Runs criv workflows and shows state, diagnostics, source links, and LikeC4 previews in VS Code-compatible editors.'
+      link ../../extensions/vscode-criv/src/extension.ts 'source'
+
+      vscodeController = component 'Extension controller' {
+        technology 'TypeScript and VS Code API'
+        description 'Registers commands, diagnostics, tree data, language features, and custom editors.'
+        link ../../extensions/vscode-criv/src/extension.ts 'source'
+      }
+      vscodePreview = component 'C4 preview editor' {
+        technology 'TypeScript and VS Code Webview'
+        description 'Selects named views and manages a navigable C4 preview editor.'
+        link ../../extensions/vscode-criv/src/c4Preview.ts 'source'
+      }
+      vscodeState = component 'Workspace state store' {
+        technology 'TypeScript'
+        description 'Loads state and publishes projected snapshots to extension features.'
+        link ../../extensions/vscode-criv/src/stateStore.ts 'source'
+      }
+      vscodeNavigation = component 'Source navigation adapter' {
+        technology 'TypeScript and VS Code API'
+        description 'Provides source links, hovers, definitions, references, and target navigation.'
+        link ../../extensions/vscode-criv/src/languageFeatures.ts 'source'
+      }
+      vscodeDiagnostics = component 'Diagnostics adapter' {
+        technology 'TypeScript and VS Code API'
+        description 'Converts criv check output into workspace diagnostics and channel output.'
+        link ../../extensions/vscode-criv/src/checkDiagnostics.ts 'source'
+      }
+      vscodeCommands = component 'CLI command runner' {
+        technology 'TypeScript and Node.js child processes'
+        description 'Runs trusted criv commands in the workspace and bounds their captured output.'
+        link ../../extensions/vscode-criv/src/commandRunner.ts 'source'
+      }
+      vscodeExplorer = component 'Vault explorer' {
+        technology 'TypeScript and VS Code TreeView'
+        description 'Presents documents, decisions, and source references as a navigable tree.'
+        link ../../extensions/vscode-criv/src/tree.ts 'source'
+      }
+    }
+  }
+}
+
+views {
+  global style architectureTheme
+
+  view vscodeComponents of criv.vscodeExtension {
+    title 'Components / VS Code'
+    description 'How the extension runs criv, projects state, reports diagnostics, and draws architecture previews.'
+
+    include *
+    include criv.cli
+    include criv.stateStore
+    include criv.stateProjection
+    include criv.sharedRenderer
+    include
+      criv.vscodeExtension.vscodePreview with {
+        navigateTo codeVscodePreview
+      }
+    include
+      criv.vscodeExtension.vscodeState with {
+        navigateTo codeVscodeState
+      }
+  }
+}

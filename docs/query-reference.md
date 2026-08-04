@@ -340,61 +340,11 @@ Select text rows or a JSON array of rows
 
 **Default:** `text`
 
-## `criv query c4-elements`
-
-- **Usage**: `criv query c4-elements [--format <FORMAT>] <NOTE_ID>`
-
-List parsed Mermaid C4 elements from a note
-
-### Arguments
-
-#### `<NOTE_ID>`
-
-Note id or unique note name
-
-### Flags
-
-#### `--format <FORMAT>`
-
-Select text rows or a JSON array of rows
-
-**Choices:**
-
-- `text`
-- `json`
-
-**Default:** `text`
-
-## `criv query c4-relationships`
-
-- **Usage**: `criv query c4-relationships [--format <FORMAT>] <NOTE_ID>`
-
-List parsed Mermaid C4 relationships from a note
-
-### Arguments
-
-#### `<NOTE_ID>`
-
-Note id or unique note name
-
-### Flags
-
-#### `--format <FORMAT>`
-
-Select text rows or a JSON array of rows
-
-**Choices:**
-
-- `text`
-- `json`
-
-**Default:** `text`
-
 ## `criv query c4-code`
 
 - **Usage**: `criv query c4-code [--format <FORMAT>] <PATH_GLOB>`
 
-Emit a focused Mermaid class diagram from source graph symbols and calls
+Emit focused LikeC4 source for modules in a source path glob
 
 ### Arguments
 

@@ -1,0 +1,18 @@
+views {
+  global style architectureTheme
+
+  dynamic view refreshSession {
+    title 'Dynamic / CLI / Refresh and publication'
+    description 'How one file change becomes a checked state publication for downstream tools.'
+
+    codingAgent -> repository 'Changes source code or vault content'
+    criv.cli.refreshCoordinator -> criv.cli.vaultModel 'Loads the current vault'
+    criv.cli.vaultModel -> criv.cli.sourceIntelligence 'Updates source indexes and relations'
+    criv.cli.vaultModel -> criv.cli.architectureService 'Compiles the LikeC4 workspace'
+    criv.cli.architectureService -> criv.cli.vaultModel 'Returns the model and diagnostics'
+    criv.cli.refreshCoordinator -> criv.cli.governanceEngine 'Checks publication blockers and vault drift'
+    criv.cli.refreshCoordinator -> criv.cli.architectureService 'Generates configured Code architecture'
+    criv.cli.refreshCoordinator -> criv.cli.statePublisher 'Builds the next state envelope'
+    criv.cli.statePublisher -> criv.stateStore 'Writes state and retained snapshots'
+  }
+}

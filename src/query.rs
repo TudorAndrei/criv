@@ -50,11 +50,7 @@ enum QueryCommand {
     Coverage(CoverageOptions),
     /// List source, note, or decision nodes.
     Nodes(NodesOptions),
-    /// List parsed Mermaid C4 elements from a note.
-    C4Elements(NoteOptions),
-    /// List parsed Mermaid C4 relationships from a note.
-    C4Relationships(NoteOptions),
-    /// Emit a focused Mermaid class diagram from source graph symbols and calls.
+    /// Emit focused LikeC4 source for modules in a source path glob.
     C4Code(PathGlobOptions),
     /// Compare two state snapshots or git refs.
     Diff(DiffOptions),
@@ -71,10 +67,7 @@ impl QueryCommand {
     fn capability(&self) -> QueryCapability {
         match self {
             Self::Diff(_) => QueryCapability::Snapshot,
-            Self::NextAdrId(_)
-            | Self::CitedBy(_)
-            | Self::OrphanDocs(_)
-            | Self::C4Relationships(_) => QueryCapability::Docs,
+            Self::NextAdrId(_) | Self::CitedBy(_) | Self::OrphanDocs(_) => QueryCapability::Docs,
             Self::Nodes(options)
                 if matches!(options.kind, Some(NodeKind::Doc | NodeKind::Decision)) =>
             {
@@ -90,7 +83,6 @@ impl QueryCommand {
             | Self::Governing(_)
             | Self::Coverage(_)
             | Self::Nodes(_)
-            | Self::C4Elements(_)
             | Self::C4Code(_) => QueryCapability::Sources,
         }
     }
@@ -230,14 +222,6 @@ pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
         }
         QueryCommand::Nodes(options) => {
             let rows = nodes(&vault, options.kind, options.without_docs);
-            (rows, options.output.format)
-        }
-        QueryCommand::C4Elements(options) => {
-            let rows = c4_elements(&vault, &options.note_id)?;
-            (rows, options.output.format)
-        }
-        QueryCommand::C4Relationships(options) => {
-            let rows = c4_relationships(&vault, &options.note_id)?;
             (rows, options.output.format)
         }
         QueryCommand::C4Code(options) => (
@@ -526,53 +510,6 @@ fn nodes(vault: &Vault, kind: Option<NodeKind>, without_docs: bool) -> Vec<Strin
     rows
 }
 
-fn c4_elements(vault: &Vault, id: &str) -> Result<Vec<String>> {
-    let note = vault
-        .resolve_note(id)
-        .ok_or_else(|| CrivError::new(format!("note `{id}` does not resolve")))?;
-    let mut rows = Vec::new();
-    for diagram in &note.c4_diagrams {
-        for element in &diagram.elements {
-            let source = match &element.source {
-                None => "none".to_string(),
-                Some(source) => match vault.resolve_source_target(source) {
-                    SourceTargetResolution::Resolved { path, .. } => path,
-                    SourceTargetResolution::MissingFile
-                    | SourceTargetResolution::MissingFragment { .. } => "unresolved".into(),
-                },
-            };
-            rows.push(format!(
-                "level={} alias={} category={} kind={} source={}",
-                diagram.level.as_str(),
-                element.alias,
-                element.category.as_str(),
-                element.kind,
-                source
-            ));
-        }
-    }
-    Ok(rows)
-}
-
-fn c4_relationships(vault: &Vault, id: &str) -> Result<Vec<String>> {
-    let note = vault
-        .resolve_note(id)
-        .ok_or_else(|| CrivError::new(format!("note `{id}` does not resolve")))?;
-    let mut rows = Vec::new();
-    for diagram in &note.c4_diagrams {
-        for relationship in &diagram.relationships {
-            rows.push(format!(
-                "level={} from={} to={} label={}",
-                diagram.level.as_str(),
-                relationship.from,
-                relationship.to,
-                relationship.label.as_deref().unwrap_or("missing")
-            ));
-        }
-    }
-    Ok(rows)
-}
-
 fn diff(root: &Path, left: &str, right: &str) -> Result<Vec<String>> {
     let left = load_snapshot(root, left)?;
     let right = load_snapshot(root, right)?;
@@ -763,14 +700,6 @@ mod tests {
             ),
             (query_nodes_command(None, false), QueryCapability::Sources),
             (
-                QueryCommand::C4Elements(query_note_options()),
-                QueryCapability::Sources,
-            ),
-            (
-                QueryCommand::C4Relationships(query_note_options()),
-                QueryCapability::Docs,
-            ),
-            (
                 QueryCommand::C4Code(PathGlobOptions {
                     path_glob: "src/**".into(),
                     output: query_output_options(),
@@ -802,7 +731,6 @@ mod tests {
             QueryCommand::OrphanDocs(query_output_options()),
             query_nodes_command(Some(NodeKind::Doc), false),
             query_nodes_command(Some(NodeKind::Decision), false),
-            QueryCommand::C4Relationships(query_note_options()),
         ];
 
         crate::source_index::reset_work_counts();
@@ -842,44 +770,6 @@ mod tests {
         assert_eq!(source_graph.parsed_files, 2);
         assert_eq!(source_graph.cache_publications, 1);
         assert!(temp.path().join(".criv/source-graph.json").exists());
-    }
-
-    #[test]
-    fn c4_elements_lists_resolution_status() {
-        let temp = TempDir::new().unwrap();
-        write_query_fixture(temp.path());
-        let vault = Vault::load(temp.path()).unwrap();
-
-        let rows = c4_elements(&vault, "c4").unwrap();
-
-        assert_eq!(
-            rows,
-            vec![
-                "level=container alias=cli category=container kind=Container source=src/lib.rs"
-                    .to_string(),
-                "level=container alias=plugin category=container kind=Container source=unresolved"
-                    .to_string(),
-                "level=container alias=external category=software-system kind=System_Ext source=none"
-                    .to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn c4_relationships_lists_labels() {
-        let temp = TempDir::new().unwrap();
-        write_query_fixture(temp.path());
-        let vault = Vault::load(temp.path()).unwrap();
-
-        let rows = c4_relationships(&vault, "c4").unwrap();
-
-        assert_eq!(
-            rows,
-            vec![
-                "level=container from=cli to=plugin label=writes state for".to_string(),
-                "level=container from=plugin to=external label=missing".to_string(),
-            ]
-        );
     }
 
     #[test]
@@ -954,28 +844,5 @@ fn helper() {}
         )
         .unwrap();
         fs::write(root.join("other/out.rs"), "fn external() {}\n").unwrap();
-        fs::write(
-            root.join("docs/c4.md"),
-            r#"---
-id: c4
-kind: doc
-title: C4
----
-
-# C4
-
-```mermaid
-C4Container
-Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
-%% criv:source src/lib.rs#fn:helper
-Container(plugin, "Obsidian Plugin", "TypeScript", "Reads generated state")
-%% criv:source src/missing.rs
-System_Ext(external, "GitHub", "Renders Mermaid")
-Rel(cli, plugin, "writes state for")
-Rel(plugin, external)
-```
-"#,
-        )
-        .unwrap();
     }
 }

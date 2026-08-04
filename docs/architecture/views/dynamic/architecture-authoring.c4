@@ -1,0 +1,19 @@
+views {
+  global style architectureTheme
+
+  dynamic view architectureAuthoring {
+    title 'Dynamic / Architecture / Author and preview a view'
+    description 'The agent workflow from an authored LikeC4 change to a validated editor preview.'
+
+    codingAgent -> repository 'Edits model or view source'
+    codingAgent -> criv.cli.commandInterface 'Runs watch once or check'
+    criv.cli.commandInterface -> criv.cli.refreshCoordinator 'Starts a refresh session'
+    criv.cli.refreshCoordinator -> criv.cli.vaultModel 'Loads every architecture source'
+    criv.cli.vaultModel -> criv.cli.architectureService 'Compiles and lays out named views'
+    criv.cli.architectureService -> criv.cli.vaultModel 'Returns diagnostics and the computed model'
+    criv.cli.refreshCoordinator -> criv.cli.governanceEngine 'Validates source links and interface drift'
+    criv.cli.refreshCoordinator -> criv.cli.statePublisher 'Publishes the validated workspace'
+    criv.vscodeExtension.vscodeState -> criv.stateStore 'Reads the new state revision'
+    criv.vscodeExtension.vscodePreview -> criv.sharedRenderer.diagramRenderer 'Selects the view owned by the open file'
+  }
+}

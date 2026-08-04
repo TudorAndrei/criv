@@ -1,0 +1,19 @@
+{
+  "name": "@criv/likec4",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./node": "./src/node.ts",
+    "./protocol": "./src/protocol.ts",
+    "./renderer": "./src/renderer.ts"
+  },
+  "dependencies": {
+    "likec4": "1.59.2",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "tslib": "2.8.1"
+  }
+}

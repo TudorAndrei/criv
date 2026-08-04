@@ -12,15 +12,15 @@ state that other tools can read.
 - `criv init` creates the vault files, ADR directory, Git hooks, agent runtime
   skills, and Obsidian companion plugin scaffold.
 - `criv check` validates Markdown formatting, note schema, ADR placement,
-  wiki-links, source targets, Mermaid C4 diagram references, pattern
+  wiki-links, source targets, LikeC4 architecture workspaces, pattern
   references, and ADR supersession rules.
 - `criv watch --once` writes `.criv/state.json` and content-addressed local
   snapshots for downstream tools.
 - `criv state list|prune` inspects and bounds those ignored local snapshots.
 - `criv query ...` asks the graph about targets, citations (`cites`,
   `cited-by`), ADR governance (`governs`, `governing`), coverage, callers,
-  callees, attack surface, C4 elements and relationships, focused C4 Code
-  projections, diffs, and orphaned docs.
+  callees, attack surface, focused LikeC4 module projections, diffs, and
+  orphaned docs.
 - `criv search ...` searches files, text, notes, and structural policy patterns.
 - `criv enforce --stage commit|push|ci` runs stage-aware documentation and policy
   checks.
@@ -227,18 +227,15 @@ criv query coverage
 criv query nodes --kind code --without-docs
 criv query governs ADR-0001
 criv query governing src/main.rs
-criv query c4-elements ADR-0026
-criv query c4-relationships ADR-0026
-criv query c4-code src/c4.rs
+criv query c4-code 'src/**'
 criv query diff latest latest
 ```
 
 See [docs/query-reference.md](docs/query-reference.md) for every `criv query`
 subcommand, positional argument, flag, and example.
 
-`c4-code` emits a Mermaid `classDiagram` from the source graph for a focused
-file or component/module glob. Use it for C4 Code-level inspection of a narrow
-implementation area, not as a whole-application architecture diagram.
+`c4-code` emits LikeC4 source with modules and imports for a focused source
+glob. It does not emit files, classes, functions, methods, or calls.
 
 Search code and notes:
 
@@ -374,7 +371,7 @@ and delegates shared helper logic to the `criv-wasm` crate.
 Build the plugin when working on its templates or WASM helper:
 
 ```sh
-npm --prefix .obsidian/plugins/criv ci
+npm ci
 npm --prefix .obsidian/plugins/criv run build
 ```
 
@@ -394,15 +391,17 @@ native state tree and status summary, opens AST-aware source selectors, surfaces
 For local development:
 
 ```sh
-npm --prefix extensions/vscode-criv install
+npm ci
 npm --prefix extensions/vscode-criv run build
 npm --prefix extensions/vscode-criv run test
 npm --prefix extensions/vscode-criv run test:integration
 ```
 
-The `.c4` preview command renders Mermaid C4 artifacts with Mermaid 11 and DOT
-code artifacts with `@viz-js/viz` inside a webview. The text `.c4` file remains
-the source of truth; the preview is only a projection.
+The default `.c4` editor renders the matching named LikeC4 view from
+`.criv/state.json`. Use **Reopen Editor With → Text Editor** to edit the DSL.
+The extension packages the renderer and its assets. It does not use a global
+LikeC4 command or a network service. The `.c4` workspace remains the source of
+truth; the preview is only a projection.
 
 ## Releases
 

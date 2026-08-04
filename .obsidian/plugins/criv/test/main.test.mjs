@@ -24,7 +24,7 @@ await esbuild.build({
 
 const { default: CrivPlugin } = await import(pathToFileURL(outFile).href);
 const validState = {
-  schema: "criv.state.v0",
+  schema: "criv.state.v1",
   graph: {
     nodes: [{ id: "note:README.md", kind: "note", label: "README", path: "README.md" }],
     edges: [{ from: "note:README.md", kind: "mentions", to: "source:src/lib.rs" }],
@@ -55,13 +55,13 @@ const validStateRaw = JSON.stringify(validState);
 
 {
   const { plugin } = createPlugin({
-    ".criv/state.json": JSON.stringify({ ...validState, schema: "criv.state.v1" }),
+    ".criv/state.json": JSON.stringify({ ...validState, schema: "criv.state.v2" }),
   });
   assert.equal(await plugin.loadState(), null);
   assert.equal(plugin.cachedState(), null);
   assert.equal(
     plugin.stateStatus(),
-    "Could not read .criv/state.json: unsupported criv state schema: criv.state.v1",
+    "Could not read .criv/state.json: unsupported criv state schema: criv.state.v2",
   );
 }
 
@@ -85,7 +85,7 @@ const validStateRaw = JSON.stringify(validState);
   const { plugin } = createPlugin({ ".criv/state.json": validStateRaw });
   const summary = await plugin.readState();
   assert.deepEqual(summary, {
-    schema: "criv.state.v0",
+    schema: "criv.state.v1",
     node_count: 1,
     edge_count: 1,
     source_count: 2,
@@ -141,8 +141,6 @@ function aliasPlugin() {
   const aliases = {
     "@codemirror/state": resolve(stubDir, "codemirror-state.mjs"),
     "@codemirror/view": resolve(stubDir, "codemirror-view.mjs"),
-    "@viz-js/viz": resolve(stubDir, "viz-js-viz.mjs"),
-    mermaid: resolve(stubDir, "mermaid.mjs"),
     obsidian: resolve(stubDir, "obsidian.mjs"),
   };
   return {

@@ -17,7 +17,7 @@ const STORE_DIR: &str = ".criv/snapshots";
 const INDEX_PATH: &str = ".criv/snapshots/index.json";
 const LATEST_PATH: &str = ".criv/latest";
 const INDEX_SCHEMA: &str = "criv.snapshot-index.v0";
-const STATE_SCHEMA: &str = "criv.state.v0";
+const STATE_SCHEMA: &str = "criv.state.v1";
 
 #[derive(Debug, ClapArgs)]
 pub(crate) struct StateOptions {
@@ -506,7 +506,7 @@ mod tests {
 
     fn state(seed: &str) -> (String, String) {
         let contents =
-            format!("{{\n  \"schema\": \"criv.state.v0\",\n  \"seed\": \"{seed}\"\n}}\n");
+            format!("{{\n  \"schema\": \"criv.state.v1\",\n  \"seed\": \"{seed}\"\n}}\n");
         let hash = blake3::hash(contents.trim_end_matches('\n').as_bytes())
             .to_hex()
             .to_string();

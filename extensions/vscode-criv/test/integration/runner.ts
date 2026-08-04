@@ -22,10 +22,30 @@ export async function run(): Promise<void> {
     assert.ok(commands.includes(command), `Expected command ${command} to be registered.`);
   }
 
+  await assertC4UsesCustomPreview();
   await assertNoJsonDiagnostics([
     "extensions/vscode-criv/package.json",
     "extensions/vscode-criv/language-configuration.json",
   ]);
+}
+
+async function assertC4UsesCustomPreview(): Promise<void> {
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  assert.ok(workspaceFolder, "Expected the repository root to be opened as the test workspace.");
+  const uri = vscode.Uri.joinPath(
+    workspaceFolder.uri,
+    "docs",
+    "architecture",
+    "01-system-context.c4",
+  );
+
+  await vscode.commands.executeCommand("vscode.open", uri);
+  await delay(250);
+
+  const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+  assert.ok(input instanceof vscode.TabInputCustom, "Expected .c4 to open in a custom editor.");
+  assert.equal(input.viewType, "criv.c4Preview");
+  await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
 }
 
 async function assertNoJsonDiagnostics(relativePaths: readonly string[]): Promise<void> {

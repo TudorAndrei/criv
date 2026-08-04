@@ -1,6 +1,6 @@
 {
   "state": {
-    "schema": "criv.state.v0",
+    "schema": "criv.state.v1",
     "graph": {
       "nodes": [
         {

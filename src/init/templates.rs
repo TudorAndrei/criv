@@ -192,7 +192,7 @@ struct DefaultState {
 impl Default for DefaultState {
     fn default() -> Self {
         Self {
-            schema: "criv.state.v0",
+            schema: "criv.state.v1",
             graph: EmptyGraph::default(),
             patterns: BTreeMap::new(),
             source_index: Vec::new(),

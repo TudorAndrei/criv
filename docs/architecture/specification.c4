@@ -1,0 +1,66 @@
+specification {
+  tag external
+  tag optional
+
+  element person {
+    style {
+      shape person
+      color green
+    }
+  }
+  element softwareSystem {
+    style {
+      color primary
+    }
+  }
+  element container {
+    style {
+      color primary
+    }
+  }
+  element dataStore {
+    style {
+      shape storage
+      color primary
+    }
+  }
+  element component {
+    style {
+      shape component
+      color secondary
+    }
+  }
+  element module {
+    style {
+      shape rectangle
+      color muted
+    }
+  }
+
+  deploymentNode environment {
+    style {
+      color muted
+    }
+  }
+  deploymentNode device {
+    style {
+      color muted
+    }
+  }
+  deploymentNode process {
+    style {
+      color secondary
+    }
+  }
+}
+
+global {
+  styleGroup architectureTheme {
+    style element.tag = #external {
+      color muted
+    }
+    style element.tag = #optional {
+      color muted
+    }
+  }
+}

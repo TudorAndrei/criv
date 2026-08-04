@@ -1,18 +1,27 @@
 ---
 name: referencing-code
-description: Use when adding criv wiki-links from docs or ADRs to source files, symbols, line ranges, patterns, and notes.
+description: Use when writing a criv wiki-link from a document or ADR to a source file, symbol, line range, policy match, or another note.
 metadata:
-  criv-template: blake3:0a07d759a1b2706c
+  criv-template: blake3:192843957592d6f0
 ---
 
 # Referencing code
 
-Use wiki-links for code, pattern, and note references.
+A wiki-link is how a document claims a piece of the repository. criv resolves
+each one and reports drift when the target moves.
 
-- Source file: `[[src/auth/verify.rs]]`
-- Source symbol: `[[src/auth/verify.rs#verify_token]]`
-- Source lines: `[[src/auth/verify.rs#L42-L67]]`
-- Pattern: `[[match:ADR-0007/no-block-on-in-handler]]`
-- Note: `[[0007-content-addressed-state-and-diffing|ADR-0007]]`
+| Target | Form |
+| --- | --- |
+| Source file | `[[src/auth/verify.rs]]` |
+| Source symbol | `[[src/auth/verify.rs#verify_token]]` |
+| Source lines | `[[src/auth/verify.rs#L42-L67]]` |
+| Policy match | `[[match:ADR-0007/no-block-on-in-handler]]` |
+| Another note | `[[0007-content-addressed-state-and-diffing\|ADR-0007]]` |
 
-Partial source paths are allowed, but `criv check` warns when they are ambiguous.
+Prefer a symbol over a line range. A symbol survives edits above it; a line
+range does not.
+
+A partial source path resolves while it stays unique. Write the path from the
+repository root when `criv check` warns that a path is ambiguous.
+
+The links are correct when the vault is green after `criv watch --once`.

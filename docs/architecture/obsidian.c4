@@ -1,0 +1,43 @@
+model {
+  extend criv {
+    obsidianPlugin = container 'Obsidian companion plugin' {
+      technology 'TypeScript and Obsidian API'
+      description 'Shows state, source references, policy matches, and LikeC4 previews inside Obsidian.'
+      link ../../.obsidian/plugins/criv/src/main.ts 'source'
+
+      obsidianController = component 'Obsidian adapter' {
+        technology 'TypeScript and Obsidian plugin API'
+        description 'Connects Obsidian views, editor actions, and repository files to criv features.'
+        link ../../.obsidian/plugins/criv/src/main.ts 'source'
+      }
+      obsidianState = component 'State model' {
+        technology 'TypeScript'
+        description 'Parses published criv state for navigation and editor presentation.'
+        link ../../.obsidian/plugins/criv/src/core.ts 'source'
+      }
+      obsidianWasm = component 'WebAssembly adapter' {
+        technology 'TypeScript'
+        description 'Loads and calls the packaged state projection library.'
+        link ../../.obsidian/plugins/criv/src/wasm.ts 'source'
+      }
+    }
+  }
+}
+
+views {
+  global style architectureTheme
+
+  view obsidianComponents of criv.obsidianPlugin {
+    title 'Components / Obsidian'
+    description 'How the Obsidian plugin reads state and draws architecture previews.'
+
+    include *
+    include criv.stateStore
+    include criv.stateProjection
+    include criv.sharedRenderer
+    include
+      criv.obsidianPlugin.obsidianController with {
+        navigateTo codeObsidianAdapter
+      }
+  }
+}

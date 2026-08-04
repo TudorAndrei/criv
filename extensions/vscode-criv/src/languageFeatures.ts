@@ -15,6 +15,7 @@ import type { WorkspaceStateStore } from "./stateStore";
 const SOURCE_SELECTOR = [
   { language: "markdown", scheme: "file" },
   { language: "criv-c4", scheme: "file" },
+  { language: "likec4", scheme: "file" },
 ];
 
 export function registerSourceLanguageFeatures(
@@ -184,5 +185,9 @@ function completionKind(kind: string): vscode.CompletionItemKind {
 }
 
 function isSourceSelectorDocument(document: vscode.TextDocument): boolean {
-  return document.languageId === "markdown" || document.languageId === "criv-c4";
+  return (
+    document.languageId === "markdown" ||
+    document.languageId === "criv-c4" ||
+    document.languageId === "likec4"
+  );
 }

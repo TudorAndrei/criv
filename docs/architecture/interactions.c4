@@ -1,0 +1,197 @@
+// Relationship labels read as: source, action, destination. A technology is
+// present when a relationship crosses a process, language, or storage boundary.
+model {
+  maintainer -> repository 'Reviews and approves repository changes' {
+    technology 'Editor and Git'
+  }
+  maintainer -> criv.cli 'Runs validation, query, and maintenance commands' {
+    technology 'Terminal'
+  }
+  maintainer -> criv.obsidianPlugin 'Reviews vault knowledge and architecture' {
+    technology 'Obsidian user interface'
+  }
+  maintainer -> criv.vscodeExtension 'Reviews diagnostics and repository structure' {
+    technology 'VS Code user interface'
+  }
+  codingAgent -> repository 'Changes source code and vault content' {
+    technology 'Workspace file tools and Git'
+  }
+  codingAgent -> criv.cli 'Checks changes and queries repository knowledge' {
+    technology 'Terminal'
+  }
+  githubActions -> criv.cli 'Validates pushes and pull requests' {
+    technology 'Hosted runner and released binary'
+  }
+
+  criv.obsidianPlugin -> obsidian 'Provides vault views and editor actions' {
+    technology 'Obsidian plugin API'
+  }
+  criv.vscodeExtension -> vscode 'Provides editors, diagnostics, commands, and navigation' {
+    technology 'VS Code extension API'
+  }
+
+  criv.cli -> repository 'Reads and writes confined repository content' {
+    technology 'File system and libgit2'
+  }
+  criv.cli -> criv.stateStore 'Publishes state, caches, and snapshots' {
+    technology 'Atomic file writes'
+  }
+  criv.obsidianPlugin -> criv.stateStore 'Reads the published state' {
+    technology 'JSON through the Obsidian file API'
+  }
+  criv.vscodeExtension -> criv.stateStore 'Reads the published state' {
+    technology 'JSON through the workspace file system'
+  }
+  criv.vscodeExtension -> criv.cli 'Starts trusted check and refresh commands' {
+    technology 'Child process'
+  }
+  criv.obsidianPlugin -> criv.sharedRenderer 'Embeds architecture previews' {
+    technology 'Bundled npm package'
+  }
+  criv.vscodeExtension -> criv.sharedRenderer 'Embeds architecture previews' {
+    technology 'Bundled npm package and webview messages'
+  }
+  criv.obsidianPlugin -> criv.stateProjection 'Validates and projects state' {
+    technology 'Packaged WebAssembly'
+  }
+  criv.vscodeExtension -> criv.stateProjection 'Validates and projects state' {
+    technology 'Packaged WebAssembly'
+  }
+
+  // CLI component roll-up.
+  criv.cli.commandInterface -> criv.cli.scaffoldInstaller 'Starts vault initialization'
+  criv.cli.commandInterface -> criv.cli.vaultModel 'Starts read-only vault operations'
+  criv.cli.commandInterface -> criv.cli.refreshCoordinator 'Starts watch and refresh sessions'
+  criv.cli.commandInterface -> criv.cli.governanceEngine 'Starts checks and staged enforcement'
+  criv.cli.commandInterface -> criv.cli.knowledgeQueries 'Starts query and search operations'
+
+  criv.cli.refreshCoordinator -> criv.cli.vaultModel 'Loads the current vault'
+  criv.cli.refreshCoordinator -> criv.cli.sourceIntelligence 'Reuses incremental source data'
+  criv.cli.refreshCoordinator -> criv.cli.governanceEngine 'Validates before and after publication'
+  criv.cli.refreshCoordinator -> criv.cli.architectureService 'Requests configured architecture output'
+  criv.cli.refreshCoordinator -> criv.cli.statePublisher 'Publishes the refreshed graph'
+
+  criv.cli.vaultModel -> criv.cli.sourceIntelligence 'Builds source indexes and relations'
+  criv.cli.vaultModel -> criv.cli.architectureService 'Compiles the LikeC4 workspace' {
+    technology 'Node.js bridge process'
+  }
+
+  criv.cli.governanceEngine -> criv.cli.vaultModel 'Reads notes, decisions, links, and configuration'
+  criv.cli.governanceEngine -> criv.cli.sourceIntelligence 'Evaluates policies and source interfaces'
+  criv.cli.governanceEngine -> criv.cli.repositoryHistory 'Resolves changes, renames, and decision history'
+  criv.cli.governanceEngine -> criv.cli.statePublisher 'Compares the previous published state'
+  criv.cli.governanceEngine -> criv.cli.scaffoldInstaller 'Checks the generated skill inventory'
+
+  criv.cli.knowledgeQueries -> criv.cli.vaultModel 'Reads the repository knowledge graph'
+  criv.cli.knowledgeQueries -> criv.cli.sourceIntelligence 'Searches indexed source data'
+  criv.cli.knowledgeQueries -> criv.cli.repositoryHistory 'Reads commit history and stored revisions'
+  criv.cli.knowledgeQueries -> criv.cli.architectureService 'Builds focused module projections'
+  criv.cli.knowledgeQueries -> criv.cli.statePublisher 'Reads retained snapshots'
+
+  criv.cli.architectureService -> criv.cli.vaultModel 'Reads architecture sources and configuration'
+  criv.cli.architectureService -> criv.cli.sourceIntelligence 'Reads module and import relations'
+  criv.cli.statePublisher -> criv.cli.vaultModel 'Builds the state envelope from vault facts'
+  criv.cli.statePublisher -> criv.cli.sourceIntelligence 'Serializes source graph facts'
+  criv.cli.statePublisher -> criv.stateStore 'Writes state and retained snapshots' {
+    technology 'Atomic JSON writes'
+  }
+
+  criv.cli.vaultModel -> repository 'Reads documents, decisions, configuration, and architecture' {
+    technology 'File system'
+  }
+  criv.cli.sourceIntelligence -> repository 'Reads configured source roots' {
+    technology 'File system and fff index'
+  }
+  criv.cli.repositoryHistory -> repository 'Reads commits, diffs, and changed files' {
+    technology 'libgit2'
+  }
+  criv.cli.scaffoldInstaller -> repository 'Writes canonical vault and agent files' {
+    technology 'Confined atomic writes'
+  }
+
+  // Shared renderer components.
+  criv.sharedRenderer.diagramRenderer -> criv.sharedRenderer.modelContract 'Reads the compiled model contract'
+  criv.sharedRenderer.modelCompiler -> criv.sharedRenderer.modelContract 'Emits the compiled model contract'
+
+  // Shared state projection components.
+  criv.stateProjection.graphProjection -> criv.stateProjection.stateDecoder 'Reads validated state'
+  criv.stateProjection.selectorProjection -> criv.stateProjection.stateDecoder 'Reads validated state'
+  criv.stateProjection.selectorProjection -> criv.stateProjection.graphProjection 'Searches projected graph nodes'
+
+  // Obsidian components.
+  criv.obsidianPlugin.obsidianController -> criv.obsidianPlugin.obsidianState 'Builds vault views and previews'
+  criv.obsidianPlugin.obsidianController -> criv.obsidianPlugin.obsidianWasm 'Requests safe state projections' {
+    technology 'Asynchronous TypeScript call'
+  }
+  criv.obsidianPlugin.obsidianController -> criv.sharedRenderer.diagramRenderer 'Renders and navigates named views'
+  criv.obsidianPlugin.obsidianController -> criv.sharedRenderer.modelContract 'Reads the compiled model contract'
+  criv.obsidianPlugin.obsidianWasm -> criv.stateProjection 'Calls the packaged state API' {
+    technology 'WebAssembly call'
+  }
+  criv.obsidianPlugin.obsidianWasm -> criv.obsidianPlugin.obsidianState 'Returns projected editor data'
+  criv.obsidianPlugin.obsidianController -> criv.stateStore 'Reads the current state envelope' {
+    technology 'Obsidian file API'
+  }
+
+  // VS Code components.
+  criv.vscodeExtension.vscodeController -> criv.vscodeExtension.vscodeState 'Observes workspace state'
+  criv.vscodeExtension.vscodeController -> criv.vscodeExtension.vscodePreview 'Registers the custom architecture editor'
+  criv.vscodeExtension.vscodeController -> criv.vscodeExtension.vscodeNavigation 'Registers source navigation'
+  criv.vscodeExtension.vscodeController -> criv.vscodeExtension.vscodeDiagnostics 'Publishes check diagnostics'
+  criv.vscodeExtension.vscodeController -> criv.vscodeExtension.vscodeCommands 'Registers and runs commands'
+  criv.vscodeExtension.vscodeController -> criv.vscodeExtension.vscodeExplorer 'Registers the vault explorer'
+
+  criv.vscodeExtension.vscodeState -> criv.stateProjection 'Builds safe editor projections' {
+    technology 'WebAssembly call'
+  }
+  criv.vscodeExtension.vscodeState -> criv.stateStore 'Reads the current state envelope' {
+    technology 'Workspace file system'
+  }
+  criv.vscodeExtension.vscodePreview -> criv.vscodeExtension.vscodeState 'Reads compiled architecture models'
+  criv.vscodeExtension.vscodePreview -> criv.sharedRenderer.diagramRenderer 'Renders and navigates the owned view' {
+    technology 'Webview message channel'
+  }
+  criv.vscodeExtension.vscodePreview -> criv.sharedRenderer.modelContract 'Reads the compiled model contract'
+  criv.vscodeExtension.vscodeNavigation -> criv.vscodeExtension.vscodeState 'Resolves source targets and hovers'
+  criv.vscodeExtension.vscodeExplorer -> criv.vscodeExtension.vscodeState 'Builds the tree from projected state'
+  criv.vscodeExtension.vscodeDiagnostics -> criv.vscodeExtension.vscodeCommands 'Reads bounded check output'
+  criv.vscodeExtension.vscodeCommands -> criv.cli 'Starts trusted repository commands' {
+    technology 'Child process'
+  }
+}
+
+views {
+  global style architectureTheme
+
+  view containers of criv {
+    title 'Overview / Containers'
+    description 'The executable, editor, shared-library, and state boundaries that make up criv.'
+
+    include *
+    include maintainer
+    include codingAgent
+    include repository
+    include obsidian
+    include vscode
+    include
+      criv.cli with {
+        navigateTo cliComponents
+      }
+    include
+      criv.obsidianPlugin with {
+        navigateTo obsidianComponents
+      }
+    include
+      criv.vscodeExtension with {
+        navigateTo vscodeComponents
+      }
+    include
+      criv.sharedRenderer with {
+        navigateTo sharedRendererComponents
+      }
+    include
+      criv.stateProjection with {
+        navigateTo stateProjectionComponents
+      }
+  }
+}

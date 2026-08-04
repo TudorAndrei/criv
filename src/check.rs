@@ -10,8 +10,6 @@ use rumdl_lib::rule::{LintWarning, Rule};
 use rumdl_lib::rules::{all_rules, filter_rules};
 use serde::Serialize;
 
-use crate::c4::{C4ElementCategory, C4Level};
-use crate::c4_artifact::C4ArtifactFormat;
 #[cfg(test)]
 use crate::git::ChangedEntry;
 use crate::git::{ChangeStatus, ChangedSet};
@@ -139,8 +137,8 @@ fn validate_all_with_fix(root: &Path, fix: bool) -> Result<Vec<Diagnostic>> {
     let mut diagnostics = validate_markdown_format(root, fix, None)?;
     let vault = Vault::load(root)?;
     let policy_plan = PolicyScanPlan::new(&vault);
-    let previous_interface_hashes = previous_c4_interface_hashes(root)?;
-    diagnostics.extend(validate_with_previous_c4_interfaces(
+    let previous_interface_hashes = previous_architecture_interface_hashes(root)?;
+    diagnostics.extend(validate_with_previous_architecture_interfaces(
         &vault,
         previous_interface_hashes.as_ref(),
         &policy_plan,
@@ -183,7 +181,7 @@ fn validate_changed(root: &Path) -> Result<Vec<Diagnostic>> {
     let mut diagnostics = validate_markdown_format(root, false, Some(&changed_paths))?;
     let vault = Vault::load(root)?;
     let policy_plan = PolicyScanPlan::new(&vault);
-    let previous_interface_hashes = previous_c4_interface_hashes(root)?;
+    let previous_interface_hashes = previous_architecture_interface_hashes(root)?;
     diagnostics.extend(validate_changed_vault(
         &vault,
         previous_interface_hashes.as_ref(),
@@ -440,14 +438,14 @@ fn relative_path(root: &Path, path: &Path) -> String {
 #[cfg(test)]
 fn validate(vault: &Vault) -> Vec<Diagnostic> {
     let policy_plan = PolicyScanPlan::new(vault);
-    validate_with_previous_c4_interfaces(vault, None, &policy_plan)
+    validate_with_previous_architecture_interfaces(vault, None, &policy_plan)
 }
 
 pub(crate) fn validate_with_policy_plan(
     vault: &Vault,
     policy_plan: &PolicyScanPlan,
 ) -> Vec<Diagnostic> {
-    validate_with_previous_c4_interfaces(vault, None, policy_plan)
+    validate_with_previous_architecture_interfaces(vault, None, policy_plan)
 }
 
 pub(crate) fn validate_with_previous_state(
@@ -455,11 +453,11 @@ pub(crate) fn validate_with_previous_state(
     previous: Option<&State>,
 ) -> Vec<Diagnostic> {
     let policy_plan = PolicyScanPlan::new(vault);
-    let previous_hashes = previous.map(State::c4_interface_hashes);
-    validate_with_previous_c4_interfaces(vault, previous_hashes.as_ref(), &policy_plan)
+    let previous_hashes = previous.map(State::architecture_interface_hashes);
+    validate_with_previous_architecture_interfaces(vault, previous_hashes.as_ref(), &policy_plan)
 }
 
-fn validate_with_previous_c4_interfaces(
+fn validate_with_previous_architecture_interfaces(
     vault: &Vault,
     previous_interface_hashes: Option<&BTreeMap<String, String>>,
     policy_plan: &PolicyScanPlan,
@@ -476,11 +474,47 @@ fn validate_with_previous_c4_interfaces(
     validate_links(vault, &mut diagnostics);
     validate_supersession(vault, &mut diagnostics);
     validate_c4_artifacts(vault, &mut diagnostics);
-    validate_c4_interface_drift(vault, previous_interface_hashes, &mut diagnostics);
+    validate_likec4_workspace(vault, &mut diagnostics);
+    validate_architecture_interface_drift(vault, previous_interface_hashes, &mut diagnostics);
     diagnostics.sort_by(|a, b| {
         (&a.path, a.line.unwrap_or(0), a.code).cmp(&(&b.path, b.line.unwrap_or(0), b.code))
     });
     diagnostics
+}
+
+fn validate_likec4_workspace(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
+    diagnostics.extend(vault.likec4_workspace.diagnostics.iter().map(|diagnostic| {
+        error(
+            diagnostic.kind.code(),
+            &diagnostic.path,
+            diagnostic.line,
+            diagnostic.message.clone(),
+        )
+    }));
+    let Some(model) = &vault.likec4_workspace.model else {
+        return;
+    };
+    for link in model
+        .get("sourceLinks")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(target) = link.get("target").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if !matches!(
+            vault.resolve_source_target(target),
+            SourceTargetResolution::Resolved { .. }
+        ) {
+            diagnostics.push(error(
+                "invalid-likec4-source",
+                &vault.likec4_workspace.path,
+                None,
+                format!("LikeC4 source link does not resolve: `{target}`"),
+            ));
+        }
+    }
 }
 
 fn validate_changed_vault(
@@ -513,9 +547,12 @@ fn validate_changed_vault(
         .iter()
         .filter(|artifact| changed_paths.contains(&artifact.rel_path))
     {
-        validate_c4_artifact(vault, artifact, &mut diagnostics);
+        validate_c4_artifact(artifact, &mut diagnostics);
     }
-    validate_c4_interface_drift_for_paths(
+    if changed_paths.iter().any(|path| path.ends_with(".c4")) {
+        validate_likec4_workspace(vault, &mut diagnostics);
+    }
+    validate_architecture_interface_drift_for_paths(
         vault,
         previous_interface_hashes,
         Some(changed_paths),
@@ -569,7 +606,7 @@ fn policy_diagnostic(diagnostic: &PolicyDiagnostic) -> Diagnostic {
     error(code, &diagnostic.path, Some(diagnostic.line), message)
 }
 
-fn previous_c4_interface_hashes(root: &Path) -> Result<Option<BTreeMap<String, String>>> {
+fn previous_architecture_interface_hashes(root: &Path) -> Result<Option<BTreeMap<String, String>>> {
     let path = root.join(".criv/state.json");
     if !path.exists() {
         return Ok(None);
@@ -581,7 +618,12 @@ fn previous_c4_interface_hashes(root: &Path) -> Result<Option<BTreeMap<String, S
         .and_then(serde_json::Value::as_array)
         .into_iter()
         .flatten()
-        .filter(|node| node.get("kind").and_then(serde_json::Value::as_str) == Some("c4-interface"))
+        .filter(|node| {
+            matches!(
+                node.get("kind").and_then(serde_json::Value::as_str),
+                Some("architecture-interface" | "c4-interface")
+            )
+        })
         .filter_map(|node| {
             Some((
                 node.get("id")?.as_str()?.to_string(),
@@ -665,7 +707,6 @@ fn validate_note_local(
     }
 
     validate_targets(vault, note, diagnostics);
-    validate_c4_diagrams(vault, &note.rel_path, &note.c4_diagrams, diagnostics);
 }
 
 fn validate_decision_note(
@@ -837,15 +878,11 @@ pub(crate) fn publication_blocking_diagnostics(vault: &Vault) -> Vec<Diagnostic>
 
 fn validate_c4_artifacts(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
     for artifact in &vault.c4_artifacts {
-        validate_c4_artifact(vault, artifact, diagnostics);
+        validate_c4_artifact(artifact, diagnostics);
     }
 }
 
-fn validate_c4_artifact(
-    vault: &Vault,
-    artifact: &crate::c4_artifact::C4Artifact,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+fn validate_c4_artifact(artifact: &crate::c4::C4Artifact, diagnostics: &mut Vec<Diagnostic>) {
     for artifact_diagnostic in &artifact.diagnostics {
         diagnostics.push(error(
             artifact_diagnostic.code,
@@ -854,49 +891,22 @@ fn validate_c4_artifact(
             artifact_diagnostic.message.clone(),
         ));
     }
-    for directive in artifact
-        .directives
-        .iter()
-        .filter(|directive| directive.key == "generated")
-    {
-        if let Some(value) = directive.value.as_deref()
-            && !matches!(value, "true" | "false")
-        {
-            diagnostics.push(error(
-                "invalid-c4-generated",
-                &artifact.rel_path,
-                Some(directive.line),
-                "criv:generated must be `true` or `false` when a value is provided",
-            ));
-        }
-    }
-
-    if artifact.format == Some(C4ArtifactFormat::Dot) {
-        if artifact.level.is_some_and(|level| level.as_str() != "code") {
-            diagnostics.push(error(
-                "invalid-c4-level",
-                &artifact.rel_path,
-                None,
-                "DOT .c4 artifacts currently support only filename-derived Code level",
-            ));
-        }
-        if let Err(message) = validate_dot_shape(&artifact.path) {
-            diagnostics.push(error("invalid-c4-dot", &artifact.rel_path, None, message));
-        }
-    }
-
-    validate_c4_diagrams(vault, &artifact.rel_path, &artifact.diagrams, diagnostics);
 }
 
-fn validate_c4_interface_drift(
+fn validate_architecture_interface_drift(
     vault: &Vault,
     previous_interface_hashes: Option<&BTreeMap<String, String>>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    validate_c4_interface_drift_for_paths(vault, previous_interface_hashes, None, diagnostics);
+    validate_architecture_interface_drift_for_paths(
+        vault,
+        previous_interface_hashes,
+        None,
+        diagnostics,
+    );
 }
 
-fn validate_c4_interface_drift_for_paths(
+fn validate_architecture_interface_drift_for_paths(
     vault: &Vault,
     previous_interface_hashes: Option<&BTreeMap<String, String>>,
     changed_paths: Option<&BTreeSet<String>>,
@@ -905,8 +915,13 @@ fn validate_c4_interface_drift_for_paths(
     let Some(previous_interface_hashes) = previous_interface_hashes else {
         return;
     };
-    for record in state::c4_interface_hash_records(vault) {
-        if changed_paths.is_some_and(|paths| !paths.contains(&record.path)) {
+    for record in state::architecture_interface_hash_records(vault) {
+        if changed_paths.is_some_and(|paths| {
+            !paths.contains(&record.source_path)
+                && !paths.iter().any(|path| {
+                    path == &record.path || path.starts_with(&format!("{}/", record.path))
+                })
+        }) {
             continue;
         }
         let Some(previous_hash) = previous_interface_hashes.get(&record.id) else {
@@ -914,187 +929,15 @@ fn validate_c4_interface_drift_for_paths(
         };
         if previous_hash != &record.hash {
             diagnostics.push(warning(
-                "c4-interface-drift",
+                "architecture-interface-drift",
                 &record.path,
                 Some(record.line),
                 format!(
-                    "C4 source `{}` interface changed since the previous state; review the diagram",
+                    "LikeC4 source `{}` interface changed since the previous state; review the architecture model",
                     record.target
                 ),
             ));
         }
-    }
-}
-
-fn validate_dot_shape(path: &Path) -> std::result::Result<(), String> {
-    let contents = std::fs::read_to_string(path)
-        .map_err(|err| format!("failed to read DOT .c4 artifact: {err}"))?;
-    if !contents.contains('{') || !contents.contains('}') {
-        return Err("DOT .c4 artifact must contain a graph body enclosed in braces".into());
-    }
-    Ok(())
-}
-
-fn validate_c4_diagrams(
-    vault: &Vault,
-    path: &str,
-    diagrams: &[crate::c4::C4Diagram],
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    for diagram in diagrams {
-        for (line, source) in &diagram.invalid_source_placements {
-            diagnostics.push(error(
-                "invalid-c4-source-placement",
-                path,
-                Some(*line),
-                format!("`criv:source {source}` must immediately follow a C4 architecture element"),
-            ));
-        }
-
-        for (alias, line) in diagram.duplicate_aliases() {
-            diagnostics.push(error(
-                "duplicate-c4-alias",
-                path,
-                Some(line),
-                format!("C4 element alias `{alias}` is declared more than once"),
-            ));
-        }
-
-        for (element, line) in diagram.duplicate_sources() {
-            diagnostics.push(error(
-                "duplicate-c4-source",
-                path,
-                Some(line),
-                format!(
-                    "C4 element `{}` has more than one `criv:source` annotation",
-                    element.alias
-                ),
-            ));
-        }
-
-        for relationship in diagram.unresolved_relationships() {
-            diagnostics.push(error(
-                "unresolved-c4-relationship",
-                path,
-                Some(relationship.line),
-                format!(
-                    "C4 relationship `{}` -> `{}` references an unknown element alias",
-                    relationship.from, relationship.to
-                ),
-            ));
-        }
-
-        for relationship in &diagram.relationships {
-            if relationship.label.is_none() {
-                diagnostics.push(warning(
-                    "missing-c4-relationship-label",
-                    path,
-                    Some(relationship.line),
-                    format!(
-                        "C4 relationship `{}` -> `{}` should describe its communication intent",
-                        relationship.from, relationship.to
-                    ),
-                ));
-            }
-        }
-
-        for element in &diagram.elements {
-            if !c4_category_allowed_at_level(diagram.level, element.category) {
-                diagnostics.push(error(
-                    "invalid-c4-level",
-                    path,
-                    Some(element.line),
-                    format!(
-                        "C4 {} diagram cannot contain a {} element `{}`",
-                        diagram.level.as_str(),
-                        element.category.as_str(),
-                        element.alias
-                    ),
-                ));
-            }
-
-            if element.label.is_empty() {
-                diagnostics.push(warning(
-                    "missing-c4-label",
-                    path,
-                    Some(element.line),
-                    format!("C4 element `{}` should have a label", element.alias),
-                ));
-            }
-
-            if element.description.is_none() {
-                diagnostics.push(warning(
-                    "missing-c4-description",
-                    path,
-                    Some(element.line),
-                    format!(
-                        "C4 element `{}` should describe its responsibility",
-                        element.alias
-                    ),
-                ));
-            }
-
-            if matches!(
-                element.category,
-                C4ElementCategory::Container | C4ElementCategory::Component
-            ) && element.technology.is_none()
-            {
-                diagnostics.push(warning(
-                    "missing-c4-technology",
-                    path,
-                    Some(element.line),
-                    format!(
-                        "C4 {} element `{}` should include a technology",
-                        element.category.as_str(),
-                        element.alias
-                    ),
-                ));
-            }
-
-            let Some(source) = &element.source else {
-                continue;
-            };
-            match vault.resolve_source_target(source) {
-                SourceTargetResolution::Resolved { .. } => warn_legacy_source_target(
-                    vault,
-                    diagnostics,
-                    path,
-                    Some(element.line),
-                    source,
-                    "C4 source",
-                ),
-                SourceTargetResolution::MissingFile => diagnostics.push(error(
-                    "unresolved-c4-target",
-                    path,
-                    Some(element.line),
-                    format!(
-                        "C4 element `{}` source `{source}` does not resolve to a source file",
-                        element.alias
-                    ),
-                )),
-                SourceTargetResolution::MissingFragment { path: resolved_path } => diagnostics.push(error(
-                    "unresolved-c4-target",
-                    path,
-                    Some(element.line),
-                    format!(
-                        "C4 element `{}` source `{source}` resolves to `{path}` but does not resolve to a source symbol",
-                        element.alias,
-                        path = resolved_path
-                    ),
-                )),
-            }
-        }
-    }
-}
-
-fn c4_category_allowed_at_level(level: C4Level, category: C4ElementCategory) -> bool {
-    match level {
-        C4Level::Context => matches!(
-            category,
-            C4ElementCategory::Person | C4ElementCategory::SoftwareSystem
-        ),
-        C4Level::Container => !matches!(category, C4ElementCategory::Component),
-        C4Level::Component => true,
     }
 }
 
@@ -1874,360 +1717,15 @@ See [[does-not-exist]].
     }
 
     #[test]
-    fn valid_c4_source_annotation_passes() {
-        let vault = c4_vault(
-            r#"
-```mermaid
-C4Container
-Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
-%% criv:source src/main.rs#fn:run
-```
-"#,
-        );
-
-        let diagnostics = validate(&vault);
-
-        assert!(
-            diagnostics
-                .iter()
-                .all(|diag| diag.code != "unresolved-c4-target")
-        );
-    }
-
-    #[test]
-    fn missing_c4_source_target_is_reported() {
-        let vault = c4_vault(
-            r#"
-```mermaid
-C4Container
-Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
-%% criv:source src/missing.rs
-```
-"#,
-        );
-
-        let diagnostics = validate(&vault);
-
-        assert!(
-            diagnostics
-                .iter()
-                .any(|diag| diag.code == "unresolved-c4-target")
-        );
-    }
-
-    #[test]
-    fn duplicate_c4_source_annotation_is_reported() {
-        let vault = c4_vault(
-            r#"
-```mermaid
-C4Container
-Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
-%% criv:source src/main.rs
-%% criv:source src/lib.rs
-```
-"#,
-        );
-
-        let diagnostics = validate(&vault);
-
-        assert!(
-            diagnostics
-                .iter()
-                .any(|diag| diag.code == "duplicate-c4-source")
-        );
-    }
-
-    #[test]
-    fn duplicate_c4_alias_is_reported() {
-        let vault = c4_vault(
-            r#"
-```mermaid
-C4Container
-Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
-Container(cli, "Other CLI", "Rust", "Duplicates alias")
-```
-"#,
-        );
-
-        let diagnostics = validate(&vault);
-
-        assert!(
-            diagnostics
-                .iter()
-                .any(|diag| diag.code == "duplicate-c4-alias")
-        );
-    }
-
-    #[test]
-    fn unresolved_c4_relationship_is_reported() {
-        let vault = c4_vault(
-            r#"
-```mermaid
-C4Container
-Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
-Rel(cli, plugin, "writes state for")
-```
-"#,
-        );
-
-        let diagnostics = validate(&vault);
-
-        assert!(
-            diagnostics
-                .iter()
-                .any(|diag| diag.code == "unresolved-c4-relationship")
-        );
-    }
-
-    #[test]
-    fn relationship_to_c4_boundary_is_unresolved() {
-        let vault = c4_vault(
-            r#"
-```mermaid
-C4Container
-System_Boundary(system, "criv") {
-    Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
-}
-Rel(cli, system, "runs inside")
-```
-"#,
-        );
-
-        let diagnostics = validate(&vault);
-
-        assert!(
-            diagnostics
-                .iter()
-                .any(|diag| diag.code == "unresolved-c4-relationship")
-        );
-    }
-
-    #[test]
-    fn invalid_c4_level_is_reported_for_mixed_abstractions() {
-        let context_vault = c4_vault(
-            r#"
-```mermaid
-C4Context
-Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
-```
-"#,
-        );
-        let container_vault = c4_vault(
-            r#"
-```mermaid
-C4Container
-Component(parser, "C4 Parser", "Rust", "Parses Mermaid C4 blocks")
-```
-"#,
-        );
-
-        assert!(
-            validate(&context_vault)
-                .iter()
-                .any(|diag| diag.code == "invalid-c4-level")
-        );
-        assert!(
-            validate(&container_vault)
-                .iter()
-                .any(|diag| diag.code == "invalid-c4-level")
-        );
-    }
-
-    #[test]
-    fn surrounding_context_elements_are_valid_in_lower_level_diagrams() {
-        let vault = c4_vault(
-            r#"
-```mermaid
-C4Component
-Person(user, "Maintainer", "Runs checks")
-System_Ext(github, "GitHub", "Hosts repositories")
-Container(cli, "criv CLI", "Rust", "Runs local validation")
-Component(parser, "C4 Parser", "Rust", "Parses Mermaid C4 blocks")
-```
-"#,
-        );
-
-        let diagnostics = validate(&vault);
-
-        assert!(
-            diagnostics
-                .iter()
-                .all(|diag| diag.code != "invalid-c4-level")
-        );
-    }
-
-    #[test]
-    fn invalid_c4_source_placement_is_reported() {
-        let vault = c4_vault(
-            r#"
-```mermaid
-C4Container
-System_Boundary(system, "criv") {
-%% criv:source src/main.rs
-}
-```
-"#,
-        );
-
-        let diagnostics = validate(&vault);
-
-        assert!(
-            diagnostics
-                .iter()
-                .any(|diag| diag.code == "invalid-c4-source-placement")
-        );
-    }
-
-    #[test]
-    fn missing_c4_metadata_is_reported_as_warnings() {
-        let vault = c4_vault(
-            r#"
-```mermaid
-C4Container
-Container(cli, "")
-Rel(cli, cli)
-```
-"#,
-        );
-
-        let diagnostics = validate(&vault);
-
-        for code in [
-            "missing-c4-label",
-            "missing-c4-description",
-            "missing-c4-technology",
-            "missing-c4-relationship-label",
-        ] {
-            assert!(
-                diagnostics
-                    .iter()
-                    .any(|diag| diag.code == code && diag.is_warning()),
-                "missing warning {code}"
-            );
-        }
-    }
-
-    #[test]
-    fn c4_artifact_mermaid_validation_reuses_c4_rules() {
-        let vault = c4_artifact_vault(
-            "docs/architecture/02-container.c4",
-            r#"
-C4Container
-Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
-Container(cli, "Other CLI", "Rust", "Duplicates alias")
-Rel(cli, plugin, "writes state for")
-"#,
-        );
-
-        let diagnostics = validate(&vault);
-
-        for code in ["duplicate-c4-alias", "unresolved-c4-relationship"] {
-            assert!(
-                diagnostics
-                    .iter()
-                    .any(|diag| diag.code == code
-                        && diag.path == "docs/architecture/02-container.c4"),
-                "missing diagnostic {code}"
-            );
-        }
-    }
-
-    #[test]
-    fn c4_artifact_source_annotations_are_validated_as_c4_sources() {
-        let vault = c4_artifact_vault(
-            "docs/architecture/02-container.c4",
-            r#"
-C4Container
-Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
-%% criv:source src/main.rs#fn:run
-"#,
-        );
-
-        let diagnostics = validate(&vault);
-
-        assert!(diagnostics.iter().all(|diag| {
-            diag.code != "unknown-c4-directive" && diag.code != "unresolved-c4-target"
-        }));
-    }
-
-    #[test]
-    fn c4_artifact_directive_and_level_errors_are_reported() {
-        let vault = c4_artifact_vault(
-            "docs/architecture/02-container.c4",
-            r#"
-%% criv:unknown yes
-%% criv:format dot
-%% criv:generated maybe
-C4Context
-Person(user, "Maintainer", "Runs checks")
-"#,
-        );
-
-        let diagnostics = validate(&vault);
-
-        for code in [
-            "unknown-c4-directive",
-            "mismatched-c4-format",
-            "invalid-c4-generated",
-            "mismatched-c4-level",
-        ] {
-            assert!(
-                diagnostics.iter().any(|diag| diag.code == code),
-                "missing diagnostic {code}"
-            );
-        }
-    }
-
-    #[test]
-    fn c4_artifact_dot_code_file_validates_structurally() {
-        let vault = c4_artifact_vault(
-            "docs/architecture/04-code.c4",
-            r#"
-// criv:generated true
-digraph criv_code {
-  "src/main.rs#fn:run" -> "src/lib.rs#fn:helper";
-}
-"#,
-        );
-
-        let diagnostics = validate(&vault);
-
-        assert!(
-            diagnostics
-                .iter()
-                .all(|diag| diag.path != "docs/architecture/04-code.c4")
-        );
-    }
-
-    #[test]
-    fn c4_artifact_dot_requires_code_level_and_graph_body() {
-        let vault = c4_artifact_vault(
-            "docs/architecture/01-context.c4",
-            r#"
-digraph criv_code
-"#,
-        );
-
-        let diagnostics = validate(&vault);
-
-        for code in ["invalid-c4-level", "invalid-c4-dot"] {
-            assert!(
-                diagnostics.iter().any(|diag| diag.code == code),
-                "missing diagnostic {code}"
-            );
-        }
-    }
-
-    #[test]
-    fn c4_interface_drift_ignores_body_only_changes() {
-        let root = c4_interface_drift_fixture(
+    fn likec4_interface_drift_ignores_body_only_changes() {
+        let root = architecture_interface_drift_fixture(
             r#"
 pub fn run(input: String) -> usize {
   input.len()
 }
 "#,
         );
-        let previous_vault = Vault::load(&root).unwrap();
+        let previous_vault = likec4_interface_vault(&root);
         let previous_state = State::build(&root, &previous_vault).unwrap();
         fs::write(
             root.join("src/lib.rs"),
@@ -2240,27 +1738,27 @@ pub fn run(input: String) -> usize {
         )
         .unwrap();
 
-        let vault = Vault::load(&root).unwrap();
+        let vault = likec4_interface_vault(&root);
         let diagnostics = validate_with_previous_state(&vault, Some(&previous_state));
 
         assert!(
             diagnostics
                 .iter()
-                .all(|diag| diag.code != "c4-interface-drift")
+                .all(|diag| diag.code != "architecture-interface-drift")
         );
         let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn c4_interface_drift_warns_on_signature_changes() {
-        let root = c4_interface_drift_fixture(
+    fn likec4_interface_drift_warns_on_signature_changes() {
+        let root = architecture_interface_drift_fixture(
             r#"
 pub fn run(input: String) -> usize {
   input.len()
 }
 "#,
         );
-        let previous_vault = Vault::load(&root).unwrap();
+        let previous_vault = likec4_interface_vault(&root);
         let previous_state = State::build(&root, &previous_vault).unwrap();
         fs::write(
             root.join("src/lib.rs"),
@@ -2272,12 +1770,12 @@ pub fn run(input: String, fallback: usize) -> usize {
         )
         .unwrap();
 
-        let vault = Vault::load(&root).unwrap();
+        let vault = likec4_interface_vault(&root);
         let diagnostics = validate_with_previous_state(&vault, Some(&previous_state));
 
         assert!(diagnostics.iter().any(|diag| {
-            diag.code == "c4-interface-drift"
-                && diag.path == "docs/architecture/02-container.c4"
+            diag.code == "architecture-interface-drift"
+                && diag.path == "docs/architecture"
                 && diag.is_warning()
         }));
         let _ = fs::remove_dir_all(root);
@@ -2354,7 +1852,6 @@ pub fn run(input: String, fallback: usize) -> usize {
             supersedes: Vec::new(),
             superseded_by: Vec::new(),
             wiki_links: Vec::new(),
-            c4_diagrams: Vec::new(),
             frontmatter_error: None,
         }
     }
@@ -2376,38 +1873,6 @@ pub fn run(input: String, fallback: usize) -> usize {
 
     fn test_vault(notes: Vec<Note>) -> Vault {
         Vault::from_parts_for_test(notes)
-    }
-
-    fn c4_vault(diagram: &str) -> Vault {
-        let root = unique_temp_dir("criv-c4-check");
-        fs::create_dir_all(root.join("src")).unwrap();
-        fs::create_dir_all(root.join("docs")).unwrap();
-        fs::write(
-            root.join("criv.toml"),
-            r#"
-[source]
-roots = ["src"]
-"#,
-        )
-        .unwrap();
-        fs::write(root.join("src/main.rs"), "fn run() {}\n").unwrap();
-        fs::write(root.join("src/lib.rs"), "fn helper() {}\n").unwrap();
-        fs::write(
-            root.join("docs/c4.md"),
-            format!(
-                r#"---
-id: c4
-kind: doc
-title: C4
----
-
-# C4
-{diagram}
-"#
-            ),
-        )
-        .unwrap();
-        Vault::load(&root).unwrap()
     }
 
     fn source_note_vault(body: &str, target_symbols: &[&str]) -> Vault {
@@ -2458,25 +1923,7 @@ title: Source Note
         Vault::load(&root).unwrap()
     }
 
-    fn c4_artifact_vault(path: &str, contents: &str) -> Vault {
-        let root = unique_temp_dir("criv-c4-artifact-check");
-        fs::create_dir_all(root.join("src")).unwrap();
-        fs::create_dir_all(root.join("docs/architecture")).unwrap();
-        fs::write(
-            root.join("criv.toml"),
-            r#"
-[source]
-roots = ["src"]
-"#,
-        )
-        .unwrap();
-        fs::write(root.join("src/main.rs"), "fn run() {}\n").unwrap();
-        fs::write(root.join("src/lib.rs"), "fn helper() {}\n").unwrap();
-        fs::write(root.join(path), contents).unwrap();
-        Vault::load(&root).unwrap()
-    }
-
-    fn c4_interface_drift_fixture(source: &str) -> std::path::PathBuf {
+    fn architecture_interface_drift_fixture(source: &str) -> std::path::PathBuf {
         let root = unique_temp_dir("criv-c4-interface-drift");
         fs::create_dir_all(root.join("src")).unwrap();
         fs::create_dir_all(root.join("docs/architecture")).unwrap();
@@ -2489,15 +1936,20 @@ roots = ["src"]
         )
         .unwrap();
         fs::write(root.join("src/lib.rs"), source).unwrap();
-        fs::write(
-            root.join("docs/architecture/02-container.c4"),
-            r#"
-C4Container
-Container(cli, "criv CLI", "Rust", "Validates and queries the vault")
-%% criv:source src/lib.rs#fn:run
-"#,
-        )
-        .unwrap();
         root
+    }
+
+    fn likec4_interface_vault(root: &Path) -> Vault {
+        let mut vault = Vault::load(root).unwrap();
+        vault.likec4_workspace.path = "docs/architecture".into();
+        vault.likec4_workspace.model = Some(serde_json::json!({
+            "elements": [{ "id": "cli", "title": "criv CLI" }],
+            "relationships": [],
+            "sourceLinks": [{
+                "element": "cli",
+                "target": "src/lib.rs#fn:run"
+            }]
+        }));
+        vault
     }
 }

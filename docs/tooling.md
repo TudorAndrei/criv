@@ -175,10 +175,11 @@ is required. Large-workload measurement remains deferred.
 
 Obsidian and VS Code validation are hosted-CI suites rather than automatic hk
 steps. Contributors changing a companion should run its package scripts
-directly. The Obsidian companion commands are:
+directly. Run `npm ci` from the repository root first. The Obsidian companion
+commands are:
 
 ```sh
-npm --prefix .obsidian/plugins/criv audit --audit-level=high
+npm audit --workspace criv-obsidian-plugin --audit-level=high
 npm --prefix .obsidian/plugins/criv run format:check
 npm --prefix .obsidian/plugins/criv run lint
 npm --prefix .obsidian/plugins/criv test
@@ -205,7 +206,7 @@ The VS Code-compatible extension lives in `extensions/vscode-criv`. Its local
 tasks are exposed through mise and npm:
 
 ```sh
-npm --prefix extensions/vscode-criv audit --audit-level=high
+npm audit --workspace vscode-criv --audit-level=high
 npm --prefix extensions/vscode-criv run build
 npm --prefix extensions/vscode-criv run test
 npm --prefix extensions/vscode-criv run test:integration
@@ -219,14 +220,22 @@ JSON diagnostics for extension manifest and language configuration files. Its
 short temporary user-data and extension-installation paths avoid macOS IPC path
 limits. Hosted CI runs this command under Xvfb; it is not part of local hooks.
 
-The extension renders `.c4` previews locally: Mermaid C4 artifacts use Mermaid
-11, DOT Code artifacts use `@viz-js/viz`, and the preview webview uses packaged
-extension resources rather than CDN scripts. Run `criv watch --once` after
-changing extension source so generated architecture state and
-`docs/architecture/04-code.c4` stay current.
+The extension uses a read-only LikeC4 preview as the default `.c4` editor. It
+selects the named view owned by the opened file. There is no fallback view: a
+file that owns none states so and points at a file that declares a view.
+Navigating inside the
+diagram opens the file that owns the target view in the same editor group, so
+the tab tracks the diagram. Use
+**Reopen Editor With → Text Editor** to edit the DSL. The preview webview uses packaged extension
+resources and does not use a CDN or a global LikeC4 command. Run `criv watch
+--once` after architecture or extension source changes. This keeps architecture
+state current. The repository Code model and views are hand-authored under
+`docs/architecture/code/`, so watch does not replace them.
 
 `npm --prefix extensions/vscode-criv run package` and `mise run
-vscode-package` build a local `vscode-criv.vsix` without publishing. The
+vscode-package` build a local `vscode-criv.vsix` without publishing. `mise run
+vscode-install` builds that VSIX and installs it into the local editor; reload
+the window afterwards. The
 prepublish hook builds the Node.js Wasm target into
 `extensions/vscode-criv/pkg/`; the VSIX includes `criv_wasm.js` and
 `criv_wasm_bg.wasm` from that directory. If the extension reports an unavailable

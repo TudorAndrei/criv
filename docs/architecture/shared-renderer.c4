@@ -1,0 +1,40 @@
+model {
+  extend criv {
+    sharedRenderer = container 'Shared LikeC4 renderer' {
+      technology 'TypeScript, React, and LikeC4'
+      description 'Provides the compiled-model contract and the browser renderer used by both editor adapters.'
+      link ../../packages/criv-likec4/src/renderer.ts 'source'
+
+      modelContract = component 'Model contract' {
+        technology 'TypeScript'
+        description 'Defines the stable model, diagnostic, and version contract shared by editor adapters.'
+        link ../../packages/criv-likec4/src/protocol.ts 'source'
+      }
+      diagramRenderer = component 'Diagram renderer' {
+        technology 'TypeScript, React, and LikeC4'
+        description 'Mounts, navigates, and updates a LikeC4 diagram in an adapter-owned DOM element.'
+        link ../../packages/criv-likec4/src/renderer.ts 'source'
+      }
+      modelCompiler = component 'Model compiler' {
+        technology 'TypeScript and Node.js'
+        description 'Offers a Node.js API that compiles LikeC4 source into the shared model contract.'
+        link ../../packages/criv-likec4/src/node.ts 'source'
+      }
+    }
+  }
+}
+
+views {
+  global style architectureTheme
+
+  view sharedRendererComponents of criv.sharedRenderer {
+    title 'Components / Shared renderer'
+    description 'The model contract, browser renderer, and Node.js compiler in the shared package.'
+
+    include *
+    include
+      criv.sharedRenderer.diagramRenderer with {
+        navigateTo codeSharedRenderer
+      }
+  }
+}

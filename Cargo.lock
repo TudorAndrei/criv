@@ -722,6 +722,7 @@ dependencies = [
  "tree-sitter-rust",
  "tree-sitter-typescript",
  "usage-lib",
+ "wait-timeout",
 ]
 
 [[package]]

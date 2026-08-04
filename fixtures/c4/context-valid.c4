@@ -1,3 +1,0 @@
-%% criv:format mermaid
-C4Context
-Person(user, "User", "Uses criv")

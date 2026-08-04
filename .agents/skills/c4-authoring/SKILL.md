@@ -1,95 +1,107 @@
 ---
 name: c4-authoring
-description: Use when authoring or reviewing criv C4 architecture artifacts, including Mermaid C4 blocks, standalone .c4 files, source anchors, and implementation drift expectations.
+description: Use when authoring or reviewing the LikeC4 architecture workspace in docs/architecture — models, named views, source links, or architecture drift.
 metadata:
-  criv-template: blake3:0e8c167dd42491e5
+  criv-template: blake3:bae18c3c32e81fbc
 ---
 
 # C4 authoring
 
-Use this skill when creating or reviewing C4 architecture artifacts for a criv
-vault.
+`docs/architecture/` is one LikeC4 workspace. LikeC4 DSL is the only
+architecture source, and LikeC4 is the renderer.
 
-## Source Of Truth
+## 1. Pick one level
 
-C4 artifacts are text/code first. An LLM should generate text, a human should
-review the text, and `criv check` should validate it before implementation work
-depends on it. Rendered diagrams in Obsidian, VS Code, Mermaid, Merman, or other
-viewers are projections over the source text.
+Read the workspace, then choose the level the change belongs to:
 
-Standalone `.c4` files are a filetype convention, not a custom DSL. The file
-contains Mermaid C4 or DOT directly.
+- System Context — people, the system in scope, and external systems
+- Container — the runnable parts of one software system
+- Component — the responsibilities inside one container
+- Code — language modules and import relations
+- Dynamic — the order of one runtime workflow
+- Deployment — which process contains each container instance
 
-## Levels
+Declare each element once, at one level. A store that only this system writes
+is a container of the system, not a context-level element. Tag every external
+person and system with `external` and grey it in every view, so a reader sees
+the system boundary.
 
-Keep each diagram at one C4 level:
+Hosting belongs to the deployment model. An adapter depends on its host
+application through the host API; a container diagram states dependency, and a
+deployment diagram states containment.
 
-- System Context: people, the system in scope, and external systems.
-- Container: deployable or runnable parts inside one software system.
-- Component: major responsibilities inside one container.
-- Code: code elements that implement one component or a generated source graph.
+LikeC4 merges every source file in the workspace into one model. A domain file
+may contain its model declarations and the named views that explain that
+domain. This does not copy an element: declare each element and relationship
+once, then select it from any view. Keep cross-domain workflow views under
+`views/dynamic/` or another focused `views/` folder.
 
-Use Code diagrams sparingly for focused implementation stories. Do not turn a
-whole application into a hand-authored class diagram unless the artifact is an
-explicit generated source graph.
+Prefer one primary view for each domain file. A large Code domain may own more
+than one focused view when each view answers a different module question. A
+shared specification or relationship file may own no view. The editor uses the
+LikeC4 `sourcePath` of each named view, so a file preview shows only views that
+the file declares.
 
-## .c4 Files
+Done when each changed element has one model identity at one level, and each
+planned view has a stated level and the question it answers.
 
-Infer format from the first meaningful non-comment line:
+## 2. Author the view
 
-- `C4Context`, `C4Container`, or `C4Component` means Mermaid C4.
-- `digraph`, `graph`, `strict digraph`, or `strict graph` means DOT.
+Name an element with a noun, and put a qualifier such as "optional" in the
+description or a tag. Select shared elements with LikeC4 view rules rather than
+copying model declarations. Put repeated styles and selections in global style
+or predicate groups. Extend a view only when the new view is a more detailed
+form of the base view.
 
-Use filename-derived levels:
+A relationship label reads as *Source, label, Destination*: start it with a
+capital letter and a present-tense verb, and end it on the object rather than a
+preposition. Carry a `technology` when the relationship crosses a process, a
+language, or a storage boundary.
 
-- `context.c4` or `01-context.c4`
-- `container.c4` or `02-container.c4`
-- `component.c4`, `components.c4`, or `03-components.c4`
-- `code.c4` or `04-code.c4`
+```likec4
+model {
+  criv.vscodeExtension -> criv.cli 'Starts check and refresh commands' {
+    technology 'Child process'
+  }
+  validator = component 'Validation engine' {
+    link ../../src/check.rs 'source'
+  }
+}
+```
 
-Do not add extra required metadata lines for information that the file already
-communicates. `criv:format` is optional and only asserts the inferred format.
+A `source` link resolves from `docs/architecture/` and accepts a criv file,
+line, symbol, or pattern selector. Point it at a stable module or public
+interface.
 
-## Mermaid C4 Rules
+Done when every view is readable on its own, every domain file opens its owned
+view, and every element that claims an implementation boundary has one
+resolvable source link.
 
-Every element should have:
+## 3. Keep Code architecture at module level
 
-- a stable alias;
-- a readable name;
-- a short responsibility;
-- technology when the level is Container or Component and the technology is
-  known.
+A Code node is a language module: a Rust crate or `mod`, a TypeScript or
+JavaScript module or namespace, a Python module or package, a Go package.
+Files and symbols are source locations for those modules.
 
-Every relationship should have a label with a meaningful verb. Prefer small,
-readable diagrams over large mixed-abstraction canvases.
+A hand-authored Code model must be a true roll-up of the component model: when
+a module in component A imports a module in component B, the component model
+states a relationship from A to B. Keep cross-cutting helpers, re-export
+barrels, and bundler shims outside the architecture, and name them in a comment
+at the top of the Code model file.
 
-## Source Anchors
+When `[architecture.code]` names a Code file, `criv watch --once` owns that
+file, and the way to change it is to change source boundaries or generator
+behaviour. Enable that setting when the roll-up cost outgrows its value.
 
-Use `criv:source` anchors when an element maps to implementation.
+Done when every Code node is a language module, every cross-component import
+has a component-level relationship, and each view is focused by language or
+another bounded module concern.
 
-Prefer stable interface-bearing anchors:
+## 4. Validate
 
-- public or exported functions and methods;
-- structs, enums, classes, and interfaces;
-- modules, components, or files that represent a real architectural boundary.
+Run `criv watch --once`, then `criv check`, as the `checking-drift` skill
+describes. Open each changed view in the editor preview and confirm it renders
+the boundary you intended.
 
-Avoid anchoring high-level C4 elements to private helper internals unless the
-diagram is a narrow Code-level view. Body-only refactors should not require a
-C4 update when the interface is unchanged, but input, output, field, variant, or
-exported member changes should trigger a diagram review.
-
-## Review Checklist
-
-Before finishing:
-
-- The title states the diagram level and scope.
-- The diagram uses one abstraction level.
-- Elements have names and responsibilities.
-- Relationships are directional and labelled.
-- Source anchors point at real implementation symbols when the diagram claims to
-  describe existing code.
-- The artifact remains useful as text without opening a visual renderer.
-
-Inspect existing diagrams with `criv query c4-elements <note-id>` and `criv
-query c4-relationships <note-id>`. Generate a focused code diagram with `criv
-query c4-code <path-glob>` when it would clarify an implementation boundary.
+The work is complete when the vault is green, every source link resolves, and
+every changed view renders its intended boundary.
