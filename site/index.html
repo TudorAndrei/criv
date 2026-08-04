@@ -121,6 +121,14 @@ criv check</code></pre>
 
     <script>
       const architectureDialog = document.querySelector('#architecture-dialog');
+      const architectureView = architectureDialog.querySelector('likec4-view');
+      const darkMode = window.matchMedia('(prefers-color-scheme: dark)');
+      const updateArchitectureTheme = () => {
+        architectureView.setAttribute('color-scheme', darkMode.matches ? 'dark' : 'light');
+      };
+
+      updateArchitectureTheme();
+      darkMode.addEventListener('change', updateArchitectureTheme);
       document.querySelector('#architecture-open').addEventListener('click', () => {
         architectureDialog.showModal();
       });
