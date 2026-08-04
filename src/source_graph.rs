@@ -111,7 +111,7 @@ pub(crate) struct SymbolRange {
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub(crate) struct SymbolId {
     pub(crate) path: String,
-    pub(crate) name: String,
+    name: String,
     selector: String,
 }
 
