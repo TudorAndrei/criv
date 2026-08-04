@@ -33,4 +33,5 @@ creates ADRs. It must not invent a decision history.
 - [Home](https://tudorandrei.github.io/criv/)
 - [Get started](https://tudorandrei.github.io/criv/getting-started/)
 - [ADR discovery](https://tudorandrei.github.io/criv/adr-discovery/)
+- [Documentation](https://tudorandrei.github.io/criv/docs/)
 - [Repository](https://github.com/TudorAndrei/criv)

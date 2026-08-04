@@ -67,3 +67,4 @@ criv check
 - [Get started](https://tudorandrei.github.io/criv/getting-started/): setup guide
 - [ADR discovery](https://tudorandrei.github.io/criv/adr-discovery/): agent workflow for ADR candidates
 - [Full agent guide](https://tudorandrei.github.io/criv/llms-full.txt): complete setup and ADR workflow
+- [Documentation](https://tudorandrei.github.io/criv/docs/): generated repository documentation

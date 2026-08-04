@@ -6,6 +6,10 @@ on:
       - main
     paths:
       - site/**
+      - docs/**
+      - package.json
+      - package-lock.json
+      - scripts/prepare-docs-site.mjs
       - .github/workflows/pages.yml
   workflow_dispatch:
 
@@ -37,6 +41,24 @@ jobs:
 
       - name: Configure Pages
         uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
+
+      - name: Install JavaScript dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Prepare documentation site
+        run: node scripts/prepare-docs-site.mjs
+
+      - name: Generate C4 web component
+        run: node_modules/.bin/likec4 gen webcomponent --output .site-build/docs-book/likec4-webcomponent.js docs/architecture
+
+      - name: Install mise
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        with:
+          install: false
+          cache: true
+
+      - name: Build documentation
+        run: mise x cargo:mdbook@latest -- mdbook build .site-build/docs-book
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0
