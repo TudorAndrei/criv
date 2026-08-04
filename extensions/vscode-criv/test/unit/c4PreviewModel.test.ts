@@ -7,22 +7,27 @@ const views = [
   {
     id: "codeVscodePreview",
     title: "Code / VS Code / Preview",
-    sourcePath: "model/code/vscode.c4",
+    sourcePath: "code/vscode.c4",
+  },
+  {
+    id: "codeVscodeState",
+    title: "Code / VS Code / Workspace state",
+    sourcePath: "code/vscode.c4",
   },
   {
     id: "cliComponents",
     title: "Components / CLI",
-    sourcePath: "model/cli.c4",
+    sourcePath: "cli.c4",
   },
   {
     id: "obsidianComponents",
     title: "Components / Obsidian",
-    sourcePath: "model/obsidian.c4",
+    sourcePath: "obsidian.c4",
   },
   {
     id: "index",
     title: "Overview / System context",
-    sourcePath: "model/landscape.c4",
+    sourcePath: "systems.c4",
   },
   {
     id: "unowned",
@@ -31,21 +36,30 @@ const views = [
 ];
 
 test("selects the state view owned by the opened C4 file", () => {
-  assert.equal(preferredC4ViewId("docs/architecture/model/landscape.c4", views), "index");
+  assert.equal(preferredC4ViewId("docs/architecture/systems.c4", views), "index");
 });
 
-test("selects a component view from its model scope file", () => {
-  assert.equal(preferredC4ViewId("docs/architecture/model/cli.c4", views), "cliComponents");
-  assert.equal(
-    preferredC4ViewId("docs/architecture/model/obsidian.c4", views),
-    "obsidianComponents",
-  );
+test("selects a component view from its domain file", () => {
+  assert.equal(preferredC4ViewId("docs/architecture/cli.c4", views), "cliComponents");
+  assert.equal(preferredC4ViewId("docs/architecture/obsidian.c4", views), "obsidianComponents");
 });
 
 test("selects a Code view from its module model file", () => {
   assert.equal(
-    preferredC4ViewId("docs/architecture/model/code/vscode.c4", views),
+    preferredC4ViewId("docs/architecture/code/vscode.c4", views),
     "codeVscodePreview",
+  );
+});
+
+test("keeps navigation in a file that owns more than one focused view", () => {
+  assert.equal(
+    c4NavigationTarget(
+      "docs/architecture/code/vscode.c4",
+      "docs/architecture",
+      "codeVscodeState",
+      views,
+    ),
+    undefined,
   );
 });
 
@@ -55,13 +69,12 @@ test("returns no preference when no state view belongs to the file", () => {
 
 test("offers no view for a file that owns none", () => {
   assert.equal(preferredC4ViewId("docs/architecture/specification.c4", views), undefined);
-  assert.equal(preferredC4ViewId("docs/architecture/model/relationships.c4", views), undefined);
 });
 
 test("navigation targets the file that owns the selected view", () => {
   assert.equal(
-    c4NavigationTarget("docs/architecture/model/cli.c4", "docs/architecture", "index", views),
-    "docs/architecture/model/landscape.c4",
+    c4NavigationTarget("docs/architecture/cli.c4", "docs/architecture", "index", views),
+    "docs/architecture/systems.c4",
   );
   assert.equal(
     c4NavigationTarget(
@@ -70,14 +83,14 @@ test("navigation targets the file that owns the selected view", () => {
       "cliComponents",
       views,
     ),
-    "docs/architecture/model/cli.c4",
+    "docs/architecture/cli.c4",
   );
 });
 
 test("navigation stays put when the open document already owns the view", () => {
   assert.equal(
     c4NavigationTarget(
-      "docs/architecture/model/cli.c4",
+      "docs/architecture/cli.c4",
       "docs/architecture",
       "cliComponents",
       views,
@@ -86,7 +99,7 @@ test("navigation stays put when the open document already owns the view", () => 
   );
   assert.equal(
     c4NavigationTarget(
-      "./docs/architecture/model/cli.c4",
+      "./docs/architecture/cli.c4",
       "docs/architecture",
       "cliComponents",
       views,
@@ -97,8 +110,8 @@ test("navigation stays put when the open document already owns the view", () => 
 
 test("navigation stops when the view or the workspace has no path", () => {
   assert.equal(
-    c4NavigationTarget("docs/architecture/model/cli.c4", "docs/architecture", "unowned", views),
+    c4NavigationTarget("docs/architecture/cli.c4", "docs/architecture", "unowned", views),
     undefined,
   );
-  assert.equal(c4NavigationTarget("docs/architecture/model/cli.c4", "", "index", views), undefined);
+  assert.equal(c4NavigationTarget("docs/architecture/cli.c4", "", "index", views), undefined);
 });

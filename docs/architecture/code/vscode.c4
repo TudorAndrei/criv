@@ -166,3 +166,29 @@ model {
   criv.vscodeExtension.vscodeExplorer.treeModule -> criv.vscodeExtension.vscodeState.stateModelModule 'Reads state snapshots'
   criv.vscodeExtension.vscodeExplorer.treeModule -> criv.vscodeExtension.vscodeState.wasmModule 'Resolves tree selectors'
 }
+
+views {
+  global style architectureTheme
+
+  view codeVscodePreview of criv.vscodeExtension.vscodePreview {
+    title 'Code / VS Code / Preview'
+    description 'The TypeScript modules behind the custom architecture preview editor.'
+
+    include *
+    include criv.vscodeExtension.vscodeController.*
+    include criv.vscodeExtension.vscodeState.stateStoreModule
+    include criv.vscodeExtension.vscodeCommands.commandsModule
+    include criv.sharedRenderer.diagramRenderer.*
+    include criv.sharedRenderer.modelContract.*
+  }
+
+  view codeVscodeState of criv.vscodeExtension.vscodeState {
+    title 'Code / VS Code / Workspace state'
+    description 'The TypeScript modules that load, validate, and project criv state.'
+
+    include *
+    include criv.vscodeExtension.vscodeController.*
+    include criv.vscodeExtension.vscodeNavigation.*
+    include criv.vscodeExtension.vscodeExplorer.*
+  }
+}

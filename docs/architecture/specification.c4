@@ -53,3 +53,14 @@ specification {
     }
   }
 }
+
+global {
+  styleGroup architectureTheme {
+    style element.tag = #external {
+      color muted
+    }
+    style element.tag = #optional {
+      color muted
+    }
+  }
+}

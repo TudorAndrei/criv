@@ -1,8 +1,8 @@
 model {
   extend criv {
     vscodeExtension = container 'VS Code companion extension' {
-      technology 'TypeScript and Rust WebAssembly'
-      description 'Runs criv workflows and shows state, diagnostics, source links, and LikeC4 previews in VS Code.'
+      technology 'TypeScript and VS Code API'
+      description 'Runs criv workflows and shows state, diagnostics, source links, and LikeC4 previews in VS Code-compatible editors.'
       link ../../extensions/vscode-criv/src/extension.ts 'source'
 
       vscodeController = component 'Extension controller' {
@@ -16,13 +16,13 @@ model {
         link ../../extensions/vscode-criv/src/c4Preview.ts 'source'
       }
       vscodeState = component 'Workspace state store' {
-        technology 'TypeScript and Rust WebAssembly'
-        description 'Loads, validates, and publishes the current criv state to extension features.'
+        technology 'TypeScript'
+        description 'Loads state and publishes projected snapshots to extension features.'
         link ../../extensions/vscode-criv/src/stateStore.ts 'source'
       }
       vscodeNavigation = component 'Source navigation adapter' {
         technology 'TypeScript and VS Code API'
-        description 'Provides source targets, links, hover information, and document navigation.'
+        description 'Provides source links, hovers, definitions, references, and target navigation.'
         link ../../extensions/vscode-criv/src/languageFeatures.ts 'source'
       }
       vscodeDiagnostics = component 'Diagnostics adapter' {
@@ -32,7 +32,7 @@ model {
       }
       vscodeCommands = component 'CLI command runner' {
         technology 'TypeScript and Node.js child processes'
-        description 'Registers editor commands and runs the criv binary in the workspace.'
+        description 'Runs trusted criv commands in the workspace and bounds their captured output.'
         link ../../extensions/vscode-criv/src/commandRunner.ts 'source'
       }
       vscodeExplorer = component 'Vault explorer' {
@@ -41,5 +41,28 @@ model {
         link ../../extensions/vscode-criv/src/tree.ts 'source'
       }
     }
+  }
+}
+
+views {
+  global style architectureTheme
+
+  view vscodeComponents of criv.vscodeExtension {
+    title 'Components / VS Code'
+    description 'How the extension runs criv, projects state, reports diagnostics, and draws architecture previews.'
+
+    include *
+    include criv.cli
+    include criv.stateStore
+    include criv.stateProjection
+    include criv.sharedRenderer
+    include
+      criv.vscodeExtension.vscodePreview with {
+        navigateTo codeVscodePreview
+      }
+    include
+      criv.vscodeExtension.vscodeState with {
+        navigateTo codeVscodeState
+      }
   }
 }

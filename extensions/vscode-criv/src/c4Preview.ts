@@ -90,7 +90,7 @@ class C4PreviewSurface {
     if (!viewId) {
       webview.html = buildC4PreviewStatusHtml(
         webview.cspSource,
-        `${relativePath} declares no named view. Open a file under ${model.workspace}/views/ to see a diagram.`,
+        `${relativePath} declares no named view. Open an architecture file that declares a named view to see a diagram.`,
       );
       return;
     }

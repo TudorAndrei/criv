@@ -26,3 +26,16 @@ model {
   criv.sharedRenderer.diagramRenderer.rendererModule -> criv.sharedRenderer.modelContract.protocolModule 'Reads the model contract'
   criv.sharedRenderer.modelCompiler.nodeModule -> criv.sharedRenderer.modelContract.protocolModule 'Emits the model contract'
 }
+
+views {
+  global style architectureTheme
+
+  view codeSharedRenderer of criv.sharedRenderer.diagramRenderer {
+    title 'Code / Shared / LikeC4 renderer'
+    description 'The renderer module and the contract it shares with both editor adapters.'
+
+    include *
+    include criv.sharedRenderer.modelContract.*
+    include criv.sharedRenderer.modelCompiler.*
+  }
+}

@@ -28,3 +28,18 @@ model {
   criv.obsidianPlugin.obsidianController.mainModule -> criv.sharedRenderer.modelContract.protocolModule 'Reads the model contract'
   criv.obsidianPlugin.obsidianWasm.wasmModule -> criv.obsidianPlugin.obsidianState.coreModule 'Maps validated state to editor snapshots'
 }
+
+views {
+  global style architectureTheme
+
+  view codeObsidianAdapter of criv.obsidianPlugin.obsidianController {
+    title 'Code / Obsidian / Adapter'
+    description 'The TypeScript modules that connect Obsidian to state and the renderer.'
+
+    include *
+    include criv.obsidianPlugin.obsidianState.*
+    include criv.obsidianPlugin.obsidianWasm.*
+    include criv.sharedRenderer.diagramRenderer.*
+    include criv.sharedRenderer.modelContract.*
+  }
+}

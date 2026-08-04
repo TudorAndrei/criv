@@ -1,15 +1,17 @@
 views {
-  dynamic view stateConsumption {
-    title 'Dynamic / Editors / Opening a C4 preview'
-    description 'The order of events when a maintainer opens a C4 file in VS Code.'
+  global style architectureTheme
 
-    maintainer -> criv.vscodeExtension.vscodeController 'Opens a .c4 file'
-    criv.vscodeExtension.vscodeController -> criv.vscodeExtension.vscodePreview 'Opens the custom editor'
-    criv.vscodeExtension.vscodePreview -> criv.vscodeExtension.vscodeState 'Requests the compiled model'
+  dynamic view stateConsumption {
+    title 'Dynamic / Editors / Open an architecture view'
+    description 'How VS Code opens the named view owned by one file without parsing LikeC4 source.'
+
+    maintainer -> criv.vscodeExtension.vscodePreview 'Opens an architecture file that owns a view'
+    criv.vscodeExtension.vscodePreview -> criv.vscodeExtension.vscodeState 'Requests the current architecture model'
     criv.vscodeExtension.vscodeState -> criv.stateStore 'Reads the published state'
-    criv.stateStore -> criv.vscodeExtension.vscodeState 'Returns the state envelope'
-    criv.vscodeExtension.vscodeState -> criv.vscodeExtension.vscodePreview 'Returns the compiled C4 model'
-    criv.vscodeExtension.vscodePreview -> criv.sharedRenderer.diagramRenderer 'Mounts the selected view'
-    criv.sharedRenderer.diagramRenderer -> criv.vscodeExtension.vscodePreview 'Reports the navigated view'
+    criv.vscodeExtension.vscodeState -> criv.stateProjection 'Validates and projects the state'
+    criv.stateProjection -> criv.vscodeExtension.vscodeState 'Returns the architecture model and view ownership'
+    criv.vscodeExtension.vscodeState -> criv.vscodeExtension.vscodePreview 'Returns the compiled model'
+    criv.vscodeExtension.vscodePreview -> criv.sharedRenderer.diagramRenderer 'Mounts the file-owned named view'
+    criv.sharedRenderer.diagramRenderer -> criv.vscodeExtension.vscodePreview 'Reports view navigation'
   }
 }

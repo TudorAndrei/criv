@@ -38,11 +38,10 @@ The generator does not make nodes for files, classes, functions, methods, or
 calls. A file is only a source location for a module. Each language gets a
 focused named view. There is no full Code view.
 
-This repository keeps hand-authored module models under
-`docs/architecture/model/code/` and focused Code views under
-`docs/architecture/views/code/`. It does not enable `[architecture.code]`.
-Each view explains one component or workflow instead of copying the complete
-source index.
+This repository keeps hand-authored module models and their focused views under
+`docs/architecture/code/`. It does not enable `[architecture.code]`. Each view
+explains one component or workflow instead of copying the complete source
+index.
 
 A hand-authored Code model must stay a true roll-up of the component model. If
 a module in component A imports a module in component B, the component model
@@ -50,22 +49,26 @@ must also show a relationship from A to B. Cross-cutting helper modules,
 re-export barrels, and bundler shims stay outside the architecture; name them
 in a comment at the top of the Code model file.
 
-The workspace has one LikeC4 project. Model files hold elements and
-relationships only. View files hold named views only, and each view file owns
-one primary named view. This ownership lets an editor select the correct
-preview from the opened file path. The folders are:
+The workspace has one LikeC4 project. LikeC4 merges every source file into one
+model. A domain file declares its elements and relationships once and also owns
+the primary named views that explain that domain. A large Code domain can own
+more than one focused view. Cross-domain runtime workflows stay in separate
+view files. This ownership lets an editor select the correct preview from the
+opened file path without copying model declarations.
 
 ```text
 docs/architecture/
-  specification.c4        element kinds, tags, and shared styles
-  model/                  people, systems, containers, and components
-  model/code/             language modules and import relations
-  model/deployment.c4     deployment nodes and container instances
-  views/overview/         System context and Container views
-  views/components/       one Component view for each container
-  views/code/             focused Code views
-  views/dynamic/          runtime sequences
-  views/deployment/       where each container runs
+  specification.c4        element kinds, tags, and global style groups
+  systems.c4              people, systems, and the System Context view
+  cli.c4                  CLI components and their primary view
+  interactions.c4         cross-container relationships and Container view
+  deployment.c4           deployment nodes and Deployment views
+  obsidian.c4             Obsidian components and their primary view
+  vscode.c4               VS Code components and their primary view
+  shared-renderer.c4      renderer components and their primary view
+  state-projection.c4     WebAssembly components and their primary view
+  code/                   language modules and focused Code views
+  views/dynamic/          cross-domain runtime sequences
 ```
 
 Scoped views provide System Context to Container to Component navigation.
@@ -169,6 +172,11 @@ file without parsing `.c4` source. The shared renderer handles LikeC4
 `onNavigateTo` events and reports the selected view to the host control. VS
 Code remembers that selection across state refreshes.
 
+There is no fallback diagram. A domain file opens the named views that it owns.
+A shared file such as `specification.c4` can own no view and shows an explicit
+status message. The status message points to another architecture file that
+declares a named view; it does not assume that every view is under `views/`.
+
 VS Code registers the read-only preview as the default `.c4` editor; **Reopen
 Editor With → Text Editor** exposes the DSL. The repository recommends the
 official `likec4.likec4-vscode` extension for DSL language services and maps
@@ -190,9 +198,9 @@ version and run `npm ci`. Normal validation can then run without network
 access. CI must run the Rust workspace tests, the two editor test suites,
 `criv check`, and `npm audit`.
 
-The 2026-08-04 implementation measurements used Node.js 26.5.1 on an Apple arm64 development
-host and the current repository model with 57 elements, 12 views, and 54 source
-links:
+The 2026-08-04 implementation measurements used Node.js 26.5.1 on an Apple
+arm64 development host and the repository model that existed during the test.
+Architecture changes can change its element, view, and source-link counts:
 
 | Measure | Result |
 | --- | ---: |

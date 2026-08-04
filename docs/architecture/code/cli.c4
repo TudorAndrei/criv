@@ -1,0 +1,328 @@
+// Code architecture for the criv CLI. Every node is a Rust module, and every
+// relation is an import relation between modules. `criv::util` is a
+// cross-cutting helper module and stays outside the architecture.
+model {
+  extend criv.cli.commandInterface {
+    rustMain = module 'criv::main' {
+      technology 'Rust'
+      description 'Parses command-line arguments and reports process results.'
+      link ../../src/main.rs 'source'
+    }
+    rustCriv = module 'criv' {
+      technology 'Rust'
+      description 'Exposes the library API and routes each operation to its workflow.'
+      link ../../src/lib.rs 'source'
+    }
+  }
+
+  extend criv.cli.scaffoldInstaller {
+    rustInit = module 'criv::init' {
+      technology 'Rust'
+      description 'Writes the vault scaffold and canonical configuration.'
+      link ../../src/init.rs 'source'
+    }
+    rustGeneratedSkills = module 'criv::generated_skills' {
+      technology 'Rust'
+      description 'Installs and inspects the canonical generated skill inventory.'
+      link ../../src/generated_skills.rs 'source'
+    }
+  }
+
+  extend criv.cli.vaultModel {
+    rustVault = module 'criv::vault' {
+      technology 'Rust'
+      description 'Builds the in-memory repository vault from documents and source data.'
+      link ../../src/vault.rs 'source'
+    }
+    rustC4 = module 'criv::c4' {
+      technology 'Rust'
+      description 'Defines C4 artifact data and source handling.'
+      link ../../src/c4.rs 'source'
+    }
+    rustConfig = module 'criv::config' {
+      technology 'Rust'
+      description 'Reads and validates the canonical criv configuration.'
+      link ../../src/config.rs 'source'
+    }
+  }
+
+  extend criv.cli.repositoryHistory {
+    rustGit = module 'criv::git' {
+      technology 'Rust and git2'
+      description 'Holds the embedded Git boundary for repository history and change sets.'
+      link ../../src/git.rs 'source'
+    }
+  }
+
+  extend criv.cli.architectureService {
+    rustLikeC4 = module 'criv::likec4' {
+      technology 'Rust'
+      description 'Runs the LikeC4 bridge and returns models and diagnostics.'
+      link ../../src/likec4.rs 'source'
+    }
+  }
+
+  extend criv.cli.sourceIntelligence {
+    rustSourceIndex = module 'criv::source_index' {
+      technology 'Rust'
+      description 'Indexes repository source paths for one-shot and live workflows.'
+      link ../../src/source_index.rs 'source'
+    }
+    rustSourcePaths = module 'criv::source_paths' {
+      technology 'Rust'
+      description 'Selects and reads source paths from configured roots.'
+      link ../../src/source_paths.rs 'source'
+    }
+    rustSourceGraph = module 'criv::source_graph' {
+      technology 'Rust and tree-sitter'
+      description 'Extracts language modules, imports, and symbols from indexed sources.'
+      link ../../src/source_graph.rs 'source'
+    }
+    rustStructural = module 'criv::structural' {
+      technology 'Rust and ast-grep'
+      description 'Matches structural patterns against parsed source files.'
+      link ../../src/structural.rs 'source'
+    }
+  }
+
+  extend criv.cli.governanceEngine {
+    rustCheck = module 'criv::check' {
+      technology 'Rust'
+      description 'Validates the loaded vault and produces structured diagnostics.'
+      link ../../src/check.rs 'source'
+    }
+    rustPolicyScan = module 'criv::policy_scan' {
+      technology 'Rust'
+      description 'Evaluates configured policy patterns against repository content.'
+      link ../../src/policy_scan.rs 'source'
+    }
+    rustAdr = module 'criv::adr' {
+      technology 'Rust'
+      description 'Resolves effective decision governance for each source scope.'
+      link ../../src/adr.rs 'source'
+    }
+    rustSourceReconcile = module 'criv::source_reconcile' {
+      technology 'Rust'
+      description 'Reconciles renamed and deleted source scopes against decisions.'
+      link ../../src/source_reconcile.rs 'source'
+    }
+  }
+
+  extend criv.cli.governanceEngine {
+    rustEnforce = module 'criv::enforce' {
+      technology 'Rust'
+      description 'Selects the change scope for each enforcement stage and fails closed.'
+      link ../../src/enforce.rs 'source'
+    }
+  }
+
+  extend criv.cli.refreshCoordinator {
+    rustWatch = module 'criv::watch' {
+      technology 'Rust and notify'
+      description 'Receives file changes and schedules incremental refresh sessions.'
+      link ../../src/watch.rs 'source'
+    }
+    rustRefresh = module 'criv::refresh' {
+      technology 'Rust'
+      description 'Coordinates load, validation, architecture output, and state publication.'
+      link ../../src/refresh.rs 'source'
+    }
+  }
+
+  extend criv.cli.statePublisher {
+    rustState = module 'criv::state' {
+      technology 'Rust and serde'
+      description 'Builds and serializes the validated repository state envelope.'
+      link ../../src/state.rs 'source'
+    }
+    rustSnapshots = module 'criv::snapshots' {
+      technology 'Rust and blake3'
+      description 'Publishes and retains immutable content-addressed state snapshots.'
+      link ../../src/snapshots.rs 'source'
+    }
+  }
+
+  extend criv.cli.knowledgeQueries {
+    rustQuery = module 'criv::query' {
+      technology 'Rust'
+      description 'Answers typed knowledge graph questions about the vault.'
+      link ../../src/query.rs 'source'
+    }
+    rustSearch = module 'criv::search' {
+      technology 'Rust'
+      description 'Runs text and structural searches over indexed sources.'
+      link ../../src/search.rs 'source'
+    }
+  }
+
+  extend criv.cli.architectureService {
+    rustArchitecture = module 'criv::architecture' {
+      technology 'Rust'
+      description 'Controls optional publication of generated Code architecture.'
+      link ../../src/architecture.rs 'source'
+    }
+    rustC4Code = module 'criv::c4_code' {
+      technology 'Rust and LikeC4'
+      description 'Serializes an indexed module graph as LikeC4 source.'
+      link ../../src/c4_code.rs 'source'
+    }
+  }
+
+  // Command routing.
+  criv.cli.commandInterface.rustMain -> criv.cli.commandInterface.rustCriv 'Calls the library API'
+  criv.cli.commandInterface.rustCriv -> criv.cli.scaffoldInstaller.rustInit 'Installs the vault scaffold'
+  criv.cli.commandInterface.rustCriv -> criv.cli.vaultModel.rustVault 'Runs one-shot load operations'
+  criv.cli.commandInterface.rustCriv -> criv.cli.refreshCoordinator.rustWatch 'Starts watch sessions'
+  criv.cli.commandInterface.rustCriv -> criv.cli.refreshCoordinator.rustRefresh 'Runs one-shot refresh sessions'
+  criv.cli.commandInterface.rustCriv -> criv.cli.governanceEngine.rustCheck 'Runs one-shot checks'
+  criv.cli.commandInterface.rustCriv -> criv.cli.governanceEngine.rustEnforce 'Runs staged enforcement'
+  criv.cli.commandInterface.rustCriv -> criv.cli.knowledgeQueries.rustQuery 'Sends query requests'
+  criv.cli.commandInterface.rustCriv -> criv.cli.knowledgeQueries.rustSearch 'Sends search requests'
+
+  // Refresh pipeline.
+  criv.cli.refreshCoordinator.rustWatch -> criv.cli.refreshCoordinator.rustRefresh 'Schedules refresh sessions'
+  criv.cli.refreshCoordinator.rustWatch -> criv.cli.sourceIntelligence.rustSourceIndex 'Updates the live source index'
+  criv.cli.refreshCoordinator.rustWatch -> criv.cli.vaultModel.rustConfig 'Reads the watch configuration'
+  criv.cli.refreshCoordinator.rustRefresh -> criv.cli.vaultModel.rustVault 'Loads the repository model'
+  criv.cli.refreshCoordinator.rustRefresh -> criv.cli.vaultModel.rustConfig 'Reads the refresh configuration'
+  criv.cli.refreshCoordinator.rustRefresh -> criv.cli.sourceIntelligence.rustSourceIndex 'Updates the live source index'
+  criv.cli.refreshCoordinator.rustRefresh -> criv.cli.sourceIntelligence.rustSourceGraph 'Rebuilds changed source relations'
+  criv.cli.refreshCoordinator.rustRefresh -> criv.cli.governanceEngine.rustCheck 'Validates the loaded vault'
+  criv.cli.refreshCoordinator.rustRefresh -> criv.cli.architectureService.rustArchitecture 'Requests configured architecture output'
+  criv.cli.refreshCoordinator.rustRefresh -> criv.cli.statePublisher.rustState 'Publishes the validated state'
+
+  // Vault loading.
+  criv.cli.vaultModel.rustVault -> criv.cli.vaultModel.rustC4 'Creates C4 artifacts'
+  criv.cli.vaultModel.rustVault -> criv.cli.vaultModel.rustConfig 'Reads the vault configuration'
+  criv.cli.vaultModel.rustVault -> criv.cli.architectureService.rustLikeC4 'Compiles C4 sources'
+  criv.cli.vaultModel.rustVault -> criv.cli.sourceIntelligence.rustSourceIndex 'Indexes configured sources'
+  criv.cli.vaultModel.rustVault -> criv.cli.sourceIntelligence.rustSourceGraph 'Builds module and import relations'
+
+  // Source analysis.
+  criv.cli.sourceIntelligence.rustSourceIndex -> criv.cli.sourceIntelligence.rustSourcePaths 'Selects and reads source paths'
+  criv.cli.sourceIntelligence.rustSourceIndex -> criv.cli.vaultModel.rustConfig 'Reads the configured source roots'
+  criv.cli.sourceIntelligence.rustSourceGraph -> criv.cli.sourceIntelligence.rustSourcePaths 'Reads indexed source content'
+
+  // Validation and enforcement.
+  criv.cli.governanceEngine.rustCheck -> criv.cli.vaultModel.rustVault 'Validates repository artifacts'
+  criv.cli.governanceEngine.rustCheck -> criv.cli.vaultModel.rustC4 'Validates C4 artifacts'
+  criv.cli.governanceEngine.rustCheck -> criv.cli.vaultModel.rustConfig 'Reads the check configuration'
+  criv.cli.governanceEngine.rustCheck -> criv.cli.governanceEngine.rustPolicyScan 'Evaluates policy patterns'
+  criv.cli.governanceEngine.rustCheck -> criv.cli.repositoryHistory.rustGit 'Reads changed files and history'
+  criv.cli.governanceEngine.rustCheck -> criv.cli.statePublisher.rustState 'Reads the previous published state'
+  criv.cli.governanceEngine.rustCheck -> criv.cli.scaffoldInstaller.rustGeneratedSkills 'Checks the generated skill inventory'
+  criv.cli.governanceEngine.rustPolicyScan -> criv.cli.sourceIntelligence.rustStructural 'Matches structural patterns'
+  criv.cli.governanceEngine.rustPolicyScan -> criv.cli.vaultModel.rustVault 'Reads scanned vault content'
+  criv.cli.governanceEngine.rustAdr -> criv.cli.vaultModel.rustVault 'Reads decisions'
+  criv.cli.governanceEngine.rustAdr -> criv.cli.vaultModel.rustConfig 'Reads the decision configuration'
+  criv.cli.governanceEngine.rustAdr -> criv.cli.repositoryHistory.rustGit 'Reads decision history'
+  criv.cli.governanceEngine.rustAdr -> criv.cli.governanceEngine.rustSourceReconcile 'Reconciles governed source scopes'
+  criv.cli.governanceEngine.rustSourceReconcile -> criv.cli.repositoryHistory.rustGit 'Reads renames and deletions'
+  criv.cli.governanceEngine.rustSourceReconcile -> criv.cli.vaultModel.rustVault 'Reads governed source references'
+  criv.cli.governanceEngine.rustEnforce -> criv.cli.governanceEngine.rustCheck 'Runs the staged checks'
+  criv.cli.governanceEngine.rustEnforce -> criv.cli.governanceEngine.rustPolicyScan 'Runs the staged policy scan'
+  criv.cli.governanceEngine.rustEnforce -> criv.cli.governanceEngine.rustAdr 'Reads effective governance'
+  criv.cli.governanceEngine.rustEnforce -> criv.cli.governanceEngine.rustSourceReconcile 'Fails closed on stale scopes'
+  criv.cli.governanceEngine.rustEnforce -> criv.cli.repositoryHistory.rustGit 'Selects the staged change scope'
+  criv.cli.governanceEngine.rustEnforce -> criv.cli.vaultModel.rustVault 'Loads the changed vault scope'
+
+  // State publication.
+  criv.cli.statePublisher.rustState -> criv.cli.vaultModel.rustVault 'Builds the state envelope'
+  criv.cli.statePublisher.rustState -> criv.cli.vaultModel.rustC4 'Serializes C4 artifacts'
+  criv.cli.statePublisher.rustState -> criv.cli.sourceIntelligence.rustSourceGraph 'Serializes source relations'
+  criv.cli.statePublisher.rustState -> criv.cli.sourceIntelligence.rustStructural 'Serializes structural matches'
+  criv.cli.statePublisher.rustState -> criv.cli.statePublisher.rustSnapshots 'Publishes retained snapshots'
+
+  // Query and search.
+  criv.cli.knowledgeQueries.rustQuery -> criv.cli.vaultModel.rustVault 'Resolves graph questions'
+  criv.cli.knowledgeQueries.rustQuery -> criv.cli.sourceIntelligence.rustSourceIndex 'Reads indexed sources'
+  criv.cli.knowledgeQueries.rustQuery -> criv.cli.sourceIntelligence.rustSourceGraph 'Reads module and import relations'
+  criv.cli.knowledgeQueries.rustQuery -> criv.cli.repositoryHistory.rustGit 'Reads commit history'
+  criv.cli.knowledgeQueries.rustQuery -> criv.cli.statePublisher.rustSnapshots 'Reads published snapshots'
+  criv.cli.knowledgeQueries.rustQuery -> criv.cli.architectureService.rustC4Code 'Reads the generated module graph'
+  criv.cli.knowledgeQueries.rustSearch -> criv.cli.sourceIntelligence.rustSourceIndex 'Searches indexed sources'
+  criv.cli.knowledgeQueries.rustSearch -> criv.cli.sourceIntelligence.rustStructural 'Matches structural patterns'
+  criv.cli.knowledgeQueries.rustSearch -> criv.cli.vaultModel.rustVault 'Scopes searches to the vault'
+
+  // Architecture export.
+  criv.cli.architectureService.rustArchitecture -> criv.cli.architectureService.rustC4Code 'Renders the module architecture'
+  criv.cli.architectureService.rustArchitecture -> criv.cli.vaultModel.rustVault 'Reads the loaded vault'
+  criv.cli.architectureService.rustArchitecture -> criv.cli.vaultModel.rustConfig 'Reads the architecture configuration'
+  criv.cli.architectureService.rustC4Code -> criv.cli.vaultModel.rustVault 'Reads indexed vault data'
+  criv.cli.architectureService.rustC4Code -> criv.cli.sourceIntelligence.rustSourceGraph 'Reads module and import data'
+
+  // Vault initialization.
+  criv.cli.scaffoldInstaller.rustInit -> criv.cli.scaffoldInstaller.rustGeneratedSkills 'Installs the skill inventory'
+}
+
+views {
+  global style architectureTheme
+
+  view codeRefreshPipeline of criv.cli.refreshCoordinator {
+    title 'Code / CLI / Refresh pipeline'
+    description 'The Rust modules that run one refresh session.'
+
+    include *
+    include criv.cli.vaultModel.rustVault
+    include criv.cli.sourceIntelligence.rustSourceIndex
+    include criv.cli.sourceIntelligence.rustSourceGraph
+    include criv.cli.governanceEngine.rustCheck
+    include criv.cli.architectureService.rustLikeC4
+    include criv.cli.architectureService.rustArchitecture
+    include criv.cli.statePublisher.rustState
+  }
+
+  view codeValidation of criv.cli.governanceEngine {
+    title 'Code / CLI / Validation and enforcement'
+    description 'The Rust modules that validate the vault and gate each enforcement stage.'
+
+    include *
+    include criv.cli.repositoryHistory.*
+    include criv.cli.vaultModel.rustVault
+    include criv.cli.vaultModel.rustConfig
+    include criv.cli.sourceIntelligence.rustStructural
+  }
+
+  view codeVaultLoading of criv.cli.vaultModel {
+    title 'Code / CLI / Vault loading'
+    description 'The Rust modules that build the repository vault.'
+
+    include *
+    include criv.cli.architectureService.rustLikeC4
+    include criv.cli.sourceIntelligence.rustSourceIndex
+    include criv.cli.sourceIntelligence.rustSourceGraph
+  }
+
+  view codeQuery of criv.cli.knowledgeQueries {
+    title 'Code / CLI / Query and search'
+    description 'The Rust modules that answer knowledge graph and search requests.'
+
+    include *
+    include criv.cli.vaultModel.rustVault
+    include criv.cli.sourceIntelligence.*
+    include criv.cli.repositoryHistory.*
+    include criv.cli.statePublisher.rustSnapshots
+    include criv.cli.architectureService.rustC4Code
+  }
+
+  view codeArchitectureExporter of criv.cli.architectureService {
+    title 'Code / CLI / Architecture service'
+    description 'The Rust modules that compile LikeC4 and generate focused Code architecture.'
+
+    include *
+    include criv.cli.vaultModel.rustVault
+    include criv.cli.vaultModel.rustConfig
+    include criv.cli.sourceIntelligence.rustSourceGraph
+  }
+
+  view codeStatePublication of criv.cli.statePublisher {
+    title 'Code / CLI / State publication'
+    description 'The Rust modules that build and retain the state envelope.'
+
+    include *
+    include criv.cli.vaultModel.rustVault
+    include criv.cli.vaultModel.rustC4
+    include criv.cli.sourceIntelligence.rustSourceGraph
+    include criv.cli.sourceIntelligence.rustStructural
+  }
+}

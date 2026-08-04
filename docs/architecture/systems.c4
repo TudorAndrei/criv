@@ -1,11 +1,17 @@
 model {
   maintainer = person 'Repository maintainer' {
-    description 'Authors code and documentation, runs criv, and reviews validation results.'
+    #external
+    description 'Reviews decisions and changes, and operates the repository toolchain.'
     link ../../README.md 'source'
   }
 
+  codingAgent = person 'Coding agent' {
+    #external
+    description 'Changes source code and vault content, follows repository decisions, and checks its work.'
+  }
+
   criv = softwareSystem 'criv' {
-    description 'Maintains a local knowledge graph between repository documentation and source code.'
+    description 'Validates and publishes a local knowledge graph between repository documentation, decisions, architecture, and source code.'
     link ../../src/lib.rs 'source'
   }
 
@@ -32,5 +38,25 @@ model {
     #external
     technology 'Hosted continuous integration'
     description 'Runs repository validation on each push and pull request.'
+  }
+}
+
+views {
+  global style architectureTheme
+
+  view index {
+    title 'Overview / System context'
+    description 'How maintainers, coding agents, editors, and CI use criv around one project repository.'
+
+    include maintainer
+    include codingAgent
+    include
+      criv with {
+        navigateTo containers
+      }
+    include repository
+    include obsidian
+    include vscode
+    include githubActions
   }
 }

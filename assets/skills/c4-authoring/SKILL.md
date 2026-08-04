@@ -28,9 +28,17 @@ Hosting belongs to the deployment model. An adapter depends on its host
 application through the host API; a container diagram states dependency, and a
 deployment diagram states containment.
 
-Model files hold elements and relationships. View files hold named views, one
-primary view each, under `views/overview/`, `views/components/`, `views/code/`,
-`views/dynamic/`, or `views/deployment/`.
+LikeC4 merges every source file in the workspace into one model. A domain file
+may contain its model declarations and the named views that explain that
+domain. This does not copy an element: declare each element and relationship
+once, then select it from any view. Keep cross-domain workflow views under
+`views/dynamic/` or another focused `views/` folder.
+
+Prefer one primary view for each domain file. A large Code domain may own more
+than one focused view when each view answers a different module question. A
+shared specification or relationship file may own no view. The editor uses the
+LikeC4 `sourcePath` of each named view, so a file preview shows only views that
+the file declares.
 
 Done when each changed element has one model identity at one level, and each
 planned view has a stated level and the question it answers.
@@ -39,7 +47,9 @@ planned view has a stated level and the question it answers.
 
 Name an element with a noun, and put a qualifier such as "optional" in the
 description or a tag. Select shared elements with LikeC4 view rules rather than
-copying model declarations.
+copying model declarations. Put repeated styles and selections in global style
+or predicate groups. Extend a view only when the new view is a more detailed
+form of the base view.
 
 A relationship label reads as *Source, label, Destination*: start it with a
 capital letter and a present-tense verb, and end it on the object rather than a
@@ -61,8 +71,9 @@ A `source` link resolves from `docs/architecture/` and accepts a criv file,
 line, symbol, or pattern selector. Point it at a stable module or public
 interface.
 
-Done when every view is readable on its own and every element that claims an
-implementation boundary has one resolvable source link.
+Done when every view is readable on its own, every domain file opens its owned
+view, and every element that claims an implementation boundary has one
+resolvable source link.
 
 ## 3. Keep Code architecture at module level
 

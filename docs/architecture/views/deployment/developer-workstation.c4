@@ -1,9 +1,0 @@
-views {
-  deployment view developerWorkstation {
-    title 'Deployment / Developer workstation'
-    description 'Where each criv container runs on a maintainer machine, and which host process owns it.'
-
-    include workstation
-    include workstation.**
-  }
-}
