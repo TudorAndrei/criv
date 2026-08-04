@@ -47,6 +47,11 @@ run = "npm --prefix extensions/vscode-criv run build"
 description = "Package the VS Code-compatible companion extension as a local VSIX"
 run = "npm --prefix extensions/vscode-criv run package"
 
+[tasks.vscode-install]
+description = "Package the companion extension and install it into the local editor"
+depends = ["vscode-package"]
+run = "code --install-extension extensions/vscode-criv/vscode-criv.vsix --force"
+
 [tasks.pre-commit]
 description = "Run the hk pre-commit hook"
 run = "hk run pre-commit"

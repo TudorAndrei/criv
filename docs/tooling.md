@@ -231,7 +231,9 @@ state current. The repository Code model and views are hand-authored under
 does not replace them.
 
 `npm --prefix extensions/vscode-criv run package` and `mise run
-vscode-package` build a local `vscode-criv.vsix` without publishing. The
+vscode-package` build a local `vscode-criv.vsix` without publishing. `mise run
+vscode-install` builds that VSIX and installs it into the local editor; reload
+the window afterwards. The
 prepublish hook builds the Node.js Wasm target into
 `extensions/vscode-criv/pkg/`; the VSIX includes `criv_wasm.js` and
 `criv_wasm_bg.wasm` from that directory. If the extension reports an unavailable
