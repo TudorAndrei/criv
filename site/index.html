@@ -3,88 +3,102 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>criv — keep code documentation in sync with the code</title>
+    <title>criv — keep code documentation connected to code</title>
     <meta
       name="description"
-      content="criv is an open-source Rust CLI that validates that a repository's docs still point at real files, symbols, and decisions. Install it with mise, then run criv init."
+      content="criv is a local Rust CLI that validates repository documentation, source references, and architectural decisions."
     />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#101010" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="criv" />
+    <meta property="og:title" content="criv — validated repository documentation" />
+    <meta property="og:description" content="Keep repository documentation connected to the code it describes." />
+    <meta property="og:url" content="https://tudorandrei.github.io/criv/" />
+    <meta name="twitter:card" content="summary" />
     <link rel="canonical" href="https://tudorandrei.github.io/criv/" />
-    <style>
-      body {
-        max-width: 68ch;
-        margin: 0 auto;
-        padding: 2.5rem 1.25rem 4rem;
-        font: 15px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-        color: #1c1c1c;
-        background: #fff;
-      }
-      h1, h2 { font: inherit; font-weight: 700; margin: 2rem 0 0.75rem; }
-      h1 { margin-top: 0; }
-      p { margin: 0 0 1rem; }
-      pre {
-        margin: 0 0 1rem;
-        padding: 0.5rem 0 0.5rem 2ch;
-        border-left: 1px solid #d8d8d8;
-        overflow-x: auto;
-        font: inherit;
-      }
-      a { color: inherit; }
-      @media (prefers-color-scheme: dark) {
-        body { color: #d8d8d8; background: #101010; }
-        pre { border-color: #2e2e2e; }
-      }
-    </style>
+    <link rel="icon" href="/criv/favicon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="/criv/site.webmanifest" />
+    <link rel="stylesheet" href="/criv/style.css" />
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
-        "@type": "SoftwareApplication",
-        "name": "criv",
-        "applicationCategory": "DeveloperApplication",
-        "operatingSystem": "macOS, Linux, Windows",
-        "description": "A local Rust CLI that turns a repository's docs/ folder into a validated graph of notes, source references, and architectural decision records.",
-        "url": "https://tudorandrei.github.io/criv/",
-        "codeRepository": "https://github.com/TudorAndrei/criv",
-        "programmingLanguage": "Rust",
-        "softwareVersion": "0.7.0",
-        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
-        "author": { "@type": "Person", "name": "Tudor Andrei", "url": "https://github.com/TudorAndrei" }
+        "@graph": [
+          {
+            "@type": "SoftwareApplication",
+            "name": "criv",
+            "applicationCategory": "DeveloperApplication",
+            "operatingSystem": "macOS, Linux, Windows",
+            "description": "A local Rust CLI that turns a repository's docs folder into a validated graph of notes, source references, and architectural decision records.",
+            "url": "https://tudorandrei.github.io/criv/",
+            "codeRepository": "https://github.com/TudorAndrei/criv",
+            "programmingLanguage": "Rust",
+            "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+            "author": { "@type": "Person", "name": "Tudor Andrei", "url": "https://github.com/TudorAndrei" }
+          },
+          {
+            "@type": "WebSite",
+            "name": "criv",
+            "url": "https://tudorandrei.github.io/criv/"
+          }
+        ]
       }
     </script>
   </head>
 
   <body>
-    <main>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <main id="content">
+      <nav aria-label="Main navigation">
+        <a href="/criv/">criv</a>
+        <a href="/criv/getting-started/">Get started</a>
+        <a href="/criv/adr-discovery/">ADR discovery</a>
+      </nav>
+
       <h1>criv</h1>
 
-      <p>
-        criv is an open-source Rust CLI that keeps repository documentation
-        connected to the code it describes. Docs point at real files, symbols,
-        and decisions; <code>criv check</code> fails when those references stop
-        resolving. It runs locally, with no server and no network access.
+      <p class="lead">
+        Keep repository documentation connected to the code it describes.
+        criv validates notes, source references, and architectural decisions on
+        your machine. It has no server and needs no network access.
       </p>
 
-      <h2>Install with mise</h2>
-
-      <p>Add to the repository's <code>mise.toml</code>:</p>
-      <pre><code>[tools."github:TudorAndrei/criv"]
-version = "0.7.0"
-
-[tools."github:TudorAndrei/criv".platforms]
-macos-arm64 = { asset_pattern = "criv-aarch64-apple-darwin.tar.gz" }
-linux-arm64 = { asset_pattern = "criv-aarch64-unknown-linux-gnu.tar.gz" }
-linux-x64   = { asset_pattern = "criv-x86_64-unknown-linux-gnu.tar.gz" }
-windows-x64 = { asset_pattern = "criv-x86_64-pc-windows-msvc.zip" }</code></pre>
-
-      <p>Then, from the repository root:</p>
-      <pre><code>mise install
-criv init                    # create criv.toml, docs/, docs/adr/, Git hooks
-echo '.criv/' &gt;&gt; .gitignore   # generated state stays local
-criv check                   # validate</code></pre>
+      <h2>Start with your agent</h2>
 
       <p>
-        <a href="https://github.com/TudorAndrei/criv">GitHub</a> ·
-        <a href="/criv/llms.txt">llms.txt</a> · MIT ·
-        <time datetime="2026-07-29">29 July 2026</time>
+        Tell the agent to initialize the repository first. If past project
+        conversations or documentation are available, the agent can read them
+        before it decides which lasting choices need ADRs.
+      </p>
+
+      <pre><code>mise install
+criv init
+
+# Agent task:
+# Read existing documentation and, if available, past project conversations.
+# Use them with the code to identify lasting architectural decisions.
+# Create ADRs only for decisions supported by this evidence.
+
+criv watch --once
+criv check</code></pre>
+
+      <p>
+        <a href="/criv/getting-started/">Set up criv in a repository</a> or
+        <a href="/criv/adr-discovery/">learn how to find ADR candidates</a>.
+      </p>
+
+      <h2>What criv checks</h2>
+
+      <ul>
+        <li>Docs can point to real files, symbols, structural patterns, and notes.</li>
+        <li>ADRs can govern the source paths and policy patterns they affect.</li>
+        <li><code>criv check</code> reports broken links and invalid decisions before a change lands.</li>
+      </ul>
+
+      <p class="footer">
+        <a href="https://github.com/TudorAndrei/criv">GitHub repository</a>
+        · <a href="/criv/llms.txt">llms.txt</a> · MIT
       </p>
     </main>
   </body>

@@ -1,0 +1,36 @@
+# criv
+
+criv is an open-source Rust command-line tool. It keeps repository documentation
+connected to the code it describes. It runs locally and needs no server.
+
+## Install
+
+Add this to the target repository's `mise.toml`:
+
+```toml
+[tools."github:TudorAndrei/criv"]
+version = "latest"
+```
+
+Then run:
+
+```sh
+mise install
+criv init
+criv watch --once
+criv check
+```
+
+## Agent workflow
+
+An agent must run `criv init` at the repository root. It must read the existing
+documentation and ADRs. If past project conversations are available, it can
+read them too. It must compare this evidence with the current code before it
+creates ADRs. It must not invent a decision history.
+
+## Guides
+
+- [Home](https://tudorandrei.github.io/criv/)
+- [Get started](https://tudorandrei.github.io/criv/getting-started/)
+- [ADR discovery](https://tudorandrei.github.io/criv/adr-discovery/)
+- [Repository](https://github.com/TudorAndrei/criv)

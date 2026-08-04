@@ -9,21 +9,11 @@ state that other tools can read.
 
 `criv` gives a codebase an executable documentation layer:
 
-- `criv init` creates the vault files, ADR directory, Git hooks, agent runtime
-  skills, and Obsidian companion plugin scaffold.
-- `criv check` validates Markdown formatting, note schema, ADR placement,
-  wiki-links, source targets, LikeC4 architecture workspaces, pattern
-  references, and ADR supersession rules.
-- `criv watch --once` writes `.criv/state.json` and content-addressed local
-  snapshots for downstream tools.
-- `criv state list|prune` inspects and bounds those ignored local snapshots.
-- `criv query ...` asks the graph about targets, citations (`cites`,
-  `cited-by`), ADR governance (`governs`, `governing`), coverage, callers,
-  callees, attack surface, focused LikeC4 module projections, diffs, and
-  orphaned docs.
-- `criv search ...` searches files, text, notes, and structural policy patterns.
-- `criv enforce --stage commit|push|ci` runs stage-aware documentation and policy
-  checks.
+- `criv init` creates the vault files, ADR directory, agent skills, and editor
+  companion files.
+- `criv check` validates documentation, source references, and ADR rules.
+- `criv watch --once` writes the local state used by tools and editors.
+- `criv query`, `criv search`, and `criv enforce` inspect and protect the graph.
 
 `.criv/` is local generated state and should stay ignored by git.
 
@@ -43,36 +33,29 @@ The goal is not to replace source control, linters, or an editor. The goal is to
 make design knowledge inspectable and enforceable in the same local workflow as
 the code.
 
-## Install
+## Quick start
 
-Install the Rust CLI from the repository:
-
-```sh
-cargo install --git https://github.com/TudorAndrei/criv criv
-```
-
-To pin criv in another repository with mise, add the following to that
-repository's `mise.toml`:
+Add criv to the target repository's `mise.toml`:
 
 ```toml
 [tools."github:TudorAndrei/criv"]
-version = "0.7.0"
-
-[tools."github:TudorAndrei/criv".platforms]
-macos-arm64 = { asset_pattern = "criv-aarch64-apple-darwin.tar.gz" }
-linux-arm64 = { asset_pattern = "criv-aarch64-unknown-linux-gnu.tar.gz" }
-linux-x64 = { asset_pattern = "criv-x86_64-unknown-linux-gnu.tar.gz" }
-windows-x64 = { asset_pattern = "criv-x86_64-pc-windows-msvc.zip" }
+version = "latest"
 ```
 
-Then install the pinned tool and initialize the repository:
+Then initialize the repository:
 
 ```sh
 mise install
 criv init
+criv watch --once
+criv check
 ```
 
-For local development in this repository, install the pinned project tools:
+Tell your agent to read the current documentation and, when available, past
+project conversations before it creates ADRs. It must create ADRs only for
+lasting decisions supported by that evidence.
+
+For local development in this repository:
 
 ```sh
 mise install
@@ -90,7 +73,17 @@ cargo run -- query coverage
 cargo run -- search --files main
 ```
 
-## How
+## Common workflow
+
+Use the quick start above for a new repository. Use these commands when the
+documentation or code changes:
+
+```sh
+criv watch --once
+criv check
+```
+
+### Initialization, checks, and command reference
 
 Initialize a repository:
 

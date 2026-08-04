@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Get started with criv</title>
+    <meta name="description" content="Install criv and initialize documentation in a repository." />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#101010" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
+    <meta property="og:type" content="article" />
+    <meta property="og:site_name" content="criv" />
+    <meta property="og:title" content="Get started with criv" />
+    <meta property="og:description" content="Install criv and initialize documentation in a repository." />
+    <meta property="og:url" content="https://tudorandrei.github.io/criv/getting-started/" />
+    <meta name="twitter:card" content="summary" />
+    <link rel="canonical" href="https://tudorandrei.github.io/criv/getting-started/" />
+    <link rel="icon" href="/criv/favicon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="/criv/site.webmanifest" />
+    <link rel="stylesheet" href="/criv/style.css" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "HowTo",
+        "name": "Get started with criv",
+        "description": "Install criv and initialize documentation in a repository.",
+        "step": [
+          { "@type": "HowToStep", "name": "Add criv", "text": "Add criv with the latest keyword to the repository mise configuration." },
+          { "@type": "HowToStep", "name": "Install", "text": "Run mise install at the repository root." },
+          { "@type": "HowToStep", "name": "Initialize", "text": "Run criv init, then refresh and check the documentation graph." }
+        ]
+      }
+    </script>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <main id="content">
+      <nav aria-label="Main navigation">
+        <a href="/criv/">criv</a>
+        <a href="/criv/getting-started/">Get started</a>
+        <a href="/criv/adr-discovery/">ADR discovery</a>
+      </nav>
+
+      <h1>Get started</h1>
+
+      <p>
+        Add criv to the repository tool list. The <code>latest</code> keyword
+        selects the latest released binary.
+      </p>
+
+      <pre><code>[tools."github:TudorAndrei/criv"]
+version = "latest"</code></pre>
+
+      <p>Then run these commands at the repository root:</p>
+
+      <pre><code>mise install
+criv init
+criv watch --once
+criv check</code></pre>
+
+      <p>
+        <code>criv init</code> creates the configuration, the documentation and
+        ADR directories, local generated state, agent skills, and editor
+        companion files. It leaves existing Markdown files in place.
+      </p>
+
+      <p>
+        Next: <a href="/criv/adr-discovery/">find ADR candidates from the repository record</a>.
+      </p>
+    </main>
+  </body>
+</html>

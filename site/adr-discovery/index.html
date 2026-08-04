@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Find ADR candidates with criv</title>
+    <meta name="description" content="Give an agent evidence to decide which architectural decisions need ADRs." />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#101010" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
+    <meta property="og:type" content="article" />
+    <meta property="og:site_name" content="criv" />
+    <meta property="og:title" content="Find ADR candidates with criv" />
+    <meta property="og:description" content="Give an agent evidence to decide which lasting decisions need ADRs." />
+    <meta property="og:url" content="https://tudorandrei.github.io/criv/adr-discovery/" />
+    <meta name="twitter:card" content="summary" />
+    <link rel="canonical" href="https://tudorandrei.github.io/criv/adr-discovery/" />
+    <link rel="icon" href="/criv/favicon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="/criv/site.webmanifest" />
+    <link rel="stylesheet" href="/criv/style.css" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "TechArticle",
+        "headline": "Find ADR candidates with criv",
+        "description": "Give an agent evidence to decide which lasting decisions need ADRs.",
+        "mainEntityOfPage": "https://tudorandrei.github.io/criv/adr-discovery/",
+        "author": { "@type": "Person", "name": "Tudor Andrei", "url": "https://github.com/TudorAndrei" }
+      }
+    </script>
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <main id="content">
+      <nav aria-label="Main navigation">
+        <a href="/criv/">criv</a>
+        <a href="/criv/getting-started/">Get started</a>
+        <a href="/criv/adr-discovery/">ADR discovery</a>
+      </nav>
+
+      <h1>Find ADR candidates</h1>
+
+      <p>
+        An ADR records a lasting architectural choice and its reason. Do not
+        create one for every code change. Ask the agent to use the repository
+        record as evidence before it writes an ADR.
+      </p>
+
+      <h2>Give the agent this order</h2>
+
+      <ol>
+        <li>Run <code>criv init</code> from the repository root.</li>
+        <li>Read the existing documentation and ADRs.</li>
+        <li>If they are available, read past project conversations for decisions and their reasons.</li>
+        <li>Compare that evidence with the current code.</li>
+        <li>Write ADRs for lasting decisions that the evidence supports.</li>
+        <li>Run <code>criv watch --once</code> and <code>criv check</code>.</li>
+      </ol>
+
+      <h2>Useful questions</h2>
+
+      <ul>
+        <li>Which choice changes the structure, boundary, data model, or delivery path?</li>
+        <li>What alternatives were considered, and why was this one selected?</li>
+        <li>Which source paths does the decision govern?</li>
+        <li>Does an existing ADR already record the decision?</li>
+      </ul>
+
+      <p>
+        If evidence is missing, the agent should leave the decision open or ask
+        for it. It should not invent history.
+      </p>
+
+      <p>
+        <a href="/criv/getting-started/">Return to setup</a> or
+        <a href="https://github.com/TudorAndrei/criv">read the repository documentation</a>.
+      </p>
+    </main>
+  </body>
+</html>
