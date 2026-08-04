@@ -766,6 +766,7 @@ class CrivC4View extends FileView {
       protocolVersion: 1,
       likec4Version: architecture.likec4Version as "1.59.2",
       revision: ++this.revision,
+      workspace: architecture.workspace,
       model: architecture.model.raw,
       views: architecture.model.views,
       sourceLinks: architecture.model.sourceLinks,
