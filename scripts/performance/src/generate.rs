@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -62,6 +63,41 @@ pub fn mutate_sources(
         fs::write(path, contents).map_err(display_error)?;
     }
     Ok(())
+}
+
+pub fn append_source_revision(
+    root: &Path,
+    generated: &GeneratedWorkload,
+    revision: usize,
+) -> Result<(), String> {
+    let path = generated
+        .source_paths
+        .iter()
+        .min_by_key(|path| mutation_priority(path))
+        .ok_or_else(|| "workload has no source file for snapshot history".to_string())?;
+    let path = root.join(path);
+    let mut file = fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .map_err(display_error)?;
+    let symbol = match path.extension().and_then(|value| value.to_str()) {
+        Some("rs") => format!(
+            "\npub fn criv_performance_snapshot_revision_{revision}() -> usize {{ {revision} }}"
+        ),
+        Some("ts") => format!(
+            "\nexport function crivPerformanceSnapshotRevision{revision}(): number {{ return {revision}; }}"
+        ),
+        Some("mjs") => format!(
+            "\nexport function crivPerformanceSnapshotRevision{revision}() {{ return {revision}; }}"
+        ),
+        _ => {
+            return Err(format!(
+                "workload snapshot history needs a supported code file: {}",
+                path.display()
+            ));
+        }
+    };
+    writeln!(file, "{symbol}").map_err(display_error)
 }
 
 fn mutation_priority(path: &Path) -> u8 {
@@ -277,6 +313,7 @@ fn initialize_git(root: &Path) -> Result<(), String> {
     run_git(root, &["init", "-q", "-b", "main"])?;
     run_git(root, &["config", "user.email", "performance@criv.invalid"])?;
     run_git(root, &["config", "user.name", "criv performance"])?;
+    run_git(root, &["config", "commit.gpgsign", "false"])?;
     run_git(
         root,
         &[
@@ -460,5 +497,24 @@ mod tests {
             changed_path.extension().and_then(|value| value.to_str()),
             Some("rs")
         );
+    }
+
+    #[test]
+    fn snapshot_revision_adds_a_semantic_symbol() {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let loaded =
+            LoadedManifest::load(&repository.join("fixtures/performance/barrs-small.toml"))
+                .unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let generated = generate(root.path(), &loaded.manifest).unwrap();
+
+        append_source_revision(root.path(), &generated, 2).unwrap();
+
+        let contents = generated
+            .source_paths
+            .iter()
+            .map(|path| fs::read_to_string(root.path().join(path)).unwrap())
+            .collect::<String>();
+        assert!(contents.contains("pub fn criv_performance_snapshot_revision_2() -> usize { 2 }"));
     }
 }

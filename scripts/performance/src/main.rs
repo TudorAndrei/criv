@@ -11,7 +11,7 @@ use std::process::{Command, Output};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, ValueEnum};
-use generate::{GeneratedWorkload, generate, mutate_sources};
+use generate::{GeneratedWorkload, append_source_revision, generate, mutate_sources};
 use manifest::LoadedManifest;
 use serde::Serialize;
 use tempfile::TempDir;
@@ -60,6 +60,7 @@ enum Case {
     WatchOnceCold,
     WatchOnceWarm,
     WatchOnceChanged,
+    WatchOnceSemanticChanged,
     SourceIndexFiles,
     Check,
     EnforceCi,
@@ -67,6 +68,8 @@ enum Case {
     QueryOrphanDocs,
     QueryNodesDocs,
     DiffLatest,
+    StateList,
+    StatePruneDryRun,
 }
 
 impl Case {
@@ -75,6 +78,7 @@ impl Case {
             Self::WatchOnceCold => "watch_once_cold",
             Self::WatchOnceWarm => "watch_once_warm",
             Self::WatchOnceChanged => "watch_once_changed",
+            Self::WatchOnceSemanticChanged => "watch_once_semantic_changed",
             Self::SourceIndexFiles => "source_index_files",
             Self::Check => "check",
             Self::EnforceCi => "enforce_ci",
@@ -82,21 +86,29 @@ impl Case {
             Self::QueryOrphanDocs => "query_orphan_docs",
             Self::QueryNodesDocs => "query_nodes_docs",
             Self::DiffLatest => "diff_latest",
+            Self::StateList => "state_list",
+            Self::StatePruneDryRun => "state_prune_dry_run",
         }
     }
 
     fn cache_state(self) -> &'static str {
         match self {
-            Self::WatchOnceWarm | Self::WatchOnceChanged | Self::DiffLatest => "warm",
+            Self::WatchOnceWarm
+            | Self::WatchOnceChanged
+            | Self::WatchOnceSemanticChanged
+            | Self::DiffLatest
+            | Self::StateList
+            | Self::StatePruneDryRun => "warm",
             _ => "cold",
         }
     }
 
     fn args(self) -> &'static [&'static str] {
         match self {
-            Self::WatchOnceCold | Self::WatchOnceWarm | Self::WatchOnceChanged => {
-                &["watch", "--once"]
-            }
+            Self::WatchOnceCold
+            | Self::WatchOnceWarm
+            | Self::WatchOnceChanged
+            | Self::WatchOnceSemanticChanged => &["watch", "--once"],
             Self::SourceIndexFiles => &["search", "--files", "symbol"],
             Self::Check => &["check"],
             Self::EnforceCi => &["enforce", "--stage", "ci"],
@@ -104,25 +116,52 @@ impl Case {
             Self::QueryOrphanDocs => &["query", "orphan-docs"],
             Self::QueryNodesDocs => &["query", "nodes", "--kind", "doc"],
             Self::DiffLatest => &["query", "diff", "latest", "latest"],
+            Self::StateList => &["state", "list", "--format", "json"],
+            Self::StatePruneDryRun => &[
+                "state",
+                "prune",
+                "--keep",
+                "20",
+                "--dry-run",
+                "--format",
+                "json",
+            ],
         }
     }
 
     fn needs_seed(self) -> bool {
         matches!(
             self,
-            Self::WatchOnceWarm | Self::WatchOnceChanged | Self::DiffLatest
+            Self::WatchOnceWarm
+                | Self::WatchOnceChanged
+                | Self::WatchOnceSemanticChanged
+                | Self::DiffLatest
+                | Self::StateList
+                | Self::StatePruneDryRun
         )
     }
 
     fn needs_mutation(self) -> bool {
         self == Self::WatchOnceChanged
     }
+
+    fn needs_semantic_mutation(self) -> bool {
+        self == Self::WatchOnceSemanticChanged
+    }
+
+    fn snapshot_history(self) -> usize {
+        match self {
+            Self::StateList | Self::StatePruneDryRun => 20,
+            _ => 1,
+        }
+    }
 }
 
-const ALL_CASES: [Case; 10] = [
+const ALL_CASES: [Case; 13] = [
     Case::WatchOnceCold,
     Case::WatchOnceWarm,
     Case::WatchOnceChanged,
+    Case::WatchOnceSemanticChanged,
     Case::SourceIndexFiles,
     Case::Check,
     Case::EnforceCi,
@@ -130,6 +169,8 @@ const ALL_CASES: [Case; 10] = [
     Case::QueryOrphanDocs,
     Case::QueryNodesDocs,
     Case::DiffLatest,
+    Case::StateList,
+    Case::StatePruneDryRun,
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -466,9 +507,26 @@ fn prepare_sample(
                 String::from_utf8_lossy(&output.stderr).trim()
             ));
         }
+        for revision in 2..=case.snapshot_history() {
+            append_source_revision(root, generated, revision)?;
+            let sample_id = format!("snapshot-seed-{revision}");
+            let output = run_criv(binary, root, &["watch", "--once"], run_id, &sample_id, case)?;
+            if !output.status.success() {
+                return Err(format!(
+                    "snapshot-history seed failed for {} {} revision {revision}:\nstdout:\n{}\nstderr:\n{}",
+                    loaded.manifest.id,
+                    case.id(),
+                    String::from_utf8_lossy(&output.stdout).trim(),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                ));
+            }
+        }
     }
     if case.needs_mutation() {
         mutate_sources(root, generated, loaded.manifest.changed_source_files)?;
+    }
+    if case.needs_semantic_mutation() {
+        append_source_revision(root, generated, 2)?;
     }
     Ok(())
 }
@@ -787,5 +845,39 @@ mod tests {
         let first = create_result_dir(root.path(), "same").unwrap();
         let second = create_result_dir(root.path(), "same").unwrap();
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn snapshot_store_cases_use_seeded_public_cli_operations() {
+        assert!(Case::StateList.needs_seed());
+        assert_eq!(Case::StateList.snapshot_history(), 20);
+        assert_eq!(Case::StateList.cache_state(), "warm");
+        assert_eq!(
+            Case::StateList.args(),
+            &["state", "list", "--format", "json"]
+        );
+        assert!(Case::StatePruneDryRun.needs_seed());
+        assert_eq!(Case::StatePruneDryRun.snapshot_history(), 20);
+        assert_eq!(Case::StatePruneDryRun.cache_state(), "warm");
+        assert_eq!(
+            Case::StatePruneDryRun.args(),
+            &[
+                "state",
+                "prune",
+                "--keep",
+                "20",
+                "--dry-run",
+                "--format",
+                "json"
+            ]
+        );
+    }
+
+    #[test]
+    fn semantic_change_case_seeds_then_changes_one_state_partition() {
+        assert!(Case::WatchOnceSemanticChanged.needs_seed());
+        assert!(Case::WatchOnceSemanticChanged.needs_semantic_mutation());
+        assert_eq!(Case::WatchOnceSemanticChanged.cache_state(), "warm");
+        assert_eq!(Case::WatchOnceSemanticChanged.args(), &["watch", "--once"]);
     }
 }

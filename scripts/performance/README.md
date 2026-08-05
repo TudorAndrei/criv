@@ -25,3 +25,33 @@ The publication path has two local smoke tests:
 tests/performance_harness.sh
 tests/performance_git_note.sh
 ```
+
+## State storage baseline
+
+`criv-state-storage-baseline` reads one generated `.criv/state.json`, reports
+its graph and repeated-string shape, and records repeated native
+read/decode/schema-validation samples. It measures the current JSON boundary;
+it does not call private `criv` functions.
+
+`measure-state-wasm.mjs` measures the packaged Wasm boundary in fresh Node.js
+processes. It records cold module plus initial-projection cost, initial
+projections after load, graph lookup, selector variants, Wasm module bytes, and
+process maximum RSS.
+
+Use release artifacts and at least three samples for evidence:
+
+```sh
+cargo run --release -p criv-perf-harness \
+  --bin criv-state-storage-baseline -- \
+  --state /path/to/generated/.criv/state.json \
+  --samples 5
+
+node scripts/performance/measure-state-wasm.mjs \
+  --state /path/to/generated/.criv/state.json \
+  --package extensions/vscode-criv/pkg \
+  --samples 5
+```
+
+The main harness also has `state-list` and `state-prune-dry-run` cases. Their
+untimed setup publishes twenty unique snapshots before it measures the public
+CLI command. This matches the default retained snapshot bound.
