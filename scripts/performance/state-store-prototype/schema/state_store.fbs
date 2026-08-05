@@ -1,0 +1,84 @@
+namespace criv.bench;
+
+table StringTable {
+  values:[string];
+}
+
+table Metadata {
+  schema:uint;
+  root:uint;
+  architecture:[ubyte];
+  has_architecture:bool;
+  registered_patterns:[uint];
+}
+
+struct NodeRow {
+  id:uint;
+  hash:uint;
+  kind:uint;
+  label:uint;
+  path:uint;
+}
+
+table NodeBlock {
+  rows:[NodeRow];
+}
+
+struct EdgeRow {
+  from:uint;
+  to:uint;
+  kind:uint;
+  hash:uint;
+}
+
+table EdgeBlock {
+  rows:[EdgeRow];
+}
+
+struct SourceRow {
+  path:uint;
+  mime:uint;
+  frecency:uint;
+}
+
+table SourceBlock {
+  rows:[SourceRow];
+}
+
+table Capture {
+  key:uint;
+  value:uint;
+}
+
+table PatternMatch {
+  file:uint;
+  range:uint;
+  captures:[Capture];
+}
+
+table PatternGroup {
+  id:uint;
+  matches:[PatternMatch];
+}
+
+table Patterns {
+  groups:[PatternGroup];
+}
+
+union PartitionData {
+  StringTable,
+  Metadata,
+  NodeBlock,
+  EdgeBlock,
+  SourceBlock,
+  Patterns
+}
+
+table Partition {
+  version:uint = 1;
+  block:uint;
+  data:PartitionData;
+}
+
+root_type Partition;
+file_identifier "CRFP";

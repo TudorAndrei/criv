@@ -55,3 +55,12 @@ node scripts/performance/measure-state-wasm.mjs \
 The main harness also has `state-list` and `state-prune-dry-run` cases. Their
 untimed setup publishes twenty unique snapshots before it measures the public
 CLI command. This matches the default retained snapshot bound.
+
+## State store candidate prototype
+
+`state-store-prototype/` contains the throwaway candidate adapters for GitHub
+issue 88. `criv-state-storage-fixtures` generates the matched State revisions
+from the canonical observed workload manifests. The candidate CLI and its
+packaged Wasm adapter then measure storage, publication, native operations, and
+editor projections through public process boundaries. See
+`state-store-prototype/README.md` for the exact commands.

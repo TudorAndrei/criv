@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -35,6 +35,7 @@ test("reports the packaged Wasm storage operations as JSON", () => {
     "source-index": [{ path: "src/lib.rs", frecency: 1 }],
   });
   writeFileSync(state, raw);
+  const report = join(root, "report.json");
 
   const result = spawnSync(
     process.execPath,
@@ -47,12 +48,15 @@ test("reports the packaged Wasm storage operations as JSON", () => {
       "--samples",
       "1",
       "--allow-low-samples",
+      "--output",
+      report,
     ],
     { encoding: "utf8" },
   );
 
   assert.equal(result.status, 0, result.stderr);
-  const output = JSON.parse(result.stdout);
+  assert.equal(result.stdout, "");
+  const output = JSON.parse(readFileSync(report, "utf8"));
   assert.equal(output.schema, "criv.state-wasm-baseline.v1");
   assert.equal(output.samples, 1);
   assert.equal(output.state_bytes, Buffer.byteLength(raw));

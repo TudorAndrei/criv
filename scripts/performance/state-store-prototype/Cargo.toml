@@ -1,0 +1,50 @@
+[package]
+name = "criv-state-store-prototype"
+version = "0.8.0"
+edition = "2024"
+publish = false
+
+[features]
+default = ["wasm-all"]
+wasm-all = []
+wasm-criv-column = []
+wasm-flatbuffers = []
+wasm-json = []
+wasm-postcard = []
+wasm-rkyv = []
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "criv-state-store-bench"
+path = "src/main.rs"
+
+[dependencies]
+blake3 = "1"
+clap = { version = "4", features = ["derive"] }
+flatbuffers = "25.12.19"
+postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
+rkyv = { version = "0.8.18", default-features = false, features = [
+  "std",
+  "bytecheck",
+  "little_endian",
+  "pointer_width_32",
+  "unaligned",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+serde-wasm-bindgen = "0.6"
+wasm-bindgen = "0.2"
+
+[dev-dependencies]
+assert_cmd = "2"
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

@@ -2,7 +2,7 @@
 
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import { performance } from "node:perf_hooks";
 import { parseArgs } from "node:util";
@@ -39,6 +39,7 @@ function options() {
       state: { type: "string" },
       package: { type: "string" },
       samples: { type: "string", default: "5" },
+      output: { type: "string" },
       "allow-low-samples": { type: "boolean", default: false },
       worker: { type: "boolean", default: false },
       operation: { type: "string" },
@@ -223,7 +224,9 @@ function parent(values) {
     wasm_module_bytes: statSync(wasmModule).size,
     operations,
   };
-  process.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+  const report = `${JSON.stringify(output, null, 2)}\n`;
+  if (values.output) writeFileSync(resolve(values.output), report);
+  else process.stdout.write(report);
 }
 
 try {
