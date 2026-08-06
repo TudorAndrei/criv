@@ -201,7 +201,6 @@ exclude = []
 
 [index]
 source = true
-embeddings = false
 
 [state]
 keep = 20

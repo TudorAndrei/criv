@@ -12,7 +12,6 @@ mod likec4;
 mod policy_scan;
 mod query;
 mod refresh;
-mod search;
 mod snapshots;
 mod source_graph;
 mod source_index;
@@ -76,7 +75,6 @@ enum Command {
     Adr(adr::AdrOptions),
     Check(check::CheckOptions),
     Query(query::QueryOptions),
-    Search(search::SearchOptions),
     State(snapshots::StateOptions),
     Watch(watch::WatchOptions),
     Enforce(enforce::EnforceOptions),
@@ -123,7 +121,6 @@ fn run_command(args: Vec<String>, cwd: &std::path::Path) -> Result<()> {
         Some(Command::Adr(options)) => adr::run(cwd, options),
         Some(Command::Check(options)) => check::run(cwd, options),
         Some(Command::Query(options)) => query::run(cwd, options),
-        Some(Command::Search(options)) => search::run(cwd, options),
         Some(Command::State(options)) => snapshots::run(cwd, options),
         Some(Command::Watch(options)) => watch::run(cwd, options),
         Some(Command::Enforce(options)) => enforce::run(cwd, options),
@@ -276,9 +273,7 @@ mod tests {
         assert!(spec.contains("cmd list"));
         assert!(spec.contains("cmd prune"));
         assert!(spec.contains("cmd enforce"));
-        assert!(spec.contains("cmd search"));
         assert!(spec.contains("cmd reconcile-sources"));
-        assert!(spec.contains("flag --pattern-id"));
 
         let spec = usage_spec();
         let query = spec
@@ -309,8 +304,6 @@ mod tests {
         .expect("coverage help should render");
         let nodes = usage_help(&["help".to_string(), "query".to_string(), "nodes".to_string()])
             .expect("nodes help should render");
-        let search = usage_help(&["search".to_string(), "--help".to_string()])
-            .expect("search help should render");
 
         assert!(root.contains("Usage: criv"));
         assert_eq!(root, default);
@@ -329,7 +322,6 @@ mod tests {
         assert!(!nodes.contains("--by"));
         assert!(root.contains("enforce --stage <STAGE>"));
         assert!(!root.contains("enforce <--stage <STAGE>>"));
-        assert!(search.contains("--pattern-id <PATTERN_ID>"));
     }
 
     #[test]

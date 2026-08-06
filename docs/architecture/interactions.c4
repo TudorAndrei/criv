@@ -63,7 +63,7 @@ model {
   criv.cli.commandInterface -> criv.cli.vaultModel 'Starts read-only vault operations'
   criv.cli.commandInterface -> criv.cli.refreshCoordinator 'Starts watch and refresh sessions'
   criv.cli.commandInterface -> criv.cli.governanceEngine 'Starts checks and staged enforcement'
-  criv.cli.commandInterface -> criv.cli.knowledgeQueries 'Starts query and search operations'
+  criv.cli.commandInterface -> criv.cli.knowledgeQueries 'Starts query operations'
 
   criv.cli.refreshCoordinator -> criv.cli.vaultModel 'Loads the current vault'
   criv.cli.refreshCoordinator -> criv.cli.sourceIntelligence 'Reuses incremental source data'
@@ -83,7 +83,7 @@ model {
   criv.cli.governanceEngine -> criv.cli.scaffoldInstaller 'Checks the generated skill inventory'
 
   criv.cli.knowledgeQueries -> criv.cli.vaultModel 'Reads the repository knowledge graph'
-  criv.cli.knowledgeQueries -> criv.cli.sourceIntelligence 'Searches indexed source data'
+  criv.cli.knowledgeQueries -> criv.cli.sourceIntelligence 'Reads indexed source data'
   criv.cli.knowledgeQueries -> criv.cli.repositoryHistory 'Reads commit history and stored revisions'
   criv.cli.knowledgeQueries -> criv.cli.architectureService 'Builds focused module projections'
   criv.cli.knowledgeQueries -> criv.cli.statePublisher 'Reads retained snapshots'

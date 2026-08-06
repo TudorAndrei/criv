@@ -27,6 +27,6 @@ Each diagnostic names a file and a rule. Correct the file it names, or correct
 the code that made the claim false. Treat a diagnostic that misreads the
 repository as a criv bug worth reporting.
 
-A governs or policy diagnostic names an ADR. Run `criv search --rule ADR-NNNN`
-to see what its patterns match today. The `writing-decisions` skill owns the
-ADR side of that fix.
+A governs or policy diagnostic names an ADR. Run `criv check --filter ADR-NNNN`
+to isolate its current diagnostics. The `writing-decisions` skill owns the ADR
+side of that fix.

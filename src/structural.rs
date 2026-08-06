@@ -6,12 +6,13 @@ use std::path::Path;
 use std::{cell::Cell, thread_local};
 
 use ast_grep_config::{DeserializeEnv, SerializableRuleCore};
+#[cfg(test)]
+use ast_grep_core::Matcher;
 use ast_grep_core::meta_var::MetaVariable;
-use ast_grep_core::{Doc, Matcher, NodeMatch, Pattern};
+use ast_grep_core::{Doc, NodeMatch, Pattern};
 use ast_grep_language::{Language, LanguageExt, SupportLang};
 
 use crate::source_paths::read_source_to_string;
-use crate::util::GlobMatcher;
 use crate::vault::{PolicyPattern, Vault};
 use crate::{CrivError, Result};
 
@@ -19,48 +20,6 @@ use crate::{CrivError, Result};
 pub(crate) enum PatternSource<'a> {
     Pattern(&'a str),
     Rule(&'a str),
-}
-
-/// Which source files a structural scan may visit.
-///
-/// An empty `GlobSet` matches nothing, so a caller that means "no filter" must
-/// say so explicitly rather than passing an empty glob list. `Globs(&[])` keeps
-/// the empty-means-nothing reading that the incremental state rebuild relies on.
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum PathScope<'a> {
-    All,
-    Globs(&'a [String]),
-}
-
-impl<'a> PathScope<'a> {
-    pub(crate) fn from_paths(paths: &'a [String]) -> Self {
-        if paths.is_empty() {
-            Self::All
-        } else {
-            Self::Globs(paths)
-        }
-    }
-}
-
-enum CompiledPathScope {
-    All,
-    Globs(GlobMatcher),
-}
-
-impl CompiledPathScope {
-    fn compile(scope: PathScope<'_>) -> Result<Self> {
-        Ok(match scope {
-            PathScope::All => Self::All,
-            PathScope::Globs(paths) => Self::Globs(GlobMatcher::new(paths)?),
-        })
-    }
-
-    fn is_match(&self, path: &str) -> bool {
-        match self {
-            Self::All => true,
-            Self::Globs(matcher) => matcher.is_match(path),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -186,75 +145,6 @@ pub(crate) fn compile_policy(
     Ok(CompiledPolicy { language, matcher })
 }
 
-pub(crate) fn find(
-    root: &Path,
-    vault: &Vault,
-    source: PatternSource<'_>,
-    scope: PathScope<'_>,
-    language: Option<&str>,
-) -> Result<Vec<StructuralMatch>> {
-    let forced_language = language.map(parse_language).transpose()?;
-    let mut rows = Vec::new();
-    let mut compiled_any_language = false;
-    let mut first_compile_error = None;
-    let forced_matcher = forced_language
-        .map(|language| compile(source, language))
-        .transpose()?;
-
-    let path_matcher = CompiledPathScope::compile(scope)?;
-    for source_file in vault.source_files() {
-        if !path_matcher.is_match(source_file) {
-            continue;
-        }
-        if forced_language
-            .is_some_and(|language| SupportLang::from_path(source_file) != Some(language))
-        {
-            continue;
-        }
-        let Some(language) = forced_language.or_else(|| SupportLang::from_path(source_file)) else {
-            continue;
-        };
-
-        let matcher = if let Some(matcher) = forced_matcher.as_ref() {
-            matcher
-        } else {
-            match compile(source, language) {
-                Ok(matcher) => {
-                    let contents = read_source_to_string(root, source_file)?;
-                    rows.extend(scan_compiled_source(
-                        source_file,
-                        language,
-                        &contents,
-                        &matcher,
-                    ));
-                    compiled_any_language = true;
-                    continue;
-                }
-                Err(err) => {
-                    first_compile_error.get_or_insert(err);
-                    continue;
-                }
-            }
-        };
-        compiled_any_language = true;
-
-        let contents = read_source_to_string(root, source_file)?;
-        rows.extend(scan_compiled_source(
-            source_file,
-            language,
-            &contents,
-            matcher,
-        ));
-    }
-
-    if !compiled_any_language && let Some(err) = first_compile_error {
-        return Err(err);
-    }
-
-    sort_matches(&mut rows);
-    Ok(rows)
-}
-
 pub(crate) fn find_policies_batch(
     root: &Path,
     vault: &Vault,
@@ -323,32 +213,6 @@ fn sort_matches(rows: &mut Vec<StructuralMatch>) {
     });
 }
 
-pub(crate) fn find_policy_pattern_entry(
-    root: &Path,
-    vault: &Vault,
-    policy: &PolicyPattern,
-    scope: PathScope<'_>,
-) -> Result<Vec<StructuralMatch>> {
-    let compiled = compile_policy(policy).map_err(CrivError::from)?;
-    let path_matcher = CompiledPathScope::compile(scope)?;
-    let mut rows = Vec::new();
-    for source_file in vault.source_files() {
-        if path_matcher.is_match(source_file)
-            && SupportLang::from_path(source_file) == Some(compiled.language)
-        {
-            let contents = read_source_to_string(root, source_file)?;
-            rows.extend(scan_compiled_source(
-                source_file,
-                compiled.language,
-                &contents,
-                &compiled.matcher,
-            ));
-        }
-    }
-    sort_matches(&mut rows);
-    Ok(rows)
-}
-
 fn policy_source(
     policy: &PolicyPattern,
 ) -> std::result::Result<(PatternSource<'_>, &str), PolicyCompileError> {
@@ -369,19 +233,6 @@ fn policy_source(
         (None, None) => Err(PolicyCompileError::MissingBody),
         (Some(pattern), None) => Ok((PatternSource::Pattern(pattern), language)),
         (None, Some(rule)) => Ok((PatternSource::Rule(rule), language)),
-    }
-}
-
-pub(crate) fn language_glob(language: &str) -> &'static str {
-    match language {
-        "rust" | "rs" => "**/*.rs",
-        "typescript" | "ts" => "**/*.ts",
-        "tsx" => "**/*.tsx",
-        "javascript" | "js" => "**/*.js",
-        "jsx" => "**/*.jsx",
-        "python" | "py" => "**/*.py",
-        "go" | "golang" => "**/*.go",
-        _ => "**",
     }
 }
 
@@ -413,6 +264,7 @@ fn compile(source: PatternSource<'_>, language: SupportLang) -> Result<CompiledM
     }
 }
 
+#[cfg(test)]
 fn scan_source<M: Matcher>(
     source_file: &str,
     language: SupportLang,
@@ -424,18 +276,6 @@ fn scan_source<M: Matcher>(
         .find_all(matcher)
         .map(|matched| row_from_match(source_file, &matched))
         .collect()
-}
-
-fn scan_compiled_source(
-    source_file: &str,
-    language: SupportLang,
-    contents: &str,
-    matcher: &CompiledMatcher,
-) -> Vec<StructuralMatch> {
-    match matcher {
-        CompiledMatcher::Pattern(pattern) => scan_source(source_file, language, contents, pattern),
-        CompiledMatcher::Rule(rule) => scan_source(source_file, language, contents, rule),
-    }
 }
 
 fn row_from_match<D: Doc>(source_file: &str, matched: &NodeMatch<'_, D>) -> StructuralMatch {
@@ -508,11 +348,6 @@ fn parse_language(language: &str) -> Result<SupportLang> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn jsx_language_glob_matches_only_jsx_files() {
-        assert_eq!(language_glob("jsx"), "**/*.jsx");
-        assert_eq!(language_glob("javascript"), "**/*.js");
-    }
     use std::fs;
     use tempfile::TempDir;
 
@@ -568,13 +403,12 @@ all:
     }
 
     #[test]
-    fn batch_matches_sequential_find() {
+    fn batch_returns_all_expected_policy_rows() {
         let (temp, vault) = policy_fixture();
         let function_policy = policy("rust", "fn $NAME() { $$$ }");
         let struct_policy = policy("rust", "struct $NAME;");
         let function_compiled = compile_policy(&function_policy).unwrap();
         let struct_compiled = compile_policy(&struct_policy).unwrap();
-        let paths = vec!["src/**".to_string()];
         let policy_paths = BTreeSet::from(["src/left.rs".to_string(), "src/right.rs".to_string()]);
         let requests = vec![
             PolicyScanRequest {
@@ -592,24 +426,22 @@ all:
         let batch = find_policies_batch(temp.path(), &vault, &requests).unwrap();
 
         assert_eq!(
-            batch.get(&0).unwrap(),
-            &find_policy_pattern_entry(
-                temp.path(),
-                &vault,
-                &function_policy,
-                PathScope::Globs(&paths),
-            )
-            .unwrap()
+            batch
+                .get(&0)
+                .unwrap()
+                .iter()
+                .map(|row| row.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["src/left.rs", "src/right.rs"]
         );
         assert_eq!(
-            batch.get(&1).unwrap(),
-            &find_policy_pattern_entry(
-                temp.path(),
-                &vault,
-                &struct_policy,
-                PathScope::Globs(&paths),
-            )
-            .unwrap()
+            batch
+                .get(&1)
+                .unwrap()
+                .iter()
+                .map(|row| row.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["src/left.rs", "src/right.rs"]
         );
     }
 
@@ -679,41 +511,6 @@ all:
         let batch = find_policies_batch(temp.path(), &vault, &requests).unwrap();
 
         assert!(batch.get(&0).unwrap().is_empty());
-    }
-
-    #[test]
-    fn path_scope_all_visits_every_source_file() {
-        let (temp, vault) = policy_fixture();
-
-        let rows = find(
-            temp.path(),
-            &vault,
-            PatternSource::Pattern("fn $NAME() { $$$ }"),
-            PathScope::All,
-            Some("rust"),
-        )
-        .unwrap();
-
-        assert_eq!(
-            rows.iter().map(|row| row.path.as_str()).collect::<Vec<_>>(),
-            vec!["src/left.rs", "src/right.rs"]
-        );
-    }
-
-    #[test]
-    fn path_scope_with_no_globs_visits_nothing() {
-        let (temp, vault) = policy_fixture();
-
-        let rows = find(
-            temp.path(),
-            &vault,
-            PatternSource::Pattern("fn $NAME() { $$$ }"),
-            PathScope::Globs(&[]),
-            Some("rust"),
-        )
-        .unwrap();
-
-        assert!(rows.is_empty());
     }
 
     fn policy(language: &str, pattern: &str) -> PolicyPattern {

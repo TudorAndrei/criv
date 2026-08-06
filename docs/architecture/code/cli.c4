@@ -148,11 +148,6 @@ model {
       description 'Answers typed knowledge graph questions about the vault.'
       link ../../src/query.rs 'source'
     }
-    rustSearch = module 'criv::search' {
-      technology 'Rust'
-      description 'Runs text and structural searches over indexed sources.'
-      link ../../src/search.rs 'source'
-    }
   }
 
   extend criv.cli.architectureService {
@@ -177,7 +172,6 @@ model {
   criv.cli.commandInterface.rustCriv -> criv.cli.governanceEngine.rustCheck 'Runs one-shot checks'
   criv.cli.commandInterface.rustCriv -> criv.cli.governanceEngine.rustEnforce 'Runs staged enforcement'
   criv.cli.commandInterface.rustCriv -> criv.cli.knowledgeQueries.rustQuery 'Sends query requests'
-  criv.cli.commandInterface.rustCriv -> criv.cli.knowledgeQueries.rustSearch 'Sends search requests'
 
   // Refresh pipeline.
   criv.cli.refreshCoordinator.rustWatch -> criv.cli.refreshCoordinator.rustRefresh 'Schedules refresh sessions'
@@ -233,16 +227,13 @@ model {
   criv.cli.statePublisher.rustState -> criv.cli.sourceIntelligence.rustStructural 'Serializes structural matches'
   criv.cli.statePublisher.rustState -> criv.cli.statePublisher.rustSnapshots 'Publishes retained snapshots'
 
-  // Query and search.
+  // Queries.
   criv.cli.knowledgeQueries.rustQuery -> criv.cli.vaultModel.rustVault 'Resolves graph questions'
   criv.cli.knowledgeQueries.rustQuery -> criv.cli.sourceIntelligence.rustSourceIndex 'Reads indexed sources'
   criv.cli.knowledgeQueries.rustQuery -> criv.cli.sourceIntelligence.rustSourceGraph 'Reads module and import relations'
   criv.cli.knowledgeQueries.rustQuery -> criv.cli.repositoryHistory.rustGit 'Reads commit history'
   criv.cli.knowledgeQueries.rustQuery -> criv.cli.statePublisher.rustSnapshots 'Reads published snapshots'
   criv.cli.knowledgeQueries.rustQuery -> criv.cli.architectureService.rustC4Code 'Reads the generated module graph'
-  criv.cli.knowledgeQueries.rustSearch -> criv.cli.sourceIntelligence.rustSourceIndex 'Searches indexed sources'
-  criv.cli.knowledgeQueries.rustSearch -> criv.cli.sourceIntelligence.rustStructural 'Matches structural patterns'
-  criv.cli.knowledgeQueries.rustSearch -> criv.cli.vaultModel.rustVault 'Scopes searches to the vault'
 
   // Architecture export.
   criv.cli.architectureService.rustArchitecture -> criv.cli.architectureService.rustC4Code 'Renders the module architecture'
@@ -294,8 +285,8 @@ views {
   }
 
   view codeQuery of criv.cli.knowledgeQueries {
-    title 'Code / CLI / Query and search'
-    description 'The Rust modules that answer knowledge graph and search requests.'
+    title 'Code / CLI / Queries'
+    description 'The Rust modules that answer typed knowledge graph questions.'
 
     include *
     include criv.cli.vaultModel.rustVault

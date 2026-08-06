@@ -54,7 +54,6 @@ criv check
 - `criv watch --once` — write `.criv/state.json` and content-addressed snapshots.
 - `criv query ...` — ask the graph about coverage, citations, ADR governance,
   callers, callees, C4 elements, and diffs.
-- `criv search ...` — search files, text, notes, and structural policy patterns.
 - `criv enforce --stage commit|push|ci` — run the stage-aware gate used by hooks
   and CI.
 

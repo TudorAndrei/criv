@@ -13,7 +13,6 @@ pub(crate) struct Config {
     pub(crate) source_roots: Vec<String>,
     pub(crate) source_exclude: Vec<String>,
     pub(crate) source_index: bool,
-    pub(crate) embeddings: bool,
     pub(crate) state_keep: usize,
     pub(crate) architecture_code: Option<ArchitectureCodeConfig>,
     pub(crate) enforce_stages: Vec<String>,
@@ -42,7 +41,6 @@ impl Default for Config {
             source_roots: vec!["src".into(), "lib".into()],
             source_exclude: vec!["**/target/**".into(), "**/node_modules/**".into()],
             source_index: true,
-            embeddings: false,
             state_keep: 20,
             architecture_code: None,
             enforce_stages: vec!["commit".into(), "push".into(), "ci".into()],
@@ -92,7 +90,7 @@ impl RawConfig {
         let docs_dir = vault_path("vault.docs", &self.vault.docs.unwrap_or(defaults.docs_dir))?;
         if !self.patterns.is_empty() {
             return Err(CrivError::new(
-                "criv.toml [patterns.*] is no longer supported; move persistent patterns into an ADR policy.patterns entry and use its ADR-NNNN/local-id, or use positional structural search with --lang for ad hoc patterns",
+                "criv.toml [patterns.*] is no longer supported; move persistent patterns into an ADR policy.patterns entry and use its ADR-NNNN/local-id",
             ));
         }
         Ok(Config {
@@ -107,7 +105,6 @@ impl RawConfig {
                 .collect::<Result<Vec<_>>>()?,
             source_exclude: self.source.exclude.unwrap_or(defaults.source_exclude),
             source_index: self.index.source.unwrap_or(defaults.source_index),
-            embeddings: self.index.embeddings.unwrap_or(defaults.embeddings),
             state_keep: positive_state_keep(self.state.keep.unwrap_or(defaults.state_keep))?,
             architecture_code: self
                 .architecture
@@ -177,7 +174,6 @@ struct RawSource {
 #[derive(Debug, Default, Deserialize)]
 struct RawIndex {
     source: Option<bool>,
-    embeddings: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -370,7 +366,7 @@ languages = ["rust"]
 [index]
 source = false
 notes = "memory"
-embeddings = true
+legacy = true
 
 [obsidian]
 plugin = false
@@ -381,7 +377,6 @@ plugin = false
         let config = raw.into_config().unwrap();
         assert_eq!(config.source_roots, vec!["src"]);
         assert!(!config.source_index);
-        assert!(config.embeddings);
     }
 
     #[test]
@@ -423,7 +418,6 @@ pattern = "println!($$$ARGS)"
         assert!(message.contains("[patterns.*]"));
         assert!(message.contains("ADR policy.patterns"));
         assert!(message.contains("ADR-NNNN/local-id"));
-        assert!(message.contains("--lang"));
     }
 
     #[test]

@@ -61,7 +61,6 @@ enum Case {
     WatchOnceWarm,
     WatchOnceChanged,
     WatchOnceSemanticChanged,
-    SourceIndexFiles,
     Check,
     EnforceCi,
     QueryNextAdrId,
@@ -79,7 +78,6 @@ impl Case {
             Self::WatchOnceWarm => "watch_once_warm",
             Self::WatchOnceChanged => "watch_once_changed",
             Self::WatchOnceSemanticChanged => "watch_once_semantic_changed",
-            Self::SourceIndexFiles => "source_index_files",
             Self::Check => "check",
             Self::EnforceCi => "enforce_ci",
             Self::QueryNextAdrId => "query_next_adr_id",
@@ -109,7 +107,6 @@ impl Case {
             | Self::WatchOnceWarm
             | Self::WatchOnceChanged
             | Self::WatchOnceSemanticChanged => &["watch", "--once"],
-            Self::SourceIndexFiles => &["search", "--files", "symbol"],
             Self::Check => &["check"],
             Self::EnforceCi => &["enforce", "--stage", "ci"],
             Self::QueryNextAdrId => &["query", "next-adr-id"],
@@ -157,12 +154,11 @@ impl Case {
     }
 }
 
-const ALL_CASES: [Case; 13] = [
+const ALL_CASES: [Case; 12] = [
     Case::WatchOnceCold,
     Case::WatchOnceWarm,
     Case::WatchOnceChanged,
     Case::WatchOnceSemanticChanged,
-    Case::SourceIndexFiles,
     Case::Check,
     Case::EnforceCi,
     Case::QueryNextAdrId,

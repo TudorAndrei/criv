@@ -41,7 +41,7 @@ when terms actually get resolved.
 ```sh
 criv query governing src/watch.rs      # which ADRs govern this file
 criv query governs ADR-0007            # what an ADR controls
-criv search --notes "<topic>"          # search note text
+rg -n -i "<topic>" docs/               # search note text
 ```
 
 ## ADR conventions specific to this repo

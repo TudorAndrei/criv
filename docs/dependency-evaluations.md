@@ -97,7 +97,7 @@ That is evidence that the two advisory call paths are not reached by the
 currently inspected source, not proof that text search alone can rule out every
 runtime path or upstream behavior.
 
-### Unmaintained crates: `bincode` and `paste`
+### Unmaintained crate: `bincode`
 
 `RUSTSEC-2025-0141` marks `bincode v1.3.3` unmaintained. Its active default
 dependency path is:
@@ -105,18 +105,6 @@ dependency path is:
 ```text
 bincode v1.3.3 <- heed-types v0.21.0 <- heed v0.22.1 <- fff-search v0.10.1 <- criv
 ```
-
-`RUSTSEC-2024-0436` marks `paste v1.0.15` unmaintained. It is present in the
-lockfile but absent from the default and default-target dependency trees. The
-feature/target tree shows it becomes active only with criv's optional
-`embeddings` feature:
-
-```text
-paste <- macro_rules_attribute <- tokenizers <- fastembed <- criv[embeddings]
-```
-
-This distinguishes an inactive default-build lockfile entry from an absent
-dependency: embedding builds still use it and remain in the monitoring scope.
 
 ### Policy conclusion
 

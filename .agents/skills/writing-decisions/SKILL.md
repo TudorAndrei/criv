@@ -2,7 +2,7 @@
 name: writing-decisions
 description: Use when creating or superseding a criv ADR under docs/adr, setting its governs scopes, or adding an inline policy pattern.
 metadata:
-  criv-template: blake3:4c005ba4223cc730
+  criv-template: blake3:c32cb797754d1673
 ---
 
 # Writing decisions
@@ -36,11 +36,11 @@ Use `pattern` for a simple ast-grep pattern and `rule` for full ast-grep YAML.
 An ADR's `policy.patterns` frontmatter is the only home for a persistent named
 rule, addressed as `ADR-NNNN/local-id`.
 
-Inspect matches before accepting the decision:
+Inspect policy diagnostics before accepting the decision:
 
-- `criv search --pattern-id ADR-NNNN/local-id` — one named rule, scoped to its ADR's `governs`.
-- `criv search --rule ADR-NNNN` — every rule in that ADR.
-- `criv search --lang rust 'pattern'` — an exploratory pattern with no ADR.
+- `criv check --filter ADR-NNNN` — text diagnostics for one decision.
+- `criv check --format json --filter ADR-NNNN` — machine-readable diagnostics.
+- `criv enforce --stage ci` — the complete policy gate.
 
 ## Immutability
 

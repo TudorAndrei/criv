@@ -8,7 +8,6 @@ exclude = ["**/target/**", "**/node_modules/**"]
 
 [index]
 source = true
-embeddings = false
 
 [state]
 keep = 20

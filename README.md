@@ -13,7 +13,7 @@ state that other tools can read.
   companion files.
 - `criv check` validates documentation, source references, and ADR rules.
 - `criv watch --once` writes the local state used by tools and editors.
-- `criv query`, `criv search`, and `criv enforce` inspect and protect the graph.
+- `criv query` and `criv enforce` inspect and protect the graph.
 
 `.criv/` is local generated state and should stay ignored by git.
 
@@ -70,7 +70,6 @@ You can also run the CLI from a checkout without installing it globally:
 ```sh
 cargo run -- check
 cargo run -- query coverage
-cargo run -- search --files main
 ```
 
 ## Common workflow
@@ -189,21 +188,15 @@ policy:
       message: Prefer structured diagnostics.
 ```
 
-`criv check`, `criv search --rule ADR-NNNN`, and `criv enforce` parse those
-inline ast-grep rules from the ADR each time they run. They are also the only
-persistent named patterns: a policy named `no-println` in `ADR-0005` is
-addressed as `ADR-0005/no-println` for links, state, and a focused search.
+`criv check` and `criv enforce` parse those inline ast-grep rules from the ADR
+each time they run. They are also the only persistent named patterns: a policy
+named `no-println` in `ADR-0005` is addressed as `ADR-0005/no-println` for links
+and state.
 
-Use `criv search --pattern-id ADR-NNNN/local-id` to inspect one persistent
-policy. With no `--paths`, the search uses the owning ADR's effective
-`governs` scope; pass `--paths` to deliberately override it. For unnamed
-exploratory searches, keep the pattern on the command line and specify its
-language:
+Use a filtered check to inspect policy diagnostics for one decision:
 
 ```sh
-criv search --pattern-id ADR-0005/no-println
-criv search --rule ADR-0005
-criv search --lang rust 'println!($$$ARGS)'
+criv check --filter ADR-0005
 ```
 
 Refresh generated state when docs or source files change:
@@ -229,46 +222,6 @@ subcommand, positional argument, flag, and example.
 
 `c4-code` emits LikeC4 source with modules and imports for a focused source
 glob. It does not emit files, classes, functions, methods, or calls.
-
-Search code and notes:
-
-```sh
-criv search --files main
-criv search --grep "watch --once"
-criv search --notes "Obsidian"
-criv search --pattern-id ADR-0005/no-println
-criv search --rule ADR-0005
-```
-
-### Semantic note search (optional)
-
-`criv search --notes <query> --semantic` matches notes by meaning rather than by
-substring. It is off by default and requires two independent gates:
-
-```sh
-cargo install --features embeddings --git https://github.com/TudorAndrei/criv criv
-```
-
-```toml
-[index]
-embeddings = true
-```
-
-Released binaries are built without the feature, so `--semantic` always fails on
-them even when `criv.toml` enables it. This is deliberate, per
-[ADR-0047](docs/adr/0047-semantic-note-search-stays-source-only.md): enabling
-embeddings grows the binary from roughly 12 MB to roughly 30 MB, against a
-release profile tuned for size.
-
-The backend is not fully local. The first `--semantic` run downloads model
-weights from the Hugging Face Hub and a prebuilt ONNX Runtime shared library,
-populating a cache of roughly 97 MB under `.criv/embeddings`. The download is
-silent. Later runs reuse the cache and need no network. With an empty cache and
-no network, the command fails with an error retrieving `model.onnx`.
-
-Every other criv command runs offline, which is what makes them safe inside git
-hooks and CI. Semantic search is the one exception; keep it out of automated
-gates unless the cache is known to be warm.
 
 Run the same enforcement path used by hooks and CI:
 

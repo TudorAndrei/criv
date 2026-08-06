@@ -518,16 +518,6 @@ fn init_check_watch_query_search_and_enforce_workflow() {
         .success()
         .stdout(predicate::str::contains("src/lib.rs#fn:run"));
     criv(root)
-        .args(["search", "--files", "lib"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("src/lib.rs"));
-    criv(root)
-        .args(["search", "--grep", "criv"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("src/lib.rs:2"));
-    criv(root)
         .args(["enforce", "--stage", "ci"])
         .assert()
         .success();
@@ -788,11 +778,6 @@ fn disabled_source_index_is_observed_through_cli_boundary() {
     assert!(state["source-index"].as_array().unwrap().is_empty());
 
     criv(root)
-        .args(["search", "--files", "lib"])
-        .assert()
-        .success()
-        .stdout(predicate::str::is_empty());
-    criv(root)
         .args(["query", "nodes", "--kind", "code", "--without-docs"])
         .assert()
         .success()
@@ -820,7 +805,6 @@ exclude = []
 
 [index]
 source = true
-embeddings = false
 
 [enforce]
 stages = ["commit", "push", "ci"]
@@ -852,97 +836,6 @@ fn check_accepts_valid_crlf_frontmatter() {
     .unwrap();
 
     criv(root).arg("check").assert().success();
-}
-
-#[test]
-fn file_search_honors_path_and_language_filters() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-
-    init(root);
-    fs::create_dir_all(root.join("src")).unwrap();
-    fs::create_dir_all(root.join("scripts")).unwrap();
-    fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
-    fs::write(root.join("scripts/main.py"), "def main():\n    pass\n").unwrap();
-    write_criv_config(
-        root,
-        vec!["src", "scripts"],
-        vec!["**/target/**", "**/node_modules/**"],
-        true,
-    );
-
-    criv(root)
-        .args(["search", "--files", "main"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("src/main.rs"))
-        .stdout(predicate::str::contains("scripts/main.py"));
-    criv(root)
-        .args(["search", "--files", "main", "--paths", "src/**"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("src/main.rs"))
-        .stdout(predicate::str::contains("scripts/main.py").not());
-    criv(root)
-        .args(["search", "--files", "main", "--lang", "rust"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("src/main.rs"))
-        .stdout(predicate::str::contains("scripts/main.py").not());
-}
-
-#[test]
-fn structural_search_without_a_path_filter_scans_every_source_file() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-
-    init(root);
-    fs::create_dir_all(root.join("src")).unwrap();
-    fs::create_dir_all(root.join("scripts")).unwrap();
-    fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
-    fs::write(root.join("scripts/tool.rs"), "fn tool() {}\n").unwrap();
-    write_criv_config(root, vec!["src", "scripts"], vec![], true);
-
-    // No `--paths` and no `--lang`: the scan must cover the whole source index
-    // rather than compiling an empty glob set that matches nothing.
-    criv(root)
-        .args(["search", "fn $NAME() { $$$ }"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("src/main.rs"))
-        .stdout(predicate::str::contains("scripts/tool.rs"));
-
-    criv(root)
-        .args(["search", "fn $NAME() { $$$ }", "--paths", "src/**"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("src/main.rs"))
-        .stdout(predicate::str::contains("scripts/tool.rs").not());
-}
-
-#[test]
-fn file_search_matches_jsx_for_the_jsx_language_filter() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    init(root);
-    fs::create_dir_all(root.join("src")).unwrap();
-    fs::write(
-        root.join("src/component.jsx"),
-        "export const Component = () => <div />;\n",
-    )
-    .unwrap();
-    fs::write(
-        root.join("src/component.js"),
-        "export const component = 1;\n",
-    )
-    .unwrap();
-    write_criv_config(root, vec!["src"], vec![], true);
-
-    criv(root)
-        .args(["search", "--files", "component", "--lang", "jsx"])
-        .assert()
-        .success()
-        .stdout("src/component.jsx\n");
 }
 
 // Windows cannot represent the quote, tab, and newline characters used in the
@@ -1461,63 +1354,6 @@ fn query_diff_rejects_non_utf8_state_from_a_git_ref() {
 }
 
 #[test]
-fn search_json_output_is_valid_for_special_characters() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-
-    init(root);
-    fs::create_dir_all(root.join("src")).unwrap();
-    fs::write(
-        root.join("src/lib.rs"),
-        "pub fn run() { let text = \"quoted\tvalue\"; }\n",
-    )
-    .unwrap();
-    write_criv_config(
-        root,
-        vec!["src"],
-        vec!["**/target/**", "**/node_modules/**"],
-        true,
-    );
-
-    let assert = criv(root)
-        .args(["search", "--grep", "quoted", "--format", "json"])
-        .assert()
-        .success();
-    let rows: Vec<serde_json::Value> = serde_json::from_slice(&assert.get_output().stdout).unwrap();
-    let row = rows
-        .iter()
-        .find(|row| row["path"] == "src/lib.rs")
-        .expect("grep row");
-    assert_eq!(row["line"], 1);
-    assert_eq!(
-        row["text"],
-        "pub fn run() { let text = \"quoted\tvalue\"; }"
-    );
-}
-
-#[test]
-fn regex_grep_reports_invalid_queries() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-
-    init(root);
-    fs::create_dir_all(root.join("src")).unwrap();
-    fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
-    write_criv_config(
-        root,
-        vec!["src"],
-        vec!["**/target/**", "**/node_modules/**"],
-        true,
-    );
-
-    criv(root)
-        .args(["search", "--grep", "[", "--grep-mode", "regex"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("invalid regex grep query"));
-}
-
-#[test]
 fn check_json_output_is_valid_for_special_characters() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
@@ -2022,160 +1858,6 @@ policy:
 }
 
 #[test]
-fn adr_policy_patterns_are_the_only_persistent_named_searches() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-
-    init(root);
-    fs::create_dir_all(root.join("src")).unwrap();
-    fs::create_dir_all(root.join("docs/adr")).unwrap();
-    write_criv_config(
-        root,
-        vec!["src"],
-        vec!["**/target/**", "**/node_modules/**"],
-        true,
-    );
-    fs::write(
-        root.join("src/governed.rs"),
-        "pub fn governed() {\n    println!(\"governed\");\n}\n",
-    )
-    .unwrap();
-    fs::write(
-        root.join("src/outside.rs"),
-        "pub fn outside() {\n    println!(\"outside\");\n}\n",
-    )
-    .unwrap();
-    fs::write(
-        root.join("docs/adr/0990-pattern-search.md"),
-        r#"---
-id: ADR-0990
-kind: decision
-title: Pattern search
-status: accepted
-date: 2026-08-02
-governs:
-  - src/governed.rs
-policy:
-  patterns:
-    - id: no-println
-      language: rust
-      pattern: "println!($$$ARGS)"
-    - id: functions
-      language: rust
-      pattern: "pub fn $NAME() { $$$BODY }"
----
-
-# Pattern search
-"#,
-    )
-    .unwrap();
-
-    criv(root)
-        .args(["search", "--pattern-id", "ADR-0990/no-println"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("src/governed.rs:2"))
-        .stdout(predicate::str::contains("src/outside.rs").not());
-    criv(root)
-        .args([
-            "search",
-            "--pattern-id",
-            "ADR-0990/no-println",
-            "--paths",
-            "src/outside.rs",
-        ])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("src/outside.rs:2"))
-        .stdout(predicate::str::contains("src/governed.rs").not());
-    criv(root)
-        .args(["search", "--rule", "ADR-0990"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("src/governed.rs:1"))
-        .stdout(predicate::str::contains("src/governed.rs:2"))
-        .stdout(predicate::str::contains("src/outside.rs").not());
-    criv(root)
-        .args(["search", "--lang", "rust", "println!($$$ARGS)"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("src/governed.rs:2"))
-        .stdout(predicate::str::contains("src/outside.rs:2"));
-    criv(root)
-        .args(["search", "--help"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("--pattern-id <PATTERN_ID>"));
-    criv(root)
-        .arg("--usage")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("flag --pattern-id"));
-
-    fs::write(
-        root.join("criv.toml"),
-        r#"
-[source]
-roots = ["src"]
-
-[patterns.no-println]
-language = "rust"
-pattern = "println!($$$ARGS)"
-"#,
-    )
-    .unwrap();
-    criv(root)
-        .arg("check")
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "[patterns.*] is no longer supported",
-        ))
-        .stderr(predicate::str::contains("ADR-NNNN/local-id"))
-        .stderr(predicate::str::contains("--lang"));
-}
-
-#[test]
-fn search_rule_reports_invalid_inline_policy_definitions() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-
-    init(root);
-    fs::create_dir_all(root.join("docs/adr")).unwrap();
-    write_criv_config(
-        root,
-        vec!["src"],
-        vec!["**/target/**", "**/node_modules/**"],
-        false,
-    );
-    fs::write(
-        root.join("docs/adr/0994-invalid-search-policy.md"),
-        r#"---
-id: ADR-0994
-kind: decision
-title: Invalid search policy
-status: accepted
-date: 2026-06-26
-policy:
-  patterns:
-    - id: invalid-rule
-      language: rust
-      rule: "not: [valid"
----
-
-# Invalid search policy
-"#,
-    )
-    .unwrap();
-
-    criv(root)
-        .args(["search", "--rule", "ADR-0994"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("failed to parse ast-grep rule"));
-}
-
-#[test]
 fn inline_policy_patterns_are_enforced_without_generation() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
@@ -2222,11 +1904,6 @@ policy:
         .failure()
         .stdout(predicate::str::contains("ADR-0995 policy"))
         .stdout(predicate::str::contains("println!"));
-    criv(root)
-        .args(["search", "--rule", "ADR-0995"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("src/lib.rs:2"));
     criv(root)
         .args(["enforce", "--stage", "commit"])
         .assert()
@@ -2310,7 +1987,7 @@ policy:
 }
 
 #[test]
-fn non_accepted_inline_policies_remain_searchable_but_do_not_block_or_register_state() {
+fn non_accepted_inline_policies_do_not_block_or_register_state() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
 
@@ -2358,16 +2035,6 @@ policy:
         .args(["enforce", "--stage", "ci"])
         .assert()
         .success();
-    criv(root)
-        .args(["search", "--pattern-id", "ADR-0994/no-println"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("src/lib.rs:2"));
-    criv(root)
-        .args(["search", "--rule", "ADR-0994"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("src/lib.rs:2"));
     criv(root).args(["watch", "--once"]).assert().success();
     let state = fs::read_to_string(root.join(".criv/state.json")).unwrap();
     assert!(!state.contains("ADR-0994/no-println"));
@@ -2597,7 +2264,6 @@ exclude = ["**/target/**", "**/node_modules/**"]
 
 [index]
 source = true
-embeddings = false
 
 [enforce]
 stages = ["commit", "push", "ci"]
@@ -2852,7 +2518,6 @@ fn write_criv_config(root: &Path, roots: Vec<&str>, exclude: Vec<&str>, source_i
 
         [index]
         source = source_index
-        embeddings = false
 
         [enforce]
         stages = ["commit", "push", "ci"]

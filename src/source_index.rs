@@ -12,14 +12,13 @@ use std::{
 
 use fff_search::file_picker::FilePicker;
 use fff_search::{
-    FFFMode, FilePickerOptions, FuzzySearchOptions, GrepSearchOptions, PaginationArgs, QueryParser,
-    SharedFilePicker, SharedFrecency, parse_grep_query,
+    FFFMode, FilePickerOptions, FuzzySearchOptions, PaginationArgs, QueryParser, SharedFilePicker,
+    SharedFrecency,
 };
-use regex::Regex;
 
 use crate::config::Config;
 use crate::source_paths::{
-    SourceRootKind, canonical_source_path, read_source_to_string, source_metadata, source_root_kind,
+    SourceRootKind, canonical_source_path, source_metadata, source_root_kind,
 };
 use crate::util::{GlobMatcher, is_text_file};
 use crate::{CrivError, Result};
@@ -75,25 +74,11 @@ pub(crate) fn work_counts() -> WorkCounts {
     WORK_COUNTS.with(Cell::get)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SourceGrepMode {
-    Plain,
-    Regex,
-    Fuzzy,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FileHit {
-    pub(crate) path: String,
+struct FileHit {
+    path: String,
     score: i32,
     frecency: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct GrepHit {
-    pub(crate) path: String,
-    pub(crate) line: usize,
-    pub(crate) text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,8 +88,6 @@ pub(crate) struct IndexedSource {
 }
 
 pub(crate) trait SourceIndex: std::fmt::Debug + Send + Sync {
-    fn fuzzy_files(&self, query: &str, limit: usize) -> Result<Vec<FileHit>>;
-    fn grep(&self, query: &str, mode: SourceGrepMode, paths: &[String]) -> Result<Vec<GrepHit>>;
     fn resolve_partial_path(&self, path: &str) -> Option<(String, bool)>;
     fn entries(&self) -> Result<Vec<IndexedSource>>;
 }
@@ -424,39 +407,49 @@ impl FffSourceIndex {
             .collect()
     }
 
-    fn grep_explicit_files(
-        &self,
-        query: &str,
-        mode: SourceGrepMode,
-        paths: Option<&GlobMatcher>,
-        matcher: Option<&Regex>,
-    ) -> Vec<GrepHit> {
-        let plain_query = query.to_lowercase();
-        let mut rows = Vec::new();
-        for path in self
-            .explicit_files
-            .iter()
-            .filter(|path| self.source_path_allowed(path) && path_allowed(path, paths))
-        {
-            let Ok(contents) = read_source_to_string(&self.root, path) else {
-                continue;
-            };
-            for (index, line) in contents.lines().enumerate() {
-                let matched = match mode {
-                    SourceGrepMode::Plain => line.to_lowercase().contains(&plain_query),
-                    SourceGrepMode::Regex => matcher.is_some_and(|matcher| matcher.is_match(line)),
-                    SourceGrepMode::Fuzzy => fuzzy_score(line, query).is_some(),
-                };
-                if matched {
-                    rows.push(GrepHit {
-                        path: path.clone(),
-                        line: index + 1,
-                        text: line.trim().to_string(),
-                    });
-                }
-            }
+    fn partial_path_candidates(&self, query: &str, limit: usize) -> Result<Vec<FileHit>> {
+        let mut hits = self.explicit_file_hits(query);
+        for scoped in &self.pickers {
+            hits.extend(self.with_picker(scoped, |picker| {
+                let parser = QueryParser::default();
+                let query = parser.parse(query);
+                let results = picker.fuzzy_search(
+                    &query,
+                    None,
+                    FuzzySearchOptions {
+                        max_threads: 0,
+                        project_path: None,
+                        current_file: None,
+                        pagination: PaginationArgs { offset: 0, limit },
+                        ..Default::default()
+                    },
+                );
+
+                results
+                    .items
+                    .into_iter()
+                    .zip(results.scores)
+                    .filter_map(|(file, score)| {
+                        let path = prefixed_path(&scoped.prefix, file.relative_path(picker));
+                        self.indexed_path(path).map(|path| FileHit {
+                            path,
+                            score: score.total,
+                            frecency: file.total_frecency_score().max(0) as u32,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })?);
         }
-        rows
+        hits.sort_by(|left, right| {
+            right
+                .score
+                .cmp(&left.score)
+                .then_with(|| right.frecency.cmp(&left.frecency))
+                .then_with(|| left.path.cmp(&right.path))
+        });
+        hits.dedup_by(|left, right| left.path == right.path);
+        hits.truncate(limit);
+        Ok(hits)
     }
 }
 
@@ -507,104 +500,6 @@ fn prefixed_path(prefix: &str, path: String) -> String {
 }
 
 impl SourceIndex for FffSourceIndex {
-    fn fuzzy_files(&self, query: &str, limit: usize) -> Result<Vec<FileHit>> {
-        let mut hits = self.explicit_file_hits(query);
-        for scoped in &self.pickers {
-            hits.extend(self.with_picker(scoped, |picker| {
-                let parser = QueryParser::default();
-                let query = parser.parse(query);
-                let results = picker.fuzzy_search(
-                    &query,
-                    None,
-                    FuzzySearchOptions {
-                        max_threads: 0,
-                        project_path: None,
-                        current_file: None,
-                        pagination: PaginationArgs { offset: 0, limit },
-                        ..Default::default()
-                    },
-                );
-
-                results
-                    .items
-                    .into_iter()
-                    .zip(results.scores)
-                    .filter_map(|(file, score)| {
-                        let path = prefixed_path(&scoped.prefix, file.relative_path(picker));
-                        self.indexed_path(path).map(|path| FileHit {
-                            path,
-                            score: score.total,
-                            frecency: file.total_frecency_score().max(0) as u32,
-                        })
-                    })
-                    .collect::<Vec<_>>()
-            })?);
-        }
-        hits.sort_by(|left, right| {
-            right
-                .score
-                .cmp(&left.score)
-                .then_with(|| right.frecency.cmp(&left.frecency))
-                .then_with(|| left.path.cmp(&right.path))
-        });
-        hits.dedup_by(|left, right| left.path == right.path);
-        hits.truncate(limit);
-        Ok(hits)
-    }
-
-    fn grep(&self, query: &str, mode: SourceGrepMode, paths: &[String]) -> Result<Vec<GrepHit>> {
-        let regex_matcher = regex_matcher(query, mode)?;
-        let path_matcher = (!paths.is_empty()).then(|| GlobMatcher::from_valid_patterns(paths));
-        let mut rows =
-            self.grep_explicit_files(query, mode, path_matcher.as_ref(), regex_matcher.as_ref());
-        for scoped in &self.pickers {
-            rows.extend(self.with_picker(scoped, |picker| {
-                let grep_query = match mode {
-                    SourceGrepMode::Plain => query.to_lowercase(),
-                    SourceGrepMode::Regex | SourceGrepMode::Fuzzy => query.to_string(),
-                };
-                let parsed = parse_grep_query(&grep_query);
-                let results = picker.grep(
-                    &parsed,
-                    &GrepSearchOptions {
-                        mode: match mode {
-                            SourceGrepMode::Plain => fff_search::GrepMode::PlainText,
-                            SourceGrepMode::Regex => fff_search::GrepMode::Regex,
-                            SourceGrepMode::Fuzzy => fff_search::GrepMode::Fuzzy,
-                        },
-                        page_limit: 10_000,
-                        trim_whitespace: true,
-                        ..Default::default()
-                    },
-                );
-
-                let mut scoped_rows = Vec::new();
-                for matched in results.matches {
-                    let Some(file) = results.files.get(matched.file_index) else {
-                        continue;
-                    };
-                    let path = prefixed_path(&scoped.prefix, file.relative_path(picker));
-                    if self.indexed_path(path.clone()).is_none()
-                        || !path_allowed(&path, path_matcher.as_ref())
-                    {
-                        continue;
-                    }
-                    scoped_rows.push(GrepHit {
-                        path,
-                        line: matched.line_number as usize,
-                        text: matched.line_content.trim().to_string(),
-                    });
-                }
-                scoped_rows
-            })?);
-        }
-        rows.sort_by(|left, right| {
-            (&left.path, left.line, &left.text).cmp(&(&right.path, right.line, &right.text))
-        });
-        rows.dedup();
-        Ok(rows)
-    }
-
     fn resolve_partial_path(&self, path: &str) -> Option<(String, bool)> {
         if path.is_empty() || path.starts_with("match:") {
             return None;
@@ -617,7 +512,7 @@ impl SourceIndex for FffSourceIndex {
         }
 
         let fff_matches = self
-            .fuzzy_files(path, 50)
+            .partial_path_candidates(path, 50)
             .ok()
             .unwrap_or_default()
             .into_iter()
@@ -679,33 +574,12 @@ impl SourceIndex for FffSourceIndex {
 struct EmptySourceIndex;
 
 impl SourceIndex for EmptySourceIndex {
-    fn fuzzy_files(&self, _query: &str, _limit: usize) -> Result<Vec<FileHit>> {
-        Ok(Vec::new())
-    }
-
-    fn grep(&self, _query: &str, _mode: SourceGrepMode, _paths: &[String]) -> Result<Vec<GrepHit>> {
-        Ok(Vec::new())
-    }
-
     fn resolve_partial_path(&self, _path: &str) -> Option<(String, bool)> {
         None
     }
 
     fn entries(&self) -> Result<Vec<IndexedSource>> {
         Ok(Vec::new())
-    }
-}
-
-fn path_allowed(path: &str, matcher: Option<&GlobMatcher>) -> bool {
-    matcher.is_none_or(|matcher| matcher.is_match(path))
-}
-
-fn regex_matcher(query: &str, mode: SourceGrepMode) -> Result<Option<Regex>> {
-    match mode {
-        SourceGrepMode::Regex => Regex::new(query)
-            .map(Some)
-            .map_err(|err| CrivError::new(format!("invalid regex grep query `{query}`: {err}"))),
-        SourceGrepMode::Plain | SourceGrepMode::Fuzzy => Ok(None),
     }
 }
 
@@ -786,31 +660,6 @@ mod tests {
             entries,
             vec![".github/workflows/ci.yml", "Cargo.toml", "src/lib.rs"]
         );
-        assert!(
-            index
-                .fuzzy_files("Cargo", 10)
-                .unwrap()
-                .iter()
-                .any(|hit| hit.path == "Cargo.toml")
-        );
-        assert!(
-            index.fuzzy_files("", 2).unwrap().len() <= 2,
-            "file search should honor requested result limits"
-        );
-        assert!(
-            index
-                .grep("package", SourceGrepMode::Plain, &[])
-                .unwrap()
-                .iter()
-                .any(|hit| hit.path == "Cargo.toml" && hit.line == 1)
-        );
-        assert!(
-            index
-                .grep("pkg", SourceGrepMode::Fuzzy, &["Cargo.toml".into()])
-                .unwrap()
-                .iter()
-                .any(|hit| hit.path == "Cargo.toml" && hit.line == 1)
-        );
         assert_eq!(
             index.resolve_partial_path("lib.rs"),
             Some(("src/lib.rs".into(), false))
@@ -819,10 +668,6 @@ mod tests {
             index.resolve_partial_path("lib.rs"),
             Some(("src/lib.rs".into(), false))
         );
-        let error = index
-            .grep("[", SourceGrepMode::Regex, &[])
-            .expect_err("invalid regex should fail");
-        assert!(error.to_string().contains("invalid regex grep query"));
         assert_eq!(
             work_counts(),
             WorkCounts {

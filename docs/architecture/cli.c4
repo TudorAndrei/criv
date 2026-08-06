@@ -52,7 +52,7 @@ model {
       }
       knowledgeQueries = component 'Knowledge queries' {
         technology 'Rust'
-        description 'Answers graph questions and searches source, notes, and structural patterns.'
+        description 'Answers typed questions about the repository knowledge graph.'
         link ../../src/query.rs 'source'
       }
     }

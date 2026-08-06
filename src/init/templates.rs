@@ -135,10 +135,7 @@ impl Default for DefaultConfig {
                 roots: vec!["src", "lib"],
                 exclude: vec!["**/target/**", "**/node_modules/**"],
             },
-            index: IndexConfig {
-                source: true,
-                embeddings: false,
-            },
+            index: IndexConfig { source: true },
             state: StateConfig { keep: 20 },
             enforce: EnforceConfig {
                 stages: vec!["commit", "push", "ci"],
@@ -165,7 +162,6 @@ struct SourceConfig {
 #[derive(Debug, Serialize)]
 struct IndexConfig {
     source: bool,
-    embeddings: bool,
 }
 
 #[cfg(test)]

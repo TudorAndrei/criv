@@ -85,3 +85,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0079-no-fallback-view-in-the-c4-preview|ADR-0079]] - No fallback view in the C4 preview
 - [[0080-co-locate-primary-likec4-views-with-their-models|ADR-0080]] - Co-locate primary LikeC4 views with their models
 - [[0081-require-material-state-store-performance-gains|ADR-0081]] - Require material State store performance gains
+- [[0082-no-standalone-search-command|ADR-0082]] - No standalone search command

@@ -2,7 +2,7 @@
 name: checking-drift
 description: Use when criv check fails, or when validating that documents, ADR metadata, wiki-links, source references, and generated state still match the code.
 metadata:
-  criv-template: blake3:c1ce057757cdb1cb
+  criv-template: blake3:7e864efe46cd2197
 ---
 
 # Checking drift
@@ -29,6 +29,6 @@ Each diagnostic names a file and a rule. Correct the file it names, or correct
 the code that made the claim false. Treat a diagnostic that misreads the
 repository as a criv bug worth reporting.
 
-A governs or policy diagnostic names an ADR. Run `criv search --rule ADR-NNNN`
-to see what its patterns match today. The `writing-decisions` skill owns the
-ADR side of that fix.
+A governs or policy diagnostic names an ADR. Run `criv check --filter ADR-NNNN`
+to isolate its current diagnostics. The `writing-decisions` skill owns the ADR
+side of that fix.
