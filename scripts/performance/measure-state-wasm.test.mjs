@@ -16,14 +16,23 @@ test("reports the packaged Wasm storage operations as JSON", () => {
   );
   writeFileSync(
     join(packageRoot, "criv_wasm.js"),
-    `module.exports = {
-      validated_state: raw => JSON.parse(raw),
-      summarize_state: raw => ({ node_count: JSON.parse(raw).graph.nodes.length }),
-      source_entries: raw => JSON.parse(raw)["source-index"],
-      graph_nodes: raw => JSON.parse(raw).graph.nodes,
-      lookup_graph_node: (raw, target) => JSON.parse(raw).graph.nodes.find(node => node.id === target),
-      suggest_source_selectors: raw => JSON.parse(raw)["source-index"]
-    };\n`,
+    `class LoadedState {
+      constructor(raw) { this.state = JSON.parse(raw); }
+      initialProjections() {
+        return {
+          state: this.state,
+          summary: { node_count: this.state.graph.nodes.length },
+          sources: this.state["source-index"],
+          nodes: this.state.graph.nodes
+        };
+      }
+      lookupNode(target) { return this.state.graph.nodes.find(node => node.id === target); }
+      suggestSelectors() {
+        return this.state["source-index"].map(source => ({ ...source, target: source.path }));
+      }
+      free() {}
+    }
+    module.exports = { LoadedState };\n`,
   );
   writeFileSync(join(packageRoot, "criv_wasm_bg.wasm"), Buffer.from([0, 1, 2, 3]));
   const state = join(root, "state.json");
@@ -57,7 +66,7 @@ test("reports the packaged Wasm storage operations as JSON", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, "");
   const output = JSON.parse(readFileSync(report, "utf8"));
-  assert.equal(output.schema, "criv.state-wasm-baseline.v1");
+  assert.equal(output.schema, "criv.state-wasm-loaded-revision.v1");
   assert.equal(output.samples, 1);
   assert.equal(output.state_bytes, Buffer.byteLength(raw));
   assert.equal(output.wasm_module_bytes, 4);
@@ -70,9 +79,15 @@ test("reports the packaged Wasm storage operations as JSON", () => {
     "selector_exact",
     "selector_suffix",
     "selector_missing",
+    "replacement_lifetime",
   ]);
   for (const operation of Object.values(output.operations)) {
     assert.equal(operation.timing.samples, 1);
     assert.equal(operation.raw.length, 1);
   }
+  assert.equal(output.operations.replacement_lifetime.replacement_lifetime.cycles, 20);
+  assert.equal(
+    output.operations.replacement_lifetime.replacement_lifetime.passes_110_percent_limit,
+    true,
+  );
 });

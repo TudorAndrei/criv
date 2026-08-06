@@ -24,11 +24,13 @@ import { registerSourceLanguageFeatures } from "./languageFeatures";
 import { parseSourceTarget } from "./sourceTarget";
 import { WorkspaceStateStore, type WorkspaceStateStatus } from "./stateStore";
 import { CrivStateTreeProvider } from "./tree";
+import { createVscodeStateHost } from "./vscodeStateHost";
+import { loadState } from "./wasm";
 
 export { CRIV_COMMANDS };
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  const store = new WorkspaceStateStore();
+  const store = new WorkspaceStateStore(createVscodeStateHost(), { loadState });
   const treeProvider = new CrivStateTreeProvider();
   const checkDiagnostics = new CrivCheckDiagnostics();
   const c4Diagnostics = new C4ArtifactDiagnostics();
@@ -84,6 +86,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.workspace.onDidSaveTextDocument(async (document) => {
       await maybeRunCheckOnSave(store, checkDiagnostics, document);
+    }),
+    vscode.workspace.onDidChangeWorkspaceFolders(async () => {
+      await store.refresh();
     }),
   );
 

@@ -11,7 +11,6 @@ import {
 import type { CrivStateSnapshot } from "../../src/stateModel";
 
 const snapshot: CrivStateSnapshot = {
-  raw: "{}",
   summary: {
     schema: "criv.state.v1",
     node_count: 2,

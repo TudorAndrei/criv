@@ -4,7 +4,6 @@ import type { CrivLikeC4Model } from "@criv/likec4/protocol";
 export type CrivStateEnvelope = CrivValidatedState;
 
 export interface CrivStateSnapshot {
-  raw: string;
   summary: CrivStateSummary;
   sources: CrivSourceEntry[];
   graphNodes: CrivGraphNode[];
@@ -33,14 +32,12 @@ export function registeredPatterns(envelope: CrivStateEnvelope): string[] {
 }
 
 export function buildStateSnapshot(
-  raw: string,
   envelope: CrivStateEnvelope,
   summary: CrivStateSummary,
   sources: CrivSourceEntry[],
   graphNodes: CrivGraphNode[],
 ): CrivStateSnapshot {
   return {
-    raw,
     summary,
     sources,
     graphNodes,

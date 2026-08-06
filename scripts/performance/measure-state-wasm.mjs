@@ -8,7 +8,7 @@ import { performance } from "node:perf_hooks";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
 
-const OUTPUT_SCHEMA = "criv.state-wasm-baseline.v1";
+const OUTPUT_SCHEMA = "criv.state-wasm-loaded-revision.v1";
 const OPERATIONS = [
   "cold_load_and_initial_projections",
   "initial_projections_after_load",
@@ -18,19 +18,22 @@ const OPERATIONS = [
   "selector_exact",
   "selector_suffix",
   "selector_missing",
+  "replacement_lifetime",
 ];
 
 const definitions = {
   cold_load_and_initial_projections:
-    "load the packaged Wasm module, read the complete State, and run the four initial editor projections",
+    "load the packaged Wasm module, read and decode one State revision, and return the initial projection batch",
   initial_projections_after_load:
-    "run validated_state, summarize_state, source_entries, and graph_nodes after module and file load",
+    "return the initial projection batch after module, file, and State revision load",
   lookup_present: "look up one existing graph-node ID after module and file load",
   lookup_missing: "look up one absent graph-node ID after module and file load",
   selector_empty: "request source selectors with an empty query after module and file load",
   selector_exact: "request source selectors with one exact source path after module and file load",
   selector_suffix: "request source selectors with one source basename after module and file load",
   selector_missing: "request source selectors with one absent query after module and file load",
+  replacement_lifetime:
+    "load, project, and free the same State twenty times after five warm-up replacements",
 };
 
 function options() {
@@ -57,21 +60,13 @@ function loadPackage(packageRoot) {
   return createRequire(import.meta.url)(packageRoot);
 }
 
-function runInitialProjections(wasm, raw) {
-  const values = [
-    wasm.validated_state(raw),
-    wasm.summarize_state(raw),
-    wasm.source_entries(raw),
-    wasm.graph_nodes(raw),
-  ];
-  if (values.length !== 4) throw new Error("initial projection count changed");
+function loadRevision(wasm, raw) {
+  return new wasm.LoadedState(raw);
 }
 
-function operationInputs(wasm, raw) {
-  const nodes = wasm.graph_nodes(raw);
-  const sources = wasm.source_entries(raw);
-  const presentNode = nodes[0]?.id ?? "__criv_missing_node__";
-  const exactSource = sources[0]?.path ?? "__criv_missing_source__";
+function operationInputs(projections) {
+  const presentNode = projections.nodes[0]?.id ?? "__criv_missing_node__";
+  const exactSource = projections.sources[0]?.path ?? "__criv_missing_source__";
   return {
     presentNode,
     exactSource,
@@ -79,26 +74,42 @@ function operationInputs(wasm, raw) {
   };
 }
 
-function runOperation(wasm, raw, operation, inputs) {
+function runOperation(revision, operation, inputs) {
   switch (operation) {
     case "initial_projections_after_load":
     case "cold_load_and_initial_projections":
-      return runInitialProjections(wasm, raw);
+      return revision.initialProjections();
     case "lookup_present":
-      return wasm.lookup_graph_node(raw, inputs.presentNode);
+      return revision.lookupNode(inputs.presentNode);
     case "lookup_missing":
-      return wasm.lookup_graph_node(raw, "__criv_missing_node__");
+      return revision.lookupNode("__criv_missing_node__");
     case "selector_empty":
-      return wasm.suggest_source_selectors(raw, "", 20);
+      return revision.suggestSelectors("", 20);
     case "selector_exact":
-      return wasm.suggest_source_selectors(raw, inputs.exactSource, 20);
+      return revision.suggestSelectors(inputs.exactSource, 20);
     case "selector_suffix":
-      return wasm.suggest_source_selectors(raw, inputs.suffixSource, 20);
+      return revision.suggestSelectors(inputs.suffixSource, 20);
     case "selector_missing":
-      return wasm.suggest_source_selectors(raw, "__criv_missing_selector__", 20);
+      return revision.suggestSelectors("__criv_missing_selector__", 20);
     default:
       throw new Error(`unsupported operation: ${operation}`);
   }
+}
+
+function runReplacementLifetime(wasm, raw) {
+  const replace = () => {
+    const revision = loadRevision(wasm, raw);
+    revision.initialProjections();
+    revision.free();
+    globalThis.gc?.();
+  };
+  for (let warmup = 0; warmup < 5; warmup += 1) replace();
+  const rss = [];
+  for (let replacement = 0; replacement < 20; replacement += 1) {
+    replace();
+    rss.push(process.memoryUsage().rss);
+  }
+  return rss;
 }
 
 function worker(values) {
@@ -109,23 +120,39 @@ function worker(values) {
 
   let wasm;
   let raw;
+  let revision;
   let inputs;
+  let replacementRssBytes;
   let start;
   if (operation === "cold_load_and_initial_projections") {
     start = performance.now();
     wasm = loadPackage(packageRoot);
     raw = readFileSync(state, "utf8");
-    runInitialProjections(wasm, raw);
+    revision = loadRevision(wasm, raw);
+    revision.initialProjections();
+  } else if (operation === "replacement_lifetime") {
+    wasm = loadPackage(packageRoot);
+    raw = readFileSync(state, "utf8");
+    start = performance.now();
+    replacementRssBytes = runReplacementLifetime(wasm, raw);
   } else {
     wasm = loadPackage(packageRoot);
     raw = readFileSync(state, "utf8");
-    inputs = operationInputs(wasm, raw);
+    revision = loadRevision(wasm, raw);
+    if (operation !== "initial_projections_after_load") {
+      inputs = operationInputs(revision.initialProjections());
+    }
     start = performance.now();
-    runOperation(wasm, raw, operation, inputs);
+    runOperation(revision, operation, inputs);
   }
   const seconds = (performance.now() - start) / 1000;
+  revision?.free();
   process.stdout.write(
-    `${JSON.stringify({ seconds, max_rss_bytes: process.resourceUsage().maxRSS * 1024 })}\n`,
+    `${JSON.stringify({
+      seconds,
+      max_rss_bytes: process.resourceUsage().maxRSS * 1024,
+      replacement_rss_bytes: replacementRssBytes,
+    })}\n`,
   );
 }
 
@@ -167,9 +194,11 @@ function findWasmModule(packageRoot) {
 }
 
 function runWorker(state, packageRoot, operation) {
+  const nodeArgs = operation === "replacement_lifetime" ? ["--expose-gc"] : [];
   const result = spawnSync(
     process.execPath,
     [
+      ...nodeArgs,
       fileURLToPath(import.meta.url),
       "--worker",
       "--state",
@@ -208,10 +237,15 @@ function parent(values) {
       cache_state:
         operation === "cold_load_and_initial_projections"
           ? "fresh process and module after one untimed process warm-up; operating-system file cache is not reset"
-          : "fresh process with module and State loaded before the timed operation, after one untimed process warm-up",
+          : operation === "replacement_lifetime"
+            ? "fresh process with five untimed load, project, free, and garbage-collection cycles"
+            : "fresh process with module and State revision loaded before the timed operation, after one untimed process warm-up",
       raw,
       timing: timing(raw),
       peak_rss: memory(raw),
+      ...(operation === "replacement_lifetime"
+        ? { replacement_lifetime: replacementLifetime(raw) }
+        : {}),
     };
   }
   const output = {
@@ -227,6 +261,18 @@ function parent(values) {
   const report = `${JSON.stringify(output, null, 2)}\n`;
   if (values.output) writeFileSync(resolve(values.output), report);
   else process.stdout.write(report);
+}
+
+function replacementLifetime(raw) {
+  const samples = raw.map((sample) => sample.replacement_rss_bytes);
+  const ratios = samples.map((sample) => Math.max(...sample) / sample[0]);
+  return {
+    cycles: 20,
+    warmup_cycles: 5,
+    sample_rss_bytes: samples,
+    maximum_to_first_ratio: Math.max(...ratios),
+    passes_110_percent_limit: ratios.every((ratio) => ratio <= 1.1),
+  };
 }
 
 try {

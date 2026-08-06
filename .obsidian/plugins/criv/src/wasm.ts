@@ -19,16 +19,26 @@ export interface CrivSelectorSuggestion {
   detail: string;
 }
 
+export interface CrivInitialProjections {
+  state: CrivState;
+  summary: CrivStateSummary;
+  sources: SourceIndexEntry[];
+  nodes: unknown[];
+}
+
+type CrivWasmLoadedState = {
+  initialProjections(): CrivInitialProjections;
+  lookupNode(target: string): unknown;
+  suggestSelectors(query: string, limit: number): CrivSelectorSuggestion[];
+  free(): void;
+};
+
 type CrivWasmModule = {
-  validated_state(raw: string): CrivState;
-  summarize_state(raw: string): CrivStateSummary;
-  source_entries(raw: string): SourceIndexEntry[];
-  graph_nodes(raw: string): unknown[];
-  suggest_source_selectors(raw: string, query: string, limit: number): CrivSelectorSuggestion[];
-  lookup_graph_node(raw: string, target: string): unknown;
+  LoadedState: new (raw: string) => CrivWasmLoadedState;
 };
 
 export const CRIV_WASM_LOAD_ERROR = "criv-wasm-unavailable";
+export const CRIV_LOADED_STATE_DISPOSED = "criv-loaded-state-disposed";
 
 export class CrivWasmLoadError extends Error {
   readonly code = CRIV_WASM_LOAD_ERROR;
@@ -42,15 +52,24 @@ export class CrivWasmLoadError extends Error {
   }
 }
 
+export class CrivLoadedStateDisposedError extends Error {
+  readonly code = CRIV_LOADED_STATE_DISPOSED;
+
+  constructor() {
+    super("The loaded criv State revision was disposed.");
+    this.name = "CrivLoadedStateDisposedError";
+  }
+}
+
+export interface CrivLoadedState {
+  initialProjections(): CrivInitialProjections;
+  lookupNode(target: string): unknown;
+  suggestSelectors(query: string, limit: number): CrivSelectorSuggestion[];
+  dispose(): void;
+}
+
 export interface CrivWasmBridge {
-  validatedState(raw: string): Promise<CrivState>;
-  summarizeState(raw: string): Promise<CrivStateSummary>;
-  sourceEntries(raw: string): Promise<SourceIndexEntry[]>;
-  suggestSourceSelectors(
-    raw: string,
-    query: string,
-    limit: number,
-  ): Promise<CrivSelectorSuggestion[]>;
+  loadState(raw: string): Promise<CrivLoadedState>;
 }
 
 export type CrivWasmLoader = () => Promise<unknown>;
@@ -72,58 +91,69 @@ export function createCrivWasmBridge(loader: CrivWasmLoader): CrivWasmBridge {
   };
 
   return {
-    async validatedState(raw) {
-      return (await loadWasm()).validated_state(raw);
-    },
-    async summarizeState(raw) {
-      return (await loadWasm()).summarize_state(raw);
-    },
-    async sourceEntries(raw) {
-      return (await loadWasm()).source_entries(raw);
-    },
-    async suggestSourceSelectors(raw, query, limit) {
-      return (await loadWasm()).suggest_source_selectors(raw, query, limit);
+    async loadState(raw) {
+      const wasm = await loadWasm();
+      const loaded = new wasm.LoadedState(raw);
+      try {
+        return new LoadedStateAdapter(loaded);
+      } catch (error) {
+        loaded.free();
+        throw error;
+      }
     },
   };
 }
 
-export function validatedState(raw: string): Promise<CrivState> {
-  return bridge.validatedState(raw);
-}
-
-export function summarizeState(raw: string): Promise<CrivStateSummary> {
-  return bridge.summarizeState(raw);
-}
-
-export function sourceEntries(raw: string): Promise<SourceIndexEntry[]> {
-  return bridge.sourceEntries(raw);
-}
-
-export function suggestSourceSelectors(
-  raw: string,
-  query: string,
-  limit: number,
-): Promise<CrivSelectorSuggestion[]> {
-  return bridge.suggestSourceSelectors(raw, query, limit);
+export function loadState(raw: string): Promise<CrivLoadedState> {
+  return bridge.loadState(raw);
 }
 
 function requireCrivWasmModule(value: unknown): CrivWasmModule {
   if (!isRecord(value)) {
     throw new Error("criv Wasm module did not export an object");
   }
-  for (const name of [
-    "validated_state",
-    "summarize_state",
-    "source_entries",
-    "graph_nodes",
-    "suggest_source_selectors",
-    "lookup_graph_node",
-  ]) {
-    if (typeof value[name] !== "function") {
-      throw new Error(`criv Wasm module is missing export ${name}`);
-    }
+  if (typeof value.LoadedState !== "function") {
+    throw new Error("criv Wasm module is missing export LoadedState");
   }
   return value as CrivWasmModule;
+}
+
+class LoadedStateAdapter implements CrivLoadedState {
+  private readonly projections: CrivInitialProjections;
+  private disposed = false;
+
+  constructor(private readonly loaded: CrivWasmLoadedState) {
+    this.projections = loaded.initialProjections();
+  }
+
+  initialProjections(): CrivInitialProjections {
+    this.assertAvailable();
+    return this.projections;
+  }
+
+  lookupNode(target: string): unknown {
+    this.assertAvailable();
+    return this.loaded.lookupNode(target);
+  }
+
+  suggestSelectors(query: string, limit: number): CrivSelectorSuggestion[] {
+    this.assertAvailable();
+    return this.loaded.suggestSelectors(query, limit);
+  }
+
+  dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+    this.loaded.free();
+  }
+
+  private assertAvailable(): void {
+    if (this.disposed) {
+      throw new CrivLoadedStateDisposedError();
+    }
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

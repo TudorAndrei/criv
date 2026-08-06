@@ -30,7 +30,6 @@ test("builds host state from a canonical validated projection", () => {
   assert.equal(stateContract.patterns?.["ADR-0002/draft-entrypoint"], undefined);
 
   const snapshot = buildStateSnapshot(
-    stateContractRaw,
     stateContract,
     {
       schema: "criv.state.v1",
@@ -75,7 +74,6 @@ test("keeps LikeC4 view source ownership in host state", () => {
   const envelope = JSON.parse(raw) as CrivStateEnvelope;
 
   const snapshot = buildStateSnapshot(
-    raw,
     envelope,
     {
       schema: "criv.state.v1",
@@ -123,15 +121,13 @@ test("collects c4 artifacts from source entries and graph nodes", () => {
   );
 });
 
-test("builds a loaded state snapshot from parsed state and wasm projections", () => {
-  const raw = JSON.stringify({
+test("builds a loaded state snapshot from wasm projections", () => {
+  const envelope = {
     schema: "criv.state.v1",
     "registered-patterns": ["adr/source-selector"],
-  });
-  const envelope = JSON.parse(raw) as CrivStateEnvelope;
+  } satisfies CrivStateEnvelope;
 
   const snapshot = buildStateSnapshot(
-    raw,
     envelope,
     {
       schema: "criv.state.v1",
@@ -144,7 +140,6 @@ test("builds a loaded state snapshot from parsed state and wasm projections", ()
     [],
   );
 
-  assert.equal(snapshot.raw, raw);
   assert.deepEqual(snapshot.registeredPatterns, ["adr/source-selector"]);
   assert.deepEqual(snapshot.c4Artifacts, [
     {

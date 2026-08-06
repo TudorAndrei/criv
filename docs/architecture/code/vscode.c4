@@ -125,6 +125,7 @@ model {
   // Extension activation.
   criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodePreview.previewModule 'Registers the custom editor'
   criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodeState.stateStoreModule 'Observes workspace state'
+  criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodeState.wasmModule 'Creates the state bridge'
   criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodeState.configModule 'Reads the extension settings'
   criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodeNavigation.languageFeaturesModule 'Registers language features'
   criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodeNavigation.sourceTargetModule 'Opens resolved source targets'
@@ -144,8 +145,7 @@ model {
 
   // Workspace state.
   criv.vscodeExtension.vscodeState.stateStoreModule -> criv.vscodeExtension.vscodeState.stateModelModule 'Builds extension snapshots'
-  criv.vscodeExtension.vscodeState.stateStoreModule -> criv.vscodeExtension.vscodeState.wasmModule 'Validates state'
-  criv.vscodeExtension.vscodeState.stateModelModule -> criv.vscodeExtension.vscodeState.wasmModule 'Projects validated state'
+  criv.vscodeExtension.vscodeState.stateStoreModule -> criv.vscodeExtension.vscodeState.wasmModule 'Owns loaded state revisions'
   criv.vscodeExtension.vscodeState.stateModelModule -> criv.vscodeExtension.vscodeState.c4ArtifactModule 'Describes C4 artifacts'
   criv.vscodeExtension.vscodeState.configModule -> criv.vscodeExtension.vscodeState.configModelModule 'Validates the settings model'
 
@@ -154,7 +154,6 @@ model {
   criv.vscodeExtension.vscodeNavigation.languageFeaturesModule -> criv.vscodeExtension.vscodeState.stateStoreModule 'Reads the current state'
   criv.vscodeExtension.vscodeNavigation.languageFeaturesModule -> criv.vscodeExtension.vscodeCommands.commandsModule 'Offers command links'
   criv.vscodeExtension.vscodeNavigation.sourceReferencesModule -> criv.vscodeExtension.vscodeState.stateModelModule 'Reads state snapshots'
-  criv.vscodeExtension.vscodeNavigation.sourceReferencesModule -> criv.vscodeExtension.vscodeState.wasmModule 'Resolves source selectors'
 
   // Diagnostics.
   criv.vscodeExtension.vscodeDiagnostics.checkDiagnosticsModule -> criv.vscodeExtension.vscodeDiagnostics.checkDiagnosticModelModule 'Parses check results'
@@ -164,7 +163,6 @@ model {
   // Vault tree.
   criv.vscodeExtension.vscodeExplorer.treeModule -> criv.vscodeExtension.vscodeState.stateStoreModule 'Observes the current state'
   criv.vscodeExtension.vscodeExplorer.treeModule -> criv.vscodeExtension.vscodeState.stateModelModule 'Reads state snapshots'
-  criv.vscodeExtension.vscodeExplorer.treeModule -> criv.vscodeExtension.vscodeState.wasmModule 'Resolves tree selectors'
 }
 
 views {

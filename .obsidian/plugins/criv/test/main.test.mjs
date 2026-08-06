@@ -38,6 +38,41 @@ const validState = {
 };
 const validStateRaw = JSON.stringify(validState);
 
+class FakeRevision {
+  disposals = 0;
+
+  constructor(state) {
+    this.state = state;
+  }
+
+  initialProjections() {
+    return {
+      state: this.state,
+      summary: {
+        schema: this.state.schema,
+        node_count: this.state.graph?.nodes?.length ?? 0,
+        edge_count: this.state.graph?.edges?.length ?? 0,
+        source_count: this.state["source-index"]?.length ?? 0,
+        pattern_count: this.state["registered-patterns"]?.length ?? 0,
+      },
+      sources: this.state["source-index"] ?? [],
+      nodes: [],
+    };
+  }
+
+  lookupNode() {
+    return undefined;
+  }
+
+  suggestSelectors() {
+    return [];
+  }
+
+  dispose() {
+    this.disposals += 1;
+  }
+}
+
 {
   const { plugin } = createPlugin({ ".criv/state.json": validStateRaw });
   const loaded = await plugin.loadState();
@@ -96,8 +131,101 @@ const validStateRaw = JSON.stringify(validState);
   });
 }
 
-function createPlugin(files) {
+{
+  const oldLoad = deferred();
+  const newLoad = deferred();
+  const oldRevision = new FakeRevision({ ...validState, marker: "old" });
+  const newRevision = new FakeRevision({ ...validState, marker: "new" });
+  const loads = [oldLoad.promise, newLoad.promise];
+  let loadCount = 0;
+  const { plugin } = createPlugin(
+    { ".criv/state.json": validStateRaw },
+    () => loads[loadCount++],
+  );
+
+  const oldRefresh = plugin.loadState();
+  await waitFor(() => loadCount === 1);
+  const newRefresh = plugin.loadState();
+  await waitFor(() => loadCount === 2);
+  newLoad.resolve(newRevision);
+  await newRefresh;
+  oldLoad.resolve(oldRevision);
+  await oldRefresh;
+
+  assert.equal(plugin.cachedState().marker, "new");
+  assert.equal(oldRevision.disposals, 1);
+  assert.equal(newRevision.disposals, 0);
+}
+
+{
+  const current = new FakeRevision(validState);
+  const changed = new FakeRevision({ ...validState, marker: "changed" });
+  const revisions = [current, changed];
+  let loadCount = 0;
+  const { plugin, setStat, reads } = createPlugin(
+    {
+      ".criv/state.json": validStateRaw,
+      "state/other.json": JSON.stringify({ ...validState, marker: "changed" }),
+    },
+    async () => revisions[loadCount++],
+  );
+
+  setStat({ mtime: 1, size: validStateRaw.length });
+  await plugin.loadState();
+  await plugin.pollState();
+  assert.equal(reads(), 1);
+
+  await plugin.updateStatePath("state/other.json");
+  assert.equal(plugin.cachedState().marker, "changed");
+  assert.equal(current.disposals, 1);
+
+  plugin.onunload();
+  assert.equal(changed.disposals, 1);
+}
+
+{
+  const files = { ".criv/state.json": validStateRaw };
+  const current = new FakeRevision(validState);
+  const changed = new FakeRevision({ ...validState, marker: "polled" });
+  const revisions = [current, changed];
+  let loadCount = 0;
+  const { plugin, setStat, reads } = createPlugin(
+    files,
+    async () => revisions[loadCount++],
+  );
+
+  setStat({ mtime: 1, size: validStateRaw.length });
+  await plugin.loadState();
+  files[".criv/state.json"] = JSON.stringify({ ...validState, marker: "polled" });
+  setStat({ mtime: 2, size: files[".criv/state.json"].length });
+  await plugin.pollState();
+
+  assert.equal(reads(), 2);
+  assert.equal(plugin.cachedState().marker, "polled");
+  assert.equal(current.disposals, 1);
+}
+
+{
+  const current = new FakeRevision(validState);
+  let loadCount = 0;
+  const { plugin } = createPlugin({ ".criv/state.json": validStateRaw }, async () => {
+    loadCount += 1;
+    if (loadCount === 1) {
+      return current;
+    }
+    throw new Error("unsupported criv state schema: criv.state.v2");
+  });
+
+  await plugin.loadState();
+  await plugin.loadState();
+
+  assert.equal(plugin.cachedState(), null);
+  assert.equal(current.disposals, 1);
+}
+
+function createPlugin(files, loader) {
   let readCount = 0;
+  let stat = { mtime: 0, size: 0 };
   const app = {
     vault: {
       adapter: {
@@ -107,6 +235,9 @@ function createPlugin(files) {
             return files[path];
           }
           throw new Error(`missing ${path}`);
+        },
+        async stat() {
+          return stat;
         },
       },
       cachedRead() {
@@ -129,12 +260,32 @@ function createPlugin(files) {
       },
     },
   };
-  const plugin = new CrivPlugin(app, {});
+  const plugin = new CrivPlugin(app, {}, loader);
   plugin.settings = {
     statePath: ".criv/state.json",
     externalEditorUrl: "vscode://file/{path}",
   };
-  return { plugin, reads: () => readCount };
+  return { plugin, reads: () => readCount, setStat: (value) => (stat = value) };
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function waitFor(predicate) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (predicate()) {
+      return;
+    }
+    await Promise.resolve();
+  }
+  throw new Error("condition was not reached");
 }
 
 function aliasPlugin() {

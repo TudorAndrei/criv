@@ -697,6 +697,7 @@ dependencies = [
 name = "criv-wasm"
 version = "0.8.0"
 dependencies = [
+ "js-sys",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",

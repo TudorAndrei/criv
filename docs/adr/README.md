@@ -86,3 +86,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0080-co-locate-primary-likec4-views-with-their-models|ADR-0080]] - Co-locate primary LikeC4 views with their models
 - [[0081-require-material-state-store-performance-gains|ADR-0081]] - Require material State store performance gains
 - [[0082-no-standalone-search-command|ADR-0082]] - No standalone search command
+- [[0083-own-one-loaded-state-revision-per-editor-workspace|ADR-0083]] - Own one loaded State revision per editor workspace

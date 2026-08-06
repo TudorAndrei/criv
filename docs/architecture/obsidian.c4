@@ -12,12 +12,12 @@ model {
       }
       obsidianState = component 'State model' {
         technology 'TypeScript'
-        description 'Parses published criv state for navigation and editor presentation.'
+        description 'Defines validated state data and pure navigation and presentation operations.'
         link ../../.obsidian/plugins/criv/src/core.ts 'source'
       }
       obsidianWasm = component 'WebAssembly adapter' {
         technology 'TypeScript'
-        description 'Loads and calls the packaged state projection library.'
+        description 'Loads, calls, and disposes revisions from the packaged state projection library.'
         link ../../.obsidian/plugins/criv/src/wasm.ts 'source'
       }
     }

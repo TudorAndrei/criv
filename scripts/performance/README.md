@@ -33,10 +33,12 @@ its graph and repeated-string shape, and records repeated native
 read/decode/schema-validation samples. It measures the current JSON boundary;
 it does not call private `criv` functions.
 
-`measure-state-wasm.mjs` measures the packaged Wasm boundary in fresh Node.js
-processes. It records cold module plus initial-projection cost, initial
-projections after load, graph lookup, selector variants, Wasm module bytes, and
-process maximum RSS.
+`measure-state-wasm.mjs` measures the packaged Wasm loaded-revision boundary in
+fresh Node.js processes. It records cold module plus State load and initial-batch
+cost, the initial batch after revision load, prepared graph lookup, prepared
+selector variants, twenty replace-and-free cycles, Wasm module bytes, and
+process maximum RSS. Each timed query uses one loaded revision and does not pass
+raw State again.
 
 Use release artifacts and at least three samples for evidence:
 

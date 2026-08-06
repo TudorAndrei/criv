@@ -32,6 +32,15 @@ function wasmError(action) {
   }
   assert.fail("expected the canonical Wasm export to reject input");
 }
+
+function initialProjections(raw) {
+  const revision = new wasm.LoadedState(raw);
+  try {
+    return revision.initialProjections();
+  } finally {
+    revision.free();
+  }
+}
 const stateContractPath = resolve(__dirname, "../../../../fixtures/state/criv.state.v1.json");
 assert.equal(
   existsSync(stateContractPath),
@@ -40,9 +49,11 @@ assert.equal(
 );
 const stateContractRaw = readFileSync(stateContractPath, "utf8");
 const stateContract = JSON.parse(stateContractRaw);
-assert.deepEqual(wasm.validated_state(stateContractRaw), stateContract);
+assert.deepEqual(initialProjections(stateContractRaw).state, stateContract);
 assert.match(
-  wasmError(() => wasm.validated_state(stateContractRaw.replace("criv.state.v1", "criv.state.v2"))),
+  wasmError(
+    () => new wasm.LoadedState(stateContractRaw.replace("criv.state.v1", "criv.state.v2")),
+  ),
   /unsupported criv state schema/i,
 );
 assert.equal(stateContract.graph.nodes.length, 6);
@@ -68,7 +79,7 @@ const fixture = JSON.parse(
   readFileSync(resolve(pluginRoot, "fixtures/link-resolution.json"), "utf8"),
 );
 const state = fixture.state;
-const sources = wasm.source_entries(JSON.stringify(state));
+const sources = initialProjections(JSON.stringify(state)).sources;
 
 for (const testCase of fixture.cases) {
   const source = core.resolveSource(sources, testCase.target);
@@ -104,18 +115,17 @@ const rankedState = {
   ],
 };
 
+const rankedRevision = new wasm.LoadedState(JSON.stringify(rankedState));
+assert.equal(rankedRevision.suggestSelectors("src/lib.rs", 2)[0].path, "src/lib.rs");
 assert.equal(
-  wasm.suggest_source_selectors(JSON.stringify(rankedState), "src/lib.rs", 2)[0].path,
-  "src/lib.rs",
-);
-assert.equal(
-  wasm.suggest_source_selectors(JSON.stringify(rankedState), "lib.rs", 2)[0].path,
+  rankedRevision.suggestSelectors("lib.rs", 2)[0].path,
   "crates/criv-wasm/src/lib.rs",
 );
 assert.equal(
-  wasm.suggest_source_selectors(JSON.stringify(rankedState), "", 1)[0].path,
+  rankedRevision.suggestSelectors("", 1)[0].path,
   "crates/criv-wasm/src/lib.rs",
 );
+rankedRevision.free();
 
 const unsafeSourceState = {
   ...state,
@@ -129,7 +139,7 @@ const unsafeSourceState = {
   ],
 };
 
-const safeSources = wasm.source_entries(JSON.stringify(unsafeSourceState));
+const safeSources = initialProjections(JSON.stringify(unsafeSourceState)).sources;
 assert.deepEqual(
   safeSources.map((entry) => entry.path),
   ["src/lib.rs", "src/windows/path.rs"],
@@ -141,13 +151,13 @@ assert.equal(core.safeVaultPath("C:\\Users\\name\\.ssh\\id_rsa"), null);
 assert.equal(core.safeVaultPath("src\\lib.rs"), "src/lib.rs");
 
 const validStateRaw = JSON.stringify(state);
-assert.deepEqual(wasm.validated_state(validStateRaw), state);
+assert.deepEqual(initialProjections(validStateRaw).state, state);
 assert.match(
-  wasmError(() => wasm.validated_state(validStateRaw.replace("criv.state.v1", "criv.state.v2"))),
+  wasmError(() => new wasm.LoadedState(validStateRaw.replace("criv.state.v1", "criv.state.v2"))),
   /unsupported criv state schema/i,
 );
 assert.match(
-  wasmError(() => wasm.validated_state("{")),
+  wasmError(() => new wasm.LoadedState("{")),
   /invalid criv state JSON/i,
 );
 

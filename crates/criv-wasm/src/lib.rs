@@ -1,87 +1,191 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, hash_map::DefaultHasher};
+use std::hash::{Hash, Hasher};
 
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 const STATE_SCHEMA: &str = "criv.state.v1";
+const INITIAL_PROJECTIONS_TAKEN: &str = "criv initial projections were already taken";
 
 #[wasm_bindgen]
-pub fn validated_state(raw: &str) -> Result<JsValue, JsValue> {
-    let state = decode_state_value(raw).map_err(|error| JsValue::from_str(&error))?;
-    state
-        .serialize(&serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true))
-        .map_err(|err| JsValue::from_str(&format!("failed to encode validated criv state: {err}")))
-}
-
-#[wasm_bindgen]
-pub fn summarize_state(raw: &str) -> Result<JsValue, JsValue> {
-    let state = parse_state(raw)?;
-    let source_paths = unique_source_paths(&state.source_index);
-    serde_wasm_bindgen::to_value(&StateSummary {
-        schema: state.schema,
-        node_count: state.graph.nodes.len(),
-        edge_count: state.graph.edges.len(),
-        source_count: source_paths.len(),
-        pattern_count: state.registered_patterns.len(),
-        first_node_id: state.graph.nodes.first().map(|node| node.id.clone()),
-        first_edge: state
-            .graph
-            .edges
-            .first()
-            .map(|edge| format!("{}:{}:{}", edge.from, edge.kind, edge.to)),
-        first_source_path: source_paths.into_iter().next(),
-    })
-    .map_err(|err| JsValue::from_str(&format!("failed to encode criv summary: {err}")))
+pub struct LoadedState {
+    #[cfg(not(target_arch = "wasm32"))]
+    initial_envelope: Option<serde_json::Value>,
+    initial_projections: Option<JsValue>,
+    prepared: PreparedState,
 }
 
 #[wasm_bindgen]
-pub fn source_entries(raw: &str) -> Result<JsValue, JsValue> {
-    let state = parse_state(raw)?;
-    let entries = unique_source_entries(&state.source_index);
-    serde_wasm_bindgen::to_value(&entries)
-        .map_err(|err| JsValue::from_str(&format!("failed to encode criv source entries: {err}")))
-}
-
-#[wasm_bindgen]
-pub fn graph_nodes(raw: &str) -> Result<JsValue, JsValue> {
-    let state = parse_state(raw)?;
-    let nodes = editor_graph_nodes(&state);
-    serde_wasm_bindgen::to_value(&nodes)
-        .map_err(|err| JsValue::from_str(&format!("failed to encode criv graph nodes: {err}")))
-}
-
-#[wasm_bindgen]
-pub fn suggest_source_selectors(raw: &str, query: &str, limit: usize) -> Result<JsValue, JsValue> {
-    let state = parse_state(raw)?;
-    let suggestions = source_selector_suggestions(&state, query, limit);
-    serde_wasm_bindgen::to_value(&suggestions).map_err(|err| {
-        JsValue::from_str(&format!(
-            "failed to encode criv selector suggestions: {err}"
-        ))
-    })
-}
-
-#[wasm_bindgen]
-pub fn lookup_graph_node(raw: &str, target: &str) -> Result<JsValue, JsValue> {
-    let state = parse_state(raw)?;
-    let node = find_editor_graph_node(&state, target);
-    serde_wasm_bindgen::to_value(&node)
-        .map_err(|err| JsValue::from_str(&format!("failed to encode criv graph node: {err}")))
-}
-
-fn parse_state(raw: &str) -> Result<CrivState, JsValue> {
-    decode_state(raw).map_err(|error| JsValue::from_str(&error))
-}
-
-fn decode_state(raw: &str) -> Result<CrivState, String> {
-    let state = serde_json::from_str::<CrivState>(raw)
-        .map_err(|err| format!("invalid criv state JSON: {err}"))?;
-    if state.schema != STATE_SCHEMA {
-        return Err(format!("unsupported criv state schema: {}", state.schema));
+impl LoadedState {
+    #[wasm_bindgen(constructor)]
+    pub fn new(raw: &str) -> Result<LoadedState, JsValue> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            return Self::load_wasm(raw);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut loaded = Self::load(raw).map_err(|error| JsValue::from_str(&error))?;
+            loaded.prepare_initial_projections()?;
+            Ok(loaded)
+        }
     }
-    Ok(state)
+
+    #[wasm_bindgen(js_name = initialProjections)]
+    pub fn initial_projections(&mut self) -> Result<JsValue, JsValue> {
+        self.initial_projections
+            .take()
+            .ok_or_else(|| JsValue::from_str(INITIAL_PROJECTIONS_TAKEN))
+    }
+
+    #[wasm_bindgen(js_name = lookupNode)]
+    pub fn lookup_node(&self, target: &str) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&self.prepared.lookup_node(target)).map_err(|error| {
+            JsValue::from_str(&format!("failed to encode criv graph node: {error}"))
+        })
+    }
+
+    #[wasm_bindgen(js_name = suggestSelectors)]
+    pub fn suggest_selectors(&self, query: &str, limit: usize) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&self.prepared.suggest_selectors(query, limit)).map_err(
+            |error| {
+                JsValue::from_str(&format!(
+                    "failed to encode criv selector suggestions: {error}"
+                ))
+            },
+        )
+    }
 }
 
+impl LoadedState {
+    #[cfg(target_arch = "wasm32")]
+    fn load_wasm(raw: &str) -> Result<Self, JsValue> {
+        let envelope = js_sys::JSON::parse(raw).map_err(|error| {
+            JsValue::from_str(&format!(
+                "invalid criv state JSON: {}",
+                js_error_message(&error)
+            ))
+        })?;
+        let schema = js_sys::Reflect::get(&envelope, &JsValue::from_str("schema"))
+            .ok()
+            .and_then(|value| value.as_string())
+            .unwrap_or_else(|| "<missing>".into());
+        if schema != STATE_SCHEMA {
+            return Err(JsValue::from_str(&format!(
+                "unsupported criv state schema: {schema}"
+            )));
+        }
+        let state = serde_wasm_bindgen::from_value::<CrivState>(envelope.clone())
+            .map_err(|error| JsValue::from_str(&format!("invalid criv state JSON: {error}")))?;
+        let prepared = PreparedState::new(state);
+        let initial_projections = initial_projections_from_js(&envelope, &prepared)?;
+        Ok(Self {
+            #[cfg(not(target_arch = "wasm32"))]
+            initial_envelope: None,
+            initial_projections: Some(initial_projections),
+            prepared,
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn prepare_initial_projections(&mut self) -> Result<(), JsValue> {
+        let envelope = self
+            .initial_envelope
+            .as_ref()
+            .ok_or_else(|| JsValue::from_str(INITIAL_PROJECTIONS_TAKEN))?;
+        let projections = InitialProjections {
+            state: envelope,
+            summary: &self.prepared.summary,
+            sources: &self.prepared.sources,
+            nodes: &self.prepared.nodes,
+        };
+        let value = projections
+            .serialize(&serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true))
+            .map_err(|error| {
+                JsValue::from_str(&format!(
+                    "failed to encode criv initial projections: {error}"
+                ))
+            })?;
+        self.initial_envelope = None;
+        self.initial_projections = Some(value);
+        Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load(raw: &str) -> Result<Self, String> {
+        let envelope = decode_state_value(raw)?;
+        let state = CrivState::deserialize(&envelope)
+            .map_err(|error| format!("invalid criv state JSON: {error}"))?;
+        let prepared = PreparedState::new(state);
+        Ok(Self {
+            initial_envelope: Some(envelope),
+            initial_projections: None,
+            prepared,
+        })
+    }
+
+    #[cfg(test)]
+    fn take_initial_envelope(&mut self) -> Result<serde_json::Value, String> {
+        self.initial_envelope
+            .take()
+            .ok_or_else(|| INITIAL_PROJECTIONS_TAKEN.to_string())
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn initial_projections_from_js(
+    state: &JsValue,
+    prepared: &PreparedState,
+) -> Result<JsValue, JsValue> {
+    let projections = js_sys::Object::new();
+    set_js_field(&projections, "state", state)?;
+    set_js_field(
+        &projections,
+        "summary",
+        &serde_wasm_bindgen::to_value(&prepared.summary).map_err(js_encode_error)?,
+    )?;
+    set_js_field(
+        &projections,
+        "sources",
+        &serde_wasm_bindgen::to_value(&prepared.sources).map_err(js_encode_error)?,
+    )?;
+    set_js_field(
+        &projections,
+        "nodes",
+        &serde_wasm_bindgen::to_value(&prepared.nodes).map_err(js_encode_error)?,
+    )?;
+    Ok(projections.into())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn set_js_field(object: &js_sys::Object, name: &str, value: &JsValue) -> Result<(), JsValue> {
+    js_sys::Reflect::set(object, &JsValue::from_str(name), value)
+        .map(|_| ())
+        .map_err(|error| {
+            JsValue::from_str(&format!(
+                "failed to encode criv initial projections: {}",
+                js_error_message(&error)
+            ))
+        })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn js_encode_error(error: serde_wasm_bindgen::Error) -> JsValue {
+    JsValue::from_str(&format!(
+        "failed to encode criv initial projections: {error}"
+    ))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn js_error_message(error: &JsValue) -> String {
+    js_sys::Reflect::get(error, &JsValue::from_str("message"))
+        .ok()
+        .and_then(|value| value.as_string())
+        .or_else(|| error.as_string())
+        .unwrap_or_else(|| "unknown JavaScript error".into())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn decode_state_value(raw: &str) -> Result<serde_json::Value, String> {
     let state = serde_json::from_str::<serde_json::Value>(raw)
         .map_err(|err| format!("invalid criv state JSON: {err}"))?;
@@ -95,6 +199,7 @@ fn decode_state_value(raw: &str) -> Result<serde_json::Value, String> {
     Ok(state)
 }
 
+#[cfg(test)]
 fn unique_source_paths(source_index: &[SourceIndexEntry]) -> Vec<String> {
     unique_source_entries(source_index)
         .into_iter()
@@ -102,6 +207,7 @@ fn unique_source_paths(source_index: &[SourceIndexEntry]) -> Vec<String> {
         .collect()
 }
 
+#[cfg(test)]
 fn unique_source_entries(source_index: &[SourceIndexEntry]) -> Vec<EditorSourceEntry> {
     let mut seen = BTreeSet::new();
     source_index
@@ -111,6 +217,21 @@ fn unique_source_entries(source_index: &[SourceIndexEntry]) -> Vec<EditorSourceE
             seen.insert(path.clone()).then_some(EditorSourceEntry {
                 path,
                 mime: entry.mime.clone(),
+                frecency: entry.frecency,
+            })
+        })
+        .collect()
+}
+
+fn take_unique_source_entries(source_index: Vec<SourceIndexEntry>) -> Vec<EditorSourceEntry> {
+    let mut seen = BTreeSet::new();
+    source_index
+        .into_iter()
+        .filter_map(|entry| {
+            let path = safe_source_path(&entry.path)?;
+            seen.insert(path.clone()).then_some(EditorSourceEntry {
+                path,
+                mime: entry.mime,
                 frecency: entry.frecency,
             })
         })
@@ -138,6 +259,7 @@ fn safe_source_path(path: &str) -> Option<String> {
     (!normalized.is_empty()).then(|| normalized.join("/"))
 }
 
+#[cfg(test)]
 fn editor_graph_nodes(state: &CrivState) -> Vec<EditorGraphNode> {
     state
         .graph
@@ -154,86 +276,39 @@ fn editor_graph_nodes(state: &CrivState) -> Vec<EditorGraphNode> {
         .collect()
 }
 
+fn take_editor_graph_nodes(nodes: Vec<Node>) -> Vec<EditorGraphNode> {
+    nodes
+        .into_iter()
+        .map(|node| {
+            let source_target = source_target(&node);
+            let line_range = node.path.as_deref().and_then(line_range);
+            let label = node.label.unwrap_or_else(|| node.id.clone());
+            EditorGraphNode {
+                id: node.id,
+                kind: node.kind.unwrap_or_default(),
+                label,
+                path: node.path,
+                source_target,
+                line_range,
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
 fn source_selector_suggestions(
     state: &CrivState,
     query: &str,
     limit: usize,
 ) -> Vec<SourceSelectorSuggestion> {
-    let clean_query = query.trim().to_lowercase();
-    let mut seen = BTreeSet::new();
-    let mut suggestions = Vec::new();
-
-    for entry in unique_source_entries(&state.source_index) {
-        if !seen.insert(entry.path.clone()) {
-            continue;
-        }
-        let score = if clean_query.is_empty() {
-            0
-        } else if let Some(score) = source_match_score(&entry.path, &clean_query) {
-            score + i64::from(entry.frecency)
-        } else {
-            continue;
-        };
-        suggestions.push(ScoredSourceSelectorSuggestion {
-            suggestion: SourceSelectorSuggestion {
-                target: entry.path.clone(),
-                label: entry.path.clone(),
-                kind: "file".into(),
-                path: entry.path,
-                detail: "file".into(),
-            },
-            score,
-            frecency: entry.frecency,
-        });
-    }
-
-    for node in editor_graph_nodes(state) {
-        let Some(target) = node.source_target.clone() else {
-            continue;
-        };
-        if !target.contains('#') || !seen.insert(target.clone()) {
-            continue;
-        }
-        let score = if clean_query.is_empty() {
-            0
-        } else if let Some(score) = source_match_score(&target, &clean_query) {
-            score
-        } else {
-            continue;
-        };
-        suggestions.push(ScoredSourceSelectorSuggestion {
-            suggestion: SourceSelectorSuggestion {
-                target,
-                label: node.label,
-                kind: node.kind,
-                path: node.path.unwrap_or_default(),
-                detail: node.id,
-            },
-            score,
-            frecency: 0,
-        });
-    }
-
-    suggestions.sort_by(|left, right| {
-        right
-            .score
-            .cmp(&left.score)
-            .then_with(|| right.frecency.cmp(&left.frecency))
-            .then_with(|| left.suggestion.target.cmp(&right.suggestion.target))
-    });
-    suggestions.truncate(limit);
-    suggestions
-        .into_iter()
-        .map(|scored| scored.suggestion)
-        .collect()
+    PreparedState::from_borrowed(state).suggest_selectors(query, limit)
 }
 
+#[cfg(test)]
 fn find_editor_graph_node(state: &CrivState, target: &str) -> Option<EditorGraphNode> {
-    editor_graph_nodes(state).into_iter().find(|node| {
-        node.id == target
-            || node.source_target.as_deref() == Some(target)
-            || node.path.as_deref() == Some(target)
-    })
+    PreparedState::from_borrowed(state)
+        .lookup_node(target)
+        .cloned()
 }
 
 fn source_target(node: &Node) -> Option<String> {
@@ -247,9 +322,7 @@ fn line_range(path: &str) -> Option<String> {
     path.split_once("#L").map(|(_, range)| format!("L{range}"))
 }
 
-fn source_match_score(path: &str, query: &str) -> Option<i64> {
-    let lower_path = path.to_lowercase();
-    let basename = lower_path.rsplit('/').next().unwrap_or(&lower_path);
+fn source_match_score_prepared(lower_path: &str, basename: &str, query: &str) -> Option<i64> {
     if lower_path == query {
         return Some(100_000);
     }
@@ -265,8 +338,232 @@ fn source_match_score(path: &str, query: &str) -> Option<i64> {
     if let Some(index) = lower_path.find(query) {
         return Some(60_000 - index as i64 - lower_path.len() as i64);
     }
-    fuzzy_subsequence_score(&lower_path, query)
-        .map(|score| 40_000 + score - lower_path.len() as i64)
+    fuzzy_subsequence_score(lower_path, query).map(|score| 40_000 + score - lower_path.len() as i64)
+}
+
+impl PreparedState {
+    fn new(state: CrivState) -> Self {
+        let CrivState {
+            schema,
+            graph,
+            registered_patterns,
+            source_index,
+        } = state;
+        let Graph { nodes, edges } = graph;
+        let sources = take_unique_source_entries(source_index);
+        let nodes = take_editor_graph_nodes(nodes);
+        let summary = StateSummary {
+            schema,
+            node_count: nodes.len(),
+            edge_count: edges.len(),
+            source_count: sources.len(),
+            pattern_count: registered_patterns.len(),
+            first_node_id: nodes.first().map(|node| node.id.clone()),
+            first_edge: edges
+                .first()
+                .map(|edge| format!("{}:{}:{}", edge.from, edge.kind, edge.to)),
+            first_source_path: sources.first().map(|source| source.path.clone()),
+        };
+        Self::from_parts(summary, sources, nodes)
+    }
+
+    #[cfg(test)]
+    fn from_borrowed(state: &CrivState) -> Self {
+        let sources = unique_source_entries(&state.source_index);
+        let nodes = editor_graph_nodes(state);
+        let summary = state_summary(state, &sources);
+        Self::from_parts(summary, sources, nodes)
+    }
+
+    fn from_parts(
+        summary: StateSummary,
+        sources: Vec<EditorSourceEntry>,
+        nodes: Vec<EditorGraphNode>,
+    ) -> Self {
+        let mut node_lookup = HashMap::<u64, Vec<usize>>::new();
+        for (index, node) in nodes.iter().enumerate() {
+            for key in [
+                Some(node.id.as_str()),
+                node.source_target.as_deref(),
+                node.path.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                let indexes = node_lookup.entry(target_hash(key)).or_default();
+                if indexes.last() != Some(&index) {
+                    indexes.push(index);
+                }
+            }
+        }
+
+        let mut seen = BTreeSet::new();
+        let mut selectors = Vec::new();
+        for (index, source) in sources.iter().enumerate() {
+            if !seen.insert(source.path.as_str()) {
+                continue;
+            }
+            selectors.push(PreparedSelector::new(
+                SelectorEntry::Source(index),
+                source.frecency,
+            ));
+        }
+        for (index, node) in nodes.iter().enumerate() {
+            let Some(target) = node.source_target.as_deref() else {
+                continue;
+            };
+            if !target.contains('#') || !seen.insert(target) {
+                continue;
+            }
+            selectors.push(PreparedSelector::new(SelectorEntry::Node(index), 0));
+        }
+        drop(seen);
+        let mut empty_selector_order = (0..selectors.len()).collect::<Vec<_>>();
+        empty_selector_order.sort_by(|left, right| {
+            selectors[*right]
+                .frecency
+                .cmp(&selectors[*left].frecency)
+                .then_with(|| {
+                    selectors[*left]
+                        .target(&sources, &nodes)
+                        .cmp(selectors[*right].target(&sources, &nodes))
+                })
+        });
+
+        Self {
+            summary,
+            sources,
+            nodes,
+            node_lookup,
+            selectors,
+            empty_selector_order,
+        }
+    }
+
+    fn lookup_node(&self, target: &str) -> Option<&EditorGraphNode> {
+        self.node_lookup
+            .get(&target_hash(target))?
+            .iter()
+            .filter_map(|index| self.nodes.get(*index))
+            .find(|node| node_matches_target(node, target))
+    }
+
+    fn suggest_selectors(&self, query: &str, limit: usize) -> Vec<SourceSelectorSuggestion> {
+        let clean_query = query.trim().to_lowercase();
+        if clean_query.is_empty() {
+            return self
+                .empty_selector_order
+                .iter()
+                .take(limit)
+                .map(|index| self.selectors[*index].suggestion(&self.sources, &self.nodes))
+                .collect();
+        }
+
+        let mut scored = self
+            .selectors
+            .iter()
+            .filter_map(|selector| {
+                let lower_target = selector.target(&self.sources, &self.nodes).to_lowercase();
+                let basename_start = lower_target.rfind('/').map_or(0, |index| index + 1);
+                source_match_score_prepared(
+                    &lower_target,
+                    &lower_target[basename_start..],
+                    &clean_query,
+                )
+                .map(|score| (selector, score + i64::from(selector.frecency)))
+            })
+            .collect::<Vec<_>>();
+        scored.sort_by(|(left, left_score), (right, right_score)| {
+            right_score
+                .cmp(left_score)
+                .then_with(|| right.frecency.cmp(&left.frecency))
+                .then_with(|| {
+                    left.target(&self.sources, &self.nodes)
+                        .cmp(right.target(&self.sources, &self.nodes))
+                })
+        });
+        scored
+            .into_iter()
+            .take(limit)
+            .map(|(selector, _)| selector.suggestion(&self.sources, &self.nodes))
+            .collect()
+    }
+}
+
+impl PreparedSelector {
+    fn new(entry: SelectorEntry, frecency: u32) -> Self {
+        Self { entry, frecency }
+    }
+
+    fn target<'a>(
+        &self,
+        sources: &'a [EditorSourceEntry],
+        nodes: &'a [EditorGraphNode],
+    ) -> &'a str {
+        match self.entry {
+            SelectorEntry::Source(index) => &sources[index].path,
+            SelectorEntry::Node(index) => nodes[index].source_target.as_deref().unwrap_or_default(),
+        }
+    }
+
+    fn suggestion(
+        &self,
+        sources: &[EditorSourceEntry],
+        nodes: &[EditorGraphNode],
+    ) -> SourceSelectorSuggestion {
+        match self.entry {
+            SelectorEntry::Source(index) => {
+                let source = &sources[index];
+                SourceSelectorSuggestion {
+                    target: source.path.clone(),
+                    label: source.path.clone(),
+                    kind: "file".into(),
+                    path: source.path.clone(),
+                    detail: "file".into(),
+                }
+            }
+            SelectorEntry::Node(index) => {
+                let node = &nodes[index];
+                SourceSelectorSuggestion {
+                    target: node.source_target.clone().unwrap_or_default(),
+                    label: node.label.clone(),
+                    kind: node.kind.clone(),
+                    path: node.path.clone().unwrap_or_default(),
+                    detail: node.id.clone(),
+                }
+            }
+        }
+    }
+}
+
+fn target_hash(target: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    target.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn node_matches_target(node: &EditorGraphNode, target: &str) -> bool {
+    node.id == target
+        || node.source_target.as_deref() == Some(target)
+        || node.path.as_deref() == Some(target)
+}
+
+#[cfg(test)]
+fn state_summary(state: &CrivState, sources: &[EditorSourceEntry]) -> StateSummary {
+    StateSummary {
+        schema: state.schema.clone(),
+        node_count: state.graph.nodes.len(),
+        edge_count: state.graph.edges.len(),
+        source_count: sources.len(),
+        pattern_count: state.registered_patterns.len(),
+        first_node_id: state.graph.nodes.first().map(|node| node.id.clone()),
+        first_edge: state
+            .graph
+            .edges
+            .first()
+            .map(|edge| format!("{}:{}:{}", edge.from, edge.kind, edge.to)),
+        first_source_path: sources.first().map(|source| source.path.clone()),
+    }
 }
 
 fn fuzzy_subsequence_score(value: &str, query: &str) -> Option<i64> {
@@ -357,6 +654,24 @@ struct StateSummary {
     first_source_path: Option<String>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Serialize)]
+struct InitialProjections<'a> {
+    state: &'a serde_json::Value,
+    summary: &'a StateSummary,
+    sources: &'a [EditorSourceEntry],
+    nodes: &'a [EditorGraphNode],
+}
+
+struct PreparedState {
+    summary: StateSummary,
+    sources: Vec<EditorSourceEntry>,
+    nodes: Vec<EditorGraphNode>,
+    node_lookup: HashMap<u64, Vec<usize>>,
+    selectors: Vec<PreparedSelector>,
+    empty_selector_order: Vec<usize>,
+}
+
 #[derive(Debug, Serialize)]
 struct EditorSourceEntry {
     path: String,
@@ -374,7 +689,7 @@ struct EditorGraphNode {
     line_range: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct SourceSelectorSuggestion {
     target: String,
     label: String,
@@ -383,10 +698,15 @@ struct SourceSelectorSuggestion {
     detail: String,
 }
 
-struct ScoredSourceSelectorSuggestion {
-    suggestion: SourceSelectorSuggestion,
-    score: i64,
+struct PreparedSelector {
+    entry: SelectorEntry,
     frecency: u32,
+}
+
+#[derive(Clone, Copy)]
+enum SelectorEntry {
+    Source(usize),
+    Node(usize),
 }
 
 #[cfg(test)]
@@ -394,9 +714,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn loaded_state_prepares_one_revision_for_all_operations() {
+        let mut loaded =
+            LoadedState::load(include_str!("../../../fixtures/state/criv.state.v1.json")).unwrap();
+
+        assert_eq!(loaded.prepared.summary.node_count, 6);
+        assert_eq!(loaded.prepared.sources.len(), 1);
+        assert_eq!(loaded.prepared.nodes.len(), 6);
+        assert_eq!(
+            loaded
+                .prepared
+                .lookup_node("src/lib.rs#fn:run")
+                .unwrap()
+                .kind,
+            "function"
+        );
+        assert_eq!(
+            loaded.prepared.suggest_selectors("run", 10)[0].target,
+            "src/lib.rs#fn:run"
+        );
+
+        let envelope = loaded.take_initial_envelope().unwrap();
+        assert_eq!(envelope["schema"], "criv.state.v1");
+        assert!(envelope["patterns"]["ADR-0001/entrypoint"].is_array());
+        assert!(loaded.take_initial_envelope().is_err());
+    }
+
+    #[test]
     fn parses_shared_state_contract_fixture() {
-        let state =
-            parse_state(include_str!("../../../fixtures/state/criv.state.v1.json")).unwrap();
+        let state = serde_json::from_str::<CrivState>(include_str!(
+            "../../../fixtures/state/criv.state.v1.json"
+        ))
+        .unwrap();
         assert_eq!(state.schema, "criv.state.v1");
         assert_eq!(state.graph.nodes.len(), 6);
         assert_eq!(state.graph.edges.len(), 5);
@@ -411,7 +760,7 @@ mod tests {
         let raw = include_str!("../../../fixtures/state/criv.state.v1.json")
             .replace("criv.state.v1", "criv.state.v2");
 
-        assert!(decode_state(&raw).is_err());
+        assert!(LoadedState::load(&raw).is_err());
         assert!(decode_state_value(&raw).is_err());
     }
 

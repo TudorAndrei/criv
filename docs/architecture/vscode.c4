@@ -17,7 +17,7 @@ model {
       }
       vscodeState = component 'Workspace state store' {
         technology 'TypeScript'
-        description 'Loads state and publishes projected snapshots to extension features.'
+        description 'Owns one loaded state revision and publishes projected snapshots to extension features.'
         link ../../extensions/vscode-criv/src/stateStore.ts 'source'
       }
       vscodeNavigation = component 'Source navigation adapter' {

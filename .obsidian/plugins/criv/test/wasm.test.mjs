@@ -27,17 +27,24 @@ await esbuild.build({
 const bridgeModule = await import(pathToFileURL(outFile).href);
 const compiledWasm = await import(pathToFileURL(wasmPath).href);
 const bridge = bridgeModule.createCrivWasmBridge(async () => compiledWasm);
+const revision = await bridge.loadState(stateRaw);
+const projections = revision.initialProjections();
 
-assert.equal((await bridge.validatedState(stateRaw)).schema, "criv.state.v1");
-assert.equal((await bridge.summarizeState(stateRaw)).node_count, 6);
+assert.equal(projections.state.schema, "criv.state.v1");
+assert.equal(projections.summary.node_count, 6);
 assert.deepEqual(
-  (await bridge.sourceEntries(stateRaw)).map((entry) => entry.path),
+  projections.sources.map((entry) => entry.path),
   ["src/lib.rs"],
 );
 assert.equal(
-  (await bridge.suggestSourceSelectors(stateRaw, "run", 10))[0].target,
+  revision.suggestSelectors("run", 10)[0].target,
   "src/lib.rs#fn:run",
 );
+revision.dispose();
+assert.throws(() => revision.suggestSelectors("run", 10), (error) => {
+  assert.equal(error.code, bridgeModule.CRIV_LOADED_STATE_DISPOSED);
+  return true;
+});
 
 let attempts = 0;
 const missing = bridgeModule.createCrivWasmBridge(async () => {
@@ -45,7 +52,7 @@ const missing = bridgeModule.createCrivWasmBridge(async () => {
   throw new Error("missing runtime");
 });
 for (let request = 0; request < 2; request += 1) {
-  await assert.rejects(missing.summarizeState(stateRaw), (error) => {
+  await assert.rejects(missing.loadState(stateRaw), (error) => {
     assert.equal(error.code, bridgeModule.CRIV_WASM_LOAD_ERROR);
     assert.match(error.message, /rebuild the companion and reload Obsidian/i);
     return true;
@@ -53,8 +60,8 @@ for (let request = 0; request < 2; request += 1) {
 }
 assert.equal(attempts, 1);
 
-const corrupt = bridgeModule.createCrivWasmBridge(async () => ({ summarize_state() {} }));
-await assert.rejects(corrupt.summarizeState(stateRaw), (error) => {
+const corrupt = bridgeModule.createCrivWasmBridge(async () => ({}));
+await assert.rejects(corrupt.loadState(stateRaw), (error) => {
   assert.equal(error.code, bridgeModule.CRIV_WASM_LOAD_ERROR);
   return true;
 });

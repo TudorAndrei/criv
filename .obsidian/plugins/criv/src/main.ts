@@ -15,6 +15,7 @@ import {
   TFile,
   WorkspaceLeaf,
 } from "obsidian";
+import type { App, PluginManifest } from "obsidian";
 import { CrivLikeC4Renderer } from "@criv/likec4/renderer";
 import { preferredLikeC4ViewId, type CrivLikeC4Model } from "@criv/likec4/protocol";
 import { RangeSetBuilder } from "@codemirror/state";
@@ -48,11 +49,10 @@ import {
 } from "./core";
 import {
   CrivWasmLoadError,
-  sourceEntries as projectSourceEntries,
-  summarizeState,
-  suggestSourceSelectors,
-  validatedState,
+  loadState as loadWasmState,
+  type CrivLoadedState,
   type CrivSelectorSuggestion,
+  type CrivStateSummary,
 } from "./wasm";
 
 interface CrivSettings {
@@ -68,6 +68,7 @@ const EXPECTED_SCHEMA = "criv.state.v1";
 const VIEW_TYPE = "criv-source-panel";
 const C4_VIEW_TYPE = "criv-c4-view";
 const PREVIEW_LINE_LIMIT = 80;
+const STATE_POLL_INTERVAL_MS = 2_000;
 const LINK_TARGET_SELECTOR = [
   "[data-href]",
   "a.internal-link",
@@ -98,15 +99,33 @@ interface ObsidianCommandRegistry {
   commands?: Record<string, Command>;
 }
 
+interface StateFileToken {
+  mtime: number;
+  size: number;
+}
+
 export default class CrivPlugin extends Plugin {
   settings!: CrivSettings;
   private state: CrivState | null = null;
   private stateSources: SourceIndexEntry[] = [];
+  private stateSummary: CrivStateSummary | null = null;
+  private loadedState: CrivLoadedState | null = null;
+  private stateToken: StateFileToken | null = null;
   private stateError: string | null = null;
+  private stateLoadSequence = 0;
+  private unloading = false;
   private wasmFailureNotified = false;
   private hoverEl: HTMLElement | null = null;
   private hoverSourceKey: string | null = null;
   private hoverRequest = 0;
+
+  constructor(
+    app: App,
+    manifest: PluginManifest,
+    private readonly loadWasmRevision: (raw: string) => Promise<CrivLoadedState> = loadWasmState,
+  ) {
+    super(app, manifest);
+  }
 
   async onload() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -142,6 +161,11 @@ export default class CrivPlugin extends Plugin {
       this.app.workspace.on("active-leaf-change", () => this.refreshSourcePanel()),
     );
     this.registerEvent(this.app.metadataCache.on("changed", () => this.refreshSourcePanel()));
+    this.registerInterval(
+      window.setInterval(() => {
+        void this.pollState();
+      }, STATE_POLL_INTERVAL_MS),
+    );
     this.addSettingTab(new CrivSettingTab(this.app, this));
     this.app.workspace.onLayoutReady(() => {
       void this.loadState().then(() => this.app.workspace.updateOptions());
@@ -150,6 +174,9 @@ export default class CrivPlugin extends Plugin {
   }
 
   onunload() {
+    this.unloading = true;
+    this.stateLoadSequence += 1;
+    this.clearLoadedState();
     this.hideHoverPreview();
   }
 
@@ -196,37 +223,54 @@ export default class CrivPlugin extends Plugin {
   }
 
   async readState() {
-    const statePath = this.safeStatePath();
-    if (!statePath) {
-      return null;
-    }
-    try {
-      const raw = await this.app.vault.adapter.read(statePath);
-      return await summarizeState(raw);
-    } catch (error) {
-      this.recordWasmFailure(error);
-      return null;
-    }
+    await this.getState();
+    return this.stateSummary;
   }
 
-  async loadState(): Promise<CrivState | null> {
+  async loadState(observedToken?: StateFileToken | null): Promise<CrivState | null> {
+    const sequence = ++this.stateLoadSequence;
     const statePath = this.safeStatePath();
     if (!statePath) {
-      this.state = null;
-      this.stateSources = [];
+      if (!this.isCurrentStateLoad(sequence)) {
+        return this.state;
+      }
+      this.clearLoadedState();
       this.stateError = `Invalid criv state path ${this.settings.statePath}.`;
       return null;
     }
+
+    const token =
+      observedToken === undefined ? await this.readStateFileToken(statePath) : observedToken;
+    if (!this.isCurrentStateLoad(sequence)) {
+      return this.state;
+    }
+
+    let candidate: CrivLoadedState | null = null;
     try {
       const raw = await this.app.vault.adapter.read(statePath);
-      const [state, sources] = await Promise.all([validatedState(raw), projectSourceEntries(raw)]);
-      this.state = state;
-      this.stateSources = sources;
+      candidate = await this.loadWasmRevision(raw);
+      if (!this.isCurrentStateLoad(sequence)) {
+        candidate.dispose();
+        return this.state;
+      }
+      const projections = candidate.initialProjections();
+      const previous = this.loadedState;
+      this.loadedState = candidate;
+      candidate = null;
+      this.state = projections.state;
+      this.stateSources = projections.sources;
+      this.stateSummary = projections.summary;
+      this.stateToken = token;
       this.stateError = null;
-      return state;
+      previous?.dispose();
+      return this.state;
     } catch (error) {
-      this.state = null;
-      this.stateSources = [];
+      candidate?.dispose();
+      if (!this.isCurrentStateLoad(sequence)) {
+        return this.state;
+      }
+      this.clearLoadedState();
+      this.stateToken = token;
       this.recordWasmFailure(error);
       this.stateError =
         error instanceof CrivWasmLoadError
@@ -252,12 +296,38 @@ export default class CrivPlugin extends Plugin {
     return this.stateSources;
   }
 
+  suggestSourceSelectors(query: string, limit: number): CrivSelectorSuggestion[] {
+    return this.loadedState?.suggestSelectors(query, limit) ?? [];
+  }
+
   recordWasmFailure(error: unknown): void {
     if (!(error instanceof CrivWasmLoadError) || this.wasmFailureNotified) {
       return;
     }
     this.wasmFailureNotified = true;
     new Notice(error.message);
+  }
+
+  private isCurrentStateLoad(sequence: number): boolean {
+    return !this.unloading && sequence === this.stateLoadSequence;
+  }
+
+  private clearLoadedState(): void {
+    this.loadedState?.dispose();
+    this.loadedState = null;
+    this.state = null;
+    this.stateSources = [];
+    this.stateSummary = null;
+    this.stateToken = null;
+  }
+
+  private async readStateFileToken(path: string): Promise<StateFileToken | null> {
+    try {
+      const stat = await this.app.vault.adapter.stat(path);
+      return stat ? { mtime: stat.mtime, size: stat.size } : null;
+    } catch {
+      return null;
+    }
   }
 
   async reloadState(): Promise<CrivState | null> {
@@ -267,11 +337,37 @@ export default class CrivPlugin extends Plugin {
   }
 
   async refreshSourcePanel(): Promise<void> {
-    await this.reloadState();
     const leaf = this.sourcePanelLeaf();
     if (leaf?.view instanceof CrivSourceView) {
       await leaf.view.render();
     }
+  }
+
+  async pollState(): Promise<void> {
+    if (this.unloading) {
+      return;
+    }
+    const statePath = this.safeStatePath();
+    if (!statePath) {
+      return;
+    }
+    const token = await this.readStateFileToken(statePath);
+    if (sameStateFileToken(token, this.stateToken)) {
+      return;
+    }
+    await this.loadState(token);
+    if (this.unloading) {
+      return;
+    }
+    this.app.workspace.updateOptions();
+    await this.refreshSourcePanel();
+  }
+
+  async updateStatePath(value: string): Promise<void> {
+    this.settings.statePath = safeVaultPath(value) ?? DEFAULT_SETTINGS.statePath;
+    await this.saveSettings();
+    await this.reloadState();
+    await this.refreshSourcePanel();
   }
 
   private sourcePanelLeaf(): WorkspaceLeaf | null {
@@ -893,13 +989,8 @@ class CrivSourceSuggest extends EditorSuggest<SourceSuggestionItem> {
     if (!state) {
       return [];
     }
-    // The wasm API accepts raw state JSON; the plugin currently caches the parsed state only.
     try {
-      const wasmSuggestions = await suggestSourceSelectors(
-        JSON.stringify(state),
-        context.query,
-        20,
-      );
+      const wasmSuggestions = this.plugin.suggestSourceSelectors(context.query, 20);
       return sourceSuggestionItemsFromWasm(wasmSuggestions);
     } catch (error) {
       this.plugin.recordWasmFailure(error);
@@ -1234,6 +1325,13 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function sameStateFileToken(
+  left: StateFileToken | null,
+  right: StateFileToken | null,
+): boolean {
+  return left?.mtime === right?.mtime && left?.size === right?.size;
+}
+
 class CrivEditorDriftPlugin implements PluginValue {
   decorations: DecorationSet;
 
@@ -1305,8 +1403,7 @@ class CrivSettingTab extends PluginSettingTab {
           .setPlaceholder(".criv/state.json")
           .setValue(this.plugin.settings.statePath)
           .onChange(async (value) => {
-            this.plugin.settings.statePath = safeVaultPath(value) ?? DEFAULT_SETTINGS.statePath;
-            await this.plugin.saveSettings();
+            await this.plugin.updateStatePath(value);
           }),
       );
 

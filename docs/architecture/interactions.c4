@@ -114,9 +114,9 @@ model {
   criv.sharedRenderer.modelCompiler -> criv.sharedRenderer.modelContract 'Emits the compiled model contract'
 
   // Shared state projection components.
-  criv.stateProjection.graphProjection -> criv.stateProjection.stateDecoder 'Reads validated state'
-  criv.stateProjection.selectorProjection -> criv.stateProjection.stateDecoder 'Reads validated state'
-  criv.stateProjection.selectorProjection -> criv.stateProjection.graphProjection 'Searches projected graph nodes'
+  criv.stateProjection.graphProjection -> criv.stateProjection.stateDecoder 'Prepares the loaded revision'
+  criv.stateProjection.selectorProjection -> criv.stateProjection.stateDecoder 'Reads prepared revision data'
+  criv.stateProjection.selectorProjection -> criv.stateProjection.graphProjection 'Ranks projected graph nodes'
 
   // Obsidian components.
   criv.obsidianPlugin.obsidianController -> criv.obsidianPlugin.obsidianState 'Builds vault views and previews'

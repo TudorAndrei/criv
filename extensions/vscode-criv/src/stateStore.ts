@@ -1,14 +1,10 @@
-import * as vscode from "vscode";
+import type * as vscode from "vscode";
 
 import { buildStateSnapshot, type CrivStateSnapshot } from "./stateModel";
 import {
   CrivWasmLoadError,
-  graphNodes,
-  lookupGraphNode,
-  sourceEntries,
-  suggestSourceSelectors,
-  summarizeState,
-  validatedState,
+  type CrivLoadedState,
+  type CrivWasmBridge,
 } from "./wasm";
 
 export type WorkspaceStateStatus =
@@ -19,22 +15,58 @@ export type WorkspaceStateStatus =
   | { kind: "wasm-unavailable"; root: vscode.Uri; stateUri: vscode.Uri; message: string }
   | { kind: "invalid-state"; root: vscode.Uri; stateUri: vscode.Uri; message: string };
 
-export class WorkspaceStateStore implements vscode.Disposable {
-  private statusValue: WorkspaceStateStatus = { kind: "loading" };
-  private watcher: vscode.FileSystemWatcher | undefined;
-  private readonly didChangeStatus = new vscode.EventEmitter<WorkspaceStateStatus>();
+export interface Disposable {
+  dispose(): void;
+}
 
-  readonly onDidChangeStatus = this.didChangeStatus.event;
+export interface WorkspaceStateHost {
+  findWorkspaceRoot(): Promise<vscode.Uri | undefined>;
+  stateFile(root: vscode.Uri): vscode.Uri;
+  readState(stateUri: vscode.Uri): Promise<string>;
+  watchState(root: vscode.Uri, refresh: () => void): Disposable;
+}
+
+export class WorkspaceStateStore implements Disposable {
+  private statusValue: WorkspaceStateStatus = { kind: "loading" };
+  private watcher: Disposable | undefined;
+  private watcherRootValue: string | undefined;
+  private loaded: CrivLoadedState | undefined;
+  private refreshSequence = 0;
+  private disposed = false;
+  private readonly listeners = new Set<(status: WorkspaceStateStatus) => void>();
+
+  constructor(
+    private readonly host: WorkspaceStateHost,
+    private readonly bridge: CrivWasmBridge,
+  ) {}
+
+  readonly onDidChangeStatus = (
+    listener: (status: WorkspaceStateStatus) => void,
+  ): Disposable => {
+    this.listeners.add(listener);
+    return { dispose: () => this.listeners.delete(listener) };
+  };
 
   get status(): WorkspaceStateStatus {
     return this.statusValue;
   }
 
   async refresh(): Promise<WorkspaceStateStatus> {
-    this.setStatus({ kind: "loading" });
-    const root = await findCrivWorkspaceRoot();
+    if (this.disposed) {
+      return this.statusValue;
+    }
+    const sequence = ++this.refreshSequence;
+    if (!this.loaded) {
+      this.setStatus({ kind: "loading" });
+    }
+
+    const root = await this.host.findWorkspaceRoot();
+    if (!this.isCurrent(sequence)) {
+      return this.statusValue;
+    }
     if (!root) {
       this.disposeWatcher();
+      this.disposeLoaded();
       return this.setStatus({
         kind: "missing-workspace",
         message: "Open a workspace containing criv.toml.",
@@ -42,12 +74,15 @@ export class WorkspaceStateStore implements vscode.Disposable {
     }
 
     this.ensureWatcher(root);
-    const stateUri = vscode.Uri.joinPath(root, ".criv", "state.json");
+    const stateUri = this.host.stateFile(root);
     let raw: string;
     try {
-      const bytes = await vscode.workspace.fs.readFile(stateUri);
-      raw = Buffer.from(bytes).toString("utf8");
+      raw = await this.host.readState(stateUri);
     } catch (error) {
+      if (!this.isCurrent(sequence)) {
+        return this.statusValue;
+      }
+      this.disposeLoaded();
       return this.setStatus({
         kind: "missing-state",
         root,
@@ -56,21 +91,32 @@ export class WorkspaceStateStore implements vscode.Disposable {
       });
     }
 
+    let candidate: CrivLoadedState | undefined;
     try {
-      const [envelope, summary, sources, nodes] = await Promise.all([
-        validatedState(raw),
-        summarizeState(raw),
-        sourceEntries(raw),
-        graphNodes(raw),
-      ]);
-
-      return this.setStatus({
-        kind: "ready",
-        root,
-        stateUri,
-        snapshot: buildStateSnapshot(raw, envelope, summary, sources, nodes),
-      });
+      candidate = await this.bridge.loadState(raw);
+      if (!this.isCurrent(sequence)) {
+        candidate.dispose();
+        return this.statusValue;
+      }
+      const projections = candidate.initialProjections();
+      const snapshot = buildStateSnapshot(
+        projections.state,
+        projections.summary,
+        projections.sources,
+        projections.nodes,
+      );
+      const previous = this.loaded;
+      this.loaded = candidate;
+      candidate = undefined;
+      const status = this.setStatus({ kind: "ready", root, stateUri, snapshot });
+      previous?.dispose();
+      return status;
     } catch (error) {
+      candidate?.dispose();
+      if (!this.isCurrent(sequence)) {
+        return this.statusValue;
+      }
+      this.disposeLoaded();
       return this.setStatus({
         kind: error instanceof CrivWasmLoadError ? "wasm-unavailable" : "invalid-state",
         root,
@@ -83,57 +129,46 @@ export class WorkspaceStateStore implements vscode.Disposable {
     }
   }
 
-  async lookupNode(target: string) {
-    const status = this.statusValue;
-    if (status.kind !== "ready") {
-      return undefined;
-    }
-    return lookupGraphNode(status.snapshot.raw, target);
+  lookupNode(target: string) {
+    return this.loaded?.lookupNode(target);
   }
 
-  async suggestSelectors(query: string, limit: number) {
-    const status = this.statusValue;
-    if (status.kind !== "ready") {
-      return [];
-    }
-    return suggestSourceSelectors(status.snapshot.raw, query, limit);
+  suggestSelectors(query: string, limit: number) {
+    return this.loaded?.suggestSelectors(query, limit) ?? [];
   }
 
   dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+    this.refreshSequence += 1;
     this.disposeWatcher();
-    this.didChangeStatus.dispose();
+    this.disposeLoaded();
+    this.listeners.clear();
+  }
+
+  private isCurrent(sequence: number): boolean {
+    return !this.disposed && sequence === this.refreshSequence;
   }
 
   private setStatus(status: WorkspaceStateStatus): WorkspaceStateStatus {
     this.statusValue = status;
-    this.didChangeStatus.fire(status);
+    for (const listener of this.listeners) {
+      listener(status);
+    }
     return status;
   }
 
   private ensureWatcher(root: vscode.Uri): void {
-    const watchedRoot = this.watcherRoot();
-    if (watchedRoot === root.toString()) {
+    if (this.watcherRootValue === root.toString()) {
       return;
     }
-
     this.disposeWatcher();
-    const watcher = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(root, ".criv/state.json"),
-    );
-    const refresh = () => {
+    this.watcher = this.host.watchState(root, () => {
       void this.refresh();
-    };
-    watcher.onDidCreate(refresh);
-    watcher.onDidChange(refresh);
-    watcher.onDidDelete(refresh);
-    this.watcher = watcher;
+    });
     this.watcherRootValue = root.toString();
-  }
-
-  private watcherRootValue: string | undefined;
-
-  private watcherRoot(): string | undefined {
-    return this.watcherRootValue;
   }
 
   private disposeWatcher(): void {
@@ -141,19 +176,11 @@ export class WorkspaceStateStore implements vscode.Disposable {
     this.watcher = undefined;
     this.watcherRootValue = undefined;
   }
-}
 
-export async function findCrivWorkspaceRoot(): Promise<vscode.Uri | undefined> {
-  for (const folder of vscode.workspace.workspaceFolders ?? []) {
-    const configUri = vscode.Uri.joinPath(folder.uri, "criv.toml");
-    try {
-      await vscode.workspace.fs.stat(configUri);
-      return folder.uri;
-    } catch {
-      // Continue looking for a criv workspace in multi-root windows.
-    }
+  private disposeLoaded(): void {
+    this.loaded?.dispose();
+    this.loaded = undefined;
   }
-  return undefined;
 }
 
 function messageFromError(error: unknown): string {

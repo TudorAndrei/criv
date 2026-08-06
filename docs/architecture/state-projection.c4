@@ -7,18 +7,18 @@ model {
 
       stateDecoder = component 'State decoder' {
         technology 'Rust and serde'
-        description 'Rejects invalid JSON and unsupported state schemas.'
-        link ../../crates/criv-wasm/src/lib.rs#validated_state 'source'
+        description 'Creates one loaded revision and rejects invalid JSON or an unsupported state schema.'
+        link ../../crates/criv-wasm/src/lib.rs#LoadedState 'source'
       }
       graphProjection = component 'Graph projection' {
         technology 'Rust and WebAssembly'
-        description 'Builds summaries, source entries, and editor graph nodes from validated state.'
-        link ../../crates/criv-wasm/src/lib.rs#graph_nodes 'source'
+        description 'Builds one initial batch and a prepared graph-node lookup index.'
+        link ../../crates/criv-wasm/src/lib.rs#initial_projections 'source'
       }
       selectorProjection = component 'Selector projection' {
         technology 'Rust and WebAssembly'
-        description 'Suggests safe source selectors and resolves graph-node lookups.'
-        link ../../crates/criv-wasm/src/lib.rs#suggest_source_selectors 'source'
+        description 'Ranks safe source selectors from prepared revision data.'
+        link ../../crates/criv-wasm/src/lib.rs#suggest_selectors 'source'
       }
     }
   }
