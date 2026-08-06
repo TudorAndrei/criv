@@ -40,7 +40,7 @@ jobs:
           persist-credentials: false
 
       - name: Configure Pages
-        uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 
       - name: Install JavaScript dependencies
         run: npm ci --ignore-scripts
@@ -52,7 +52,7 @@ jobs:
         run: node_modules/.bin/likec4 build --output site/architecture --base /criv/architecture/ --use-hash-history docs/architecture
 
       - name: Install mise
-        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
         with:
           install: false
           cache: true
@@ -67,4 +67,4 @@ jobs:
 
       - name: Deploy
         id: deployment
-        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
