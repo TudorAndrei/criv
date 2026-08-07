@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::architecture;
 use crate::check;
 use crate::config::Config;
+use crate::policy_scan::PolicyScanPlan;
 use crate::source_graph::{self, SourceGraphBuild};
 use crate::source_index::{LiveSourceIndex, OneShotSourceIndex, SourceChange, SourceIndexHandle};
 use crate::state::{self, State};
@@ -128,12 +129,21 @@ fn execute(
         vault.retain_source_graph_changes_from(&refreshed_graph);
     }
 
-    let diagnostics = check::validate_with_previous_state(&vault, diagnostic_previous_state);
+    let policy_plan = PolicyScanPlan::new(&vault);
+    let diagnostics = check::validate_with_previous_state_and_policy_plan(
+        &vault,
+        diagnostic_previous_state,
+        &policy_plan,
+    );
     let (snapshot, state) = match previous_state {
-        Some(previous_state) => {
-            state::write_state_incremental(root, &vault, Some(previous_state), &changed_files)?
-        }
-        None => state::write_state(root, &vault)?,
+        Some(previous_state) => state::write_state_incremental_with_policy_plan(
+            root,
+            &vault,
+            Some(previous_state),
+            &changed_files,
+            &policy_plan,
+        )?,
+        None => state::write_state_with_policy_plan(root, &vault, &policy_plan)?,
     };
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();

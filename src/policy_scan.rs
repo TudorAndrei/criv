@@ -40,17 +40,32 @@ pub(crate) struct PolicyViolation {
 pub(crate) struct PolicyScanPlan {
     diagnostics: Vec<PolicyDiagnostic>,
     owners: Vec<PlannedOwner>,
+    state_definition_error: Option<String>,
 }
 
-struct PlannedOwner {
+pub(crate) struct PlannedOwner {
     adr_id: String,
+    scopes: Vec<String>,
     paths: BTreeSet<String>,
     policies: Vec<PlannedPolicy>,
 }
 
-struct PlannedPolicy {
+pub(crate) struct PlannedPolicy {
     pattern_id: String,
+    state: Option<PlannedStatePolicy>,
     compiled: CompiledPolicy,
+}
+
+struct CandidatePolicy {
+    pattern_id: String,
+    state_pattern_id: Option<String>,
+    fingerprint_material: String,
+    compiled: CompiledPolicy,
+}
+
+struct PlannedStatePolicy {
+    pattern_id: String,
+    input_fingerprint: String,
 }
 
 enum ScanPaths<'a> {
@@ -70,8 +85,8 @@ impl ScanPaths<'_> {
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub(crate) struct WorkCounts {
-    definition_compilations: usize,
-    adr_scope_resolutions: usize,
+    pub(crate) definition_compilations: usize,
+    pub(crate) adr_scope_resolutions: usize,
 }
 
 #[cfg(test)]
@@ -92,12 +107,12 @@ fn record_work(record: impl FnOnce(&mut WorkCounts)) {
 }
 
 #[cfg(test)]
-fn reset_work_counts() {
+pub(crate) fn reset_work_counts() {
     WORK_COUNTS.with(|counts| counts.set(WorkCounts::default()));
 }
 
 #[cfg(test)]
-fn work_counts() -> WorkCounts {
+pub(crate) fn work_counts() -> WorkCounts {
     WORK_COUNTS.with(Cell::get)
 }
 
@@ -105,6 +120,7 @@ impl PolicyScanPlan {
     pub(crate) fn new(vault: &Vault) -> Self {
         let mut diagnostics = Vec::new();
         let mut owners = Vec::new();
+        let mut state_definition_errors = Vec::new();
 
         for note in &vault.notes {
             let reports_diagnostics = note.kind == NoteKind::Decision;
@@ -117,9 +133,9 @@ impl PolicyScanPlan {
             }
 
             let mut ids = BTreeSet::new();
-            let mut policies = Vec::new();
+            let mut candidates = Vec::new();
             for policy in &note.policy_patterns {
-                let Some(local_id) = policy.id.as_deref() else {
+                let Some(raw_local_id) = policy.id.as_deref() else {
                     if reports_diagnostics {
                         diagnostics.push(PolicyDiagnostic {
                             path: note.rel_path.clone(),
@@ -130,7 +146,7 @@ impl PolicyScanPlan {
                     continue;
                 };
 
-                let local_id = local_id.trim();
+                let local_id = raw_local_id.trim();
                 if local_id.is_empty() {
                     if reports_diagnostics {
                         diagnostics.push(PolicyDiagnostic {
@@ -154,54 +170,104 @@ impl PolicyScanPlan {
 
                 #[cfg(test)]
                 record_work(|counts| counts.definition_compilations += 1);
+                let state_pattern_id = active_adr_id.and_then(|adr_id| {
+                    let pattern_id = format!("{adr_id}/{raw_local_id}");
+                    (vault.patterns().contains(&pattern_id)
+                        && vault.resolve_policy_pattern(&pattern_id).is_some_and(
+                            |(registered_note, registered_policy)| {
+                                std::ptr::eq(registered_note, note)
+                                    && std::ptr::eq(registered_policy, policy)
+                            },
+                        ))
+                    .then_some(pattern_id)
+                });
                 match structural::compile_policy(policy) {
                     Ok(compiled) => {
                         if let Some(adr_id) = active_adr_id {
-                            policies.push(PlannedPolicy {
+                            candidates.push(CandidatePolicy {
                                 pattern_id: format!("{adr_id}/{local_id}"),
+                                state_pattern_id,
+                                fingerprint_material: format!("{policy:#?}"),
                                 compiled,
                             });
                         }
                     }
-                    Err(error) if reports_diagnostics => {
-                        diagnostics.push(PolicyDiagnostic {
-                            path: note.rel_path.clone(),
-                            line: policy.line,
-                            kind: diagnostic_kind(local_id, error),
-                        });
+                    Err(error) => {
+                        if let Some(pattern_id) = state_pattern_id {
+                            state_definition_errors.push((pattern_id, error.to_string()));
+                        }
+                        if reports_diagnostics {
+                            diagnostics.push(PolicyDiagnostic {
+                                path: note.rel_path.clone(),
+                                line: policy.line,
+                                kind: diagnostic_kind(local_id, error),
+                            });
+                        }
                     }
-                    Err(_) => {}
                 }
             }
 
             let Some(adr_id) = active_adr_id else {
                 continue;
             };
-            if policies.is_empty() {
+            if candidates.is_empty() {
                 continue;
             }
 
             #[cfg(test)]
             record_work(|counts| counts.adr_scope_resolutions += 1);
+            let scopes = vault.effective_governs(note);
             let paths = vault
-                .source_files_matching_globs(&vault.effective_governs(note))
+                .source_files_matching_globs(&scopes)
                 .into_iter()
+                .collect();
+            let policies = candidates
+                .into_iter()
+                .map(|candidate| PlannedPolicy {
+                    pattern_id: candidate.pattern_id,
+                    state: candidate
+                        .state_pattern_id
+                        .map(|pattern_id| PlannedStatePolicy {
+                            pattern_id,
+                            input_fingerprint: blake3::hash(
+                                format!("{}\0{scopes:?}", candidate.fingerprint_material)
+                                    .as_bytes(),
+                            )
+                            .to_hex()
+                            .to_string(),
+                        }),
+                    compiled: candidate.compiled,
+                })
                 .collect();
             owners.push(PlannedOwner {
                 adr_id: adr_id.to_string(),
+                scopes,
                 paths,
                 policies,
             });
         }
 
+        state_definition_errors.sort_by(|left, right| left.0.cmp(&right.0));
         Self {
             diagnostics,
             owners,
+            state_definition_error: state_definition_errors
+                .into_iter()
+                .next()
+                .map(|(_, error)| error),
         }
     }
 
     pub(crate) fn definition_diagnostics(&self) -> &[PolicyDiagnostic] {
         &self.diagnostics
+    }
+
+    pub(crate) fn owners(&self) -> &[PlannedOwner] {
+        &self.owners
+    }
+
+    pub(crate) fn state_definition_error(&self) -> Option<&str> {
+        self.state_definition_error.as_deref()
     }
 
     pub(crate) fn scan(
@@ -254,6 +320,36 @@ impl PolicyScanPlan {
             }
         }
         Ok(violations)
+    }
+}
+
+impl PlannedOwner {
+    pub(crate) fn scopes(&self) -> &[String] {
+        &self.scopes
+    }
+
+    pub(crate) fn paths(&self) -> &BTreeSet<String> {
+        &self.paths
+    }
+
+    pub(crate) fn policies(&self) -> &[PlannedPolicy] {
+        &self.policies
+    }
+}
+
+impl PlannedPolicy {
+    pub(crate) fn state_pattern_id(&self) -> Option<&str> {
+        self.state.as_ref().map(|state| state.pattern_id.as_str())
+    }
+
+    pub(crate) fn state_input_fingerprint(&self) -> Option<&str> {
+        self.state
+            .as_ref()
+            .map(|state| state.input_fingerprint.as_str())
+    }
+
+    pub(crate) fn compiled(&self) -> &CompiledPolicy {
+        &self.compiled
     }
 }
 
@@ -446,6 +542,7 @@ policy:
             plan.diagnostics[0].kind,
             PolicyDiagnosticKind::InvalidRule { .. }
         ));
+        assert!(plan.state_definition_error().is_some());
         assert_eq!(
             work_counts(),
             WorkCounts {
@@ -494,6 +591,19 @@ policy:
             1
         );
         assert_eq!(plan.owners[0].policies.len(), 2);
+        assert_eq!(
+            plan.owners[0]
+                .policies
+                .iter()
+                .filter(|policy| policy.state_pattern_id().is_some())
+                .count(),
+            1
+        );
+        assert_eq!(
+            plan.owners[0].policies[0].state_pattern_id(),
+            Some("ADR-0001/duplicate")
+        );
+        assert_eq!(plan.owners[0].policies[1].state_pattern_id(), None);
         assert_eq!(violations.len(), 4);
         assert!(
             violations

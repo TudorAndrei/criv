@@ -8,6 +8,7 @@ use std::{cell::Cell, thread_local};
 use serde::Serialize;
 
 use crate::c4::C4Artifact;
+use crate::policy_scan::PolicyScanPlan;
 use crate::source_graph::{Language, SourceFile, SymbolKind};
 use crate::structural;
 use crate::util::write_atomic_in;
@@ -234,17 +235,34 @@ pub(crate) struct ArchitectureInterfaceHashRecord {
 }
 
 impl State {
+    #[cfg(test)]
     pub(crate) fn build(root: &Path, vault: &Vault) -> Result<Self> {
-        Self::build_incremental(root, vault, None, &[])
+        let policy_plan = PolicyScanPlan::new(vault);
+        Self::build_with_policy_plan(root, vault, None, &[], &policy_plan)
     }
 
+    #[cfg(test)]
     fn build_incremental(
         root: &Path,
         vault: &Vault,
         previous: Option<&State>,
         changed_files: &[String],
     ) -> Result<Self> {
-        let partitions = StatePartitions::build(root, vault, previous, changed_files)?;
+        let policy_plan = PolicyScanPlan::new(vault);
+        Self::build_with_policy_plan(root, vault, previous, changed_files, &policy_plan)
+    }
+
+    fn build_with_policy_plan(
+        root: &Path,
+        vault: &Vault,
+        previous: Option<&State>,
+        changed_files: &[String],
+        policy_plan: &PolicyScanPlan,
+    ) -> Result<Self> {
+        if let Some(error) = policy_plan.state_definition_error() {
+            return Err(CrivError::new(error));
+        }
+        let partitions = StatePartitions::build(root, vault, previous, changed_files, policy_plan)?;
         let mut state = Self::from_partitions(partitions);
         state.architecture = vault.likec4_workspace.model.clone().map(|model| {
             add_likec4_model_to_graph(&mut state.graph, vault, &model);
@@ -477,9 +495,10 @@ impl StatePartitions {
         vault: &Vault,
         previous: Option<&State>,
         changed_files: &[String],
+        policy_plan: &PolicyScanPlan,
     ) -> Result<Self> {
         let previous = previous.map(|state| &state.partitions);
-        let policy_fingerprints = policy_fingerprints(vault);
+        let policy_fingerprints = policy_fingerprints(policy_plan);
         let note_catalog_fingerprint = note_catalog_fingerprint(vault);
         let invalidation = InvalidationFacts::collect(
             vault,
@@ -570,7 +589,7 @@ impl StatePartitions {
         }
 
         partitions.policies =
-            build_policy_partitions(root, vault, previous, changed_files, &policy_fingerprints)?;
+            build_policy_partitions(root, vault, previous, changed_files, policy_plan)?;
         partitions.reverse_dependencies = ReverseDependencies::index(&partitions);
         partitions.note_catalog_fingerprint = note_catalog_fingerprint;
         Ok(partitions)
@@ -1112,32 +1131,35 @@ fn build_policy_partitions(
     vault: &Vault,
     previous: Option<&StatePartitions>,
     changed_files: &[String],
-    fingerprints: &BTreeMap<String, String>,
+    policy_plan: &PolicyScanPlan,
 ) -> Result<BTreeMap<String, Arc<PolicyPartition>>> {
     let mut partitions = BTreeMap::new();
     let mut pending_policy_scans = Vec::new();
-    for pattern_id in vault.patterns() {
-        if let Some((note, policy)) = vault.resolve_policy_pattern(pattern_id) {
-            let scopes = vault.effective_governs(note);
-            let input_fingerprint = fingerprints
-                .get(pattern_id)
-                .expect("every registered pattern has an input fingerprint")
-                .clone();
+    for owner in policy_plan.owners() {
+        let changed_paths = changed_paths_in_scopes(changed_files, owner.scopes())
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        for policy in owner.policies() {
+            let Some(pattern_id) = policy.state_pattern_id() else {
+                continue;
+            };
+            let input_fingerprint = policy
+                .state_input_fingerprint()
+                .expect("published policies have an input fingerprint")
+                .to_string();
             let previous_partition =
                 previous.and_then(|previous| previous.policies.get(pattern_id));
             let definition_unchanged = previous_partition
                 .is_some_and(|partition| partition.meta.input_fingerprint == input_fingerprint);
             let paths = if definition_unchanged {
-                changed_paths_in_scopes(changed_files, &scopes)
+                changed_paths.clone()
             } else {
-                vault.source_files_matching_globs(&scopes)
-            }
-            .into_iter()
-            .collect::<BTreeSet<_>>();
+                owner.paths().clone()
+            };
 
             if definition_unchanged && paths.is_empty() {
                 partitions.insert(
-                    pattern_id.clone(),
+                    pattern_id.to_string(),
                     previous_partition
                         .expect("unchanged definitions have a previous partition")
                         .clone(),
@@ -1153,30 +1175,22 @@ fn build_policy_partitions(
                 Vec::new()
             };
             pending_policy_scans.push(PendingPolicyScan {
-                pattern_id: pattern_id.clone(),
+                pattern_id: pattern_id.to_string(),
                 input_fingerprint,
-                policy,
+                policy: policy.compiled(),
                 paths,
                 reused,
             });
         }
     }
 
-    let compiled_requests = pending_policy_scans
+    let requests = pending_policy_scans
         .iter()
         .enumerate()
-        .map(|(key, scan)| {
-            structural::compile_policy(scan.policy)
-                .map(|policy| (key, policy))
-                .map_err(CrivError::from)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let requests = compiled_requests
-        .iter()
-        .map(|(key, policy)| structural::PolicyScanRequest {
-            key: *key,
-            policy,
-            paths: &pending_policy_scans[*key].paths,
+        .map(|(key, scan)| structural::PolicyScanRequest {
+            key,
+            policy: scan.policy,
+            paths: &scan.paths,
         })
         .collect::<Vec<_>>();
     let rescanned = structural::find_policies_batch(root, vault, &requests)?;
@@ -1211,38 +1225,57 @@ fn build_policy_partitions(
     Ok(partitions)
 }
 
-fn policy_fingerprints(vault: &Vault) -> BTreeMap<String, String> {
-    vault
-        .patterns()
+fn policy_fingerprints(policy_plan: &PolicyScanPlan) -> BTreeMap<String, String> {
+    policy_plan
+        .owners()
         .iter()
-        .filter_map(|pattern_id| {
-            vault
-                .resolve_policy_pattern(pattern_id)
-                .map(|(note, policy)| {
-                    (
-                        pattern_id.clone(),
-                        stable_hash(&format!("{policy:#?}\0{:?}", vault.effective_governs(note))),
-                    )
-                })
+        .flat_map(|owner| owner.policies())
+        .filter_map(|policy| {
+            Some((
+                policy.state_pattern_id()?.to_string(),
+                policy.state_input_fingerprint()?.to_string(),
+            ))
         })
         .collect()
 }
 
-pub(crate) fn write_state(root: &Path, vault: &Vault) -> Result<(String, State)> {
-    let state = State::build(root, vault)?;
+#[cfg(test)]
+fn write_state(root: &Path, vault: &Vault) -> Result<(String, State)> {
+    let policy_plan = PolicyScanPlan::new(vault);
+    write_state_with_policy_plan(root, vault, &policy_plan)
+}
+
+pub(crate) fn write_state_with_policy_plan(
+    root: &Path,
+    vault: &Vault,
+    policy_plan: &PolicyScanPlan,
+) -> Result<(String, State)> {
+    let state = State::build_with_policy_plan(root, vault, None, &[], policy_plan)?;
     let serialized = state.serialize()?;
     state.write_serialized(root, &serialized)?;
     let snapshot = state.publish_snapshot(root, &serialized, vault.config.state_keep)?;
     Ok((snapshot, state))
 }
 
-pub(crate) fn write_state_incremental(
+#[cfg(test)]
+fn write_state_incremental(
     root: &Path,
     vault: &Vault,
     previous: Option<&State>,
     changed_files: &[String],
 ) -> Result<(String, State)> {
-    let state = State::build_incremental(root, vault, previous, changed_files)?;
+    let policy_plan = PolicyScanPlan::new(vault);
+    write_state_incremental_with_policy_plan(root, vault, previous, changed_files, &policy_plan)
+}
+
+pub(crate) fn write_state_incremental_with_policy_plan(
+    root: &Path,
+    vault: &Vault,
+    previous: Option<&State>,
+    changed_files: &[String],
+    policy_plan: &PolicyScanPlan,
+) -> Result<(String, State)> {
+    let state = State::build_with_policy_plan(root, vault, previous, changed_files, policy_plan)?;
     let serialized = state.serialize()?;
     state.write_serialized(root, &serialized)?;
     let snapshot = state.publish_snapshot(root, &serialized, vault.config.state_keep)?;
@@ -1262,7 +1295,7 @@ pub(crate) fn work_counts() -> WorkCounts {
 struct PendingPolicyScan<'a> {
     pattern_id: String,
     input_fingerprint: String,
-    policy: &'a crate::vault::PolicyPattern,
+    policy: &'a structural::CompiledPolicy,
     paths: BTreeSet<String>,
     reused: Vec<PatternMatch>,
 }

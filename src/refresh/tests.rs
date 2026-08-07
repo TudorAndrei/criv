@@ -6,10 +6,11 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 use super::*;
-use crate::{source_graph, source_index, structural, vault as vault_module};
+use crate::{policy_scan, source_graph, source_index, structural, vault as vault_module};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 struct RefreshWork {
+    policy_scan: policy_scan::WorkCounts,
     source_index: source_index::WorkCounts,
     source_graph: source_graph::WorkCounts,
     vault: vault_module::WorkCounts,
@@ -99,6 +100,68 @@ fn live_refresh_reuses_exactly_one_source_index_adapter() {
         .unwrap();
 
     assert_eq!(source_index::work_counts().fff_starts, 1);
+}
+
+#[test]
+fn one_shot_refresh_reuses_one_compiled_policy_plan_for_state() {
+    let fixture = incremental_fixture("shared-policy-plan");
+    let mut session = one_shot_session(fixture.path());
+    reset_refresh_work();
+
+    session
+        .refresh(fixture.path(), RefreshCause::Initial)
+        .unwrap();
+
+    assert_policy_refresh_work(refresh_work(), 1);
+}
+
+#[test]
+fn live_refresh_reuses_one_policy_plan_for_no_op_and_changed_sources() {
+    let _live_test = source_index::lock_live_test();
+    let fixture = incremental_fixture("shared-live-policy-plan");
+    let root = fixture.path();
+    let mut session = live_session(root);
+
+    reset_refresh_work();
+    session.refresh(root, RefreshCause::Initial).unwrap();
+    assert_policy_refresh_work(refresh_work(), 1);
+
+    reset_refresh_work();
+    session.refresh(root, RefreshCause::DocsChanged).unwrap();
+    assert_policy_refresh_work(refresh_work(), 0);
+
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn changed() {\n    println!(\"changed\");\n}\n",
+    )
+    .unwrap();
+    wait_for_source_change(&mut session, "shared policy plan source change");
+    reset_refresh_work();
+    session.refresh(root, RefreshCause::SourceChanged).unwrap();
+    assert_policy_refresh_work(refresh_work(), 1);
+}
+
+#[test]
+fn disabled_source_refresh_stops_before_policy_planning() {
+    let fixture = incremental_fixture("disabled-shared-policy-plan");
+    let root = fixture.path();
+    let config_path = root.join("criv.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    fs::write(
+        &config_path,
+        config.replace("source = true", "source = false"),
+    )
+    .unwrap();
+    let mut session = one_shot_session(root);
+
+    reset_refresh_work();
+    let error = session.refresh(root, RefreshCause::Initial).unwrap_err();
+    let work = refresh_work();
+
+    assert!(error.to_string().contains("state publication blocked"));
+    assert_eq!(work.policy_scan, policy_scan::WorkCounts::default());
+    assert_eq!(work.structural.policy_compilations, 0);
+    assert_eq!(work.structural.ast_parses, 0);
 }
 
 #[test]
@@ -352,6 +415,7 @@ fn copy_fixture_tree(source: &Path, destination: &Path) {
 }
 
 fn reset_refresh_work() {
+    policy_scan::reset_work_counts();
     source_index::reset_work_counts();
     source_graph::reset_work_counts();
     vault_module::reset_work_counts();
@@ -361,12 +425,25 @@ fn reset_refresh_work() {
 
 fn refresh_work() -> RefreshWork {
     RefreshWork {
+        policy_scan: policy_scan::work_counts(),
         source_index: source_index::work_counts(),
         source_graph: source_graph::work_counts(),
         vault: vault_module::work_counts(),
         structural: structural::work_counts(),
         state: state::work_counts(),
     }
+}
+
+fn assert_policy_refresh_work(work: RefreshWork, ast_parses: usize) {
+    assert_eq!(
+        work.policy_scan,
+        policy_scan::WorkCounts {
+            definition_compilations: 1,
+            adr_scope_resolutions: 1,
+        }
+    );
+    assert_eq!(work.structural.policy_compilations, 1);
+    assert_eq!(work.structural.ast_parses, ast_parses);
 }
 
 fn refresh_snapshot(

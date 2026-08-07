@@ -448,13 +448,22 @@ pub(crate) fn validate_with_policy_plan(
     validate_with_previous_architecture_interfaces(vault, None, policy_plan)
 }
 
+#[cfg(test)]
 pub(crate) fn validate_with_previous_state(
     vault: &Vault,
     previous: Option<&State>,
 ) -> Vec<Diagnostic> {
     let policy_plan = PolicyScanPlan::new(vault);
+    validate_with_previous_state_and_policy_plan(vault, previous, &policy_plan)
+}
+
+pub(crate) fn validate_with_previous_state_and_policy_plan(
+    vault: &Vault,
+    previous: Option<&State>,
+    policy_plan: &PolicyScanPlan,
+) -> Vec<Diagnostic> {
     let previous_hashes = previous.map(State::architecture_interface_hashes);
-    validate_with_previous_architecture_interfaces(vault, previous_hashes.as_ref(), &policy_plan)
+    validate_with_previous_architecture_interfaces(vault, previous_hashes.as_ref(), policy_plan)
 }
 
 fn validate_with_previous_architecture_interfaces(
