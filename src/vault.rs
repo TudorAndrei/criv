@@ -10,7 +10,7 @@ use crate::Result;
 use crate::c4;
 use crate::config::Config;
 use crate::source_graph::{SourceGraph, SourceGraphBuild};
-use crate::source_index::{OneShotSourceIndex, SourceIndex, SourceIndexHandle};
+use crate::source_index::{IndexedSource, OneShotSourceIndex, SourceCatalog};
 use crate::util::{
     GlobMatcher, find_wiki_links_with_lines, is_adr_id, kebab,
     markdown_headings as parse_markdown_headings, read_to_string, strip_prefix, walk_files,
@@ -140,8 +140,7 @@ pub(crate) struct Vault {
     note_ids: BTreeMap<String, usize>,
     filenames: BTreeMap<String, usize>,
     titles: BTreeMap<String, usize>,
-    source_files: Vec<String>,
-    source_index: SourceIndexHandle,
+    source_catalog: SourceCatalog,
     source_graph: SourceGraphBuild,
     effective_decisions: BTreeSet<String>,
     patterns: BTreeSet<String>,
@@ -173,18 +172,18 @@ impl Vault {
         Self::load_with_source_facilities(root, None, None, false)
     }
 
-    pub(crate) fn load_incremental_with_source_index(
+    pub(crate) fn load_incremental_with_source_catalog(
         root: &Path,
         previous_graph: Option<&SourceGraphBuild>,
-        source_index: SourceIndexHandle,
+        source_catalog: SourceCatalog,
     ) -> Result<Self> {
-        Self::load_with_source_facilities(root, previous_graph, Some(source_index), true)
+        Self::load_with_source_facilities(root, previous_graph, Some(source_catalog), true)
     }
 
     fn load_with_source_facilities(
         root: &Path,
         previous_graph: Option<&SourceGraphBuild>,
-        source_index: Option<SourceIndexHandle>,
+        source_catalog: Option<SourceCatalog>,
         load_sources: bool,
     ) -> Result<Self> {
         let config = Config::load(root)?;
@@ -222,27 +221,19 @@ impl Vault {
         let effective_decisions = effective_accepted_decision_ids(&notes);
         let patterns = registered_policy_patterns(&notes, &effective_decisions);
 
-        let source_index = if load_sources {
-            match source_index {
-                Some(source_index) => source_index,
-                None => OneShotSourceIndex::new(root, &config)?.handle(),
+        let source_catalog = if load_sources {
+            match source_catalog {
+                Some(source_catalog) => source_catalog,
+                None => OneShotSourceIndex::new(root, &config)?.catalog()?,
             }
         } else {
-            SourceIndexHandle::disabled()
+            SourceCatalog::disabled()
         };
-        let (source_files, source_graph) = if source_index.is_enabled() {
-            let source_files = source_index
-                .as_index()
-                .entries()?
-                .into_iter()
-                .map(|entry| entry.path)
-                .collect::<Vec<_>>();
-            let source_graph =
-                SourceGraphBuild::build_incremental(root, &source_files, previous_graph)?
-                    .publish(root)?;
-            (source_files, source_graph)
+        let source_graph = if source_catalog.is_enabled() {
+            SourceGraphBuild::build_incremental(root, source_catalog.paths(), previous_graph)?
+                .publish(root)?
         } else {
-            (Vec::new(), SourceGraphBuild::disabled())
+            SourceGraphBuild::disabled()
         };
 
         let mut vault = Self {
@@ -254,8 +245,7 @@ impl Vault {
             note_ids,
             filenames,
             titles,
-            source_files,
-            source_index,
+            source_catalog,
             source_graph,
             effective_decisions,
             patterns,
@@ -382,7 +372,7 @@ impl Vault {
     }
 
     pub(crate) fn resolve_source_path(&self, path: &str) -> Option<(String, bool)> {
-        self.source_index.as_index().resolve_partial_path(path)
+        self.source_catalog.resolve_partial_path(path)
     }
 
     pub(crate) fn resolve_source_target(&self, target: &str) -> SourceTargetResolution {
@@ -437,7 +427,7 @@ impl Vault {
         let matcher = GlobMatcher::from_valid_patterns(patterns);
         let mut matches_by_pattern = vec![Vec::new(); patterns.len()];
         let mut indices = Vec::new();
-        for source_file in &self.source_files {
+        for source_file in self.source_catalog.paths() {
             matcher.matching_pattern_indices_into(source_file, &mut indices);
             for index in &indices {
                 matches_by_pattern[*index].push(source_file.clone());
@@ -461,7 +451,7 @@ impl Vault {
         let matcher = GlobMatcher::from_valid_patterns(patterns);
         let mut matched = vec![false; patterns.len()];
         let mut indices = Vec::new();
-        for source_file in &self.source_files {
+        for source_file in self.source_catalog.paths() {
             matcher.matching_pattern_indices_into(source_file, &mut indices);
             for index in &indices {
                 matched[*index] = true;
@@ -477,7 +467,7 @@ impl Vault {
     }
 
     pub(crate) fn source_files(&self) -> &[String] {
-        &self.source_files
+        self.source_catalog.paths()
     }
 
     pub(crate) fn source_graph(&self) -> &SourceGraph {
@@ -492,8 +482,8 @@ impl Vault {
         self.source_graph.retain_changed_files_from(previous);
     }
 
-    pub(crate) fn source_index(&self) -> &dyn SourceIndex {
-        self.source_index.as_index()
+    pub(crate) fn source_entries(&self) -> &[IndexedSource] {
+        self.source_catalog.entries()
     }
 
     pub(crate) fn patterns(&self) -> &BTreeSet<String> {
@@ -574,8 +564,7 @@ impl Vault {
             note_ids,
             filenames,
             titles,
-            source_files: Vec::new(),
-            source_index: SourceIndexHandle::disabled(),
+            source_catalog: SourceCatalog::disabled(),
             source_graph: SourceGraphBuild::disabled(),
             effective_decisions,
             patterns,
@@ -1386,7 +1375,7 @@ source = false
 
         assert!(vault.source_files().is_empty());
         assert!(vault.source_graph().files.is_empty());
-        assert!(vault.source_index().entries().unwrap().is_empty());
+        assert!(vault.source_entries().is_empty());
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1407,15 +1396,9 @@ roots = ["src"]
 
         let config = Config::load(&root).unwrap();
         let lifecycle = OneShotSourceIndex::new(&root, &config).unwrap();
-        let index = lifecycle.handle();
-        let expected = index
-            .as_index()
-            .entries()
-            .unwrap()
-            .into_iter()
-            .map(|entry| entry.path)
-            .collect::<Vec<_>>();
-        let vault = Vault::load_incremental_with_source_index(&root, None, index).unwrap();
+        let catalog = lifecycle.catalog().unwrap();
+        let expected = catalog.paths().to_vec();
+        let vault = Vault::load_incremental_with_source_catalog(&root, None, catalog).unwrap();
 
         assert_eq!(vault.source_files(), expected);
         assert!(vault.source_graph().files.contains_key("src/lib.rs"));

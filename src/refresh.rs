@@ -5,7 +5,7 @@ use crate::check;
 use crate::config::Config;
 use crate::policy_scan::PolicyScanPlan;
 use crate::source_graph::{self, SourceGraphBuild};
-use crate::source_index::{LiveSourceIndex, OneShotSourceIndex, SourceChange, SourceIndexHandle};
+use crate::source_index::{LiveSourceIndex, OneShotSourceIndex, SourceCatalog, SourceChange};
 use crate::state::{self, State};
 use crate::vault::Vault;
 use crate::{CrivError, Result};
@@ -37,10 +37,10 @@ enum RefreshSourceIndex {
 }
 
 impl RefreshSourceIndex {
-    fn handle(&self) -> SourceIndexHandle {
+    fn catalog(&self) -> Result<SourceCatalog> {
         match self {
-            Self::OneShot(index) => index.handle(),
-            Self::Live(index) => index.handle(),
+            Self::OneShot(index) => index.catalog(),
+            Self::Live(index) => index.catalog(),
         }
     }
 
@@ -85,7 +85,7 @@ impl RefreshSession {
             previous_graph,
             previous_state,
             diagnostic_previous_state,
-            self.source_index.handle(),
+            self.source_index.catalog()?,
         )?;
 
         self.seed_graph = None;
@@ -106,10 +106,10 @@ fn execute(
     previous_graph: Option<&SourceGraphBuild>,
     previous_state: Option<&State>,
     diagnostic_previous_state: Option<&State>,
-    source_index: SourceIndexHandle,
+    source_catalog: SourceCatalog,
 ) -> Result<RefreshResult> {
     let mut vault =
-        Vault::load_incremental_with_source_index(root, previous_graph, source_index.clone())?;
+        Vault::load_incremental_with_source_catalog(root, previous_graph, source_catalog.clone())?;
     let blockers = check::publication_blocking_diagnostics(&vault);
     if !blockers.is_empty() {
         return Err(CrivError::new(format!(
@@ -124,8 +124,11 @@ fn execute(
     let changed_files = vault.source_graph().changed_files().to_vec();
     if architecture::write_code_architecture(root, &vault)? {
         let refreshed_graph = vault.source_graph_build().clone();
-        vault =
-            Vault::load_incremental_with_source_index(root, Some(&refreshed_graph), source_index)?;
+        vault = Vault::load_incremental_with_source_catalog(
+            root,
+            Some(&refreshed_graph),
+            source_catalog,
+        )?;
         vault.retain_source_graph_changes_from(&refreshed_graph);
     }
 

@@ -559,9 +559,7 @@ impl StatePartitions {
                 .insert(artifact.rel_path.clone(), partition);
         }
 
-        let mut source_entries = vault.source_index().entries()?;
-        source_entries.sort_by(|left, right| left.path.cmp(&right.path));
-        for entry in source_entries {
+        for entry in vault.source_entries() {
             let state_entry = SourceIndexEntry {
                 mime: mime_guess::from_path(&entry.path)
                     .first_raw()
@@ -585,7 +583,9 @@ impl StatePartitions {
                         entry: state_entry,
                     })
                 });
-            partitions.source_index.insert(entry.path, partition);
+            partitions
+                .source_index
+                .insert(entry.path.clone(), partition);
         }
 
         partitions.policies =

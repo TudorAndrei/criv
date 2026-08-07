@@ -87,14 +87,22 @@ pub(crate) struct IndexedSource {
     pub(crate) frecency: u32,
 }
 
-pub(crate) trait SourceIndex: std::fmt::Debug + Send + Sync {
-    fn resolve_partial_path(&self, path: &str) -> Option<(String, bool)>;
+trait SourceIndex: std::fmt::Debug + Send + Sync {
+    fn resolve_partial_path(&self, entries: &[IndexedSource], path: &str)
+    -> Option<(String, bool)>;
     fn entries(&self) -> Result<Vec<IndexedSource>>;
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct SourceIndexHandle {
+struct SourceIndexHandle {
     adapter: SourceIndexAdapter,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SourceCatalog {
+    handle: SourceIndexHandle,
+    entries: Arc<[IndexedSource]>,
+    paths: Arc<[String]>,
 }
 
 #[derive(Debug, Clone)]
@@ -110,21 +118,63 @@ impl SourceIndexHandle {
         }
     }
 
-    pub(crate) fn disabled() -> Self {
+    fn disabled() -> Self {
         Self {
             adapter: SourceIndexAdapter::Empty(Arc::new(EmptySourceIndex)),
         }
     }
 
-    pub(crate) fn is_enabled(&self) -> bool {
+    fn is_enabled(&self) -> bool {
         matches!(self.adapter, SourceIndexAdapter::Fff(_))
     }
 
-    pub(crate) fn as_index(&self) -> &dyn SourceIndex {
+    fn as_index(&self) -> &dyn SourceIndex {
         match &self.adapter {
             SourceIndexAdapter::Fff(index) => index.as_ref(),
             SourceIndexAdapter::Empty(index) => index.as_ref(),
         }
+    }
+
+    fn snapshot(&self) -> Result<SourceCatalog> {
+        let mut entries = self.as_index().entries()?;
+        entries.sort_by(|left, right| left.path.cmp(&right.path));
+        let paths = entries
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect::<Vec<_>>();
+        Ok(SourceCatalog {
+            handle: self.clone(),
+            entries: entries.into(),
+            paths: paths.into(),
+        })
+    }
+}
+
+impl SourceCatalog {
+    pub(crate) fn disabled() -> Self {
+        Self {
+            handle: SourceIndexHandle::disabled(),
+            entries: Arc::from([]),
+            paths: Arc::from([]),
+        }
+    }
+
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.handle.is_enabled()
+    }
+
+    pub(crate) fn entries(&self) -> &[IndexedSource] {
+        &self.entries
+    }
+
+    pub(crate) fn paths(&self) -> &[String] {
+        &self.paths
+    }
+
+    pub(crate) fn resolve_partial_path(&self, path: &str) -> Option<(String, bool)> {
+        self.handle
+            .as_index()
+            .resolve_partial_path(&self.entries, path)
     }
 }
 
@@ -148,7 +198,12 @@ impl OneShotSourceIndex {
         Ok(Self { handle })
     }
 
-    pub(crate) fn handle(&self) -> SourceIndexHandle {
+    pub(crate) fn catalog(&self) -> Result<SourceCatalog> {
+        self.handle.snapshot()
+    }
+
+    #[cfg(test)]
+    fn handle(&self) -> SourceIndexHandle {
         self.handle.clone()
     }
 }
@@ -197,7 +252,12 @@ impl LiveSourceIndex {
         })
     }
 
-    pub(crate) fn handle(&self) -> SourceIndexHandle {
+    pub(crate) fn catalog(&self) -> Result<SourceCatalog> {
+        self.handle.snapshot()
+    }
+
+    #[cfg(test)]
+    fn handle(&self) -> SourceIndexHandle {
         self.handle.clone()
     }
 
@@ -500,14 +560,20 @@ fn prefixed_path(prefix: &str, path: String) -> String {
 }
 
 impl SourceIndex for FffSourceIndex {
-    fn resolve_partial_path(&self, path: &str) -> Option<(String, bool)> {
+    fn resolve_partial_path(
+        &self,
+        entries: &[IndexedSource],
+        path: &str,
+    ) -> Option<(String, bool)> {
         if path.is_empty() || path.starts_with("match:") {
             return None;
         }
 
         let path = path.trim();
-        let source_files = self.source_files().ok()?;
-        if source_files.iter().any(|source_file| source_file == path) {
+        if entries
+            .binary_search_by(|entry| entry.path.as_str().cmp(path))
+            .is_ok()
+        {
             return Some((path.to_string(), false));
         }
 
@@ -521,8 +587,9 @@ impl SourceIndex for FffSourceIndex {
             .collect::<Vec<_>>();
 
         let matches = if fff_matches.is_empty() {
-            source_files
+            entries
                 .iter()
+                .map(|entry| &entry.path)
                 .filter(|file| file.ends_with(path) || file.rsplit('/').next() == Some(path))
                 .cloned()
                 .collect::<Vec<_>>()
@@ -574,7 +641,11 @@ impl SourceIndex for FffSourceIndex {
 struct EmptySourceIndex;
 
 impl SourceIndex for EmptySourceIndex {
-    fn resolve_partial_path(&self, _path: &str) -> Option<(String, bool)> {
+    fn resolve_partial_path(
+        &self,
+        _entries: &[IndexedSource],
+        _path: &str,
+    ) -> Option<(String, bool)> {
         None
     }
 
@@ -647,25 +718,23 @@ mod tests {
         reset_work_counts();
         let config = test_config(&["src", ".github/workflows", "Cargo.toml"], &[], true);
         let lifecycle = OneShotSourceIndex::new(root, &config).unwrap();
-        let handle = lifecycle.handle();
-        let index = handle.as_index();
+        let catalog = lifecycle.catalog().unwrap();
 
-        let entries = index
+        let entries = catalog
             .entries()
-            .unwrap()
-            .into_iter()
-            .map(|entry| entry.path)
+            .iter()
+            .map(|entry| entry.path.clone())
             .collect::<Vec<_>>();
         assert_eq!(
             entries,
             vec![".github/workflows/ci.yml", "Cargo.toml", "src/lib.rs"]
         );
         assert_eq!(
-            index.resolve_partial_path("lib.rs"),
+            catalog.resolve_partial_path("lib.rs"),
             Some(("src/lib.rs".into(), false))
         );
         assert_eq!(
-            index.resolve_partial_path("lib.rs"),
+            catalog.resolve_partial_path("lib.rs"),
             Some(("src/lib.rs".into(), false))
         );
         assert_eq!(
@@ -699,14 +768,12 @@ mod tests {
             true,
         );
         let lifecycle = OneShotSourceIndex::new(root, &config).unwrap();
-        let handle = lifecycle.handle();
-        let index = handle.as_index();
+        let catalog = lifecycle.catalog().unwrap();
 
-        let paths = index
+        let paths = catalog
             .entries()
-            .unwrap()
-            .into_iter()
-            .map(|entry| entry.path)
+            .iter()
+            .map(|entry| entry.path.clone())
             .collect::<Vec<_>>();
         assert_eq!(
             paths,

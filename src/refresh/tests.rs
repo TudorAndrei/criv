@@ -103,6 +103,64 @@ fn live_refresh_reuses_exactly_one_source_index_adapter() {
 }
 
 #[test]
+fn one_shot_refresh_materializes_one_source_catalog() {
+    let fixture = incremental_fixture("one-shot-source-catalog");
+    let mut session = one_shot_session(fixture.path());
+    reset_refresh_work();
+
+    session
+        .refresh(fixture.path(), RefreshCause::Initial)
+        .unwrap();
+
+    assert_source_catalog_work(refresh_work(), 1);
+}
+
+#[test]
+fn live_refresh_materializes_one_source_catalog_for_initial_no_op_and_change() {
+    let _live_test = source_index::lock_live_test();
+    let fixture = incremental_fixture("one-live-source-catalog");
+    let root = fixture.path();
+    let mut session = live_session(root);
+
+    reset_refresh_work();
+    session.refresh(root, RefreshCause::Initial).unwrap();
+    assert_source_catalog_work(refresh_work(), 1);
+
+    reset_refresh_work();
+    session.refresh(root, RefreshCause::DocsChanged).unwrap();
+    assert_source_catalog_work(refresh_work(), 1);
+
+    fs::write(root.join("src/lib.rs"), "pub fn changed() {}\n").unwrap();
+    wait_for_source_change(&mut session, "source catalog change");
+    reset_refresh_work();
+    session.refresh(root, RefreshCause::SourceChanged).unwrap();
+    assert_source_catalog_work(refresh_work(), 1);
+}
+
+#[test]
+fn disabled_source_refresh_materializes_no_source_catalog() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    write_architecture_fixture(root);
+    let config_path = root.join("criv.toml");
+    let config = fs::read_to_string(&config_path).unwrap();
+    fs::write(
+        &config_path,
+        config.replace(
+            "[architecture.code]",
+            "[index]\nsource = false\n\n[architecture.code]",
+        ),
+    )
+    .unwrap();
+    let mut session = one_shot_session(root);
+
+    reset_refresh_work();
+    session.refresh(root, RefreshCause::Initial).unwrap();
+
+    assert_source_catalog_work(refresh_work(), 0);
+}
+
+#[test]
 fn one_shot_refresh_reuses_one_compiled_policy_plan_for_state() {
     let fixture = incremental_fixture("shared-policy-plan");
     let mut session = one_shot_session(fixture.path());
@@ -444,6 +502,17 @@ fn assert_policy_refresh_work(work: RefreshWork, ast_parses: usize) {
     );
     assert_eq!(work.structural.policy_compilations, 1);
     assert_eq!(work.structural.ast_parses, ast_parses);
+}
+
+fn assert_source_catalog_work(work: RefreshWork, materializations: usize) {
+    assert_eq!(
+        work.source_index,
+        source_index::WorkCounts {
+            fff_starts: 0,
+            catalog_traversals: materializations,
+            source_enumerations: materializations,
+        }
+    );
 }
 
 fn refresh_snapshot(
