@@ -1038,7 +1038,30 @@ fn peak_rss_bytes() -> Option<u64> {
     Some(rss.saturating_mul(1024))
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn peak_rss_bytes() -> Option<u64> {
+    use windows_sys::Win32::System::ProcessStatus::{
+        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+    };
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    let mut counters = PROCESS_MEMORY_COUNTERS {
+        cb: std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: GetCurrentProcess returns a valid pseudo-handle for this process,
+    // and counters points to an initialized structure of the supplied size.
+    let status = unsafe {
+        GetProcessMemoryInfo(
+            GetCurrentProcess(),
+            &mut counters,
+            std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+        )
+    };
+    (status != 0).then_some(counters.PeakWorkingSetSize as u64)
+}
+
+#[cfg(not(any(unix, windows)))]
 fn peak_rss_bytes() -> Option<u64> {
     None
 }

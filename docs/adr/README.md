@@ -87,3 +87,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0081-require-material-state-store-performance-gains|ADR-0081]] - Require material State store performance gains
 - [[0082-no-standalone-search-command|ADR-0082]] - No standalone search command
 - [[0083-own-one-loaded-state-revision-per-editor-workspace|ADR-0083]] - Own one loaded State revision per editor workspace
+- [[0084-require-windows-hosted-validation|ADR-0084]] - Require Windows hosted validation
