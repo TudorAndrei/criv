@@ -1325,10 +1325,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function sameStateFileToken(
-  left: StateFileToken | null,
-  right: StateFileToken | null,
-): boolean {
+function sameStateFileToken(left: StateFileToken | null, right: StateFileToken | null): boolean {
   return left?.mtime === right?.mtime && left?.size === right?.size;
 }
 

@@ -36,15 +36,15 @@ assert.deepEqual(
   projections.sources.map((entry) => entry.path),
   ["src/lib.rs"],
 );
-assert.equal(
-  revision.suggestSelectors("run", 10)[0].target,
-  "src/lib.rs#fn:run",
-);
+assert.equal(revision.suggestSelectors("run", 10)[0].target, "src/lib.rs#fn:run");
 revision.dispose();
-assert.throws(() => revision.suggestSelectors("run", 10), (error) => {
-  assert.equal(error.code, bridgeModule.CRIV_LOADED_STATE_DISPOSED);
-  return true;
-});
+assert.throws(
+  () => revision.suggestSelectors("run", 10),
+  (error) => {
+    assert.equal(error.code, bridgeModule.CRIV_LOADED_STATE_DISPOSED);
+    return true;
+  },
+);
 
 let attempts = 0;
 const missing = bridgeModule.createCrivWasmBridge(async () => {

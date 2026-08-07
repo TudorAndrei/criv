@@ -51,9 +51,7 @@ const stateContractRaw = readFileSync(stateContractPath, "utf8");
 const stateContract = JSON.parse(stateContractRaw);
 assert.deepEqual(initialProjections(stateContractRaw).state, stateContract);
 assert.match(
-  wasmError(
-    () => new wasm.LoadedState(stateContractRaw.replace("criv.state.v1", "criv.state.v2")),
-  ),
+  wasmError(() => new wasm.LoadedState(stateContractRaw.replace("criv.state.v1", "criv.state.v2"))),
   /unsupported criv state schema/i,
 );
 assert.equal(stateContract.graph.nodes.length, 6);
@@ -117,14 +115,8 @@ const rankedState = {
 
 const rankedRevision = new wasm.LoadedState(JSON.stringify(rankedState));
 assert.equal(rankedRevision.suggestSelectors("src/lib.rs", 2)[0].path, "src/lib.rs");
-assert.equal(
-  rankedRevision.suggestSelectors("lib.rs", 2)[0].path,
-  "crates/criv-wasm/src/lib.rs",
-);
-assert.equal(
-  rankedRevision.suggestSelectors("", 1)[0].path,
-  "crates/criv-wasm/src/lib.rs",
-);
+assert.equal(rankedRevision.suggestSelectors("lib.rs", 2)[0].path, "crates/criv-wasm/src/lib.rs");
+assert.equal(rankedRevision.suggestSelectors("", 1)[0].path, "crates/criv-wasm/src/lib.rs");
 rankedRevision.free();
 
 const unsafeSourceState = {

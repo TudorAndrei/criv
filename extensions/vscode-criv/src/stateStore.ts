@@ -1,11 +1,7 @@
 import type * as vscode from "vscode";
 
 import { buildStateSnapshot, type CrivStateSnapshot } from "./stateModel";
-import {
-  CrivWasmLoadError,
-  type CrivLoadedState,
-  type CrivWasmBridge,
-} from "./wasm";
+import { CrivWasmLoadError, type CrivLoadedState, type CrivWasmBridge } from "./wasm";
 
 export type WorkspaceStateStatus =
   | { kind: "loading" }
@@ -40,9 +36,7 @@ export class WorkspaceStateStore implements Disposable {
     private readonly bridge: CrivWasmBridge,
   ) {}
 
-  readonly onDidChangeStatus = (
-    listener: (status: WorkspaceStateStatus) => void,
-  ): Disposable => {
+  readonly onDidChangeStatus = (listener: (status: WorkspaceStateStatus) => void): Disposable => {
     this.listeners.add(listener);
     return { dispose: () => this.listeners.delete(listener) };
   };

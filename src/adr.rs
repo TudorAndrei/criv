@@ -694,6 +694,8 @@ fn adr_semantic_content(contents: &str) -> AdrSemanticContent {
         }
         if line.is_empty()
             || line.starts_with("# ")
+            || line.starts_with("```")
+            || line.starts_with("~~~")
             || line
                 .strip_prefix("## ")
                 .is_some_and(is_standard_adr_heading)
@@ -1658,6 +1660,14 @@ mod tests {
         assert!(plausible_carried_content(
             "---\nid: ADR-0002\nkind: decision\ntitle: Shared\nstatus: accepted\n---\n\n# Shared\n\n## Context\n\nThe same substantive context is retained.\n\n## Decision\n\nA changed conclusion.\n",
             "---\nid: ADR-0001\nkind: decision\ntitle: Shared\nstatus: accepted\n---\n\n# Shared\n\n## Context\n\nThe same substantive context is retained.\n\n## Decision\n\nThe original conclusion.\n",
+        ));
+    }
+
+    #[test]
+    fn ignores_markdown_code_fences_when_comparing_adr_content() {
+        assert!(!plausible_carried_content(
+            "---\nid: ADR-0002\nkind: decision\ntitle: Local Viewer\nstatus: accepted\n---\n\n# Local Viewer\n\n## Decision\n\n```sh\ncriv install-editor --editor code --vsix viewer.vsix\n```\n",
+            "---\nid: ADR-0001\nkind: decision\ntitle: Offline Check\nstatus: accepted\n---\n\n# Offline Check\n\n## Decision\n\n```sh\nzizmor --offline --strict-collection .\n```\n",
         ));
     }
 

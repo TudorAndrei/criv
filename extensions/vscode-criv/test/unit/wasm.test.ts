@@ -65,11 +65,14 @@ test("frees one loaded revision once and rejects later use", async () => {
   revision.dispose();
 
   assert.equal(frees, 1);
-  assert.throws(() => revision.lookupNode("src/lib.rs"), (error: unknown) => {
-    assert.ok(error instanceof CrivLoadedStateDisposedError);
-    assert.equal(error.code, CRIV_LOADED_STATE_DISPOSED);
-    return true;
-  });
+  assert.throws(
+    () => revision.lookupNode("src/lib.rs"),
+    (error: unknown) => {
+      assert.ok(error instanceof CrivLoadedStateDisposedError);
+      assert.equal(error.code, CRIV_LOADED_STATE_DISPOSED);
+      return true;
+    },
+  );
 });
 
 test("caches one stable descriptive error for a missing runtime", async () => {

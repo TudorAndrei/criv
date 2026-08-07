@@ -1,15 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  WorkspaceStateStore,
-  type WorkspaceStateHost,
-} from "../../src/stateStore";
-import type {
-  CrivInitialProjections,
-  CrivLoadedState,
-  CrivWasmBridge,
-} from "../../src/wasm";
+import { WorkspaceStateStore, type WorkspaceStateHost } from "../../src/stateStore";
+import type { CrivInitialProjections, CrivLoadedState, CrivWasmBridge } from "../../src/wasm";
 
 test("keeps the latest refresh and disposes a late revision", async () => {
   const host = new FakeHost(["old", "new"]);

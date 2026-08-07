@@ -138,10 +138,7 @@ class FakeRevision {
   const newRevision = new FakeRevision({ ...validState, marker: "new" });
   const loads = [oldLoad.promise, newLoad.promise];
   let loadCount = 0;
-  const { plugin } = createPlugin(
-    { ".criv/state.json": validStateRaw },
-    () => loads[loadCount++],
-  );
+  const { plugin } = createPlugin({ ".criv/state.json": validStateRaw }, () => loads[loadCount++]);
 
   const oldRefresh = plugin.loadState();
   await waitFor(() => loadCount === 1);
@@ -189,10 +186,7 @@ class FakeRevision {
   const changed = new FakeRevision({ ...validState, marker: "polled" });
   const revisions = [current, changed];
   let loadCount = 0;
-  const { plugin, setStat, reads } = createPlugin(
-    files,
-    async () => revisions[loadCount++],
-  );
+  const { plugin, setStat, reads } = createPlugin(files, async () => revisions[loadCount++]);
 
   setStat({ mtime: 1, size: validStateRaw.length });
   await plugin.loadState();
