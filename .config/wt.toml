@@ -14,9 +14,10 @@
 # mise.lock, so a new worktree reuses what is already downloaded.
 mise = "mise trust --quiet {{ worktree_path }}"
 
-# Detached tmux session named after the branch. Detached so creating a worktree
-# never steals the terminal — this composes with `wt switch --create -x claude`.
-tmux = "bash {{ repo_path }}/.config/wt-tmux.sh start {{ branch }} {{ worktree_path }} {{ repo }}"
+# Match the shell that invoked Worktrunk. A Herdr pane opens a Herdr workspace;
+# a tmux shell creates a detached tmux session; other shells create neither.
+# Herdr is checked first because a Herdr pane can inherit TMUX.
+session = "bash {{ repo_path }}/.config/wt-session.sh {{ branch }} {{ worktree_path }} {{ repo }}"
 
 [[post-start]]
 # Reflink-clone the heavy gitignored trees listed in .worktreeinclude: target/,

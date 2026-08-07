@@ -2,10 +2,8 @@
 # wt-tmux.sh — bridge worktrunk worktrees to tmux sessions.
 #
 # One worktree, one detached tmux session, one window, cwd = the worktree.
-# Called from worktrunk hooks in .config/wt.toml:
-#
-#   [pre-start]
-#   tmux = "bash .config/wt-tmux.sh start {{ branch }} {{ worktree_path }} {{ repo }}"
+# Creation is selected by .config/wt-session.sh when Worktrunk runs in tmux.
+# Cleanup is called from the Worktrunk hook in .config/wt.toml:
 #
 #   [pre-remove]
 #   tmux = "bash .config/wt-tmux.sh stop {{ branch }} {{ repo }}"
