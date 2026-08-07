@@ -202,26 +202,27 @@ jobs:
       - wasm
       - obsidian
       - vscode
+      - windows
     if: ${{ always() }}
 
     steps:
-      - name: Require all Linux lanes
+      - name: Require all lanes
         env:
           CORE_RESULT: ${{ needs.core.result }}
           WASM_RESULT: ${{ needs.wasm.result }}
           OBSIDIAN_RESULT: ${{ needs.obsidian.result }}
           VSCODE_RESULT: ${{ needs.vscode.result }}
+          WINDOWS_RESULT: ${{ needs.windows.result }}
         run: |
           test "$CORE_RESULT" = success
           test "$WASM_RESULT" = success
           test "$OBSIDIAN_RESULT" = success
           test "$VSCODE_RESULT" = success
+          test "$WINDOWS_RESULT" = success
 
   windows:
     name: Windows build and tests
     runs-on: windows-2025
-    # Reports without blocking until the Windows support policy in #30 lands.
-    continue-on-error: true
 
     steps:
       - name: Checkout
