@@ -8,6 +8,7 @@ mod enforce;
 mod generated_skills;
 mod git;
 mod init;
+mod install_editor;
 mod likec4;
 mod policy_scan;
 mod query;
@@ -72,6 +73,8 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     Init(init::InitOptions),
+    /// Install the optional local viewer into a selected editor.
+    InstallEditor(install_editor::InstallEditorOptions),
     Adr(adr::AdrOptions),
     Check(check::CheckOptions),
     Query(query::QueryOptions),
@@ -118,6 +121,7 @@ fn run_command(args: Vec<String>, cwd: &std::path::Path) -> Result<()> {
             Ok(())
         }
         Some(Command::Init(options)) => init::run(cwd, options),
+        Some(Command::InstallEditor(options)) => install_editor::run(cwd, options),
         Some(Command::Adr(options)) => adr::run(cwd, options),
         Some(Command::Check(options)) => check::run(cwd, options),
         Some(Command::Query(options)) => query::run(cwd, options),
@@ -268,6 +272,7 @@ mod tests {
         assert!(spec.contains("bin criv"));
         assert!(spec.contains("flag --usage hide=#true"));
         assert!(spec.contains("cmd check"));
+        assert!(spec.contains("cmd install-editor"));
         assert!(spec.contains("cmd query"));
         assert!(spec.contains("cmd state"));
         assert!(spec.contains("cmd list"));

@@ -244,11 +244,17 @@ present in the package, and reload the editor window. Regenerate invalid state
 with `criv watch --once`; do not treat a state-validation error as a runtime
 packaging failure.
 
-The extension metadata is kept compatible with both VS Code Marketplace and Open
-VSX publication, but MVP verification does not require a marketplace token or
-an Open VSX publish step. Install the VSIX explicitly with an editor CLI such
-as `code --install-extension` or `cursor --install-extension` when doing
-desktop smoke tests.
+The optional viewer is local-only under
+[[0085-local-only-optional-editor-viewer|ADR-0085]]. The project does not
+publish it to the VS Code Marketplace or Open VSX. Install a built VSIX with an
+explicit editor selection:
+
+```sh
+criv install-editor --editor code --vsix extensions/vscode-criv/vscode-criv.vsix
+criv install-editor --editor cursor --vsix extensions/vscode-criv/vscode-criv.vsix
+```
+
+Use `--dry-run` to validate the local command without changing editor state.
 
 Use `hk validate` after editing `hk.pkl`. Prefer hk built-ins when one exists;
 the commit message hook uses `Builtins.check_conventional_commit` instead of a

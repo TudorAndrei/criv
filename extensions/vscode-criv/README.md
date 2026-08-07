@@ -27,11 +27,12 @@ The extension targets stable VS Code APIs with `engines.vscode` set to
 `^1.85.0`. It avoids proposed APIs and host-specific commands so the packaged
 VSIX can be installed in VS Code-compatible desktop editors such as Cursor.
 
-Install a local VSIX with an editor CLI when available:
+The viewer is local-only. It is not published to the VS Code Marketplace or
+Open VSX. Install a built VSIX through the criv CLI:
 
 ```sh
-code --install-extension extensions/vscode-criv/vscode-criv.vsix
-cursor --install-extension extensions/vscode-criv/vscode-criv.vsix
+criv install-editor --editor code --vsix extensions/vscode-criv/vscode-criv.vsix
+criv install-editor --editor cursor --vsix extensions/vscode-criv/vscode-criv.vsix
 ```
 
 Direct installation is an explicit editor-level action. `criv init` should
