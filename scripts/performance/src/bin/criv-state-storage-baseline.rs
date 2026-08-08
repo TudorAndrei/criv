@@ -5,10 +5,10 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use clap::Parser;
+use criv_state_wire::STATE_SCHEMA;
 use serde::Serialize;
 
 const OUTPUT_SCHEMA: &str = "criv.state-storage-baseline.v1";
-const STATE_SCHEMA: &str = "criv.state.v1";
 
 #[derive(Debug, Parser)]
 #[command(

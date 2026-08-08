@@ -1,5 +1,4 @@
-use std::collections::BTreeMap;
-
+use criv_state_wire::StateDocument;
 use serde::Serialize;
 
 use crate::{CrivError, Result};
@@ -9,7 +8,7 @@ pub(crate) fn default_config() -> Result<String> {
 }
 
 pub(crate) fn default_state() -> Result<String> {
-    json_pretty(&DefaultState::default(), ".criv/state.json")
+    json_pretty(&StateDocument::default(), ".criv/state.json")
 }
 
 pub(crate) fn adr_readme() -> Result<String> {
@@ -92,32 +91,6 @@ struct StateConfig {
 #[derive(Debug, Serialize)]
 struct EnforceConfig {
     stages: Vec<&'static str>,
-}
-
-#[derive(Debug, Serialize)]
-struct DefaultState {
-    schema: &'static str,
-    graph: EmptyGraph,
-    patterns: BTreeMap<String, Vec<serde_json::Value>>,
-    #[serde(rename = "source-index")]
-    source_index: Vec<serde_json::Value>,
-}
-
-impl Default for DefaultState {
-    fn default() -> Self {
-        Self {
-            schema: "criv.state.v1",
-            graph: EmptyGraph::default(),
-            patterns: BTreeMap::new(),
-            source_index: Vec::new(),
-        }
-    }
-}
-
-#[derive(Debug, Default, Serialize)]
-struct EmptyGraph {
-    nodes: Vec<serde_json::Value>,
-    edges: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]

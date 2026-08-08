@@ -634,6 +634,7 @@ dependencies = [
  "blake3",
  "clap",
  "content_inspector",
+ "criv-state-wire",
  "fff-search",
  "git2 0.21.0",
  "globset",
@@ -668,6 +669,7 @@ version = "0.8.0"
 dependencies = [
  "blake3",
  "clap",
+ "criv-state-wire",
  "libc",
  "serde",
  "serde_json",
@@ -682,6 +684,7 @@ dependencies = [
  "assert_cmd",
  "blake3",
  "clap",
+ "criv-state-wire",
  "flatbuffers",
  "libc",
  "postcard",
@@ -695,9 +698,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "criv-state-wire"
+version = "0.8.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "criv-wasm"
 version = "0.8.0"
 dependencies = [
+ "criv-state-wire",
  "js-sys",
  "serde",
  "serde-wasm-bindgen",

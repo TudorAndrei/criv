@@ -1,5 +1,11 @@
 model {
   extend criv {
+    stateWire = container 'State wire document' {
+      technology 'Rust library'
+      description 'Owns the shared State schema identity and serialized wire rows.'
+      link ../../crates/criv-state-wire/src/lib.rs 'source'
+    }
+
     stateProjection = container 'State projection library' {
       technology 'Rust compiled to WebAssembly'
       description 'Validates the published state contract and projects safe editor-facing data.'
@@ -22,6 +28,10 @@ model {
       }
     }
   }
+
+  criv.stateProjection.stateDecoder -> criv.stateWire 'Decodes the shared State document' {
+    technology 'Rust crate'
+  }
 }
 
 views {
@@ -32,5 +42,6 @@ views {
     description 'How the shared WebAssembly library validates state and returns safe editor data.'
 
     include *
+    include criv.stateWire
   }
 }

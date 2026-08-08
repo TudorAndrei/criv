@@ -10,6 +10,7 @@ roots = [
   ".github/workflows",
   ".vscode",
   ".obsidian/plugins/criv",
+  "crates/criv-state-wire",
   "crates/criv-wasm",
   "extensions/vscode-criv",
   "packages/criv-likec4",

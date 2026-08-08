@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
+use criv_state_wire::is_supported_schema;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
@@ -17,7 +18,6 @@ const STORE_DIR: &str = ".criv/snapshots";
 const INDEX_PATH: &str = ".criv/snapshots/index.json";
 const LATEST_PATH: &str = ".criv/latest";
 const INDEX_SCHEMA: &str = "criv.snapshot-index.v0";
-const STATE_SCHEMA: &str = "criv.state.v1";
 
 #[derive(Debug, ClapArgs)]
 pub(crate) struct StateOptions {
@@ -457,9 +457,14 @@ fn validate_snapshot(hash: &str, contents: &str) -> Result<()> {
     }
     let value = serde_json::from_str::<serde_json::Value>(contents)
         .map_err(|err| CrivError::new(format!("snapshot `{hash}` is corrupt: {err}")))?;
-    if value.get("schema").and_then(serde_json::Value::as_str) != Some(STATE_SCHEMA) {
+    if !value
+        .get("schema")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(is_supported_schema)
+    {
         return Err(CrivError::new(format!(
-            "snapshot `{hash}` is corrupt: expected schema {STATE_SCHEMA}"
+            "snapshot `{hash}` is corrupt: expected schema {}",
+            criv_state_wire::STATE_SCHEMA
         )));
     }
     let published = contents.strip_suffix('\n').unwrap_or(contents);

@@ -63,6 +63,13 @@ model {
       link ../../src/snapshots.rs 'source'
     }
   }
+
+  criv.cli.statePublisher -> criv.stateWire 'Builds the shared State document' {
+    technology 'Rust crate'
+  }
+  criv.cli.scaffoldInstaller -> criv.stateWire 'Creates the empty State document' {
+    technology 'Rust crate'
+  }
 }
 
 views {
@@ -75,6 +82,7 @@ views {
     include *
     include repository
     include criv.stateStore
+    include criv.stateWire
     include
       criv.cli.vaultModel with {
         navigateTo codeVaultLoading
