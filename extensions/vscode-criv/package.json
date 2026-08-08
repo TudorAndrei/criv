@@ -156,7 +156,7 @@
     "format:check": "oxfmt --check src test scripts esbuild.config.mjs",
     "lint": "oxlint src test scripts esbuild.config.mjs",
     "package": "vsce package --no-dependencies --out vscode-criv.vsix",
-    "test": "npm run build:wasm && npm run compile && npm run compile:unit-tests && node --test dist-test/unit/*.test.js",
+    "test": "npm --prefix ../../packages/criv-editor-state test && npm run build:wasm && npm run compile && npm run compile:unit-tests && node --test dist-test/unit/*.test.js",
     "test:integration": "npm run compile && npm run compile:integration-tests && node test/run-integration.mjs",
     "vscode:prepublish": "npm run build && npm run build:wasm",
     "watch": "node esbuild.config.mjs --watch"
@@ -172,6 +172,7 @@
     "typescript": "6.0.3"
   },
   "dependencies": {
+    "@criv/editor-state": "0.1.0",
     "@criv/likec4": "0.1.0"
   }
 }

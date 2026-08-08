@@ -1,4 +1,5 @@
 import type * as vscode from "vscode";
+import { LoadedRevisionOwner } from "@criv/editor-state";
 
 import { buildStateSnapshot, type CrivStateSnapshot } from "./stateModel";
 import { CrivWasmLoadError, type CrivLoadedState, type CrivWasmBridge } from "./wasm";
@@ -26,8 +27,7 @@ export class WorkspaceStateStore implements Disposable {
   private statusValue: WorkspaceStateStatus = { kind: "loading" };
   private watcher: Disposable | undefined;
   private watcherRootValue: string | undefined;
-  private loaded: CrivLoadedState | undefined;
-  private refreshSequence = 0;
+  private readonly revisions = new LoadedRevisionOwner<CrivLoadedState>();
   private disposed = false;
   private readonly listeners = new Set<(status: WorkspaceStateStatus) => void>();
 
@@ -49,86 +49,87 @@ export class WorkspaceStateStore implements Disposable {
     if (this.disposed) {
       return this.statusValue;
     }
-    const sequence = ++this.refreshSequence;
-    if (!this.loaded) {
+    if (!this.revisions.current) {
       this.setStatus({ kind: "loading" });
     }
 
-    const root = await this.host.findWorkspaceRoot();
-    if (!this.isCurrent(sequence)) {
+    let root: vscode.Uri | undefined;
+    let stateUri: vscode.Uri | undefined;
+    const result = await this.revisions.replace(
+      async (attempt) => {
+        root = await this.host.findWorkspaceRoot();
+        attempt.assertCurrent();
+        if (!root) {
+          throw new WorkspaceStateHostError("missing-workspace");
+        }
+
+        this.ensureWatcher(root);
+        stateUri = this.host.stateFile(root);
+        let raw: string;
+        try {
+          raw = await this.host.readState(stateUri);
+        } catch (error) {
+          throw new WorkspaceStateHostError("missing-state", { cause: error });
+        }
+        attempt.assertCurrent();
+        return this.bridge.loadState(raw);
+      },
+      (candidate) => {
+        const projections = candidate.initialProjections();
+        return buildStateSnapshot(
+          projections.state,
+          projections.summary,
+          projections.sources,
+          projections.nodes,
+        );
+      },
+    );
+
+    if (result.kind !== "committed" && result.kind !== "failed") {
       return this.statusValue;
     }
-    if (!root) {
+    if (result.kind === "committed") {
+      return this.setStatus({
+        kind: "ready",
+        root: root!,
+        stateUri: stateUri!,
+        snapshot: result.value,
+      });
+    }
+
+    const error = result.error;
+    if (error instanceof WorkspaceStateHostError && error.kind === "missing-workspace") {
       this.disposeWatcher();
-      this.disposeLoaded();
       return this.setStatus({
         kind: "missing-workspace",
         message: "Open a workspace containing criv.toml.",
       });
     }
-
-    this.ensureWatcher(root);
-    const stateUri = this.host.stateFile(root);
-    let raw: string;
-    try {
-      raw = await this.host.readState(stateUri);
-    } catch (error) {
-      if (!this.isCurrent(sequence)) {
-        return this.statusValue;
-      }
-      this.disposeLoaded();
+    if (error instanceof WorkspaceStateHostError && error.kind === "missing-state") {
       return this.setStatus({
         kind: "missing-state",
-        root,
-        stateUri,
-        message: `Could not read .criv/state.json: ${messageFromError(error)}`,
+        root: root!,
+        stateUri: stateUri!,
+        message: `Could not read .criv/state.json: ${messageFromError(error.cause)}`,
       });
     }
-
-    let candidate: CrivLoadedState | undefined;
-    try {
-      candidate = await this.bridge.loadState(raw);
-      if (!this.isCurrent(sequence)) {
-        candidate.dispose();
-        return this.statusValue;
-      }
-      const projections = candidate.initialProjections();
-      const snapshot = buildStateSnapshot(
-        projections.state,
-        projections.summary,
-        projections.sources,
-        projections.nodes,
-      );
-      const previous = this.loaded;
-      this.loaded = candidate;
-      candidate = undefined;
-      const status = this.setStatus({ kind: "ready", root, stateUri, snapshot });
-      previous?.dispose();
-      return status;
-    } catch (error) {
-      candidate?.dispose();
-      if (!this.isCurrent(sequence)) {
-        return this.statusValue;
-      }
-      this.disposeLoaded();
-      return this.setStatus({
-        kind: error instanceof CrivWasmLoadError ? "wasm-unavailable" : "invalid-state",
-        root,
-        stateUri,
-        message:
-          error instanceof CrivWasmLoadError
-            ? error.message
-            : `Could not read criv state projections: ${messageFromError(error)}`,
-      });
-    }
+    return this.setStatus({
+      kind: error instanceof CrivWasmLoadError ? "wasm-unavailable" : "invalid-state",
+      root: root!,
+      stateUri: stateUri!,
+      message:
+        error instanceof CrivWasmLoadError
+          ? error.message
+          : `Could not read criv state projections: ${messageFromError(error)}`,
+    });
   }
 
   lookupNode(target: string) {
-    return this.loaded?.lookupNode(target);
+    return this.revisions.current?.lookupNode(target);
   }
 
   suggestSelectors(query: string, limit: number) {
-    return this.loaded?.suggestSelectors(query, limit) ?? [];
+    return this.revisions.current?.suggestSelectors(query, limit) ?? [];
   }
 
   dispose(): void {
@@ -136,14 +137,9 @@ export class WorkspaceStateStore implements Disposable {
       return;
     }
     this.disposed = true;
-    this.refreshSequence += 1;
     this.disposeWatcher();
-    this.disposeLoaded();
+    this.revisions.dispose();
     this.listeners.clear();
-  }
-
-  private isCurrent(sequence: number): boolean {
-    return !this.disposed && sequence === this.refreshSequence;
   }
 
   private setStatus(status: WorkspaceStateStatus): WorkspaceStateStatus {
@@ -170,10 +166,15 @@ export class WorkspaceStateStore implements Disposable {
     this.watcher = undefined;
     this.watcherRootValue = undefined;
   }
+}
 
-  private disposeLoaded(): void {
-    this.loaded?.dispose();
-    this.loaded = undefined;
+class WorkspaceStateHostError extends Error {
+  constructor(
+    readonly kind: "missing-workspace" | "missing-state",
+    options?: ErrorOptions,
+  ) {
+    super(kind, options);
+    this.name = "WorkspaceStateHostError";
   }
 }
 

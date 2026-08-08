@@ -16,6 +16,7 @@ import {
   WorkspaceLeaf,
 } from "obsidian";
 import type { App, PluginManifest } from "obsidian";
+import { LoadedRevisionOwner } from "@criv/editor-state";
 import { CrivLikeC4Renderer } from "@criv/likec4/renderer";
 import { preferredLikeC4ViewId, type CrivLikeC4Model } from "@criv/likec4/protocol";
 import { RangeSetBuilder } from "@codemirror/state";
@@ -109,10 +110,9 @@ export default class CrivPlugin extends Plugin {
   private state: CrivState | null = null;
   private stateSources: SourceIndexEntry[] = [];
   private stateSummary: CrivStateSummary | null = null;
-  private loadedState: CrivLoadedState | null = null;
+  private readonly stateRevisions = new LoadedRevisionOwner<CrivLoadedState>();
   private stateToken: StateFileToken | null = null;
   private stateError: string | null = null;
-  private stateLoadSequence = 0;
   private unloading = false;
   private wasmFailureNotified = false;
   private hoverEl: HTMLElement | null = null;
@@ -175,8 +175,8 @@ export default class CrivPlugin extends Plugin {
 
   onunload() {
     this.unloading = true;
-    this.stateLoadSequence += 1;
-    this.clearLoadedState();
+    this.stateRevisions.dispose();
+    this.clearStateCache();
     this.hideHoverPreview();
   }
 
@@ -228,56 +228,47 @@ export default class CrivPlugin extends Plugin {
   }
 
   async loadState(observedToken?: StateFileToken | null): Promise<CrivState | null> {
-    const sequence = ++this.stateLoadSequence;
-    const statePath = this.safeStatePath();
-    if (!statePath) {
-      if (!this.isCurrentStateLoad(sequence)) {
-        return this.state;
-      }
-      this.clearLoadedState();
-      this.stateError = `Invalid criv state path ${this.settings.statePath}.`;
-      return null;
-    }
+    const configuredPath = this.settings.statePath;
+    let statePath: string | null = null;
+    let token: StateFileToken | null = null;
+    const result = await this.stateRevisions.replace(
+      async (attempt) => {
+        statePath = safeVaultPath(configuredPath);
+        if (!statePath) {
+          throw new Error(`Invalid criv state path ${configuredPath}.`);
+        }
+        token =
+          observedToken === undefined ? await this.readStateFileToken(statePath) : observedToken;
+        attempt.assertCurrent();
+        const raw = await this.app.vault.adapter.read(statePath);
+        attempt.assertCurrent();
+        return this.loadWasmRevision(raw);
+      },
+      (candidate) => candidate.initialProjections(),
+    );
 
-    const token =
-      observedToken === undefined ? await this.readStateFileToken(statePath) : observedToken;
-    if (!this.isCurrentStateLoad(sequence)) {
+    if (result.kind !== "committed" && result.kind !== "failed") {
       return this.state;
     }
-
-    let candidate: CrivLoadedState | null = null;
-    try {
-      const raw = await this.app.vault.adapter.read(statePath);
-      candidate = await this.loadWasmRevision(raw);
-      if (!this.isCurrentStateLoad(sequence)) {
-        candidate.dispose();
-        return this.state;
-      }
-      const projections = candidate.initialProjections();
-      const previous = this.loadedState;
-      this.loadedState = candidate;
-      candidate = null;
-      this.state = projections.state;
-      this.stateSources = projections.sources;
-      this.stateSummary = projections.summary;
+    if (result.kind === "committed") {
+      this.state = result.value.state;
+      this.stateSources = result.value.sources;
+      this.stateSummary = result.value.summary;
       this.stateToken = token;
       this.stateError = null;
-      previous?.dispose();
       return this.state;
-    } catch (error) {
-      candidate?.dispose();
-      if (!this.isCurrentStateLoad(sequence)) {
-        return this.state;
-      }
-      this.clearLoadedState();
-      this.stateToken = token;
-      this.recordWasmFailure(error);
-      this.stateError =
-        error instanceof CrivWasmLoadError
-          ? error.message
-          : `Could not read ${statePath}: ${errorMessage(error)}`;
-      return null;
     }
+
+    this.clearStateCache();
+    this.stateToken = token;
+    this.recordWasmFailure(result.error);
+    this.stateError =
+      statePath === null
+        ? `Invalid criv state path ${configuredPath}.`
+        : result.error instanceof CrivWasmLoadError
+          ? result.error.message
+          : `Could not read ${statePath}: ${errorMessage(result.error)}`;
+    return null;
   }
 
   async getState(): Promise<CrivState | null> {
@@ -297,7 +288,7 @@ export default class CrivPlugin extends Plugin {
   }
 
   suggestSourceSelectors(query: string, limit: number): CrivSelectorSuggestion[] {
-    return this.loadedState?.suggestSelectors(query, limit) ?? [];
+    return this.stateRevisions.current?.suggestSelectors(query, limit) ?? [];
   }
 
   recordWasmFailure(error: unknown): void {
@@ -308,13 +299,7 @@ export default class CrivPlugin extends Plugin {
     new Notice(error.message);
   }
 
-  private isCurrentStateLoad(sequence: number): boolean {
-    return !this.unloading && sequence === this.stateLoadSequence;
-  }
-
-  private clearLoadedState(): void {
-    this.loadedState?.dispose();
-    this.loadedState = null;
+  private clearStateCache(): void {
     this.state = null;
     this.stateSources = [];
     this.stateSummary = null;

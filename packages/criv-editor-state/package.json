@@ -1,0 +1,13 @@
+{
+  "name": "@criv/editor-state",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/revisionOwner.ts"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.ts"
+  }
+}

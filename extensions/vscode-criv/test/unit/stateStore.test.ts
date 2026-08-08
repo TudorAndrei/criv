@@ -4,31 +4,19 @@ import test from "node:test";
 import { WorkspaceStateStore, type WorkspaceStateHost } from "../../src/stateStore";
 import type { CrivInitialProjections, CrivLoadedState, CrivWasmBridge } from "../../src/wasm";
 
-test("keeps the latest refresh and disposes a late revision", async () => {
-  const host = new FakeHost(["old", "new"]);
-  const oldLoad = deferred<CrivLoadedState>();
-  const newLoad = deferred<CrivLoadedState>();
-  const oldRevision = new FakeRevision("old");
-  const newRevision = new FakeRevision("new");
-  const bridge = new FakeBridge([oldLoad.promise, newLoad.promise]);
+test("publishes the editor snapshot and delegates queries to the active revision", async () => {
+  const host = new FakeHost(["ready"]);
+  const revision = new FakeRevision("ready");
+  const bridge = new FakeBridge([Promise.resolve(revision)]);
   const store = new WorkspaceStateStore(host, bridge);
 
-  const oldRefresh = store.refresh();
-  await waitFor(() => bridge.loads === 1);
-  const newRefresh = store.refresh();
-  await waitFor(() => bridge.loads === 2);
-  newLoad.resolve(newRevision);
-  await newRefresh;
-  oldLoad.resolve(oldRevision);
-  await oldRefresh;
+  await store.refresh();
 
   assert.equal(store.status.kind, "ready");
-  assert.equal(store.status.kind === "ready" && store.status.snapshot.summary.schema, "new");
-  assert.equal(oldRevision.disposals, 1);
-  assert.equal(newRevision.disposals, 0);
-  assert.equal(store.lookupNode("target")?.id, "new:target");
-  assert.equal(store.suggestSelectors("query", 5)[0]?.target, "new:query");
-  assert.equal(host.reads, 2);
+  assert.equal(store.status.kind === "ready" && store.status.snapshot.summary.schema, "ready");
+  assert.equal(store.lookupNode("target")?.id, "ready:target");
+  assert.equal(store.suggestSelectors("query", 5)[0]?.target, "ready:query");
+  assert.equal(host.reads, 1);
 });
 
 test("clears the current revision when the latest refresh fails", async () => {
@@ -48,21 +36,19 @@ test("clears the current revision when the latest refresh fails", async () => {
   assert.equal(store.lookupNode("target"), undefined);
 });
 
-test("disposes a revision that finishes after store shutdown", async () => {
-  const host = new FakeHost(["late"]);
-  const load = deferred<CrivLoadedState>();
-  const late = new FakeRevision("late");
-  const bridge = new FakeBridge([load.promise]);
+test("disposes the watcher and active revision during editor shutdown", async () => {
+  const host = new FakeHost(["ready"]);
+  const active = new FakeRevision("ready");
+  const bridge = new FakeBridge([Promise.resolve(active)]);
   const store = new WorkspaceStateStore(host, bridge);
 
-  const refresh = store.refresh();
-  await waitFor(() => bridge.loads === 1);
+  await store.refresh();
   store.dispose();
-  load.resolve(late);
-  await refresh;
+  store.dispose();
   await store.refresh();
 
-  assert.equal(late.disposals, 1);
+  assert.equal(active.disposals, 1);
+  assert.equal(host.watcherDisposals, 1);
   assert.equal(host.reads, 1);
   assert.equal(bridge.loads, 1);
 });
@@ -71,6 +57,7 @@ class FakeHost implements WorkspaceStateHost {
   readonly root = fakeUri("root");
   readonly stateUri = fakeUri("root/.criv/state.json");
   reads = 0;
+  watcherDisposals = 0;
 
   constructor(private readonly states: string[]) {}
 
@@ -92,7 +79,7 @@ class FakeHost implements WorkspaceStateHost {
   }
 
   watchState(_root: unknown, _refresh: () => void) {
-    return { dispose() {} };
+    return { dispose: () => (this.watcherDisposals += 1) };
   }
 }
 
@@ -154,24 +141,4 @@ class FakeRevision implements CrivLoadedState {
 
 function fakeUri(value: string) {
   return { toString: () => value } as never;
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
-
-async function waitFor(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    if (predicate()) {
-      return;
-    }
-    await Promise.resolve();
-  }
-  throw new Error("condition was not reached");
 }
