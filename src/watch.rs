@@ -9,7 +9,7 @@ use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::Recursiv
 use crate::config::Config;
 use crate::refresh::{RefreshCause, RefreshSession};
 use crate::source_index::SourceChange;
-use crate::util::create_new_in;
+use crate::util::{create_new_in, remove_file_in};
 use crate::{CrivError, Result};
 
 #[derive(Debug, Default, ClapArgs)]
@@ -122,7 +122,7 @@ fn run_once(root: &Path) -> Result<()> {
 
 #[derive(Debug)]
 struct WatchLock {
-    path: PathBuf,
+    root: PathBuf,
 }
 
 impl WatchLock {
@@ -153,7 +153,7 @@ impl WatchLock {
             )));
         }
 
-        let _ = fs::remove_file(&requested_path);
+        let _ = remove_file_in(root, Path::new(".criv"), Path::new(".criv/watch.lock"));
         Self::try_create(root).map_err(|err| {
             CrivError::new(format!(
                 "failed to acquire watch lock at {}: {err}; if no watcher is running, delete that file and retry",
@@ -165,11 +165,12 @@ impl WatchLock {
     fn try_create(root: &Path) -> Result<Self> {
         use std::io::Write;
 
-        let (path, mut file) =
-            create_new_in(root, Path::new(".criv"), Path::new(".criv/watch.lock"))?;
+        let (_, mut file) = create_new_in(root, Path::new(".criv"), Path::new(".criv/watch.lock"))?;
         let owner = LockOwner::current();
         file.write_all(owner.serialize().as_bytes())?;
-        Ok(Self { path })
+        Ok(Self {
+            root: root.to_path_buf(),
+        })
     }
 }
 
@@ -276,7 +277,11 @@ fn process_start_time(pid: u32) -> Option<String> {
 
 impl Drop for WatchLock {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        let _ = remove_file_in(
+            &self.root,
+            Path::new(".criv"),
+            Path::new(".criv/watch.lock"),
+        );
     }
 }
 

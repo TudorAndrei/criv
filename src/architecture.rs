@@ -96,18 +96,16 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn code_architecture_rejects_symlinked_output_parent() {
+    fn vault_load_rejects_symlinked_architecture_output_parent() {
         use std::os::unix::fs::symlink;
 
         let temp = TempDir::new().unwrap();
         let outside = TempDir::new().unwrap();
         write_architecture_fixture_with_output(temp.path(), true, "docs/architecture/04-code.c4");
         symlink(outside.path(), temp.path().join("docs/architecture")).unwrap();
-        let vault = Vault::load(temp.path()).unwrap();
+        let error = Vault::load(temp.path()).unwrap_err();
 
-        let error = write_code_architecture(temp.path(), &vault).unwrap_err();
-
-        assert!(error.to_string().contains("symlinked vault path component"));
+        assert!(error.to_string().contains("symlinked vault path"));
         assert!(!outside.path().join("04-code.c4").exists());
     }
 

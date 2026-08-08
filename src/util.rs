@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 
 use crate::{CrivError, Result};
 
@@ -480,8 +480,16 @@ fn reject_symlink_components(root: &Path, destination: &Path) -> Result<()> {
 
 pub(crate) fn walk_files(root: &Path, extension: Option<&str>) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
-    if !root.exists() {
-        return Ok(files);
+    match fs::symlink_metadata(root) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(CrivError::new(format!(
+                "refusing to read symlinked vault path {}",
+                root.display()
+            )));
+        }
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(files),
+        Err(err) => return Err(err.into()),
     }
     walk_files_inner(root, extension, &mut files)?;
     files.sort();
@@ -498,9 +506,18 @@ fn walk_files_inner(root: &Path, extension: Option<&str>, files: &mut Vec<PathBu
             continue;
         }
 
-        if path.is_dir() {
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            return Err(CrivError::new(format!(
+                "refusing to read symlinked vault path {}",
+                path.display()
+            )));
+        }
+        if file_type.is_dir() {
             walk_files_inner(&path, extension, files)?;
-        } else if extension.is_none_or(|ext| path.extension().is_some_and(|value| value == ext)) {
+        } else if file_type.is_file()
+            && extension.is_none_or(|ext| path.extension().is_some_and(|value| value == ext))
+        {
             files.push(path);
         }
     }
@@ -582,40 +599,6 @@ pub(crate) fn find_wiki_links_with_lines(markdown: &str) -> Vec<(usize, String)>
         }
     }
     links
-}
-
-#[allow(dead_code)]
-pub(crate) fn markdown_fenced_blocks(markdown: &str) -> Vec<(usize, Option<String>, String)> {
-    let mut blocks = Vec::new();
-    let mut active: Option<(usize, Option<String>, String)> = None;
-
-    for (event, range) in Parser::new(markdown).into_offset_iter() {
-        match event {
-            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {
-                active = Some((
-                    line_number(markdown, range.start),
-                    Some(info.trim().to_string()).filter(|value| !value.is_empty()),
-                    String::new(),
-                ));
-            }
-            Event::Start(Tag::CodeBlock(CodeBlockKind::Indented)) => {
-                active = Some((line_number(markdown, range.start), None, String::new()));
-            }
-            Event::Text(text) => {
-                if let Some((_, _, contents)) = &mut active {
-                    contents.push_str(&text);
-                }
-            }
-            Event::End(TagEnd::CodeBlock) => {
-                if let Some(block) = active.take() {
-                    blocks.push(block);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    blocks
 }
 
 pub(crate) fn markdown_headings(markdown: &str) -> Vec<(usize, String, usize)> {
@@ -788,16 +771,38 @@ mod tests {
         assert!(!glob_matches("src/*.rs", "src/auth/lib.rs"));
     }
 
+    #[cfg(unix)]
     #[test]
-    fn fenced_blocks_include_line_info_and_contents() {
-        let blocks = markdown_fenced_blocks("intro\n```mermaid\nflowchart TD\n```\n\n    code\n");
+    fn vault_walk_rejects_symlinked_files() {
+        use std::os::unix::fs::symlink;
 
-        assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks[0].0, 2);
-        assert_eq!(blocks[0].1.as_deref(), Some("mermaid"));
-        assert_eq!(blocks[0].2, "flowchart TD\n");
-        assert_eq!(blocks[1].1, None);
-        assert_eq!(blocks[1].2, "code\n");
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        symlink(outside.path(), root.path().join("linked.md")).unwrap();
+
+        let error = walk_files(root.path(), Some("md")).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("refusing to read symlinked vault path")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vault_walk_rejects_symlinked_directories() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        symlink(outside.path(), root.path().join("linked-docs")).unwrap();
+
+        let error = walk_files(root.path(), Some("md")).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("refusing to read symlinked vault path")
+        );
     }
 
     #[test]
