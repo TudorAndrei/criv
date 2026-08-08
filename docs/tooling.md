@@ -245,7 +245,7 @@ with `criv watch --once`; do not treat a state-validation error as a runtime
 packaging failure.
 
 The optional viewer is local-only under
-[[0086-bundle-one-editor-viewer-with-criv|ADR-0086]]. The project does not
+[[0087-keep-editor-setup-out-of-init|ADR-0087]]. The project does not
 publish it to the VS Code Marketplace or Open VSX. Release archives put the
 one viewer package next to the criv executable. Install it with an explicit
 editor selection:

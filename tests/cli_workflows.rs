@@ -59,17 +59,11 @@ fn write_fake_node(root: &Path, output: &str) -> TempDir {
 }
 
 fn init(root: &Path) {
-    criv(root)
-        .args(["init", "--no-obsidian", "--no-skills"])
-        .assert()
-        .success();
+    criv(root).args(["init", "--no-skills"]).assert().success();
 }
 
 fn init_with_skills(root: &Path) {
-    criv(root)
-        .args(["init", "--no-obsidian"])
-        .assert()
-        .success();
+    criv(root).arg("init").assert().success();
 }
 
 fn init_git_vault(root: &Path) {
@@ -429,10 +423,7 @@ fn check_nudges_only_text_output_for_stale_skills() {
 fn check_is_silent_about_deliberately_absent_skills() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    criv(root)
-        .args(["init", "--no-obsidian", "--no-vscode", "--no-skills"])
-        .assert()
-        .success();
+    criv(root).args(["init", "--no-skills"]).assert().success();
     criv(root)
         .arg("check")
         .assert()
@@ -444,10 +435,7 @@ fn check_is_silent_about_deliberately_absent_skills() {
 fn force_skills_cli_refresh_creates_only_skills() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    criv(root)
-        .args(["init", "--no-obsidian", "--no-vscode", "--no-skills"])
-        .assert()
-        .success();
+    criv(root).args(["init", "--no-skills"]).assert().success();
 
     criv(root)
         .args(["init", "--force-skills"])
@@ -459,6 +447,20 @@ fn force_skills_cli_refresh_creates_only_skills() {
     assert!(!root.join(".obsidian").exists());
     assert!(!root.join(".vscode/extensions.json").exists());
     assert!(!root.join(".githooks").exists());
+}
+
+#[test]
+fn init_rejects_removed_editor_options() {
+    let temp = TempDir::new().unwrap();
+
+    for option in ["--no-obsidian", "--no-vscode"] {
+        criv(temp.path())
+            .args(["init", option])
+            .assert()
+            .failure()
+            .code(2)
+            .stderr(predicate::str::contains("unexpected argument"));
+    }
 }
 
 #[test]

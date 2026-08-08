@@ -9,8 +9,7 @@ state that other tools can read.
 
 `criv` gives a codebase an executable documentation layer:
 
-- `criv init` creates the vault files, ADR directory, agent skills, and editor
-  companion files.
+- `criv init` creates the vault files, ADR directory, and agent skills.
 - `criv check` validates documentation, source references, and ADR rules.
 - `criv watch --once` writes the local state used by tools and editors.
 - `criv query` and `criv enforce` inspect and protect the graph.
@@ -95,13 +94,9 @@ This creates the default vault layout:
 ```text
 criv.toml
 docs/
-  SKILL.md
-  skills/
   adr/
 .criv/
-.githooks/
-.vscode/extensions.json
-.obsidian/plugins/criv/
+.agents/skills/
 ```
 
 `criv init` does not create Git hooks and does not touch `core.hooksPath`.
@@ -111,12 +106,9 @@ own runner instead — see
 [docs/tooling.md](docs/tooling.md) for hk and lefthook configuration, per
 [ADR-0054](docs/adr/0054-criv-does-not-install-git-hooks.md).
 
-`criv init` recommends the VS Code-compatible companion extension through
-`.vscode/extensions.json` using the stable extension ID `criv.vscode-criv`. It
-does not install the extension into VS Code, Cursor, or any other editor by
-default. The optional viewer is local-only and is not published to an extension
-registry. Each criv release archive includes the viewer. Install it explicitly
-into one selected editor:
+`criv init` does not create or update editor files. The optional viewer is
+local-only and is not published to an extension registry. Each criv release
+archive includes the viewer. Install it explicitly into one selected editor:
 
 ```sh
 criv install-editor --editor code
@@ -124,22 +116,20 @@ criv install-editor --editor cursor
 ```
 
 Use `--dry-run` to validate the editor and bundled viewer without changing
-editor state.
+editor state. This separation is recorded in
+[ADR-0087](docs/adr/0087-keep-editor-setup-out-of-init.md).
 
-Use `--no-skills`, `--no-obsidian`, or `--no-vscode` if you do not want those
-generated templates or editor recommendations:
+Use `--no-skills` if you do not want the generated agent skills:
 
 ```sh
 criv init --no-skills
-criv init --no-obsidian
-criv init --no-vscode
 ```
 
 `criv check` may report that installed agent skills are out of date. Refresh
 only those criv-owned generated files with `criv init --force-skills`; it does
-not create or change hooks, editor scaffolding, vault configuration, or
-`.gitignore`. Refreshing deliberately replaces any local edits to those skill
-files. JSON and GitHub check output never include this advisory note.
+not create or change hooks, vault configuration, or `.gitignore`. Refreshing
+deliberately replaces any local edits to those skill files. JSON and GitHub
+check output never include this advisory note.
 
 Check the vault before committing documentation or code changes:
 
@@ -317,11 +307,12 @@ step. Companion checks use the package commands documented in
 
 ## Obsidian Extension
 
-`criv init` installs an Obsidian companion plugin scaffold under
-`.obsidian/plugins/criv/` unless `--no-obsidian` is passed. The plugin is a UI
-over `.criv/state.json`: it reads the CLI-generated graph state, validates the
-schema version, renders source and pattern context, offers source autocomplete,
-and delegates shared helper logic to the `criv-wasm` crate.
+The repository contains a maintained Obsidian companion under
+`.obsidian/plugins/criv/`. `criv init` does not copy it into another repository.
+The plugin is a UI over `.criv/state.json`: it reads the CLI-generated graph
+state, validates the schema version, renders source and pattern context, offers
+source autocomplete, and delegates shared helper logic to the `criv-wasm`
+crate.
 
 Build the plugin when working on its templates or WASM helper:
 

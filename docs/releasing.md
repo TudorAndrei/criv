@@ -101,7 +101,7 @@ and mise registry entries. This decision is captured in [[0014-tag-triggered-rel
 Each platform archive also includes `vscode-criv.vsix` next to the executable.
 The release workflow builds that package once and adds the same local-only
 viewer to every archive, as required by
-[[0086-bundle-one-editor-viewer-with-criv|ADR-0086]].
+[[0087-keep-editor-setup-out-of-init|ADR-0087]].
 
 Release binaries use the workspace release profile in `Cargo.toml`: symbols
 are stripped, size optimization is enabled, LTO runs at link time, codegen uses

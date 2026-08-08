@@ -21,16 +21,24 @@ Then run `mise install`. Building from source with
 
 ```sh
 mise install
-criv init                    # create criv.toml, docs/, docs/adr/, Git hooks
-echo '.criv/' >> .gitignore  # generated state stays local
+criv init                    # create the vault and agent skills
 criv watch --once            # build the graph
 criv check                   # validate it
 ```
 
 `criv init` writes only what it needs and leaves existing Markdown alone.
-Existing Git hooks and a non-criv `core.hooksPath` are preserved unless
-`--force-hooks` is passed. Use `--no-hooks`, `--no-skills`, `--no-obsidian`, or
-`--no-vscode` to skip generated pieces.
+It does not create Git hooks or editor files. Use `--no-skills` to skip the
+generated agent skills.
+
+The optional local viewer is in each release archive. Install it into one
+selected editor:
+
+```sh
+criv install-editor --editor code
+criv install-editor --editor cursor
+```
+
+Use `--dry-run` to check the editor and bundled viewer without an editor change.
 
 ## Give an agent its first task
 

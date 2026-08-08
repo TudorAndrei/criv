@@ -17,5 +17,16 @@ criv check
 ```
 
 `criv init` creates the configuration, documentation and ADR directories, local
-generated state, agent skills, and editor companion files. It leaves existing
-Markdown files in place.
+generated state, and agent skills. It leaves existing Markdown and editor files
+in place.
+
+The optional viewer is local-only. A release archive includes it next to the
+CLI. Install it into one selected editor with one of these commands:
+
+```sh
+criv install-editor --editor code
+criv install-editor --editor cursor
+```
+
+Use `--dry-run` to check the selected editor and bundled viewer without an
+editor change.

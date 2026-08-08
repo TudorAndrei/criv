@@ -9,18 +9,11 @@ use std::path::Path;
 use clap::Args as ClapArgs;
 
 use crate::generated_skills::{self, InstallMode, SkillPublication};
-use crate::util::{append_line_if_missing_in, create_dir_in, write_atomic_in, write_new_in};
+use crate::util::{append_line_if_missing_in, create_dir_in, write_new_in};
 use crate::{CrivError, Result};
-
-const VSCODE_EXTENSION_ID: &str = "criv.vscode-criv";
-const VSCODE_EXTENSIONS_JSON: &str = ".vscode/extensions.json";
 
 #[derive(Debug, Default, ClapArgs)]
 pub(crate) struct InitOptions {
-    #[arg(long)]
-    no_obsidian: bool,
-    #[arg(long)]
-    no_vscode: bool,
     #[arg(long)]
     no_skills: bool,
     #[arg(long)]
@@ -86,21 +79,6 @@ pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
         );
     }
 
-    if !options.no_obsidian {
-        for template in templates::obsidian_plugin()? {
-            write_template(
-                root,
-                template.path,
-                template.contents.as_ref(),
-                &mut created,
-            )?;
-        }
-    }
-
-    if !options.no_vscode {
-        write_vscode_extension_recommendation(root, &mut created)?;
-    }
-
     append_line_if_missing_in(root, Path::new("."), Path::new(".gitignore"), ".criv/")?;
 
     print_init_result(created, refreshed, link_messages);
@@ -141,72 +119,6 @@ fn collect_skill_publications(
             SkillPublication::Preserved => {}
         }
     }
-}
-
-fn write_vscode_extension_recommendation(
-    root: &Path,
-    created: &mut Vec<&'static str>,
-) -> Result<()> {
-    let path = root.join(VSCODE_EXTENSIONS_JSON);
-    if !path.exists() {
-        let value = serde_json::json!({
-            "recommendations": [VSCODE_EXTENSION_ID],
-        });
-        write_atomic_in(
-            root,
-            Path::new("."),
-            Path::new(VSCODE_EXTENSIONS_JSON),
-            &json_pretty(&value, VSCODE_EXTENSIONS_JSON)?,
-        )?;
-        created.push(VSCODE_EXTENSIONS_JSON);
-        return Ok(());
-    }
-
-    let contents = fs::read_to_string(&path)?;
-    let mut value: serde_json::Value = serde_json::from_str(&contents).map_err(|err| {
-        CrivError::new(format!(
-            "failed to parse {}: {err}",
-            root.join(VSCODE_EXTENSIONS_JSON).display()
-        ))
-    })?;
-    let object = value.as_object_mut().ok_or_else(|| {
-        CrivError::new(format!(
-            "{} must be a JSON object",
-            root.join(VSCODE_EXTENSIONS_JSON).display()
-        ))
-    })?;
-    let recommendations = object
-        .entry("recommendations")
-        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
-    let recommendations = recommendations.as_array_mut().ok_or_else(|| {
-        CrivError::new(format!(
-            "{} recommendations must be a JSON array",
-            root.join(VSCODE_EXTENSIONS_JSON).display()
-        ))
-    })?;
-
-    if recommendations
-        .iter()
-        .any(|value| value.as_str() == Some(VSCODE_EXTENSION_ID))
-    {
-        return Ok(());
-    }
-
-    recommendations.push(serde_json::Value::String(VSCODE_EXTENSION_ID.to_string()));
-    write_atomic_in(
-        root,
-        Path::new("."),
-        Path::new(VSCODE_EXTENSIONS_JSON),
-        &json_pretty(&value, VSCODE_EXTENSIONS_JSON)?,
-    )?;
-    Ok(())
-}
-
-fn json_pretty(value: &impl serde::Serialize, label: &str) -> Result<String> {
-    let mut json = serde_json::to_string_pretty(value)
-        .map_err(|err| CrivError::new(format!("failed to serialize {label}: {err}")))?;
-    json.push('\n');
-    Ok(json)
 }
 
 fn write_template(

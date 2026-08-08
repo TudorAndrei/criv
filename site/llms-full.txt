@@ -21,6 +21,16 @@ criv watch --once
 criv check
 ```
 
+`criv init` does not create or update editor files. The optional local viewer
+is in each release archive. Install it into one selected editor:
+
+```sh
+criv install-editor --editor code
+criv install-editor --editor cursor
+```
+
+Use `--dry-run` to check the editor and bundled viewer without an editor change.
+
 ## Agent workflow
 
 An agent must run `criv init` at the repository root. It must read the existing
