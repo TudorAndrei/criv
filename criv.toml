@@ -13,6 +13,7 @@ roots = [
   "crates/criv-state-wire",
   "crates/criv-wasm",
   "extensions/vscode-criv",
+  "packages/criv-editor-state",
   "packages/criv-likec4",
   "package.json",
   "package-lock.json",

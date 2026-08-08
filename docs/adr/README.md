@@ -56,8 +56,15 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0043-hawk-visibility-analysis|ADR-0043]] - Hawk visibility analysis
 - [[0044-vault-write-confinement|ADR-0044]] - Vault write confinement
 - [[0045-note-line-identity-in-generated-state|ADR-0045]] - Note line identity in generated state
+- [[0046-no-native-linting-in-criv-enforce|ADR-0046]] - No native linting in criv enforce
+- [[0047-semantic-note-search-stays-source-only|ADR-0047]] - Semantic note search stays source only
+- [[0048-2026-07-25-audit-findings-not-actioned|ADR-0048]] - 2026-07-25 audit findings not actioned
+- [[0049-checks-defined-in-hk-not-mise|ADR-0049]] - Checks defined in hk, not mise
+- [[0050-repeated-wikilinks-are-not-a-defect|ADR-0050]] - Repeated Wikilinks are not a defect
 - [[0051-refresh-generated-agent-skills|ADR-0051]] - Refresh generated agent skills explicitly
 - [[0052-harden-generated-skill-refresh|ADR-0052]] - Harden generated skill refresh
+- [[0053-claude-skills-is-a-link|ADR-0053]] - Claude skills is a link
+- [[0054-criv-does-not-install-git-hooks|ADR-0054]] - criv does not install Git hooks
 - [[0055-dependency-auditing-in-hk-checks|ADR-0055]] - Dependency auditing in hk checks
 - [[0056-adr-policy-patterns-are-the-only-registered-patterns|ADR-0056]] - ADR policy patterns are the only registered patterns
 - [[0057-branch-local-adr-publication-and-reconciliation|ADR-0057]] - Branch-local ADR publication and reconciliation
@@ -92,3 +99,6 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0086-bundle-one-editor-viewer-with-criv|ADR-0086]] - Bundle one editor viewer with criv
 - [[0087-keep-editor-setup-out-of-init|ADR-0087]] - Keep editor setup out of init
 - [[0088-share-the-state-wire-document|ADR-0088]] - Share the State wire document
+- [[0089-reconcile-effective-query-and-likec4-contracts|ADR-0089]] - Reconcile effective query and LikeC4 contracts
+- [[0090-enforce-runtime-boundary-decisions|ADR-0090]] - Enforce runtime boundary decisions
+- [[0091-enforce-editor-adapter-boundaries|ADR-0091]] - Enforce editor adapter boundaries
