@@ -103,7 +103,7 @@ fn live_refresh_reuses_exactly_one_source_index_adapter() {
 }
 
 #[test]
-fn one_shot_refresh_materializes_one_source_catalog() {
+fn one_shot_refresh_uses_one_full_source_observation() {
     let fixture = incremental_fixture("one-shot-source-catalog");
     let mut session = one_shot_session(fixture.path());
     reset_refresh_work();
@@ -116,7 +116,7 @@ fn one_shot_refresh_materializes_one_source_catalog() {
 }
 
 #[test]
-fn live_refresh_materializes_one_source_catalog_for_initial_no_op_and_change() {
+fn live_refresh_reuses_the_observation_that_reported_a_source_change() {
     let _live_test = source_index::lock_live_test();
     let fixture = incremental_fixture("one-live-source-catalog");
     let root = fixture.path();
@@ -131,10 +131,16 @@ fn live_refresh_materializes_one_source_catalog_for_initial_no_op_and_change() {
     assert_source_catalog_work(refresh_work(), 1);
 
     fs::write(root.join("src/lib.rs"), "pub fn changed() {}\n").unwrap();
-    wait_for_source_change(&mut session, "source catalog change");
     reset_refresh_work();
+    wait_for_source_change(&mut session, "source catalog change");
+    let observations = refresh_work().source_index.observations;
+    assert!(observations >= 1);
     session.refresh(root, RefreshCause::SourceChanged).unwrap();
-    assert_source_catalog_work(refresh_work(), 1);
+    assert_eq!(
+        refresh_work().source_index.observations,
+        observations,
+        "refresh should consume the observation that reported the change"
+    );
 }
 
 #[test]
@@ -509,8 +515,7 @@ fn assert_source_catalog_work(work: RefreshWork, materializations: usize) {
         work.source_index,
         source_index::WorkCounts {
             fff_starts: 0,
-            catalog_traversals: materializations,
-            source_enumerations: materializations,
+            observations: materializations,
         }
     );
 }

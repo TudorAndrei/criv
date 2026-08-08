@@ -742,8 +742,7 @@ mod tests {
         }
 
         let source_index = crate::source_index::work_counts();
-        assert_eq!(source_index.catalog_traversals, 0);
-        assert_eq!(source_index.source_enumerations, 0);
+        assert_eq!(source_index.observations, 0);
         let source_graph = crate::source_graph::work_counts();
         assert_eq!(source_graph.cache_loads, 0);
         assert_eq!(source_graph.parsed_files, 0);
@@ -763,8 +762,7 @@ mod tests {
         let vault = load_query_vault(temp.path(), &command).unwrap();
 
         assert_eq!(vault.source_files().len(), 2);
-        assert_eq!(crate::source_index::work_counts().catalog_traversals, 1);
-        assert_eq!(crate::source_index::work_counts().source_enumerations, 1);
+        assert_eq!(crate::source_index::work_counts().observations, 1);
         let source_graph = crate::source_graph::work_counts();
         assert_eq!(source_graph.cache_loads, 1);
         assert_eq!(source_graph.parsed_files, 2);

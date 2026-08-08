@@ -5,7 +5,7 @@ use crate::check;
 use crate::config::Config;
 use crate::policy_scan::PolicyScanPlan;
 use crate::source_graph::{self, SourceGraphBuild};
-use crate::source_index::{LiveSourceIndex, OneShotSourceIndex, SourceCatalog, SourceChange};
+use crate::source_index::{SourceCatalog, SourceChange, SourceIndexLifecycle, SourceObservation};
 use crate::state::{self, State};
 use crate::vault::Vault;
 use crate::{CrivError, Result};
@@ -26,30 +26,9 @@ pub(crate) struct RefreshResult {
 #[derive(Debug)]
 pub(crate) struct RefreshSession {
     seed_graph: Option<SourceGraphBuild>,
-    source_index: RefreshSourceIndex,
+    source_index: SourceIndexLifecycle,
+    pending_observation: Option<SourceObservation>,
     previous: Option<RefreshResult>,
-}
-
-#[derive(Debug)]
-enum RefreshSourceIndex {
-    OneShot(OneShotSourceIndex),
-    Live(LiveSourceIndex),
-}
-
-impl RefreshSourceIndex {
-    fn catalog(&self) -> Result<SourceCatalog> {
-        match self {
-            Self::OneShot(index) => index.catalog(),
-            Self::Live(index) => index.catalog(),
-        }
-    }
-
-    fn observe_source_change(&mut self) -> Result<SourceChange> {
-        match self {
-            Self::OneShot(_) => Ok(SourceChange::Unchanged),
-            Self::Live(index) => index.observe_source_change(),
-        }
-    }
 }
 
 impl RefreshSession {
@@ -57,7 +36,8 @@ impl RefreshSession {
         let config = Config::load(root)?;
         Ok(Self {
             seed_graph: source_graph::load_cached(root),
-            source_index: RefreshSourceIndex::OneShot(OneShotSourceIndex::new(root, &config)?),
+            source_index: SourceIndexLifecycle::for_command(root, &config)?,
+            pending_observation: None,
             previous: None,
         })
     }
@@ -65,7 +45,8 @@ impl RefreshSession {
     pub(crate) fn live(root: &Path, config: &Config) -> Result<Self> {
         Ok(Self {
             seed_graph: source_graph::load_cached(root),
-            source_index: RefreshSourceIndex::Live(LiveSourceIndex::new(root, config)?),
+            source_index: SourceIndexLifecycle::for_watch(root, config)?,
+            pending_observation: None,
             previous: None,
         })
     }
@@ -80,12 +61,16 @@ impl RefreshSession {
         let diagnostic_previous_state = matches!(cause, RefreshCause::SourceChanged)
             .then_some(previous_state)
             .flatten();
+        let observation = match self.pending_observation.take() {
+            Some(observation) => observation,
+            None => self.source_index.observe()?,
+        };
         let next = execute(
             root,
             previous_graph,
             previous_state,
             diagnostic_previous_state,
-            self.source_index.catalog()?,
+            observation.into_catalog(),
         )?;
 
         self.seed_graph = None;
@@ -97,7 +82,11 @@ impl RefreshSession {
     }
 
     pub(crate) fn observe_source_change(&mut self) -> Result<SourceChange> {
-        self.source_index.observe_source_change()
+        self.pending_observation = None;
+        let observation = self.source_index.observe()?;
+        let change = observation.change();
+        self.pending_observation = Some(observation);
+        Ok(change)
     }
 }
 

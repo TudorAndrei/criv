@@ -29,16 +29,14 @@ const SCAN_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub(crate) struct WorkCounts {
     pub(crate) fff_starts: usize,
-    pub(crate) catalog_traversals: usize,
-    pub(crate) source_enumerations: usize,
+    pub(crate) observations: usize,
 }
 
 #[cfg(test)]
 thread_local! {
     static WORK_COUNTS: Cell<WorkCounts> = const { Cell::new(WorkCounts {
         fff_starts: 0,
-        catalog_traversals: 0,
-        source_enumerations: 0,
+        observations: 0,
     }) };
 }
 
@@ -90,7 +88,13 @@ pub(crate) struct IndexedSource {
 trait SourceIndex: std::fmt::Debug + Send + Sync {
     fn resolve_partial_path(&self, entries: &[IndexedSource], path: &str)
     -> Option<(String, bool)>;
-    fn entries(&self) -> Result<Vec<IndexedSource>>;
+    fn observe(&self) -> Result<IndexSnapshot>;
+}
+
+#[derive(Debug, Clone)]
+struct IndexSnapshot {
+    entries: Vec<IndexedSource>,
+    fingerprint: String,
 }
 
 #[derive(Debug, Clone)]
@@ -135,18 +139,16 @@ impl SourceIndexHandle {
         }
     }
 
-    fn snapshot(&self) -> Result<SourceCatalog> {
-        let mut entries = self.as_index().entries()?;
-        entries.sort_by(|left, right| left.path.cmp(&right.path));
+    fn catalog(&self, entries: Vec<IndexedSource>) -> SourceCatalog {
         let paths = entries
             .iter()
             .map(|entry| entry.path.clone())
             .collect::<Vec<_>>();
-        Ok(SourceCatalog {
+        SourceCatalog {
             handle: self.clone(),
             entries: entries.into(),
             paths: paths.into(),
-        })
+        }
     }
 }
 
@@ -179,27 +181,86 @@ impl SourceCatalog {
 }
 
 #[derive(Debug)]
-pub(crate) struct OneShotSourceIndex {
+pub(crate) struct SourceIndexLifecycle {
     handle: SourceIndexHandle,
+    change_tracking: ChangeTracking,
 }
 
-impl OneShotSourceIndex {
-    pub(crate) fn new(root: &Path, config: &Config) -> Result<Self> {
+#[derive(Debug)]
+enum ChangeTracking {
+    Command,
+    Watch { fingerprint: Option<String> },
+}
+
+#[derive(Debug)]
+pub(crate) struct SourceObservation {
+    change: SourceChange,
+    catalog: SourceCatalog,
+}
+
+impl SourceObservation {
+    pub(crate) fn change(&self) -> SourceChange {
+        self.change
+    }
+
+    pub(crate) fn into_catalog(self) -> SourceCatalog {
+        self.catalog
+    }
+}
+
+impl SourceIndexLifecycle {
+    pub(crate) fn for_command(root: &Path, config: &Config) -> Result<Self> {
+        Self::new(root, config, SourceIndexLifetime::OneShot)
+    }
+
+    pub(crate) fn for_watch(root: &Path, config: &Config) -> Result<Self> {
+        Self::new(root, config, SourceIndexLifetime::Live)
+    }
+
+    fn new(root: &Path, config: &Config, lifetime: SourceIndexLifetime) -> Result<Self> {
         let handle = if config.source_index {
             SourceIndexHandle::enabled(Arc::new(FffSourceIndex::new(
                 root,
                 &config.source_roots,
                 &config.source_exclude,
-                SourceIndexLifetime::OneShot,
+                lifetime,
             )?))
         } else {
             SourceIndexHandle::disabled()
         };
-        Ok(Self { handle })
+        let change_tracking = match lifetime {
+            SourceIndexLifetime::OneShot => ChangeTracking::Command,
+            SourceIndexLifetime::Live => ChangeTracking::Watch { fingerprint: None },
+        };
+        Ok(Self {
+            handle,
+            change_tracking,
+        })
     }
 
-    pub(crate) fn catalog(&self) -> Result<SourceCatalog> {
-        self.handle.snapshot()
+    pub(crate) fn observe(&mut self) -> Result<SourceObservation> {
+        let snapshot = self.handle.as_index().observe()?;
+        let change = if !self.handle.is_enabled() {
+            SourceChange::Disabled
+        } else {
+            match &mut self.change_tracking {
+                ChangeTracking::Command => SourceChange::Unchanged,
+                ChangeTracking::Watch { fingerprint } => {
+                    let changed = fingerprint
+                        .replace(snapshot.fingerprint.clone())
+                        .is_some_and(|previous| previous != snapshot.fingerprint);
+                    if changed {
+                        SourceChange::Changed
+                    } else {
+                        SourceChange::Unchanged
+                    }
+                }
+            }
+        };
+        Ok(SourceObservation {
+            change,
+            catalog: self.handle.catalog(snapshot.entries),
+        })
     }
 
     #[cfg(test)]
@@ -215,69 +276,6 @@ pub(crate) enum SourceChange {
     Disabled,
 }
 
-#[derive(Debug)]
-pub(crate) struct LiveSourceIndex {
-    handle: SourceIndexHandle,
-    index: Option<Arc<FffSourceIndex>>,
-    fingerprint: Option<String>,
-}
-
-impl LiveSourceIndex {
-    pub(crate) fn new(root: &Path, config: &Config) -> Result<Self> {
-        let index = config
-            .source_index
-            .then(|| {
-                FffSourceIndex::new(
-                    root,
-                    &config.source_roots,
-                    &config.source_exclude,
-                    SourceIndexLifetime::Live,
-                )
-                .map(Arc::new)
-            })
-            .transpose()?;
-        let fingerprint = index
-            .as_ref()
-            .map(|index| index.source_fingerprint())
-            .transpose()?;
-        let handle = index
-            .as_ref()
-            .map_or_else(SourceIndexHandle::disabled, |index| {
-                SourceIndexHandle::enabled(index.clone())
-            });
-        Ok(Self {
-            handle,
-            index,
-            fingerprint,
-        })
-    }
-
-    pub(crate) fn catalog(&self) -> Result<SourceCatalog> {
-        self.handle.snapshot()
-    }
-
-    #[cfg(test)]
-    fn handle(&self) -> SourceIndexHandle {
-        self.handle.clone()
-    }
-
-    pub(crate) fn observe_source_change(&mut self) -> Result<SourceChange> {
-        let Some(index) = &self.index else {
-            return Ok(SourceChange::Disabled);
-        };
-        let next = index.source_fingerprint()?;
-        let changed = self
-            .fingerprint
-            .replace(next.clone())
-            .is_some_and(|previous| previous != next);
-        Ok(if changed {
-            SourceChange::Changed
-        } else {
-            SourceChange::Unchanged
-        })
-    }
-}
-
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum SourceIndexLifetime {
     OneShot,
@@ -291,7 +289,7 @@ struct FffSourceIndex {
     source_excludes: GlobMatcher,
     pickers: Vec<ScopedPicker>,
     explicit_files: Vec<String>,
-    source_files_cache: Option<OnceLock<Vec<String>>>,
+    observation_cache: Option<OnceLock<IndexSnapshot>>,
 }
 
 #[derive(Debug)]
@@ -354,7 +352,7 @@ impl FffSourceIndex {
             source_excludes,
             pickers,
             explicit_files: scan_plan.files,
-            source_files_cache: (lifetime == SourceIndexLifetime::OneShot).then(OnceLock::new),
+            observation_cache: (lifetime == SourceIndexLifetime::OneShot).then(OnceLock::new),
         })
     }
 
@@ -385,72 +383,70 @@ impl FffSourceIndex {
                 .any(|root| root == "." || path == root || path.starts_with(&format!("{root}/")))
     }
 
-    fn source_files(&self) -> Result<Vec<String>> {
-        if let Some(cache) = &self.source_files_cache {
+    fn observation(&self) -> Result<IndexSnapshot> {
+        if let Some(cache) = &self.observation_cache {
             if let Some(cached) = cache.get() {
                 return Ok(cached.clone());
             }
-            let files = self.collect_source_files_now()?;
-            return Ok(cache.get_or_init(|| files).clone());
+            let observation = self.collect_observation_now()?;
+            return Ok(cache.get_or_init(|| observation).clone());
         }
-        self.collect_source_files_now()
+        self.collect_observation_now()
     }
 
-    fn collect_source_files_now(&self) -> Result<Vec<String>> {
+    fn collect_observation_now(&self) -> Result<IndexSnapshot> {
         #[cfg(test)]
-        record_work(|counts| counts.source_enumerations += 1);
+        record_work(|counts| counts.observations += 1);
 
-        let mut files = BTreeSet::new();
+        let mut observed = BTreeMap::new();
         for scoped in &self.pickers {
-            files.extend(self.with_picker(scoped, |picker| {
+            observed.extend(self.with_picker(scoped, |picker| {
                 picker
                     .get_files()
                     .iter()
                     .filter(|file| !file.is_binary() && !file.is_deleted())
                     .filter_map(|file| {
                         let path = prefixed_path(&scoped.prefix, file.relative_path(picker));
-                        self.indexed_path(path)
+                        self.indexed_path(path).map(|path| {
+                            let fingerprint = format!("{path}\0{}\0{}", file.size, file.modified);
+                            (
+                                path.clone(),
+                                (file.total_frecency_score().max(0) as u32, fingerprint),
+                            )
+                        })
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<BTreeMap<_, _>>()
             })?);
         }
-        files.extend(
-            self.explicit_files
-                .iter()
-                .filter(|path| is_text_file(&self.root.join(path)).unwrap_or(false))
-                .filter_map(|path| self.indexed_path(path.clone())),
-        );
-        Ok(files.into_iter().collect())
-    }
+        for path in &self.explicit_files {
+            if is_text_file(&self.root.join(path)).unwrap_or(false)
+                && self.indexed_path(path.clone()).is_some()
+            {
+                observed.insert(
+                    path.clone(),
+                    (0, explicit_file_fingerprint(&self.root, path)?),
+                );
+            }
+        }
 
-    fn source_fingerprint(&self) -> Result<String> {
-        let mut rows = Vec::new();
-        for scoped in &self.pickers {
-            rows.extend(self.with_picker(scoped, |picker| {
-                picker
-                    .get_files()
-                    .iter()
-                    .filter(|file| !file.is_binary() && !file.is_deleted())
-                    .filter_map(|file| {
-                        let path = prefixed_path(&scoped.prefix, file.relative_path(picker));
-                        self.indexed_path(path.clone())
-                            .is_some()
-                            .then_some(format!("{path}\0{}\0{}", file.size, file.modified))
-                    })
-                    .collect::<Vec<_>>()
-            })?);
-        }
-        rows.extend(
-            self.explicit_files
-                .iter()
-                .filter(|path| self.indexed_path((*path).clone()).is_some())
-                .filter_map(|path| explicit_file_fingerprint(&self.root, path).ok()),
-        );
-        rows.sort();
-        rows.dedup();
-        Ok(blake3::hash(rows.join("\n").as_bytes())
-            .to_hex()
-            .to_string())
+        let fingerprint = blake3::hash(
+            observed
+                .values()
+                .map(|(_, fingerprint)| fingerprint.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+                .as_bytes(),
+        )
+        .to_hex()
+        .to_string();
+        let entries = observed
+            .into_iter()
+            .map(|(path, (frecency, _))| IndexedSource { path, frecency })
+            .collect();
+        Ok(IndexSnapshot {
+            entries,
+            fingerprint,
+        })
     }
 
     fn explicit_file_hits(&self, query: &str) -> Vec<FileHit> {
@@ -604,36 +600,8 @@ impl SourceIndex for FffSourceIndex {
         }
     }
 
-    fn entries(&self) -> Result<Vec<IndexedSource>> {
-        #[cfg(test)]
-        record_work(|counts| counts.catalog_traversals += 1);
-
-        let mut frecency_by_path = BTreeMap::new();
-        for scoped in &self.pickers {
-            frecency_by_path.extend(self.with_picker(scoped, |picker| {
-                picker
-                    .get_files()
-                    .iter()
-                    .filter_map(|file| {
-                        let path = prefixed_path(&scoped.prefix, file.relative_path(picker));
-                        (!file.is_binary()
-                            && !file.is_deleted()
-                            && self.indexed_path(path.clone()).is_some())
-                        .then_some((path, file.total_frecency_score().max(0) as u32))
-                    })
-                    .collect::<BTreeMap<_, _>>()
-            })?);
-        }
-        let mut entries = self
-            .source_files()?
-            .into_iter()
-            .map(|path| IndexedSource {
-                frecency: frecency_by_path.get(&path).copied().unwrap_or(0),
-                path,
-            })
-            .collect::<Vec<_>>();
-        entries.sort_by(|left, right| left.path.cmp(&right.path));
-        Ok(entries)
+    fn observe(&self) -> Result<IndexSnapshot> {
+        self.observation()
     }
 }
 
@@ -649,8 +617,11 @@ impl SourceIndex for EmptySourceIndex {
         None
     }
 
-    fn entries(&self) -> Result<Vec<IndexedSource>> {
-        Ok(Vec::new())
+    fn observe(&self) -> Result<IndexSnapshot> {
+        Ok(IndexSnapshot {
+            entries: Vec::new(),
+            fingerprint: String::new(),
+        })
     }
 }
 
@@ -717,8 +688,8 @@ mod tests {
 
         reset_work_counts();
         let config = test_config(&["src", ".github/workflows", "Cargo.toml"], &[], true);
-        let lifecycle = OneShotSourceIndex::new(root, &config).unwrap();
-        let catalog = lifecycle.catalog().unwrap();
+        let mut lifecycle = SourceIndexLifecycle::for_command(root, &config).unwrap();
+        let catalog = lifecycle.observe().unwrap().into_catalog();
 
         let entries = catalog
             .entries()
@@ -741,10 +712,9 @@ mod tests {
             work_counts(),
             WorkCounts {
                 fff_starts: 1,
-                catalog_traversals: 1,
-                source_enumerations: 1,
+                observations: 1,
             },
-            "the one-shot index should traverse the catalog once and reuse its enumeration"
+            "the command lifecycle should make one full observation"
         );
     }
 
@@ -767,8 +737,8 @@ mod tests {
             &["src/excluded.rs"],
             true,
         );
-        let lifecycle = OneShotSourceIndex::new(root, &config).unwrap();
-        let catalog = lifecycle.catalog().unwrap();
+        let mut lifecycle = SourceIndexLifecycle::for_command(root, &config).unwrap();
+        let catalog = lifecycle.observe().unwrap().into_catalog();
 
         let paths = catalog
             .entries()
@@ -787,7 +757,7 @@ mod tests {
     }
 
     #[test]
-    fn one_shot_lifecycle_keeps_one_stable_enumeration() {
+    fn command_lifecycle_keeps_one_stable_observation() {
         let temp = TempDir::new().unwrap();
         let root = temp.path();
         fs::create_dir_all(root.join("src")).unwrap();
@@ -795,13 +765,33 @@ mod tests {
         let config = test_config(&["src"], &[], true);
 
         reset_work_counts();
-        let lifecycle = OneShotSourceIndex::new(root, &config).unwrap();
-        let handle = lifecycle.handle();
-        assert_eq!(paths(&handle), vec!["src/one.rs"]);
+        let mut lifecycle = SourceIndexLifecycle::for_command(root, &config).unwrap();
+        assert_eq!(observation_paths(&mut lifecycle), vec!["src/one.rs"]);
         fs::write(root.join("src/two.rs"), "fn two() {}\n").unwrap();
-        assert_eq!(paths(&handle), vec!["src/one.rs"]);
+        assert_eq!(observation_paths(&mut lifecycle), vec!["src/one.rs"]);
         assert_eq!(work_counts().fff_starts, 1);
-        assert_eq!(work_counts().source_enumerations, 1);
+        assert_eq!(work_counts().observations, 1);
+    }
+
+    #[test]
+    fn live_lifecycle_does_not_cache_observations() {
+        let _live_test = lock_live_test();
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/one.rs"), "fn one() {}\n").unwrap();
+        let config = test_config(&["src"], &[], true);
+        let mut lifecycle = SourceIndexLifecycle::for_watch(root, &config).unwrap();
+
+        reset_work_counts();
+        let first = lifecycle.observe().unwrap();
+        let second = lifecycle.observe().unwrap();
+
+        assert_eq!(first.change(), SourceChange::Unchanged);
+        assert_eq!(second.change(), SourceChange::Unchanged);
+        assert_eq!(catalog_paths(&first.catalog), vec!["src/one.rs"]);
+        assert_eq!(catalog_paths(&second.catalog), vec!["src/one.rs"]);
+        assert_eq!(work_counts().observations, 2);
     }
 
     #[test]
@@ -814,34 +804,49 @@ mod tests {
         let config = test_config(&["src"], &[], true);
 
         reset_work_counts();
-        let mut lifecycle = LiveSourceIndex::new(root, &config).unwrap();
+        let mut lifecycle = SourceIndexLifecycle::for_watch(root, &config).unwrap();
         let handle = lifecycle.handle();
-        assert_eq!(paths(&handle), vec!["src/one.rs"]);
-        assert_eq!(
-            lifecycle.observe_source_change().unwrap(),
-            SourceChange::Unchanged
-        );
+        let initial = lifecycle.observe().unwrap();
+        assert_eq!(initial.change(), SourceChange::Unchanged);
+        assert_eq!(catalog_paths(&initial.catalog), vec!["src/one.rs"]);
 
         fs::write(root.join("src/two.rs"), "fn two() {}\n").unwrap();
         wait_for_paths(&handle, &["src/one.rs", "src/two.rs"]);
-        wait_for_change(&mut lifecycle, "source addition");
+        let addition = wait_for_change(&mut lifecycle, "source addition");
+        assert_eq!(
+            catalog_paths(&addition.catalog),
+            vec!["src/one.rs", "src/two.rs"]
+        );
 
         fs::write(
             root.join("src/one.rs"),
             "fn one() { println!(\"changed\"); }\n",
         )
         .unwrap();
-        wait_for_change(&mut lifecycle, "source modification");
+        let modification = wait_for_change(&mut lifecycle, "source modification");
+        assert_eq!(
+            catalog_paths(&modification.catalog),
+            vec!["src/one.rs", "src/two.rs"]
+        );
 
         fs::rename(root.join("src/two.rs"), root.join("src/three.rs")).unwrap();
         wait_for_paths(&handle, &["src/one.rs", "src/three.rs"]);
-        wait_for_change(&mut lifecycle, "source rename");
+        let rename = wait_for_change(&mut lifecycle, "source rename");
+        assert_eq!(
+            catalog_paths(&rename.catalog),
+            vec!["src/one.rs", "src/three.rs"]
+        );
 
         fs::remove_file(root.join("src/three.rs")).unwrap();
         wait_for_paths(&handle, &["src/one.rs"]);
-        wait_for_change(&mut lifecycle, "source deletion");
+        let deletion = wait_for_change(&mut lifecycle, "source deletion");
+        assert_eq!(catalog_paths(&deletion.catalog), vec!["src/one.rs"]);
 
         assert_eq!(work_counts().fff_starts, 1);
+        assert!(
+            work_counts().observations >= 5,
+            "each watcher poll should make a fresh full observation"
+        );
     }
 
     #[test]
@@ -850,16 +855,13 @@ mod tests {
         let config = test_config(&["src"], &[], false);
 
         reset_work_counts();
-        let one_shot = OneShotSourceIndex::new(temp.path(), &config).unwrap();
-        let mut live = LiveSourceIndex::new(temp.path(), &config).unwrap();
+        let mut command = SourceIndexLifecycle::for_command(temp.path(), &config).unwrap();
+        let mut watch = SourceIndexLifecycle::for_watch(temp.path(), &config).unwrap();
 
-        assert!(!one_shot.handle().is_enabled());
-        assert!(!live.handle().is_enabled());
-        assert!(paths(&one_shot.handle()).is_empty());
-        assert_eq!(
-            live.observe_source_change().unwrap(),
-            SourceChange::Disabled
-        );
+        assert!(!command.handle().is_enabled());
+        assert!(!watch.handle().is_enabled());
+        assert!(observation_paths(&mut command).is_empty());
+        assert_eq!(watch.observe().unwrap().change(), SourceChange::Disabled);
         assert_eq!(work_counts().fff_starts, 0);
     }
 
@@ -867,7 +869,7 @@ mod tests {
     fn source_index_rejects_parent_traversing_source_roots() {
         let temp = TempDir::new().unwrap();
         let config = test_config(&["../outside"], &[], true);
-        let error = OneShotSourceIndex::new(temp.path(), &config)
+        let error = SourceIndexLifecycle::for_command(temp.path(), &config)
             .expect_err("parent source root should fail");
 
         assert!(error.to_string().contains("parent-directory"));
@@ -887,8 +889,8 @@ mod tests {
         symlink(&outside, root.join("src")).unwrap();
 
         let config = test_config(&["src"], &[], true);
-        let error =
-            OneShotSourceIndex::new(&root, &config).expect_err("symlinked source root should fail");
+        let error = SourceIndexLifecycle::for_command(&root, &config)
+            .expect_err("symlinked source root should fail");
         assert!(error.to_string().contains("must not be a symlink"));
 
         fs::remove_file(root.join("src")).unwrap();
@@ -896,7 +898,7 @@ mod tests {
         symlink(outside.join("secret.rs"), root.join("src/secret.rs")).unwrap();
 
         let config = test_config(&["src/secret.rs"], &[], true);
-        let error = OneShotSourceIndex::new(&root, &config)
+        let error = SourceIndexLifecycle::for_command(&root, &config)
             .expect_err("symlinked source file root should fail");
         assert!(error.to_string().contains("must not be a symlink"));
     }
@@ -913,11 +915,25 @@ mod tests {
         }
     }
 
+    fn observation_paths(lifecycle: &mut SourceIndexLifecycle) -> Vec<String> {
+        let observation = lifecycle.observe().unwrap();
+        catalog_paths(&observation.catalog)
+    }
+
+    fn catalog_paths(catalog: &SourceCatalog) -> Vec<String> {
+        catalog
+            .entries()
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect()
+    }
+
     fn paths(handle: &SourceIndexHandle) -> Vec<String> {
         handle
             .as_index()
-            .entries()
+            .observe()
             .unwrap()
+            .entries
             .into_iter()
             .map(|entry| entry.path)
             .collect()
@@ -942,11 +958,12 @@ mod tests {
         }
     }
 
-    fn wait_for_change(lifecycle: &mut LiveSourceIndex, label: &str) {
+    fn wait_for_change(lifecycle: &mut SourceIndexLifecycle, label: &str) -> SourceObservation {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            match lifecycle.observe_source_change().unwrap() {
-                SourceChange::Changed => return,
+            let observation = lifecycle.observe().unwrap();
+            match observation.change() {
+                SourceChange::Changed => return observation,
                 SourceChange::Unchanged => {}
                 SourceChange::Disabled => panic!("{label} used a disabled source index"),
             }
