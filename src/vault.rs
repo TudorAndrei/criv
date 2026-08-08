@@ -10,7 +10,7 @@ use crate::Result;
 use crate::c4;
 use crate::config::Config;
 use crate::source_graph::{SourceGraph, SourceGraphBuild};
-use crate::source_index::{IndexedSource, OneShotSourceIndex, SourceCatalog};
+use crate::source_index::{IndexedSource, SourceCatalog, SourceIndexLifecycle};
 use crate::util::{
     GlobMatcher, find_wiki_links_with_lines, is_adr_id, kebab,
     markdown_headings as parse_markdown_headings, read_to_string, strip_prefix, walk_files,
@@ -224,7 +224,9 @@ impl Vault {
         let source_catalog = if load_sources {
             match source_catalog {
                 Some(source_catalog) => source_catalog,
-                None => OneShotSourceIndex::new(root, &config)?.catalog()?,
+                None => SourceIndexLifecycle::for_command(root, &config)?
+                    .observe()?
+                    .into_catalog(),
             }
         } else {
             SourceCatalog::disabled()
@@ -1395,8 +1397,8 @@ roots = ["src"]
         std::fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
 
         let config = Config::load(&root).unwrap();
-        let lifecycle = OneShotSourceIndex::new(&root, &config).unwrap();
-        let catalog = lifecycle.catalog().unwrap();
+        let mut lifecycle = SourceIndexLifecycle::for_command(&root, &config).unwrap();
+        let catalog = lifecycle.observe().unwrap().into_catalog();
         let expected = catalog.paths().to_vec();
         let vault = Vault::load_incremental_with_source_catalog(&root, None, catalog).unwrap();
 
