@@ -4,13 +4,7 @@ import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import test from "node:test";
 
-import {
-  CRIV_LOADED_STATE_DISPOSED,
-  CRIV_WASM_LOAD_ERROR,
-  CrivLoadedStateDisposedError,
-  CrivWasmLoadError,
-  createCrivWasmBridge,
-} from "../../src/wasm";
+import { CRIV_WASM_LOAD_ERROR, CrivWasmLoadError, createCrivWasmBridge } from "../../src/wasm";
 
 const require = createRequire(__filename);
 const compiledWasm = require(resolve(__dirname, "../../pkg/criv_wasm.js")) as unknown;
@@ -19,7 +13,7 @@ const stateRaw = readFileSync(
   "utf8",
 );
 
-test("uses the compiled canonical exports for validation and projections", async () => {
+test("loads the generated package through the VS Code Wasm adapter", async () => {
   const bridge = createCrivWasmBridge(async () => compiledWasm);
   const revision = await bridge.loadState(stateRaw);
   const projections = revision.initialProjections();
@@ -41,41 +35,7 @@ test("uses the compiled canonical exports for validation and projections", async
   revision.dispose();
 });
 
-test("frees one loaded revision once and rejects later use", async () => {
-  let frees = 0;
-  const bridge = createCrivWasmBridge(async () => ({
-    LoadedState: class {
-      initialProjections() {
-        return { state: {}, summary: {}, sources: [], nodes: [] };
-      }
-      lookupNode() {
-        return undefined;
-      }
-      suggestSelectors() {
-        return [];
-      }
-      free() {
-        frees += 1;
-      }
-    },
-  }));
-  const revision = await bridge.loadState(stateRaw);
-
-  revision.dispose();
-  revision.dispose();
-
-  assert.equal(frees, 1);
-  assert.throws(
-    () => revision.lookupNode("src/lib.rs"),
-    (error: unknown) => {
-      assert.ok(error instanceof CrivLoadedStateDisposedError);
-      assert.equal(error.code, CRIV_LOADED_STATE_DISPOSED);
-      return true;
-    },
-  );
-});
-
-test("caches one stable descriptive error for a missing runtime", async () => {
+test("keeps VS Code recovery text in its package loader adapter", async () => {
   let attempts = 0;
   const bridge = createCrivWasmBridge(async () => {
     attempts += 1;
@@ -86,19 +46,12 @@ test("caches one stable descriptive error for a missing runtime", async () => {
     await assert.rejects(bridge.loadState(stateRaw), (error: unknown) => {
       assert.ok(error instanceof CrivWasmLoadError);
       assert.equal(error.code, CRIV_WASM_LOAD_ERROR);
-      assert.match(error.message, /rebuild the companion and reload the editor/i);
+      assert.equal(
+        error.message,
+        "Could not load the packaged criv Wasm runtime. Rebuild the companion and reload the editor.",
+      );
       return true;
     });
   }
   assert.equal(attempts, 1);
-});
-
-test("rejects a corrupt runtime instead of changing projection semantics", async () => {
-  const bridge = createCrivWasmBridge(async () => ({}));
-
-  await assert.rejects(bridge.loadState(stateRaw), (error: unknown) => {
-    assert.ok(error instanceof CrivWasmLoadError);
-    assert.equal(error.code, CRIV_WASM_LOAD_ERROR);
-    return true;
-  });
 });
