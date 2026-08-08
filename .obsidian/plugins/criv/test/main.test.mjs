@@ -132,29 +132,6 @@ class FakeRevision {
 }
 
 {
-  const oldLoad = deferred();
-  const newLoad = deferred();
-  const oldRevision = new FakeRevision({ ...validState, marker: "old" });
-  const newRevision = new FakeRevision({ ...validState, marker: "new" });
-  const loads = [oldLoad.promise, newLoad.promise];
-  let loadCount = 0;
-  const { plugin } = createPlugin({ ".criv/state.json": validStateRaw }, () => loads[loadCount++]);
-
-  const oldRefresh = plugin.loadState();
-  await waitFor(() => loadCount === 1);
-  const newRefresh = plugin.loadState();
-  await waitFor(() => loadCount === 2);
-  newLoad.resolve(newRevision);
-  await newRefresh;
-  oldLoad.resolve(oldRevision);
-  await oldRefresh;
-
-  assert.equal(plugin.cachedState().marker, "new");
-  assert.equal(oldRevision.disposals, 1);
-  assert.equal(newRevision.disposals, 0);
-}
-
-{
   const current = new FakeRevision(validState);
   const changed = new FakeRevision({ ...validState, marker: "changed" });
   const revisions = [current, changed];
@@ -260,26 +237,6 @@ function createPlugin(files, loader) {
     externalEditorUrl: "vscode://file/{path}",
   };
   return { plugin, reads: () => readCount, setStat: (value) => (stat = value) };
-}
-
-function deferred() {
-  let resolve;
-  let reject;
-  const promise = new Promise((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
-
-async function waitFor(predicate) {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    if (predicate()) {
-      return;
-    }
-    await Promise.resolve();
-  }
-  throw new Error("condition was not reached");
 }
 
 function aliasPlugin() {

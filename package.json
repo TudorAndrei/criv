@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "workspaces": [
+    "packages/criv-editor-state",
     "packages/criv-likec4",
     ".obsidian/plugins/criv",
     "extensions/vscode-criv"
