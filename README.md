@@ -115,14 +115,16 @@ own runner instead — see
 `.vscode/extensions.json` using the stable extension ID `criv.vscode-criv`. It
 does not install the extension into VS Code, Cursor, or any other editor by
 default. The optional viewer is local-only and is not published to an extension
-registry. Build a VSIX, then install it explicitly into one selected editor:
+registry. Each criv release archive includes the viewer. Install it explicitly
+into one selected editor:
 
 ```sh
-criv install-editor --editor code --vsix extensions/vscode-criv/vscode-criv.vsix
-criv install-editor --editor cursor --vsix extensions/vscode-criv/vscode-criv.vsix
+criv install-editor --editor code
+criv install-editor --editor cursor
 ```
 
-Use `--dry-run` to validate the editor and VSIX without changing editor state.
+Use `--dry-run` to validate the editor and bundled viewer without changing
+editor state.
 
 Use `--no-skills`, `--no-obsidian`, or `--no-vscode` if you do not want those
 generated templates or editor recommendations:

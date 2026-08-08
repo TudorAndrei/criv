@@ -89,3 +89,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0083-own-one-loaded-state-revision-per-editor-workspace|ADR-0083]] - Own one loaded State revision per editor workspace
 - [[0084-require-windows-hosted-validation|ADR-0084]] - Require Windows hosted validation
 - [[0085-local-only-optional-editor-viewer|ADR-0085]] - Keep the optional editor viewer local
+- [[0086-bundle-one-editor-viewer-with-criv|ADR-0086]] - Bundle one editor viewer with criv

@@ -12,8 +12,39 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  viewer:
+    name: Package editor viewer
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install mise tools
+        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+        with:
+          install: true
+          cache: false
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Package viewer
+        run: npm --prefix extensions/vscode-criv run package
+
+      - name: Upload viewer package
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: editor-viewer
+          path: extensions/vscode-criv/vscode-criv.vsix
+          if-no-files-found: error
+          retention-days: 7
+
   build:
     name: Build ${{ matrix.target }}
+    needs: viewer
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -41,6 +72,12 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+
+      - name: Download viewer package
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: editor-viewer
+          path: viewer-package
 
       - name: Install Rust
         run: |
@@ -81,8 +118,9 @@ jobs:
           archive="criv-${{ matrix.target }}.${{ matrix.archive_ext }}"
           mkdir -p dist/stage
           cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "dist/stage/${{ matrix.binary_name }}"
+          cp "viewer-package/vscode-criv.vsix" "dist/stage/vscode-criv.vsix"
           chmod +x "dist/stage/${{ matrix.binary_name }}"
-          tar -C dist/stage -czf "dist/$archive" "${{ matrix.binary_name }}"
+          tar -C dist/stage -czf "dist/$archive" "${{ matrix.binary_name }}" vscode-criv.vsix
 
       - name: Package Windows archive
         if: runner.os == 'Windows'
@@ -91,7 +129,8 @@ jobs:
           $archive = "criv-${{ matrix.target }}.${{ matrix.archive_ext }}"
           New-Item -ItemType Directory -Force dist/stage | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "dist/stage/${{ matrix.binary_name }}"
-          Compress-Archive -Path "dist/stage/${{ matrix.binary_name }}" -DestinationPath "dist/$archive" -Force
+          Copy-Item "viewer-package/vscode-criv.vsix" "dist/stage/vscode-criv.vsix"
+          Compress-Archive -Path "dist/stage/${{ matrix.binary_name }}", "dist/stage/vscode-criv.vsix" -DestinationPath "dist/$archive" -Force
 
       - name: Upload packaged binary
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0

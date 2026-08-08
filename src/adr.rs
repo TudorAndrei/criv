@@ -1666,7 +1666,7 @@ mod tests {
     #[test]
     fn ignores_markdown_code_fences_when_comparing_adr_content() {
         assert!(!plausible_carried_content(
-            "---\nid: ADR-0002\nkind: decision\ntitle: Local Viewer\nstatus: accepted\n---\n\n# Local Viewer\n\n## Decision\n\n```sh\ncriv install-editor --editor code --vsix viewer.vsix\n```\n",
+            "---\nid: ADR-0002\nkind: decision\ntitle: Local Viewer\nstatus: accepted\n---\n\n# Local Viewer\n\n## Decision\n\n```sh\ncriv install-editor --editor code\n```\n",
             "---\nid: ADR-0001\nkind: decision\ntitle: Offline Check\nstatus: accepted\n---\n\n# Offline Check\n\n## Decision\n\n```sh\nzizmor --offline --strict-collection .\n```\n",
         ));
     }

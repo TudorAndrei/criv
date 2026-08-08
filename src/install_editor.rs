@@ -1,8 +1,10 @@
 use std::env;
-use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+
+#[cfg(windows)]
+use std::ffi::OsStr;
 
 use clap::{Args as ClapArgs, ValueEnum};
 
@@ -35,16 +37,13 @@ pub(crate) struct InstallEditorOptions {
     /// Editor CLI to use.
     #[arg(long, value_enum)]
     editor: Editor,
-    /// Local VSIX package to install.
-    #[arg(long, value_name = "PATH")]
-    vsix: PathBuf,
-    /// Validate the inputs and show the install command without changing the editor.
+    /// Validate the bundled viewer and show the install command without changing the editor.
     #[arg(long)]
     dry_run: bool,
 }
 
-pub(crate) fn run(root: &Path, options: InstallEditorOptions) -> Result<()> {
-    let vsix = validate_vsix(root, &options.vsix)?;
+pub(crate) fn run(options: InstallEditorOptions) -> Result<()> {
+    let vsix = bundled_vsix()?;
     let editor_cli = resolve_editor(options.editor)?;
 
     if options.dry_run {
@@ -73,37 +72,31 @@ pub(crate) fn run(root: &Path, options: InstallEditorOptions) -> Result<()> {
     Ok(())
 }
 
-fn validate_vsix(root: &Path, path: &Path) -> Result<PathBuf> {
-    let candidate = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        root.join(path)
-    };
-    if candidate
-        .extension()
-        .and_then(OsStr::to_str)
-        .is_none_or(|extension| !extension.eq_ignore_ascii_case("vsix"))
-    {
-        return Err(CrivError::usage(format!(
-            "--vsix must name a .vsix file: {}",
-            candidate.display()
-        )));
-    }
+fn bundled_vsix() -> Result<PathBuf> {
+    let executable = env::current_exe().map_err(|error| {
+        CrivError::new(format!(
+            "editor install failed: could not locate the criv executable: {error}"
+        ))
+    })?;
+    let directory = executable.parent().ok_or_else(|| {
+        CrivError::new("editor install failed: the criv executable has no parent directory")
+    })?;
+    let candidate = directory.join("vscode-criv.vsix");
     let metadata = fs::metadata(&candidate).map_err(|error| {
         CrivError::new(format!(
-            "editor install failed: VSIX path is not a readable file: {}: {error}",
-            candidate.display()
+            "editor install failed: bundled viewer is missing: {}: {error}; reinstall criv from a release archive",
+            candidate.display(),
         ))
     })?;
     if !metadata.is_file() {
         return Err(CrivError::new(format!(
-            "editor install failed: VSIX path is not a file: {}",
+            "editor install failed: bundled viewer is not a file: {}; reinstall criv from a release archive",
             candidate.display()
         )));
     }
     fs::canonicalize(&candidate).map_err(|error| {
         CrivError::new(format!(
-            "editor install failed: could not resolve VSIX path {}: {error}",
+            "editor install failed: could not resolve bundled viewer {}: {error}",
             candidate.display()
         ))
     })

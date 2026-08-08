@@ -121,7 +121,7 @@ fn run_command(args: Vec<String>, cwd: &std::path::Path) -> Result<()> {
             Ok(())
         }
         Some(Command::Init(options)) => init::run(cwd, options),
-        Some(Command::InstallEditor(options)) => install_editor::run(cwd, options),
+        Some(Command::InstallEditor(options)) => install_editor::run(options),
         Some(Command::Adr(options)) => adr::run(cwd, options),
         Some(Command::Check(options)) => check::run(cwd, options),
         Some(Command::Query(options)) => query::run(cwd, options),
