@@ -1,10 +1,12 @@
 use std::collections::{BTreeSet, HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 
-use serde::{Deserialize, Serialize};
+use criv_state_wire::{Node, SourceIndexEntry, StateDocument, is_supported_schema};
+#[cfg(not(target_arch = "wasm32"))]
+use serde::Deserialize;
+use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
-const STATE_SCHEMA: &str = "criv.state.v1";
 const INITIAL_PROJECTIONS_TAKEN: &str = "criv initial projections were already taken";
 
 #[wasm_bindgen]
@@ -70,12 +72,12 @@ impl LoadedState {
             .ok()
             .and_then(|value| value.as_string())
             .unwrap_or_else(|| "<missing>".into());
-        if schema != STATE_SCHEMA {
+        if !is_supported_schema(&schema) {
             return Err(JsValue::from_str(&format!(
                 "unsupported criv state schema: {schema}"
             )));
         }
-        let state = serde_wasm_bindgen::from_value::<CrivState>(envelope.clone())
+        let state = serde_wasm_bindgen::from_value::<StateDocument>(envelope.clone())
             .map_err(|error| JsValue::from_str(&format!("invalid criv state JSON: {error}")))?;
         let prepared = PreparedState::new(state);
         let initial_projections = initial_projections_from_js(&envelope, &prepared)?;
@@ -114,7 +116,7 @@ impl LoadedState {
     #[cfg(not(target_arch = "wasm32"))]
     fn load(raw: &str) -> Result<Self, String> {
         let envelope = decode_state_value(raw)?;
-        let state = CrivState::deserialize(&envelope)
+        let state = StateDocument::deserialize(&envelope)
             .map_err(|error| format!("invalid criv state JSON: {error}"))?;
         let prepared = PreparedState::new(state);
         Ok(Self {
@@ -193,7 +195,7 @@ fn decode_state_value(raw: &str) -> Result<serde_json::Value, String> {
         .get("schema")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("<missing>");
-    if schema != STATE_SCHEMA {
+    if !is_supported_schema(schema) {
         return Err(format!("unsupported criv state schema: {schema}"));
     }
     Ok(state)
@@ -260,15 +262,19 @@ fn safe_source_path(path: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-fn editor_graph_nodes(state: &CrivState) -> Vec<EditorGraphNode> {
+fn editor_graph_nodes(state: &StateDocument) -> Vec<EditorGraphNode> {
     state
         .graph
         .nodes
         .iter()
         .map(|node| EditorGraphNode {
             id: node.id.clone(),
-            kind: node.kind.clone().unwrap_or_default(),
-            label: node.label.clone().unwrap_or_else(|| node.id.clone()),
+            kind: node.kind.clone(),
+            label: if node.label.is_empty() {
+                node.id.clone()
+            } else {
+                node.label.clone()
+            },
             path: node.path.clone(),
             source_target: source_target(node),
             line_range: node.path.as_deref().and_then(line_range),
@@ -282,10 +288,14 @@ fn take_editor_graph_nodes(nodes: Vec<Node>) -> Vec<EditorGraphNode> {
         .map(|node| {
             let source_target = source_target(&node);
             let line_range = node.path.as_deref().and_then(line_range);
-            let label = node.label.unwrap_or_else(|| node.id.clone());
+            let label = if node.label.is_empty() {
+                node.id.clone()
+            } else {
+                node.label
+            };
             EditorGraphNode {
                 id: node.id,
-                kind: node.kind.unwrap_or_default(),
+                kind: node.kind,
                 label,
                 path: node.path,
                 source_target,
@@ -297,7 +307,7 @@ fn take_editor_graph_nodes(nodes: Vec<Node>) -> Vec<EditorGraphNode> {
 
 #[cfg(test)]
 fn source_selector_suggestions(
-    state: &CrivState,
+    state: &StateDocument,
     query: &str,
     limit: usize,
 ) -> Vec<SourceSelectorSuggestion> {
@@ -305,7 +315,7 @@ fn source_selector_suggestions(
 }
 
 #[cfg(test)]
-fn find_editor_graph_node(state: &CrivState, target: &str) -> Option<EditorGraphNode> {
+fn find_editor_graph_node(state: &StateDocument, target: &str) -> Option<EditorGraphNode> {
     PreparedState::from_borrowed(state)
         .lookup_node(target)
         .cloned()
@@ -342,14 +352,15 @@ fn source_match_score_prepared(lower_path: &str, basename: &str, query: &str) ->
 }
 
 impl PreparedState {
-    fn new(state: CrivState) -> Self {
-        let CrivState {
+    fn new(state: StateDocument) -> Self {
+        let StateDocument {
             schema,
             graph,
             registered_patterns,
             source_index,
+            ..
         } = state;
-        let Graph { nodes, edges } = graph;
+        let criv_state_wire::Graph { nodes, edges, .. } = graph;
         let sources = take_unique_source_entries(source_index);
         let nodes = take_editor_graph_nodes(nodes);
         let summary = StateSummary {
@@ -368,7 +379,7 @@ impl PreparedState {
     }
 
     #[cfg(test)]
-    fn from_borrowed(state: &CrivState) -> Self {
+    fn from_borrowed(state: &StateDocument) -> Self {
         let sources = unique_source_entries(&state.source_index);
         let nodes = editor_graph_nodes(state);
         let summary = state_summary(state, &sources);
@@ -549,7 +560,7 @@ fn node_matches_target(node: &EditorGraphNode, target: &str) -> bool {
 }
 
 #[cfg(test)]
-fn state_summary(state: &CrivState, sources: &[EditorSourceEntry]) -> StateSummary {
+fn state_summary(state: &StateDocument, sources: &[EditorSourceEntry]) -> StateSummary {
     StateSummary {
         schema: state.schema.clone(),
         node_count: state.graph.nodes.len(),
@@ -594,52 +605,6 @@ fn fuzzy_subsequence_score(value: &str, query: &str) -> Option<i64> {
     }
 
     current_query.is_none().then_some(score)
-}
-
-#[derive(Debug, Deserialize)]
-struct CrivState {
-    schema: String,
-    #[serde(default)]
-    graph: Graph,
-    #[serde(default, rename = "registered-patterns")]
-    registered_patterns: Vec<String>,
-    #[serde(default, rename = "source-index")]
-    source_index: Vec<SourceIndexEntry>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct Graph {
-    #[serde(default)]
-    nodes: Vec<Node>,
-    #[serde(default)]
-    edges: Vec<Edge>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Node {
-    id: String,
-    #[serde(default)]
-    kind: Option<String>,
-    #[serde(default)]
-    label: Option<String>,
-    #[serde(default)]
-    path: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Edge {
-    from: String,
-    to: String,
-    kind: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct SourceIndexEntry {
-    path: String,
-    #[serde(default)]
-    mime: Option<String>,
-    #[serde(default)]
-    frecency: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -742,7 +707,7 @@ mod tests {
 
     #[test]
     fn parses_shared_state_contract_fixture() {
-        let state = serde_json::from_str::<CrivState>(include_str!(
+        let state = serde_json::from_str::<StateDocument>(include_str!(
             "../../../fixtures/state/criv.state.v1.json"
         ))
         .unwrap();
@@ -945,7 +910,7 @@ mod tests {
         assert_eq!(by_id.id, by_target.id);
     }
 
-    fn editor_state() -> CrivState {
+    fn editor_state() -> StateDocument {
         serde_json::from_str(
             r#"{
               "schema": "criv.state.v1",
@@ -977,7 +942,7 @@ mod tests {
         .unwrap()
     }
 
-    fn selector_state() -> CrivState {
+    fn selector_state() -> StateDocument {
         serde_json::from_str(
             r#"{
               "schema": "criv.state.v1",

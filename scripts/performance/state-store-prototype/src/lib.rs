@@ -5,6 +5,7 @@ use std::process::Command;
 use std::time::Instant;
 
 use clap::{Parser, ValueEnum};
+use criv_state_wire::STATE_SCHEMA;
 use serde::{Deserialize, Serialize};
 
 #[path = "generated/state_store_generated.rs"]
@@ -13,7 +14,6 @@ mod state_store_generated;
 use state_store_generated::criv::bench as fb;
 
 const REPORT_SCHEMA: &str = "criv.state-store-candidate.v1";
-const STATE_SCHEMA: &str = "criv.state.v1";
 
 #[derive(Debug, Parser)]
 #[command(

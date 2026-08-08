@@ -10,6 +10,7 @@ documentation = "https://docs.rs/criv"
 
 [workspace]
 members = [
+  "crates/criv-state-wire",
   "crates/criv-wasm",
   "scripts/performance",
   "scripts/performance/state-store-prototype",
@@ -35,6 +36,7 @@ ast-grep-language = { version = "0.44.0", default-features = false, features = [
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
 content_inspector = "0.2"
+criv-state-wire = { version = "0.8.0", path = "crates/criv-state-wire" }
 fff-search = "0.10.1"
 git2 = { version = "0.21.0", default-features = false }
 globset = "0.4"

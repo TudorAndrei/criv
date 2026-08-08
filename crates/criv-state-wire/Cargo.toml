@@ -1,0 +1,12 @@
+[package]
+name = "criv-state-wire"
+version = "0.8.0"
+edition = "2024"
+license = "MIT"
+description = "Shared serialized State document for criv"
+repository = "https://github.com/TudorAndrei/criv"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

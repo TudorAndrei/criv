@@ -1,11 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Deref;
 use std::path::Path;
 use std::sync::Arc;
 
 #[cfg(test)]
 use std::{cell::Cell, thread_local};
 
-use serde::Serialize;
+#[cfg(test)]
+use criv_state_wire::STATE_SCHEMA;
+use criv_state_wire::{
+    Edge, Graph, LikeC4ArchitectureState, Node, PatternMatch, SourceIndexEntry, StateDocument,
+};
+use serde::{Serialize, Serializer};
 
 use crate::c4::C4Artifact;
 use crate::policy_scan::PolicyScanPlan;
@@ -15,31 +21,10 @@ use crate::util::write_atomic_in;
 use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
 
-const STATE_SCHEMA: &str = "criv.state.v1";
-
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub(crate) struct State {
-    schema: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    architecture: Option<LikeC4ArchitectureState>,
-    graph: Graph,
-    #[serde(rename = "registered-patterns")]
-    registered_patterns: Vec<String>,
-    patterns: BTreeMap<String, Vec<PatternMatch>>,
-    #[serde(rename = "source-index")]
-    source_index: Vec<SourceIndexEntry>,
-    #[serde(skip)]
+    wire: StateDocument,
     partitions: StatePartitions,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct LikeC4ArchitectureState {
-    protocol_version: u32,
-    likec4_version: String,
-    revision: u64,
-    workspace: String,
-    model: serde_json::Value,
 }
 
 struct SerializedState {
@@ -97,44 +82,6 @@ fn record_partition_rebuilt(kind: PartitionKind) {
     });
     #[cfg(not(test))]
     let _ = kind;
-}
-
-#[derive(Debug, Default, Clone, Serialize)]
-pub(crate) struct Graph {
-    root: String,
-    nodes: Vec<Node>,
-    edges: Vec<Edge>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct Node {
-    id: String,
-    hash: String,
-    kind: String,
-    label: String,
-    path: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct Edge {
-    from: String,
-    to: String,
-    kind: String,
-    hash: String,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
-pub(crate) struct PatternMatch {
-    file: String,
-    range: Option<String>,
-    captures: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct SourceIndexEntry {
-    path: String,
-    mime: Option<String>,
-    frecency: u32,
 }
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
@@ -264,8 +211,8 @@ impl State {
         }
         let partitions = StatePartitions::build(root, vault, previous, changed_files, policy_plan)?;
         let mut state = Self::from_partitions(partitions);
-        state.architecture = vault.likec4_workspace.model.clone().map(|model| {
-            add_likec4_model_to_graph(&mut state.graph, vault, &model);
+        state.wire.architecture = vault.likec4_workspace.model.clone().map(|model| {
+            add_likec4_model_to_graph(&mut state.wire.graph, vault, &model);
             LikeC4ArchitectureState {
                 protocol_version: 1,
                 likec4_version: vault
@@ -283,13 +230,9 @@ impl State {
 
     fn from_partitions(partitions: StatePartitions) -> Self {
         let (graph, patterns, source_index) = partitions.flatten();
+        let registered_patterns = patterns.keys().cloned().collect();
         Self {
-            schema: STATE_SCHEMA,
-            architecture: None,
-            graph,
-            registered_patterns: patterns.keys().cloned().collect(),
-            patterns,
-            source_index,
+            wire: StateDocument::new(graph, registered_patterns, patterns, source_index),
             partitions,
         }
     }
@@ -314,7 +257,7 @@ impl State {
         #[cfg(test)]
         record_work(|counts| counts.serializations += 1);
 
-        let json = serde_json::to_string_pretty(self)
+        let json = serde_json::to_string_pretty(&self.wire)
             .map_err(|err| CrivError::new(format!("failed to serialize state: {err}")))?;
         Ok(SerializedState {
             hash: stable_hash(&json),
@@ -346,6 +289,23 @@ impl State {
             counts.published_bytes += serialized.published.len() + serialized.hash.len() + 1;
         });
         Ok(serialized.hash.clone())
+    }
+}
+
+impl Deref for State {
+    type Target = StateDocument;
+
+    fn deref(&self) -> &Self::Target {
+        &self.wire
+    }
+}
+
+impl Serialize for State {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.wire.serialize(serializer)
     }
 }
 
