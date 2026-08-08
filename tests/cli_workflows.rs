@@ -3907,6 +3907,26 @@ fn adr_reconcile_detects_a_collision_from_a_linked_worktree() {
         .stdout(predicate::str::contains("ADR-0002 -> ADR-0003"));
 }
 
+#[test]
+fn git_test_helper_disables_commit_signing() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    git(root, &["config", "commit.gpgsign", "true"]);
+    git(root, &["config", "gpg.program", "false"]);
+    fs::write(root.join("file.txt"), "test\n").unwrap();
+    git(root, &["add", "file.txt"]);
+
+    git(root, &["commit", "-m", "test commit"]);
+
+    assert_eq!(
+        git_stdout(root, &["log", "-1", "--format=%s"]).trim(),
+        "test commit"
+    );
+}
+
 fn adr(id: &str, title: &str, slug: &str) -> String {
     format!(
         "---\nid: ADR-{id}\nkind: decision\ntitle: {title}\nstatus: accepted\ndate: 2026-08-02\n---\n\n## {title}\n\n{slug}\n"
@@ -3952,6 +3972,7 @@ fn adr_collision_fixture(root: &Path) {
 fn git(root: &Path, args: &[&str]) {
     let output = std::process::Command::new("git")
         .current_dir(root)
+        .args(["-c", "commit.gpgsign=false"])
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE")
