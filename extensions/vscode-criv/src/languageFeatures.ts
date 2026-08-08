@@ -4,7 +4,6 @@ import { COMMAND_OPEN_SOURCE_TARGET } from "./commands";
 import {
   analyzeSourceReferences,
   appendSourceHoverContents,
-  buildSourceTargetIndex,
   completionToken,
   referenceAtOffset,
   sourceReferenceDiagnostic,
@@ -161,7 +160,7 @@ function documentReferences(
   if (store.status.kind !== "ready" || !isSourceSelectorDocument(document)) {
     return [];
   }
-  return analyzeSourceReferences(document.getText(), buildSourceTargetIndex(store.status.snapshot));
+  return analyzeSourceReferences(document.getText(), (target) => store.lookupNode(target));
 }
 
 function rangeFromOffsets(document: vscode.TextDocument, start: number, end: number): vscode.Range {

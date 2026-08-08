@@ -148,6 +148,7 @@ export class C4PreviewEditorProvider implements vscode.CustomTextEditorProvider 
 
 export class C4PreviewManager implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;
+  private document: vscode.TextDocument | undefined;
   private panelSubscriptions: vscode.Disposable[] = [];
   private readonly surface: C4PreviewSurface;
 
@@ -183,6 +184,13 @@ export class C4PreviewManager implements vscode.Disposable {
       );
       this.surface.configure(panel.webview);
       this.panelSubscriptions.push(this.surface.bindMessages(panel.webview));
+      this.panelSubscriptions.push(
+        this.store.onDidChangeStatus(() => {
+          if (this.panel && this.document) {
+            this.surface.render(this.panel.webview, this.document);
+          }
+        }),
+      );
       panel.onDidDispose(() => {
         this.panel = undefined;
         for (const subscription of this.panelSubscriptions.splice(0)) {
@@ -192,6 +200,7 @@ export class C4PreviewManager implements vscode.Disposable {
       this.panel = panel;
     }
 
+    this.document = document;
     const relativePath = vscode.workspace.asRelativePath(document.uri, false);
     panel.title = `Preview ${relativePath}`;
     this.surface.render(panel.webview, document);
@@ -204,10 +213,6 @@ export class C4PreviewManager implements vscode.Disposable {
       subscription.dispose();
     }
   }
-}
-
-export class C4ArtifactDiagnostics implements vscode.Disposable {
-  dispose(): void {}
 }
 
 function isOpenSourceMessage(value: unknown): value is { type: "openSource"; target: string } {

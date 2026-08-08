@@ -30,9 +30,9 @@ import {
 } from "@codemirror/view";
 import {
   CrivState,
-  C4ArtifactSummary,
   FrontmatterPatternTarget,
   LinkedSource,
+  SourceResolver,
   SourceIndexEntry,
   addTarget,
   addTextTargets,
@@ -41,7 +41,6 @@ import {
   linkedSourcesFromMarkdown,
   looksLikeSourceOrPattern,
   parseLineRange,
-  parseC4Artifact,
   patternTooltip,
   resolvePattern,
   resolveSource,
@@ -65,7 +64,6 @@ const DEFAULT_SETTINGS: CrivSettings = {
   statePath: ".criv/state.json",
   externalEditorUrl: "vscode://file/{path}",
 };
-const EXPECTED_SCHEMA = "criv.state.v1";
 const VIEW_TYPE = "criv-source-panel";
 const C4_VIEW_TYPE = "criv-c4-view";
 const PREVIEW_LINE_LIMIT = 80;
@@ -109,6 +107,7 @@ export default class CrivPlugin extends Plugin {
   settings!: CrivSettings;
   private state: CrivState | null = null;
   private stateSources: SourceIndexEntry[] = [];
+  private stateSourcesByPath = new Map<string, SourceIndexEntry>();
   private stateSummary: CrivStateSummary | null = null;
   private readonly stateRevisions = new LoadedRevisionOwner<CrivLoadedState>();
   private stateToken: StateFileToken | null = null;
@@ -143,10 +142,7 @@ export default class CrivPlugin extends Plugin {
     this.addCommand({
       id: "reload-criv-state",
       name: "Reload criv state",
-      callback: async () => {
-        await this.reloadState();
-        await this.refreshSourcePanel();
-      },
+      callback: async () => this.reloadState(),
     });
     this.patchNativeSaveCommand();
     this.registerEditorExtension(crivDriftExtension(this));
@@ -186,11 +182,6 @@ export default class CrivPlugin extends Plugin {
       new Notice(`criv state is missing at ${this.settings.statePath}`);
       return;
     }
-    if (state.schema !== EXPECTED_SCHEMA) {
-      new Notice(`criv state schema ${state.schema ?? "unknown"} is not supported`);
-      return;
-    }
-
     new Notice(
       `criv ${state.schema}: ${state.node_count} nodes, ${state.edge_count} edges, ${state.source_count} source files`,
     );
@@ -253,6 +244,9 @@ export default class CrivPlugin extends Plugin {
     if (result.kind === "committed") {
       this.state = result.value.state;
       this.stateSources = result.value.sources;
+      this.stateSourcesByPath = new Map(
+        result.value.sources.map((source) => [source.path, source]),
+      );
       this.stateSummary = result.value.summary;
       this.stateToken = token;
       this.stateError = null;
@@ -283,8 +277,11 @@ export default class CrivPlugin extends Plugin {
     return this.state;
   }
 
-  cachedSourceEntries(): readonly SourceIndexEntry[] {
-    return this.stateSources;
+  cachedSourceResolver(): SourceResolver {
+    return {
+      lookupNode: (target) => this.stateRevisions.current?.lookupNode(target),
+      sourceEntry: (path) => this.stateSourcesByPath.get(path),
+    };
   }
 
   suggestSourceSelectors(query: string, limit: number): CrivSelectorSuggestion[] {
@@ -302,6 +299,7 @@ export default class CrivPlugin extends Plugin {
   private clearStateCache(): void {
     this.state = null;
     this.stateSources = [];
+    this.stateSourcesByPath.clear();
     this.stateSummary = null;
     this.stateToken = null;
   }
@@ -318,6 +316,8 @@ export default class CrivPlugin extends Plugin {
   async reloadState(): Promise<CrivState | null> {
     const state = await this.loadState();
     this.app.workspace.updateOptions();
+    await this.refreshSourcePanel();
+    await this.refreshC4Views();
     return state;
   }
 
@@ -326,6 +326,14 @@ export default class CrivPlugin extends Plugin {
     if (leaf?.view instanceof CrivSourceView) {
       await leaf.view.render();
     }
+  }
+
+  async refreshC4Views(): Promise<void> {
+    const views = this.app.workspace
+      .getLeavesOfType(C4_VIEW_TYPE)
+      .map((leaf) => leaf.view)
+      .filter((view): view is CrivC4View => view instanceof CrivC4View);
+    await Promise.all(views.map((view) => view.render()));
   }
 
   async pollState(): Promise<void> {
@@ -346,13 +354,13 @@ export default class CrivPlugin extends Plugin {
     }
     this.app.workspace.updateOptions();
     await this.refreshSourcePanel();
+    await this.refreshC4Views();
   }
 
   async updateStatePath(value: string): Promise<void> {
     this.settings.statePath = safeVaultPath(value) ?? DEFAULT_SETTINGS.statePath;
     await this.saveSettings();
     await this.reloadState();
-    await this.refreshSourcePanel();
   }
 
   private sourcePanelLeaf(): WorkspaceLeaf | null {
@@ -378,7 +386,7 @@ export default class CrivPlugin extends Plugin {
       return [];
     }
     const markdown = await this.app.vault.cachedRead(file);
-    return linkedSourcesFromMarkdown(markdown, this.stateSources);
+    return linkedSourcesFromMarkdown(markdown, this.cachedSourceResolver());
   }
 
   async decorateLinks(el: HTMLElement, _ctx: MarkdownPostProcessorContext) {
@@ -390,11 +398,11 @@ export default class CrivPlugin extends Plugin {
       el.querySelectorAll("[data-href], a.internal-link, a[href]"),
     ) as HTMLElement[];
     for (const anchor of candidates) {
-      const source = resolveSourceFromElement(this.stateSources, anchor);
+      const source = resolveSourceFromElement(this.cachedSourceResolver(), anchor);
       const pattern = resolvePatternFromElement(state, anchor);
       if (source) {
         anchor.addClass("criv-source-ref");
-        anchor.setAttribute("title", sourceTooltip(state, source.entry));
+        anchor.setAttribute("title", sourceTooltip(source));
         continue;
       }
       if (pattern) {
@@ -443,7 +451,7 @@ export default class CrivPlugin extends Plugin {
 
   async patternIds(): Promise<string[]> {
     const state = await this.getState();
-    return state?.["registered-patterns"] ?? Object.keys(state?.patterns ?? {});
+    return state?.["registered-patterns"] ?? [];
   }
 
   private async handleDocumentMouseOver(event: MouseEvent): Promise<void> {
@@ -457,13 +465,13 @@ export default class CrivPlugin extends Plugin {
     if (!state) {
       return;
     }
-    const source = resolveSourceFromElement(this.stateSources, link);
+    const source = resolveSourceFromElement(this.cachedSourceResolver(), link);
     if (!source) {
       return;
     }
 
     link.addClass("criv-source-ref");
-    link.setAttribute("title", sourceTooltip(state, source.entry));
+    link.setAttribute("title", sourceTooltip(source));
     await this.showHoverPreview(event, source);
   }
 
@@ -730,20 +738,16 @@ class CrivC4View extends FileView {
 
     await this.sourceForCurrentFile();
     const source = this.currentSource();
-    const summary = parseC4Artifact(this.file.path, source);
     const header = container.createDiv({ cls: "criv-c4-header" });
     header.createEl("h3", { text: this.file.basename });
     const meta = header.createDiv({ cls: "criv-c4-meta" });
-    meta.createSpan({ text: summary.format });
-    meta.createSpan({ text: summary.level });
-    if (summary.generated) {
+    meta.createSpan({ text: "likec4" });
+    meta.createSpan({ text: "model" });
+    if (/^\s*\/\/\s*criv:generated\s+true\s*$/m.test(source)) {
       meta.createSpan({ text: "generated" });
     }
     this.dirtyBadgeEl = meta.createSpan({ cls: "criv-warning criv-c4-dirty", text: "unsaved" });
     this.updateDirtyBadge();
-    if (summary.diagnostics.length > 0) {
-      meta.createSpan({ cls: "criv-warning", text: `${summary.diagnostics.length}` });
-    }
     const toolbar = header.createDiv({ cls: "criv-c4-toolbar" });
     this.renderToolbar(toolbar);
 
@@ -751,17 +755,7 @@ class CrivC4View extends FileView {
     if (this.mode === "source") {
       this.renderSourceEditor(body);
     } else {
-      await this.renderPreview(body, summary, source);
-    }
-
-    if (summary.diagnostics.length > 0) {
-      const diagnostics = container.createDiv({ cls: "criv-c4-diagnostics" });
-      for (const diagnostic of summary.diagnostics) {
-        const row = diagnostics.createDiv({ cls: "criv-c4-diagnostic" });
-        row.createSpan({ text: diagnostic.line ? `L${diagnostic.line}` : "--" });
-        row.createSpan({ text: diagnostic.code });
-        row.createSpan({ text: diagnostic.message });
-      }
+      await this.renderPreview(body);
     }
   }
 
@@ -827,11 +821,7 @@ class CrivC4View extends FileView {
     button.onclick = onClick;
   }
 
-  private async renderPreview(
-    body: HTMLElement,
-    _summary: C4ArtifactSummary,
-    _source: string,
-  ): Promise<void> {
+  private async renderPreview(body: HTMLElement): Promise<void> {
     const viewport = body.createDiv({ cls: "criv-c4-preview" });
     const surface = viewport.createDiv({ cls: "criv-c4-preview-surface" });
     const state = await this.plugin.getState();
@@ -1016,11 +1006,11 @@ function sourceSuggestionItemsFromWasm(items: CrivSelectorSuggestion[]): SourceS
 }
 
 function resolveSourceFromElement(
-  sources: readonly SourceIndexEntry[],
+  resolver: SourceResolver,
   element: HTMLElement,
 ): LinkedSource | null {
   for (const target of linkTargets(element)) {
-    const source = resolveSource(sources, target);
+    const source = resolveSource(resolver, target);
     if (source) {
       return source;
     }
@@ -1338,7 +1328,7 @@ class CrivEditorDriftPlugin implements PluginValue {
     const builder = new RangeSetBuilder<Decoration>();
     for (const { from, to } of view.visibleRanges) {
       const text = view.state.sliceDoc(from, to);
-      for (const range of crivLinkRanges(text, state, this.plugin.cachedSourceEntries())) {
+      for (const range of crivLinkRanges(text, state, this.plugin.cachedSourceResolver())) {
         if (range.status !== "unresolved") {
           continue;
         }

@@ -1,11 +1,6 @@
 import * as vscode from "vscode";
 
-import {
-  C4ArtifactDiagnostics,
-  C4PreviewEditorProvider,
-  C4PreviewManager,
-  C4_PREVIEW_VIEW_TYPE,
-} from "./c4Preview";
+import { C4PreviewEditorProvider, C4PreviewManager, C4_PREVIEW_VIEW_TYPE } from "./c4Preview";
 import { CrivCheckDiagnostics } from "./checkDiagnostics";
 import { CHECK_MAX_OUTPUT_BYTES, completeCheckStdout } from "./checkOutput";
 import {
@@ -33,7 +28,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const store = new WorkspaceStateStore(createVscodeStateHost(), { loadState });
   const treeProvider = new CrivStateTreeProvider();
   const checkDiagnostics = new CrivCheckDiagnostics();
-  const c4Diagnostics = new C4ArtifactDiagnostics();
   const c4Preview = new C4PreviewManager(context, store);
   const c4PreviewEditor = new C4PreviewEditorProvider(context, store);
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
@@ -44,14 +38,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     treeProvider.update(status);
   };
 
-  context.subscriptions.push(
-    store,
-    treeProvider,
-    checkDiagnostics,
-    c4Diagnostics,
-    c4Preview,
-    statusBar,
-  );
+  context.subscriptions.push(store, treeProvider, checkDiagnostics, c4Preview, statusBar);
   context.subscriptions.push(store.onDidChangeStatus(updateSurfaces));
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider("criv.stateView", treeProvider),

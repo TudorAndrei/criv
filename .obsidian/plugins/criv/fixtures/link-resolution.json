@@ -9,6 +9,13 @@
           "kind": "code",
           "label": "src/lib.rs (rust)",
           "path": "src/lib.rs"
+        },
+        {
+          "id": "symbol:src/lib.rs#fn:run",
+          "hash": "fixture",
+          "kind": "function",
+          "label": "run",
+          "path": "src/lib.rs#L1-L1"
         }
       ],
       "edges": [],

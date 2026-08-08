@@ -3,6 +3,8 @@ export interface CrivNode {
   kind: string;
   label: string;
   path?: string;
+  source_target?: string;
+  line_range?: string;
 }
 
 export interface PatternMatch {
@@ -21,6 +23,12 @@ export interface LinkedSource {
   target: string;
   fragment: string | null;
   entry: SourceIndexEntry;
+  node: CrivNode;
+}
+
+export interface SourceResolver {
+  lookupNode(target: string): CrivNode | undefined;
+  sourceEntry(path: string): SourceIndexEntry | undefined;
 }
 
 export interface CrivState {
@@ -57,29 +65,13 @@ export interface CrivLinkRange {
   status: "resolved" | "unresolved";
 }
 
-export type C4ArtifactFormat = "likec4" | "unknown";
-export type C4ArtifactLevel = "model";
-
-export interface C4ArtifactDiagnostic {
-  code: string;
-  line: number | null;
-  message: string;
-}
-
-export interface C4ArtifactSummary {
-  format: C4ArtifactFormat;
-  level: C4ArtifactLevel;
-  generated: boolean;
-  diagnostics: C4ArtifactDiagnostic[];
-}
-
 export function linkedSourcesFromMarkdown(
   markdown: string,
-  sources: readonly SourceIndexEntry[],
+  resolver: SourceResolver,
 ): LinkedSource[] {
   const links = Array.from(markdown.matchAll(/\[\[([^\]]+)\]\]/g))
     .map((match) => match[1] ?? "")
-    .map((target) => resolveSource(sources, target))
+    .map((target) => resolveSource(resolver, target))
     .filter((source): source is LinkedSource => source !== null);
   const seen = new Set<string>();
   return links.filter((source) => {
@@ -153,23 +145,28 @@ export function addTarget(targets: string[], value: string | null | undefined): 
   }
 }
 
-export function resolveSource(
-  sources: readonly SourceIndexEntry[],
-  target: string,
-): LinkedSource | null {
+export function resolveSource(resolver: SourceResolver, target: string): LinkedSource | null {
   const clean = cleanTarget(target);
-  const normalized = clean.split("#")[0] ?? "";
-  if (!normalized || normalized.startsWith("match:")) {
+  const [targetPath, fragment] = clean.split("#", 2);
+  if (!targetPath || targetPath.startsWith("match:")) {
     return null;
   }
-  const entry = resolveSourceEntry(sources, normalized);
+  const lookupTarget = fragment && !parseLineRange(fragment) ? clean : targetPath;
+  const node = resolver.lookupNode(lookupTarget);
+  if (!node) {
+    return null;
+  }
+  const canonicalTarget = node.source_target ?? node.path;
+  const sourcePath = canonicalTarget?.split("#", 1)[0];
+  const entry = sourcePath ? resolver.sourceEntry(sourcePath) : undefined;
   if (!entry) {
     return null;
   }
   return {
     target,
-    fragment: clean.includes("#") ? clean.split("#").slice(1).join("#") : null,
+    fragment: fragment ?? null,
     entry,
+    node,
   };
 }
 
@@ -179,13 +176,12 @@ export function resolvePattern(state: CrivState, target: string): string | null 
   if (!id) {
     return null;
   }
-  const ids = state["registered-patterns"] ?? Object.keys(state.patterns ?? {});
+  const ids = state["registered-patterns"] ?? [];
   return ids.includes(id) ? id : null;
 }
 
-export function sourceTooltip(state: CrivState, source: SourceIndexEntry): string {
-  const node = state.graph?.nodes?.find((candidate) => candidate.path === source.path);
-  return node ? `${node.kind}: ${node.label}` : source.path;
+export function sourceTooltip(source: LinkedSource): string {
+  return `${source.node.kind}: ${source.node.label}`;
 }
 
 export function patternTooltip(state: CrivState, id: string): string {
@@ -220,14 +216,14 @@ export function frontmatterPatternTargets(
 export function crivLinkRanges(
   text: string,
   state: CrivState,
-  sources: readonly SourceIndexEntry[],
+  resolver: SourceResolver,
 ): CrivLinkRange[] {
   const ranges: CrivLinkRange[] = [];
   for (const match of text.matchAll(/\[\[([^\]]+)\]\]/g)) {
     const rawTarget = match[1] ?? "";
     const from = match.index ?? 0;
     const to = from + match[0].length;
-    const source = resolveSource(sources, rawTarget);
+    const source = resolveSource(resolver, rawTarget);
     if (source) {
       ranges.push({ from, to, target: rawTarget, kind: "source", status: "resolved" });
       continue;
@@ -244,28 +240,6 @@ export function crivLinkRanges(
   return ranges;
 }
 
-export function parseC4Artifact(_path: string, text: string): C4ArtifactSummary {
-  const generated = /^\s*\/\/\s*criv:generated\s+true\s*$/m.test(text);
-  const format = /\b(specification|model|views|deployment|global|extend)\s*\{/.test(text)
-    ? "likec4"
-    : "unknown";
-  return {
-    format,
-    level: "model",
-    generated,
-    diagnostics:
-      format === "likec4"
-        ? []
-        : [
-            {
-              code: "unknown-c4-format",
-              line: firstNonEmptyLine(text),
-              message: "The .c4 file must contain LikeC4 DSL.",
-            },
-          ],
-  };
-}
-
 export function looksLikeSourceOrPattern(target: string): boolean {
   const clean = cleanTarget(target);
   return clean.startsWith("match:") || /\.[a-z0-9]+(#.*)?$/i.test(clean);
@@ -273,26 +247,6 @@ export function looksLikeSourceOrPattern(target: string): boolean {
 
 export function cleanTarget(target: string): string {
   return target.split("|")[0]?.trim() ?? "";
-}
-
-function firstNonEmptyLine(text: string): number | null {
-  const lines = text.split(/\r?\n/);
-  const index = lines.findIndex((line) => line.trim().length > 0);
-  return index === -1 ? null : index + 1;
-}
-
-function resolveSourceEntry(
-  entries: readonly SourceIndexEntry[],
-  targetPath: string,
-): SourceIndexEntry | null {
-  return (
-    entries.find((candidate) => candidate.path === targetPath) ??
-    entries.find(
-      (candidate) =>
-        candidate.path.endsWith(targetPath) || candidate.path.split("/").pop() === targetPath,
-    ) ??
-    null
-  );
 }
 
 function frontmatterPatternTarget(
@@ -313,7 +267,7 @@ function frontmatterPatternTarget(
   }
 
   const matches = state.patterns?.[id] ?? [];
-  const ids = state["registered-patterns"] ?? Object.keys(state.patterns ?? {});
+  const ids = state["registered-patterns"] ?? [];
   return {
     id,
     source,

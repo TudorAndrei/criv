@@ -77,10 +77,16 @@ const fixture = JSON.parse(
   readFileSync(resolve(pluginRoot, "fixtures/link-resolution.json"), "utf8"),
 );
 const state = fixture.state;
-const sources = initialProjections(JSON.stringify(state)).sources;
+const linkRevision = new wasm.LoadedState(JSON.stringify(state));
+const sources = linkRevision.initialProjections().sources;
+const sourceByPath = new Map(sources.map((source) => [source.path, source]));
+const sourceResolver = {
+  lookupNode: (target) => linkRevision.lookupNode(target),
+  sourceEntry: (path) => sourceByPath.get(path),
+};
 
 for (const testCase of fixture.cases) {
-  const source = core.resolveSource(sources, testCase.target);
+  const source = core.resolveSource(sourceResolver, testCase.target);
   const pattern = core.resolvePattern(state, testCase.target);
   assert.equal(source?.entry.path ?? null, testCase.source, `source for ${testCase.target}`);
   assert.equal(pattern, testCase.pattern, `pattern for ${testCase.target}`);
@@ -88,7 +94,7 @@ for (const testCase of fixture.cases) {
 
 assert.deepEqual(
   core
-    .linkedSourcesFromMarkdown("[[src/lib.rs#run]] [[lib.rs]] [[missing.rs]]", sources)
+    .linkedSourcesFromMarkdown("[[src/lib.rs#run]] [[lib.rs]] [[missing.rs]]", sourceResolver)
     .map((source) => source.entry.path),
   ["src/lib.rs"],
 );
@@ -131,12 +137,18 @@ const unsafeSourceState = {
   ],
 };
 
-const safeSources = initialProjections(JSON.stringify(unsafeSourceState)).sources;
+const unsafeRevision = new wasm.LoadedState(JSON.stringify(unsafeSourceState));
+const safeSources = unsafeRevision.initialProjections().sources;
+const safeSourceByPath = new Map(safeSources.map((source) => [source.path, source]));
+const safeSourceResolver = {
+  lookupNode: (target) => unsafeRevision.lookupNode(target),
+  sourceEntry: (path) => safeSourceByPath.get(path),
+};
 assert.deepEqual(
   safeSources.map((entry) => entry.path),
   ["src/lib.rs", "src/windows/path.rs"],
 );
-assert.equal(core.resolveSource(safeSources, "../.ssh/id_rsa"), null);
+assert.equal(core.resolveSource(safeSourceResolver, "../.ssh/id_rsa"), null);
 assert.equal(core.safeVaultPath("../.ssh/id_rsa"), null);
 assert.equal(core.safeVaultPath("/etc/passwd"), null);
 assert.equal(core.safeVaultPath("C:\\Users\\name\\.ssh\\id_rsa"), null);
@@ -179,7 +191,7 @@ assert.deepEqual(targets, [
 const ranges = core.crivLinkRanges(
   "[[src/lib.rs]] [[missing.rs]] [[match:ADR-0001/no-block-on]]",
   state,
-  sources,
+  sourceResolver,
 );
 assert.deepEqual(
   ranges.map((range) => `${range.status}:${range.kind}:${range.target}`),
@@ -189,16 +201,5 @@ assert.deepEqual(
     "resolved:pattern:match:ADR-0001/no-block-on",
   ],
 );
-
-const likec4Summary = core.parseC4Artifact(
-  "docs/architecture/model.c4",
-  "specification { element system }\nmodel { app = system 'App' }\n",
-);
-assert.equal(likec4Summary.format, "likec4");
-assert.deepEqual(likec4Summary.diagnostics, []);
-
-for (const legacySource of ["C4Context", "digraph architecture { a -> b }"]) {
-  const summary = core.parseC4Artifact("docs/architecture/model.c4", legacySource);
-  assert.equal(summary.format, "unknown");
-  assert.equal(summary.diagnostics[0].code, "unknown-c4-format");
-}
+unsafeRevision.free();
+linkRevision.free();

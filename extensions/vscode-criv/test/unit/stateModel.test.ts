@@ -52,6 +52,16 @@ test("reads registered patterns from explicit state field", () => {
   assert.deepEqual(registeredPatterns(envelope), ["adr/source-selector", "code/entrypoint"]);
 });
 
+test("does not derive registered patterns from the State match map", () => {
+  const envelope: CrivStateEnvelope = {
+    schema: "criv.state.v1",
+    patterns: {
+      "adr/source-selector": [],
+    },
+  };
+  assert.deepEqual(registeredPatterns(envelope), []);
+});
+
 test("keeps LikeC4 view source ownership in host state", () => {
   const raw = JSON.stringify({
     schema: "criv.state.v1",

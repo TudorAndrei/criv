@@ -43,11 +43,6 @@ model {
       description 'Converts validated state into extension-facing snapshots and C4 artifacts.'
       link ../../extensions/vscode-criv/src/stateModel.ts 'source'
     }
-    c4ArtifactModule = module 'criv-vscode::c4Artifact' {
-      technology 'TypeScript'
-      description 'Describes the opened C4 artifact and its owning workspace paths.'
-      link ../../extensions/vscode-criv/src/c4Artifact.ts 'source'
-    }
     wasmModule = module 'criv-vscode::wasm' {
       technology 'TypeScript and Rust WebAssembly'
       description 'Loads the WebAssembly API used to validate and query criv state.'
@@ -146,7 +141,6 @@ model {
   // Workspace state.
   criv.vscodeExtension.vscodeState.stateStoreModule -> criv.vscodeExtension.vscodeState.stateModelModule 'Builds extension snapshots'
   criv.vscodeExtension.vscodeState.stateStoreModule -> criv.vscodeExtension.vscodeState.wasmModule 'Owns loaded state revisions'
-  criv.vscodeExtension.vscodeState.stateModelModule -> criv.vscodeExtension.vscodeState.c4ArtifactModule 'Describes C4 artifacts'
   criv.vscodeExtension.vscodeState.configModule -> criv.vscodeExtension.vscodeState.configModelModule 'Validates the settings model'
 
   // Source navigation.

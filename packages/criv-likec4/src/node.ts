@@ -2,7 +2,6 @@ import { LikeC4 } from "likec4";
 
 import {
   CRIV_LIKEC4_PROTOCOL_VERSION,
-  CRIV_LIKEC4_NODE_VERSION,
   CRIV_LIKEC4_VERSION,
   type CrivLikeC4Model,
 } from "./protocol.js";
@@ -10,6 +9,7 @@ import {
 export async function buildLikeC4Model(
   source: string,
   revision = 0,
+  workspace = "",
 ): Promise<CrivLikeC4Model> {
   const likec4 = await LikeC4.fromSource(source, {
     logger: false,
@@ -35,14 +35,15 @@ export async function buildLikeC4Model(
           .filter((link) => link.title?.toLowerCase() === "source")
           .map((link) => ({ element: element.id, target: link.url })),
       )
-      .sort((left, right) =>
-        left.element.localeCompare(right.element) || left.target.localeCompare(right.target),
+      .sort(
+        (left, right) =>
+          left.element.localeCompare(right.element) || left.target.localeCompare(right.target),
       );
     return {
       protocolVersion: CRIV_LIKEC4_PROTOCOL_VERSION,
-      nodeVersion: CRIV_LIKEC4_NODE_VERSION,
       likec4Version: CRIV_LIKEC4_VERSION,
       revision,
+      workspace,
       model,
       views,
       sourceLinks,

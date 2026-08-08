@@ -20,15 +20,9 @@ export interface CrivArtifactEntry {
 
 export function registeredPatterns(envelope: CrivStateEnvelope): string[] {
   const explicit = envelope["registered-patterns"];
-  if (Array.isArray(explicit)) {
-    return explicit.filter((value): value is string => typeof value === "string").sort();
-  }
-
-  if (isRecord(envelope.patterns)) {
-    return Object.keys(envelope.patterns).sort();
-  }
-
-  return [];
+  return Array.isArray(explicit)
+    ? explicit.filter((value): value is string => typeof value === "string").sort()
+    : [];
 }
 
 export function buildStateSnapshot(

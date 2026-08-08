@@ -1,4 +1,3 @@
-import type { CrivStateSnapshot } from "./stateModel";
 import type { CrivGraphNode } from "./wasm";
 
 export type SourceReferenceKind =
@@ -18,21 +17,11 @@ export interface SourceReference {
   shouldDiagnoseUnresolved: boolean;
 }
 
-export interface SourceTargetIndex {
-  readonly targets: ReadonlySet<string>;
-  readonly nodesByTarget: ReadonlyMap<string, CrivGraphNode>;
-  readonly canonicalByLegacy: ReadonlyMap<string, string>;
-}
+export type SourceTargetLookup = (target: string) => CrivGraphNode | undefined;
 
 export interface MarkdownSink {
   appendMarkdown(value: string): void;
   appendText(value: string): void;
-}
-
-interface MutableSourceTargetIndex {
-  targets: Set<string>;
-  nodesByTarget: Map<string, CrivGraphNode>;
-  canonicalByLegacy: Map<string, string>;
 }
 
 const CRIV_SOURCE_DIRECTIVE = /\bcriv:source\s+([^\s"',)]+)/g;
@@ -40,31 +29,10 @@ const SOURCE_WIKILINK = /\[\[(source:)?([^\]|\s]+)(?:\|[^\]]*)?\]\]/g;
 const SELECTOR_CANDIDATE =
   /(^|[^\w./:#-])([A-Za-z0-9_.-][A-Za-z0-9_./-]*\.[A-Za-z0-9_-]+(?:#[A-Za-z0-9_:/.-]+)?)/g;
 
-export function buildSourceTargetIndex(snapshot: CrivStateSnapshot): SourceTargetIndex {
-  const index: MutableSourceTargetIndex = {
-    targets: new Set<string>(),
-    nodesByTarget: new Map<string, CrivGraphNode>(),
-    canonicalByLegacy: new Map<string, string>(),
-  };
-
-  for (const source of snapshot.sources) {
-    addTarget(index, source.path);
-  }
-
-  for (const node of snapshot.graphNodes) {
-    const target = node.source_target ?? node.path;
-    if (!target) {
-      continue;
-    }
-    addTarget(index, target, node);
-    addTarget(index, node.id, node);
-    addLegacySymbolAliases(index, target, node);
-  }
-
-  return index;
-}
-
-export function analyzeSourceReferences(text: string, index: SourceTargetIndex): SourceReference[] {
+export function analyzeSourceReferences(
+  text: string,
+  lookup: SourceTargetLookup,
+): SourceReference[] {
   const references: SourceReference[] = [];
 
   for (const match of text.matchAll(CRIV_SOURCE_DIRECTIVE)) {
@@ -73,7 +41,7 @@ export function analyzeSourceReferences(text: string, index: SourceTargetIndex):
       continue;
     }
     references.push(
-      referenceFor(index, "criv-source", target, match.index + match[0].indexOf(target), true),
+      referenceFor(lookup, "criv-source", target, match.index + match[0].indexOf(target), true),
     );
   }
 
@@ -86,7 +54,7 @@ export function analyzeSourceReferences(text: string, index: SourceTargetIndex):
     const start = match.index + match[0].indexOf(target);
     references.push(
       referenceFor(
-        index,
+        lookup,
         typed ? "typed-source-wikilink" : "legacy-wikilink",
         typed ? `source:${target}` : target,
         start,
@@ -101,11 +69,11 @@ export function analyzeSourceReferences(text: string, index: SourceTargetIndex):
       continue;
     }
     const start = match.index + match[0].length - candidate.length;
-    const resolved = resolveSourceTarget(index, candidate);
+    const resolved = resolveSourceTarget(lookup, candidate);
     if (!resolved || overlaps(references, start, start + candidate.length)) {
       continue;
     }
-    references.push(referenceFor(index, "selector", candidate, start, false));
+    references.push(referenceFor(lookup, "selector", candidate, start, false));
   }
 
   return references.sort((left, right) => left.start - right.start);
@@ -119,17 +87,16 @@ export function referenceAtOffset(
 }
 
 export function resolveSourceTarget(
-  index: SourceTargetIndex,
+  lookup: SourceTargetLookup,
   target: string,
 ): { canonicalTarget: string; node?: CrivGraphNode } | undefined {
   const normalized = stripSourcePrefix(target);
-  const canonicalTarget = index.targets.has(normalized)
-    ? normalized
-    : index.canonicalByLegacy.get(normalized);
+  const node = lookup(normalized);
+  const canonicalTarget = node?.source_target ?? node?.path;
   if (!canonicalTarget) {
     return undefined;
   }
-  return { canonicalTarget, node: index.nodesByTarget.get(canonicalTarget) };
+  return { canonicalTarget, node };
 }
 
 export function sourceReferenceDiagnostic(reference: SourceReference): string | undefined {
@@ -186,13 +153,13 @@ export function completionToken(text: string, offset: number): { query: string; 
 }
 
 function referenceFor(
-  index: SourceTargetIndex,
+  lookup: SourceTargetLookup,
   kind: SourceReferenceKind,
   target: string,
   start: number,
   shouldDiagnoseUnresolved: boolean,
 ): SourceReference {
-  const resolved = resolveSourceTarget(index, target);
+  const resolved = resolveSourceTarget(lookup, target);
   const legacy = kind === "legacy-wikilink" || kind === "typed-source-wikilink";
   return {
     kind,
@@ -204,50 +171,6 @@ function referenceFor(
     legacy,
     shouldDiagnoseUnresolved,
   };
-}
-
-function addTarget(index: MutableSourceTargetIndex, target: string, node?: CrivGraphNode): void {
-  index.targets.add(target);
-  if (node) {
-    index.nodesByTarget.set(target, node);
-  }
-}
-
-function addLegacySymbolAliases(
-  index: MutableSourceTargetIndex,
-  target: string,
-  node: CrivGraphNode,
-): void {
-  const [path, fragment] = splitFragment(target);
-  if (!fragment) {
-    return;
-  }
-
-  const shortName = fragment.split(":").at(-1);
-  if (shortName) {
-    addLegacyAlias(index, `${path}#${shortName}`, target);
-  }
-  if (node.label) {
-    addLegacyAlias(index, `${path}#${node.label}`, target);
-  }
-}
-
-function addLegacyAlias(
-  index: MutableSourceTargetIndex,
-  legacyTarget: string,
-  canonicalTarget: string,
-): void {
-  const existing = index.canonicalByLegacy.get(legacyTarget);
-  if (existing && existing !== canonicalTarget) {
-    index.canonicalByLegacy.delete(legacyTarget);
-    return;
-  }
-  index.canonicalByLegacy.set(legacyTarget, canonicalTarget);
-}
-
-function splitFragment(target: string): [string, string | undefined] {
-  const index = target.indexOf("#");
-  return index === -1 ? [target, undefined] : [target.slice(0, index), target.slice(index + 1)];
 }
 
 function stripSourcePrefix(target: string): string {

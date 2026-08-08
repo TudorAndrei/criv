@@ -4,43 +4,41 @@ import test from "node:test";
 import {
   analyzeSourceReferences,
   appendSourceHoverContents,
-  buildSourceTargetIndex,
   completionToken,
   sourceReferenceDiagnostic,
 } from "../../src/sourceReferences";
-import type { CrivStateSnapshot } from "../../src/stateModel";
+import type { CrivGraphNode } from "../../src/wasm";
 
-const snapshot: CrivStateSnapshot = {
-  summary: {
-    schema: "criv.state.v1",
-    node_count: 2,
-    edge_count: 0,
-    source_count: 2,
-    pattern_count: 0,
-  },
-  sources: [
-    { path: "src/main.rs", frecency: 10 },
-    { path: "docs/architecture/02-containers.c4", frecency: 1 },
-  ],
-  graphNodes: [
-    {
-      id: "symbol:src/main.rs#fn:run",
-      kind: "function",
-      label: "run",
-      path: "src/main.rs#fn:run",
-      source_target: "src/main.rs#fn:run",
-      line_range: "L10-L20",
-    },
-  ],
-  registeredPatterns: [],
-  c4Artifacts: [],
+const sourceNode: CrivGraphNode = {
+  id: "code:src/main.rs",
+  kind: "code",
+  label: "src/main.rs",
+  path: "src/main.rs",
+};
+const runNode: CrivGraphNode = {
+  id: "symbol:src/main.rs#fn:run",
+  kind: "function",
+  label: "run",
+  path: "src/main.rs#L10-L20",
+  source_target: "src/main.rs#fn:run",
+  line_range: "L10-L20",
+};
+const lookup = (target: string): CrivGraphNode | undefined => {
+  switch (target) {
+    case "src/main.rs":
+      return sourceNode;
+    case "src/main.rs#fn:run":
+    case "src/main.rs#run":
+      return runNode;
+    default:
+      return undefined;
+  }
 };
 
 test("links exact AST-aware selectors and criv source directives", () => {
-  const index = buildSourceTargetIndex(snapshot);
   const references = analyzeSourceReferences(
     "See src/main.rs#fn:run\n%% criv:source src/main.rs",
-    index,
+    lookup,
   );
 
   assert.deepEqual(
@@ -52,9 +50,8 @@ test("links exact AST-aware selectors and criv source directives", () => {
   );
 });
 
-test("warns for legacy source wikilinks and suggests canonical selectors", () => {
-  const index = buildSourceTargetIndex(snapshot);
-  const [reference] = analyzeSourceReferences("[[source:src/main.rs#run]]", index);
+test("warns for legacy source wikilinks and uses the canonical Wasm result", () => {
+  const [reference] = analyzeSourceReferences("[[source:src/main.rs#run]]", lookup);
 
   assert.equal(reference?.kind, "typed-source-wikilink");
   assert.equal(reference?.canonicalTarget, "src/main.rs#fn:run");
@@ -65,8 +62,7 @@ test("warns for legacy source wikilinks and suggests canonical selectors", () =>
 });
 
 test("reports unresolved criv source directives", () => {
-  const index = buildSourceTargetIndex(snapshot);
-  const [reference] = analyzeSourceReferences("%% criv:source src/missing.rs", index);
+  const [reference] = analyzeSourceReferences("%% criv:source src/missing.rs", lookup);
 
   assert.equal(reference?.kind, "criv-source");
   assert.equal(reference?.canonicalTarget, undefined);
@@ -84,20 +80,11 @@ test("extracts completion token at cursor offsets", () => {
 });
 
 test("renders hover labels as text instead of trusted markdown", () => {
-  const index = buildSourceTargetIndex({
-    ...snapshot,
-    graphNodes: [
-      {
-        id: "symbol:src/main.rs#fn:run",
-        kind: "function",
-        label: "[Run](command:workbench.action.terminal.sendSequence)",
-        path: "src/main.rs#fn:run",
-        source_target: "src/main.rs#fn:run",
-        line_range: "L10-L20",
-      },
-    ],
-  });
-  const [reference] = analyzeSourceReferences("See src/main.rs#fn:run", index);
+  const unsafeNode: CrivGraphNode = {
+    ...runNode,
+    label: "[Run](command:workbench.action.terminal.sendSequence)",
+  };
+  const [reference] = analyzeSourceReferences("See src/main.rs#fn:run", () => unsafeNode);
   const calls: Array<[string, string]> = [];
 
   appendSourceHoverContents(

@@ -393,15 +393,19 @@ impl PreparedState {
     ) -> Self {
         let mut node_lookup = HashMap::<u64, Vec<usize>>::new();
         for (index, node) in nodes.iter().enumerate() {
-            for key in [
+            let exact_keys = [
                 Some(node.id.as_str()),
                 node.source_target.as_deref(),
                 node.path.as_deref(),
-            ]
-            .into_iter()
-            .flatten()
-            {
+            ];
+            for key in exact_keys.into_iter().flatten() {
                 let indexes = node_lookup.entry(target_hash(key)).or_default();
+                if indexes.last() != Some(&index) {
+                    indexes.push(index);
+                }
+            }
+            for key in legacy_node_targets(node) {
+                let indexes = node_lookup.entry(target_hash(&key)).or_default();
                 if indexes.last() != Some(&index) {
                     indexes.push(index);
                 }
@@ -452,11 +456,25 @@ impl PreparedState {
     }
 
     fn lookup_node(&self, target: &str) -> Option<&EditorGraphNode> {
-        self.node_lookup
-            .get(&target_hash(target))?
+        let candidates = self.node_lookup.get(&target_hash(target))?;
+        if let Some(node) = candidates
             .iter()
             .filter_map(|index| self.nodes.get(*index))
             .find(|node| node_matches_target(node, target))
+        {
+            return Some(node);
+        }
+
+        let mut matches = candidates
+            .iter()
+            .filter_map(|index| self.nodes.get(*index))
+            .filter(|node| {
+                legacy_node_targets(node)
+                    .iter()
+                    .any(|alias| alias == target)
+            });
+        let node = matches.next()?;
+        matches.next().is_none().then_some(node)
     }
 
     fn suggest_selectors(&self, query: &str, limit: usize) -> Vec<SourceSelectorSuggestion> {
@@ -557,6 +575,29 @@ fn node_matches_target(node: &EditorGraphNode, target: &str) -> bool {
     node.id == target
         || node.source_target.as_deref() == Some(target)
         || node.path.as_deref() == Some(target)
+}
+
+fn legacy_node_targets(node: &EditorGraphNode) -> Vec<String> {
+    let mut targets = Vec::new();
+    if let Some(source_target) = &node.source_target {
+        if let Some((path, fragment)) = source_target.split_once('#') {
+            if let Some(short_name) = fragment.rsplit(':').next() {
+                targets.push(format!("{path}#{short_name}"));
+            }
+            if !node.label.is_empty() {
+                targets.push(format!("{path}#{}", node.label));
+            }
+        } else if let Some(basename) = source_target.rsplit('/').next() {
+            targets.push(basename.to_string());
+        }
+    } else if let Some(path) = node.path.as_deref().filter(|path| !path.contains('#'))
+        && let Some(basename) = path.rsplit('/').next()
+    {
+        targets.push(basename.to_string());
+    }
+    targets.sort();
+    targets.dedup();
+    targets
 }
 
 #[cfg(test)]
@@ -906,8 +947,27 @@ mod tests {
 
         let by_id = find_editor_graph_node(&state, "symbol:src/lib.rs#fn:run").unwrap();
         let by_target = find_editor_graph_node(&state, "src/lib.rs#fn:run").unwrap();
+        let by_legacy_symbol = find_editor_graph_node(&state, "src/lib.rs#run").unwrap();
+        let by_basename = find_editor_graph_node(&state, "lib.rs").unwrap();
 
         assert_eq!(by_id.id, by_target.id);
+        assert_eq!(by_id.id, by_legacy_symbol.id);
+        assert_eq!(by_basename.id, "code:src/lib.rs");
+    }
+
+    #[test]
+    fn lookup_rejects_ambiguous_legacy_aliases() {
+        let mut state = editor_state();
+        state.graph.nodes.push(Node {
+            id: "symbol:src/lib.rs#method:run".into(),
+            hash: String::new(),
+            kind: "method".into(),
+            label: "run".into(),
+            path: Some("src/lib.rs#L30-L40".into()),
+        });
+
+        assert!(find_editor_graph_node(&state, "src/lib.rs#run").is_none());
+        assert!(find_editor_graph_node(&state, "src/lib.rs#fn:run").is_some());
     }
 
     fn editor_state() -> StateDocument {
