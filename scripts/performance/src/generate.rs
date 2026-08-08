@@ -328,9 +328,8 @@ fn initialize_git(root: &Path) -> Result<(), String> {
 }
 
 fn run_git(root: &Path, args: &[&str]) -> Result<(), String> {
-    let output = Command::new("git")
+    let output = git_command(root)
         .args(args)
-        .current_dir(root)
         .output()
         .map_err(|error| format!("failed to run git: {error}"))?;
     if output.status.success() {
@@ -341,6 +340,16 @@ fn run_git(root: &Path, args: &[&str]) -> Result<(), String> {
         args.join(" "),
         String::from_utf8_lossy(&output.stderr).trim()
     ))
+}
+
+fn git_command(root: &Path) -> Command {
+    let mut command = Command::new("git");
+    command
+        .current_dir(root)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE");
+    command
 }
 
 pub fn tree_digest(root: &Path) -> Result<String, String> {
@@ -419,9 +428,8 @@ mod tests {
                 loaded.manifest.decisions
             );
             assert!(
-                Command::new("git")
+                git_command(first.path())
                     .args(["rev-parse", "--verify", "HEAD^"])
-                    .current_dir(first.path())
                     .output()
                     .unwrap()
                     .status
