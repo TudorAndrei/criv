@@ -5,7 +5,7 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    ".": "./src/revisionOwner.ts"
+    ".": "./src/index.ts"
   },
   "scripts": {
     "test": "node --test test/*.test.ts"

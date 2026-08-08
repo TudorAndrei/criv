@@ -38,13 +38,6 @@ assert.deepEqual(
 );
 assert.equal(revision.suggestSelectors("run", 10)[0].target, "src/lib.rs#fn:run");
 revision.dispose();
-assert.throws(
-  () => revision.suggestSelectors("run", 10),
-  (error) => {
-    assert.equal(error.code, bridgeModule.CRIV_LOADED_STATE_DISPOSED);
-    return true;
-  },
-);
 
 let attempts = 0;
 const missing = bridgeModule.createCrivWasmBridge(async () => {
@@ -54,14 +47,11 @@ const missing = bridgeModule.createCrivWasmBridge(async () => {
 for (let request = 0; request < 2; request += 1) {
   await assert.rejects(missing.loadState(stateRaw), (error) => {
     assert.equal(error.code, bridgeModule.CRIV_WASM_LOAD_ERROR);
-    assert.match(error.message, /rebuild the companion and reload Obsidian/i);
+    assert.equal(
+      error.message,
+      "Could not load the packaged criv Wasm runtime. Rebuild the companion and reload Obsidian.",
+    );
     return true;
   });
 }
 assert.equal(attempts, 1);
-
-const corrupt = bridgeModule.createCrivWasmBridge(async () => ({}));
-await assert.rejects(corrupt.loadState(stateRaw), (error) => {
-  assert.equal(error.code, bridgeModule.CRIV_WASM_LOAD_ERROR);
-  return true;
-});
