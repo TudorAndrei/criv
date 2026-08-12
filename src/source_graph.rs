@@ -74,14 +74,14 @@ pub(crate) struct SourceFile {
     pub(crate) language: Language,
     pub(crate) imports: Vec<Import>,
     #[serde(default)]
-    pub(crate) modules: Vec<ModuleDecl>,
+    modules: Vec<ModuleDecl>,
     pub(crate) symbols: Vec<Symbol>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ModuleDecl {
-    pub(crate) name: String,
-    pub(crate) line: usize,
+    name: String,
+    line: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

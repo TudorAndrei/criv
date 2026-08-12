@@ -172,7 +172,7 @@ impl Vault {
     }
 
     #[cfg(test)]
-    pub(crate) fn load_incremental_with_source_catalog(
+    fn load_incremental_with_source_catalog(
         root: &Path,
         previous_graph: Option<&SourceGraphBuild>,
         source_catalog: SourceCatalog,

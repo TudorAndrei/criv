@@ -64,7 +64,7 @@ pub(crate) struct PublicationPlan {
 }
 
 #[cfg(test)]
-pub(crate) fn publish(root: &Path, hash: &str, contents: &str, keep: usize) -> Result<()> {
+fn publish(root: &Path, hash: &str, contents: &str, keep: usize) -> Result<()> {
     plan_publication(root, hash, contents, keep)?;
     publish_preflighted(root, hash, contents, keep)
 }
@@ -114,12 +114,7 @@ pub(crate) fn plan_publication(
 }
 
 #[cfg(test)]
-pub(crate) fn publish_preflighted(
-    root: &Path,
-    hash: &str,
-    contents: &str,
-    keep: usize,
-) -> Result<()> {
+fn publish_preflighted(root: &Path, hash: &str, contents: &str, keep: usize) -> Result<()> {
     let mut view = reconcile(root)?;
     view.order.retain(|existing| existing != hash);
     view.order.push(hash.to_string());
