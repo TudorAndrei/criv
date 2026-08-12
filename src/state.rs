@@ -121,7 +121,6 @@ struct PartitionMeta {
 
 #[derive(Debug, Clone, Default)]
 struct PartitionDependencies {
-    source_paths: BTreeSet<String>,
     source_content_paths: BTreeSet<String>,
     call_targets: BTreeSet<String>,
     defined_symbols: BTreeSet<String>,
@@ -720,7 +719,6 @@ fn observe_partition_meta(meta: &PartitionMeta, expected_key: &PartitionKey) {
     debug_assert_eq!(&meta.key, expected_key);
     let _ = (
         &meta.input_fingerprint,
-        &meta.dependencies.source_paths,
         &meta.dependencies.source_content_paths,
         &meta.dependencies.call_targets,
         &meta.dependencies.defined_symbols,
@@ -756,7 +754,6 @@ fn build_source_partition(vault: &Vault, file: &SourceFile) -> SourcePartition {
     let mut seen_nodes = BTreeSet::new();
     let mut seen_edges = BTreeSet::new();
     let mut dependencies = PartitionDependencies::default();
-    dependencies.source_paths.insert(file.path.clone());
     let file_id = code_node_id(&file.path);
 
     for import in &file.imports {
@@ -804,7 +801,6 @@ fn build_source_partition(vault: &Vault, file: &SourceFile) -> SourcePartition {
                 .source_graph()
                 .resolve_symbol(&format!("{}#{}", symbol.id.path, parent))
         {
-            dependencies.source_paths.insert(parent_id.path.clone());
             add_edge(
                 &mut graph,
                 &mut seen_edges,
@@ -816,9 +812,7 @@ fn build_source_partition(vault: &Vault, file: &SourceFile) -> SourcePartition {
         for call in &symbol.calls {
             dependencies.call_targets.insert(call.target.clone());
             let resolved = vault.source_graph().resolve_call(&symbol.id, &call.target);
-            if let Some(target) = &resolved {
-                dependencies.source_paths.insert(target.path.clone());
-            } else {
+            if resolved.is_none() {
                 dependencies.catalog_sensitive = true;
             }
             let target = resolved
@@ -891,7 +885,6 @@ fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
         dependencies.catalog_sensitive = true;
         match vault.resolve_source_target(target) {
             SourceTargetResolution::Resolved { path, .. } => {
-                dependencies.source_paths.insert(path.clone());
                 dependencies.source_content_paths.insert(path.clone());
                 add_edge(
                     &mut graph,
@@ -902,7 +895,6 @@ fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
                 );
             }
             SourceTargetResolution::MissingFragment { path } => {
-                dependencies.source_paths.insert(path.clone());
                 dependencies.source_content_paths.insert(path);
             }
             SourceTargetResolution::MissingFile => {}
@@ -939,7 +931,6 @@ fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
         dependencies.catalog_sensitive = true;
     }
     for source_file in vault.source_files_matching_globs(&governs) {
-        dependencies.source_paths.insert(source_file.clone());
         add_edge(
             &mut graph,
             &mut seen_edges,
@@ -972,7 +963,6 @@ fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
             }
             ResolvedLink::Source { path, .. } => {
                 dependencies.catalog_sensitive = true;
-                dependencies.source_paths.insert(path.clone());
                 if crate::vault::source_fragment_name(&link.target).is_some() {
                     dependencies.source_content_paths.insert(path.clone());
                 }
@@ -1011,7 +1001,6 @@ fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
                 if let SourceTargetResolution::MissingFragment { path } =
                     vault.resolve_source_target(&link.target)
                 {
-                    dependencies.source_paths.insert(path.clone());
                     dependencies.source_content_paths.insert(path);
                 }
             }
@@ -1056,11 +1045,6 @@ fn build_c4_artifact_partition(artifact: &C4Artifact) -> RowPartition {
 }
 
 fn collect_graph_source_dependencies(graph: &Graph, dependencies: &mut PartitionDependencies) {
-    for edge in &graph.edges {
-        if let Some(path) = edge.to.strip_prefix("code:") {
-            dependencies.source_paths.insert(path.to_string());
-        }
-    }
     for node in &graph.nodes {
         if node.kind == "architecture-interface"
             && let Some(path) = node
