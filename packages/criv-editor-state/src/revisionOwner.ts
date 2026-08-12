@@ -52,6 +52,14 @@ export class LoadedRevisionOwner<Revision extends DisposableRevision> {
     }
   }
 
+  clear(): void {
+    if (this.closed) {
+      return;
+    }
+    this.sequence += 1;
+    this.disposeActive();
+  }
+
   dispose(): void {
     if (this.closed) {
       return;

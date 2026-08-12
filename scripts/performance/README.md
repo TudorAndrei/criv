@@ -54,10 +54,6 @@ node scripts/performance/measure-state-wasm.mjs \
   --samples 5
 ```
 
-The main harness also has `state-list` and `state-prune-dry-run` cases. Their
-untimed setup publishes twenty unique snapshots before it measures the public
-CLI command. This matches the default retained snapshot bound.
-
 ## State store candidate prototype
 
 `state-store-prototype/` contains the throwaway candidate adapters for GitHub

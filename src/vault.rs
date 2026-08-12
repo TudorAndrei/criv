@@ -165,19 +165,35 @@ pub(crate) enum SourceTargetResolution {
 impl Vault {
     pub(crate) fn load(root: &Path) -> Result<Self> {
         let cached = crate::source_graph::load_cached(root);
-        Self::load_with_source_facilities(root, cached.as_ref(), None, true)
+        Self::load_with_source_facilities(root, cached.as_ref(), None, true, None)
     }
 
     pub(crate) fn load_docs_only(root: &Path) -> Result<Self> {
-        Self::load_with_source_facilities(root, None, None, false)
+        Self::load_with_source_facilities(root, None, None, false, None)
     }
 
+    #[cfg(test)]
     pub(crate) fn load_incremental_with_source_catalog(
         root: &Path,
         previous_graph: Option<&SourceGraphBuild>,
         source_catalog: SourceCatalog,
     ) -> Result<Self> {
-        Self::load_with_source_facilities(root, previous_graph, Some(source_catalog), true)
+        Self::load_with_source_facilities(root, previous_graph, Some(source_catalog), true, None)
+    }
+
+    pub(crate) fn load_incremental_with_config_and_source_catalog(
+        root: &Path,
+        config: &Config,
+        previous_graph: Option<&SourceGraphBuild>,
+        source_catalog: SourceCatalog,
+    ) -> Result<Self> {
+        Self::load_with_source_facilities(
+            root,
+            previous_graph,
+            Some(source_catalog),
+            true,
+            Some(config.clone()),
+        )
     }
 
     fn load_with_source_facilities(
@@ -185,14 +201,15 @@ impl Vault {
         previous_graph: Option<&SourceGraphBuild>,
         source_catalog: Option<SourceCatalog>,
         load_sources: bool,
+        config: Option<Config>,
     ) -> Result<Self> {
-        let config = Config::load(root)?;
+        let config = config.map_or_else(|| Config::load(root), Ok)?;
         let docs_path = config.docs_path(root);
-        let notes = walk_files(&docs_path, Some("md"))?
+        let notes = walk_files(root, &docs_path, Some("md"))?
             .into_iter()
             .map(|path| parse_note(root, &docs_path, &path))
             .collect::<Result<Vec<_>>>()?;
-        let c4_artifacts = walk_files(&docs_path, Some("c4"))?
+        let c4_artifacts = walk_files(root, &docs_path, Some("c4"))?
             .into_iter()
             .map(|path| c4::parse_file(root, &docs_path, &path))
             .collect::<Result<Vec<_>>>()?;

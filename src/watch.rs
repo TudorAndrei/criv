@@ -1,15 +1,19 @@
 use std::fs;
+use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use clap::Args as ClapArgs;
-use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
+use notify_debouncer_mini::{
+    DebounceEventResult, Debouncer, new_debouncer,
+    notify::{RecommendedWatcher, RecursiveMode},
+};
 
 use crate::config::Config;
 use crate::refresh::{RefreshCause, RefreshSession};
 use crate::source_index::SourceChange;
-use crate::util::{create_new_in, remove_file_in};
+use crate::util::open_regular_file_in;
 use crate::{CrivError, Result};
 
 #[derive(Debug, Default, ClapArgs)]
@@ -19,27 +23,18 @@ pub(crate) struct WatchOptions {
 }
 
 pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
-    let _lock = WatchLock::acquire(root)?;
+    let mode = if options.once {
+        WatchMode::Once
+    } else {
+        WatchMode::Live
+    };
+    let _lock = WatchSessionLock::acquire(root, mode)?;
     if options.once {
         run_once(root)?;
         return Ok(());
     }
-    let config = Config::load(root)?;
-    let mut refresh = RefreshSession::live(root, &config)?;
-    refresh.refresh(root, RefreshCause::Initial)?;
-
-    let docs_path = config.docs_path(root);
-
-    let (tx, rx) = mpsc::channel::<DebounceEventResult>();
-    let mut debouncer = new_debouncer(Duration::from_millis(250), move |event| {
-        let _ = tx.send(event);
-    })
-    .map_err(|err| CrivError::new(format!("failed to start watcher: {err}")))?;
-
-    debouncer
-        .watcher()
-        .watch(&docs_path, RecursiveMode::Recursive)
-        .map_err(|err| CrivError::new(format!("failed to watch docs: {err}")))?;
+    let (mut _debouncer, mut rx) = start_repository_watcher(root)?;
+    let mut session = LiveWatchSession::start(root)?;
 
     println!("criv watch running");
 
@@ -47,68 +42,247 @@ pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
         let signal = match rx.recv_timeout(Duration::from_millis(250)) {
             Ok(event) => match event {
                 Ok(events) if events.is_empty() => WatchSignal::Idle,
-                Ok(_) => WatchSignal::DocsChanged,
+                Ok(events) => {
+                    WatchSignal::Paths(events.into_iter().map(|event| event.path).collect())
+                }
                 Err(err) => {
                     eprintln!("criv watch: watcher error: {err}");
-                    WatchSignal::WatcherError
+                    session.suspend("watcher adapter error");
+                    loop {
+                        std::thread::sleep(Duration::from_secs(1));
+                        match start_repository_watcher(root) {
+                            Ok((replacement, replacement_rx)) => {
+                                _debouncer = replacement;
+                                rx = replacement_rx;
+                                session.reconfigure(root);
+                                break;
+                            }
+                            Err(restart_error) => {
+                                session.suspend(&format!("watcher adapter error: {restart_error}"));
+                            }
+                        }
+                    }
+                    continue;
                 }
             },
             Err(mpsc::RecvTimeoutError::Timeout) => WatchSignal::Idle,
-            Err(mpsc::RecvTimeoutError::Disconnected) => WatchSignal::Disconnected,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(CrivError::new("watcher event channel disconnected"));
+            }
         };
 
-        let source_changed = match refresh.observe_source_change() {
+        if session.must_reconfigure(root, &signal) {
+            session.reconfigure(root);
+            continue;
+        }
+
+        let source_changed = match session.refresh.observe_source_change() {
             Ok(SourceChange::Changed) => true,
             Ok(SourceChange::Unchanged | SourceChange::Disabled) => false,
             Err(err) => {
                 eprintln!("criv watch: source index error: {err}");
+                session.suspend(&format!("source index error: {err}"));
                 false
             }
         };
+        if session.suspended {
+            continue;
+        }
 
-        match watch_decision(signal, source_changed) {
+        let docs_changed = session.docs_changed(&signal);
+        match watch_decision(docs_changed, source_changed) {
             WatchDecision::Rebuild { docs_changed } => {
                 let cause = if docs_changed {
                     RefreshCause::DocsChanged
                 } else {
                     RefreshCause::SourceChanged
                 };
-                match refresh.refresh(root, cause) {
+                match session.refresh.refresh(root, cause) {
                     Ok(_) => {}
                     Err(err) => eprintln!("criv watch: {err}"),
                 }
             }
             WatchDecision::Continue => {}
-            WatchDecision::Stop => break,
         }
     }
-
-    Ok(())
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+type RepositoryDebouncer = Debouncer<RecommendedWatcher>;
+type WatchEventReceiver = mpsc::Receiver<DebounceEventResult>;
+
+fn start_repository_watcher(root: &Path) -> Result<(RepositoryDebouncer, WatchEventReceiver)> {
+    let (tx, rx) = mpsc::channel::<DebounceEventResult>();
+    let mut debouncer = new_debouncer(Duration::from_millis(250), move |event| {
+        let _ = tx.send(event);
+    })
+    .map_err(|err| CrivError::new(format!("failed to start watcher: {err}")))?;
+    debouncer
+        .watcher()
+        .watch(root, RecursiveMode::Recursive)
+        .map_err(|err| CrivError::new(format!("failed to watch repository: {err}")))?;
+    Ok((debouncer, rx))
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
 enum WatchSignal {
-    DocsChanged,
+    Paths(Vec<PathBuf>),
     Idle,
-    WatcherError,
-    Disconnected,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum WatchDecision {
     Rebuild { docs_changed: bool },
     Continue,
-    Stop,
 }
 
-fn watch_decision(signal: WatchSignal, source_changed: bool) -> WatchDecision {
-    match signal {
-        WatchSignal::Disconnected => WatchDecision::Stop,
-        WatchSignal::DocsChanged => WatchDecision::Rebuild { docs_changed: true },
-        WatchSignal::Idle | WatchSignal::WatcherError if source_changed => WatchDecision::Rebuild {
+fn watch_decision(docs_changed: bool, source_changed: bool) -> WatchDecision {
+    match (docs_changed, source_changed) {
+        (true, _) => WatchDecision::Rebuild { docs_changed: true },
+        (false, true) => WatchDecision::Rebuild {
             docs_changed: false,
         },
-        WatchSignal::Idle | WatchSignal::WatcherError => WatchDecision::Continue,
+        (false, false) => WatchDecision::Continue,
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct WatchTopology {
+    paths: Vec<(String, PathKind)>,
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+enum PathKind {
+    Missing,
+    File,
+    Directory,
+    Unsafe,
+}
+
+#[derive(Debug)]
+struct LiveWatchSession {
+    config: Config,
+    config_source: Option<String>,
+    refresh: RefreshSession,
+    docs_path: PathBuf,
+    topology: WatchTopology,
+    suspended: bool,
+    failure: Option<String>,
+    next_retry: Instant,
+}
+
+impl LiveWatchSession {
+    fn start(root: &Path) -> Result<Self> {
+        let config_source = read_config_source(root)?;
+        let config = Config::parse(config_source.as_deref())?;
+        Self::candidate(root, config, config_source)
+    }
+
+    fn candidate(root: &Path, config: Config, config_source: Option<String>) -> Result<Self> {
+        let docs_path = config.docs_path(root);
+        require_real_docs_root(&docs_path)?;
+        let topology = WatchTopology::observe(root, &config);
+        let mut refresh = RefreshSession::live(root, &config)?;
+        refresh.refresh(root, RefreshCause::Initial)?;
+        Ok(Self {
+            config,
+            config_source,
+            refresh,
+            docs_path,
+            topology,
+            suspended: false,
+            failure: None,
+            next_retry: Instant::now(),
+        })
+    }
+
+    fn docs_changed(&self, signal: &WatchSignal) -> bool {
+        matches!(signal, WatchSignal::Paths(paths) if paths.iter().any(|path| path.starts_with(&self.docs_path)))
+    }
+
+    fn must_reconfigure(&self, root: &Path, signal: &WatchSignal) -> bool {
+        if self.suspended {
+            return !matches!(signal, WatchSignal::Idle) || Instant::now() >= self.next_retry;
+        }
+        let config_changed = match read_config_source(root) {
+            Ok(source) => source != self.config_source,
+            Err(_) => true,
+        };
+        matches!(signal, WatchSignal::Paths(_))
+            && (config_changed || WatchTopology::observe(root, &self.config) != self.topology)
+    }
+
+    fn reconfigure(&mut self, root: &Path) {
+        let candidate = read_config_source(root).and_then(|config_source| {
+            Config::parse(config_source.as_deref())
+                .and_then(|config| Self::candidate(root, config, config_source))
+        });
+        match candidate {
+            Ok(mut candidate) => {
+                if self.suspended {
+                    eprintln!("criv watch: reconfiguration recovered");
+                }
+                candidate.failure = None;
+                *self = candidate;
+            }
+            Err(err) => self.suspend(&err.to_string()),
+        }
+    }
+
+    fn suspend(&mut self, cause: &str) {
+        self.suspended = true;
+        self.next_retry = Instant::now() + Duration::from_secs(1);
+        if self.failure.as_deref() != Some(cause) {
+            eprintln!("criv watch: reconfiguration failed: {cause}; keeping last successful State");
+            self.failure = Some(cause.to_string());
+        }
+    }
+}
+
+fn read_config_source(root: &Path) -> Result<Option<String>> {
+    let path = root.join("criv.toml");
+    match fs::read_to_string(path) {
+        Ok(contents) => Ok(Some(contents)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+impl WatchTopology {
+    fn observe(root: &Path, config: &Config) -> Self {
+        let mut paths = config
+            .source_roots
+            .iter()
+            .map(|path| (path.clone(), path_kind(&root.join(path))))
+            .collect::<Vec<_>>();
+        paths.push((config.docs_dir.clone(), path_kind(&config.docs_path(root))));
+        paths.sort();
+        Self { paths }
+    }
+}
+
+fn path_kind(path: &Path) -> PathKind {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => PathKind::Unsafe,
+        Ok(metadata) if metadata.is_file() => PathKind::File,
+        Ok(metadata) if metadata.is_dir() => PathKind::Directory,
+        Ok(_) => PathKind::Unsafe,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => PathKind::Missing,
+        Err(_) => PathKind::Unsafe,
+    }
+}
+
+fn require_real_docs_root(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if !metadata.file_type().is_symlink() && metadata.is_dir() => Ok(()),
+        Ok(_) => Err(CrivError::new(format!(
+            "configured docs root {} must be a real directory",
+            path.display()
+        ))),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Err(CrivError::new(format!(
+            "configured docs root {} does not exist",
+            path.display()
+        ))),
+        Err(err) => Err(err.into()),
     }
 }
 
@@ -120,312 +294,195 @@ fn run_once(root: &Path) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug)]
-struct WatchLock {
-    root: PathBuf,
+#[derive(Debug, Clone, Copy)]
+enum WatchMode {
+    Live,
+    Once,
 }
 
-impl WatchLock {
-    fn acquire(root: &Path) -> Result<Self> {
+impl WatchMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::Once => "once",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct WatchSessionLock {
+    _file: fs::File,
+}
+
+impl WatchSessionLock {
+    fn acquire(root: &Path, mode: WatchMode) -> Result<Self> {
         let requested_path = root.join(".criv/watch.lock");
-        match Self::try_create(root) {
-            Ok(lock) => return Ok(lock),
-            Err(CrivError::Io(err)) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(err) => {
+        let (_, mut file) =
+            open_regular_file_in(root, Path::new(".criv"), Path::new(".criv/watch.lock")).map_err(
+                |err| {
+                    CrivError::new(format!(
+                        "unsafe watch lock path {}: {err}",
+                        requested_path.display()
+                    ))
+                },
+            )?;
+
+        if let Err(err) = file.try_lock() {
+            if matches!(err, fs::TryLockError::WouldBlock) {
+                let detail = read_watch_lock_record(&mut file)
+                    .map(|record| format!(" (mode {}, pid {})", record.mode, record.pid))
+                    .unwrap_or_default();
                 return Err(CrivError::new(format!(
-                    "failed to acquire watch lock at {}: {err}",
-                    requested_path.display()
+                    "another watch session owns State refresh{detail}; do not start another watch or run `criv watch --once` while it is active"
                 )));
             }
-        }
-
-        // The lock outlives a crashed or killed watcher, so an existing file is
-        // not proof that a watcher is running. Reclaim it when its recorded
-        // owner is gone; an unreadable or malformed lock (including one written
-        // by an older criv) counts as abandoned rather than wedging the vault.
-        let owner = fs::read_to_string(&requested_path)
-            .ok()
-            .and_then(|contents| LockOwner::parse(&contents));
-        if owner.as_ref().is_some_and(LockOwner::is_alive) {
             return Err(CrivError::new(format!(
-                "failed to acquire watch lock at {}: an active watcher already owns state refresh; do not start another watch or run `criv watch --once` while it is active",
+                "failed to acquire operating-system watch lock at {}: {err}",
                 requested_path.display()
             )));
         }
 
-        let _ = remove_file_in(root, Path::new(".criv"), Path::new(".criv/watch.lock"));
-        Self::try_create(root).map_err(|err| {
-            CrivError::new(format!(
-                "failed to acquire watch lock at {}: {err}; if no watcher is running, delete that file and retry",
-                requested_path.display()
-            ))
-        })
-    }
-
-    fn try_create(root: &Path) -> Result<Self> {
-        use std::io::Write;
-
-        let (_, mut file) = create_new_in(root, Path::new(".criv"), Path::new(".criv/watch.lock"))?;
-        let owner = LockOwner::current();
-        file.write_all(owner.serialize().as_bytes())?;
-        Ok(Self {
-            root: root.to_path_buf(),
-        })
+        let record = format!(
+            "schema criv.watch-lock.v1\npid {}\nmode {}\n",
+            std::process::id(),
+            mode.label()
+        );
+        file.set_len(0)
+            .and_then(|_| file.rewind())
+            .and_then(|_| file.write_all(record.as_bytes()))
+            .and_then(|_| file.sync_all())
+            .map_err(|err| {
+                CrivError::new(format!(
+                    "failed to publish watch lock diagnostics at {}: {err}",
+                    requested_path.display()
+                ))
+            })?;
+        Ok(Self { _file: file })
     }
 }
 
-/// The process recorded as owning a watch lock. The start time distinguishes the
-/// original owner from an unrelated process that later reused its PID.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LockOwner {
+struct WatchLockRecord {
     pid: u32,
-    start: Option<String>,
+    mode: &'static str,
 }
 
-impl LockOwner {
-    fn current() -> Self {
-        let pid = std::process::id();
-        Self {
-            start: process_start_time(pid),
-            pid,
-        }
-    }
-
-    fn serialize(&self) -> String {
-        let mut contents = format!("pid {}\n", self.pid);
-        if let Some(start) = &self.start {
-            contents.push_str(&format!("start {start}\n"));
-        }
-        contents
-    }
-
-    fn parse(contents: &str) -> Option<Self> {
-        let mut pid = None;
-        let mut start = None;
-        for line in contents.lines() {
-            let (key, value) = line.split_once(' ')?;
-            match key {
-                "pid" => pid = value.trim().parse::<u32>().ok(),
-                "start" => {
-                    let value = value.trim();
-                    // Older Unix locks used an empty field for a missing
-                    // timestamp. On Windows it is the platform's explicit
-                    // unknown-start sentinel and must round-trip instead.
-                    start = if value.is_empty() && cfg!(unix) {
-                        None
-                    } else {
-                        Some(value.to_string())
-                    };
-                }
-                _ => return None,
-            }
-        }
-        pid.map(|pid| Self { pid, start })
-    }
-
-    fn is_alive(&self) -> bool {
-        // A process cannot reuse its own PID. This also avoids depending on
-        // platform process inspection for the current watcher.
-        if self.pid == std::process::id() && self.start.is_none() {
-            return true;
-        }
-        match process_start_time(self.pid) {
-            // If start-time inspection is unavailable, fall back to a PID
-            // probe. This is deliberately conservative: keeping a lock held
-            // is safer than reclaiming one from a live watcher.
-            None => process_is_alive(self.pid),
-            // A recorded start time that no longer matches means the PID was
-            // reused by a different process; the original owner is gone.
-            Some(current) => self
-                .start
-                .as_deref()
-                .is_none_or(|recorded| recorded == current),
-        }
-    }
-}
-
-fn process_is_alive(pid: u32) -> bool {
-    if !cfg!(unix) {
-        return true;
-    }
-    std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .output()
-        .is_ok_and(|output| output.status.success())
-}
-
-/// Best-effort process start time, which doubles as a liveness probe: `None`
-/// means the PID could not be observed as a running process.
-///
-/// `ps` keeps this dependency-free and works on both macOS and Linux. On any
-/// other platform liveness cannot be established, so callers must treat the
-/// lock as live rather than reclaiming a lock that may still be held.
-fn process_start_time(pid: u32) -> Option<String> {
-    if !cfg!(unix) {
-        return Some(String::new());
-    }
-    let output = std::process::Command::new("ps")
-        .args(["-o", "lstart=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
-    if !output.status.success() {
+fn read_watch_lock_record(file: &mut fs::File) -> Option<WatchLockRecord> {
+    file.rewind().ok()?;
+    let mut contents = String::new();
+    file.read_to_string(&mut contents).ok()?;
+    let lines = contents.lines().collect::<Vec<_>>();
+    if lines.len() != 3 || lines[0] != "schema criv.watch-lock.v1" {
         return None;
     }
-    let start = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!start.is_empty()).then_some(start)
-}
-
-impl Drop for WatchLock {
-    fn drop(&mut self) {
-        let _ = remove_file_in(
-            &self.root,
-            Path::new(".criv"),
-            Path::new(".criv/watch.lock"),
-        );
-    }
+    let pid = lines[1].strip_prefix("pid ")?.parse().ok()?;
+    let mode = match lines[2].strip_prefix("mode ")? {
+        "live" => "live",
+        "once" => "once",
+        _ => return None,
+    };
+    Some(WatchLockRecord { pid, mode })
 }
 
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
     use tempfile::TempDir;
 
     use super::*;
 
     #[test]
-    fn watch_decisions_distinguish_docs_source_errors_and_shutdown() {
+    fn watch_decisions_distinguish_docs_and_source_changes() {
         assert_eq!(
-            watch_decision(WatchSignal::DocsChanged, false),
+            watch_decision(true, false),
             WatchDecision::Rebuild { docs_changed: true }
         );
         assert_eq!(
-            watch_decision(WatchSignal::Idle, true),
+            watch_decision(false, true),
             WatchDecision::Rebuild {
                 docs_changed: false
             }
         );
         assert_eq!(
-            watch_decision(WatchSignal::DocsChanged, true),
+            watch_decision(true, true),
             WatchDecision::Rebuild { docs_changed: true }
         );
-        assert_eq!(
-            watch_decision(WatchSignal::Idle, false),
-            WatchDecision::Continue
-        );
-        assert_eq!(
-            watch_decision(WatchSignal::WatcherError, false),
-            WatchDecision::Continue
-        );
-        assert_eq!(
-            watch_decision(WatchSignal::WatcherError, true),
-            WatchDecision::Rebuild {
-                docs_changed: false
-            }
-        );
-        assert_eq!(
-            watch_decision(WatchSignal::Disconnected, true),
-            WatchDecision::Stop
-        );
+        assert_eq!(watch_decision(false, false), WatchDecision::Continue);
     }
 
     #[test]
-    fn lock_owner_round_trips_through_the_lock_file_format() {
-        let owner = super::LockOwner::current();
-
-        let parsed = super::LockOwner::parse(&owner.serialize()).unwrap();
-
-        assert_eq!(parsed, owner);
-        assert!(
-            parsed.is_alive(),
-            "the running test process must read alive"
-        );
-    }
-
-    #[test]
-    fn lock_owner_round_trips_an_unknown_start_time() {
-        let owner = super::LockOwner {
-            pid: 42,
-            start: Some(String::new()),
-        };
-
-        let expected = if cfg!(unix) {
-            super::LockOwner {
-                pid: owner.pid,
-                start: None,
-            }
-        } else {
-            owner.clone()
-        };
-        assert_eq!(super::LockOwner::parse(&owner.serialize()), Some(expected));
-    }
-
-    #[test]
-    fn lock_owner_rejects_unparseable_contents() {
-        for contents in ["active", "pid notanumber\n", "owner 1\n", ""] {
-            assert!(
-                super::LockOwner::parse(contents).is_none(),
-                "{contents:?} must not parse as an owner"
-            );
-        }
-    }
-
-    #[test]
-    fn lock_owner_with_a_mismatched_start_time_is_not_alive() {
-        // A PID that has been reused by an unrelated process must not be
-        // mistaken for the original watcher.
-        if super::process_start_time(std::process::id()).is_none() {
-            // The fallback deliberately treats an uninspectable live PID as
-            // alive, so it cannot prove PID reuse in this environment.
-            return;
-        }
-        let owner = super::LockOwner {
-            pid: std::process::id(),
-            start: Some("Mon Jan  1 00:00:00 2001".to_string()),
-        };
-
-        assert!(!owner.is_alive());
-    }
-
-    #[test]
-    fn acquire_rejects_a_lock_held_by_this_live_process() {
+    fn operating_system_lock_allows_exactly_one_owner_and_safe_handoff() {
         let temp = TempDir::new().unwrap();
         let root = temp.path();
         fs::create_dir_all(root.join(".criv")).unwrap();
-        fs::write(
-            root.join(".criv/watch.lock"),
-            super::LockOwner::current().serialize(),
-        )
-        .unwrap();
+        let first = super::WatchSessionLock::acquire(root, super::WatchMode::Live).unwrap();
 
-        let error = super::WatchLock::acquire(root).unwrap_err();
+        let error = super::WatchSessionLock::acquire(root, super::WatchMode::Once).unwrap_err();
 
         assert!(
             error
                 .to_string()
-                .contains("active watcher already owns state refresh"),
+                .contains("another watch session owns State refresh"),
             "unexpected error: {error}"
         );
+        drop(first);
+        assert!(root.join(".criv/watch.lock").is_file());
+
+        super::WatchSessionLock::acquire(root, super::WatchMode::Once).unwrap();
     }
 
     #[test]
-    fn acquire_reclaims_a_lock_owned_by_a_dead_process() {
+    fn old_or_malformed_metadata_never_controls_ownership() {
         let temp = TempDir::new().unwrap();
         let root = temp.path();
         fs::create_dir_all(root.join(".criv")).unwrap();
-        let mut child = std::process::Command::new("true").spawn().unwrap();
-        let dead_pid = child.id();
-        child.wait().unwrap();
-        fs::write(
-            root.join(".criv/watch.lock"),
-            format!("pid {dead_pid}\nstart Mon Jan  1 00:00:00 2001\n"),
-        )
-        .unwrap();
+        fs::write(root.join(".criv/watch.lock"), "not a lock record\n").unwrap();
 
-        let lock = super::WatchLock::acquire(root).expect("an abandoned lock must be reclaimable");
+        let lock = super::WatchSessionLock::acquire(root, super::WatchMode::Live).unwrap();
 
         let contents = fs::read_to_string(root.join(".criv/watch.lock")).unwrap();
-        assert_eq!(contents, super::LockOwner::current().serialize());
+        assert_eq!(
+            contents,
+            format!(
+                "schema criv.watch-lock.v1\npid {}\nmode live\n",
+                std::process::id()
+            )
+        );
         drop(lock);
-        assert!(!root.join(".criv/watch.lock").exists());
+    }
+
+    #[test]
+    fn many_simultaneous_contenders_produce_one_owner() {
+        const CONTENDERS: usize = 16;
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join(".criv")).unwrap();
+        let root = Arc::new(temp.path().to_path_buf());
+        let start = Arc::new(Barrier::new(CONTENDERS));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let owners = Arc::new(AtomicUsize::new(0));
+        let mut threads = Vec::new();
+        for _ in 0..CONTENDERS {
+            let root = Arc::clone(&root);
+            let start = Arc::clone(&start);
+            let attempts = Arc::clone(&attempts);
+            let owners = Arc::clone(&owners);
+            threads.push(std::thread::spawn(move || {
+                start.wait();
+                let lock = WatchSessionLock::acquire(&root, WatchMode::Live);
+                attempts.fetch_add(1, Ordering::SeqCst);
+                if let Ok(lock) = lock {
+                    owners.fetch_add(1, Ordering::SeqCst);
+                    while attempts.load(Ordering::SeqCst) < CONTENDERS {
+                        std::thread::yield_now();
+                    }
+                    drop(lock);
+                }
+            }));
+        }
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(owners.load(Ordering::SeqCst), 1);
     }
 }

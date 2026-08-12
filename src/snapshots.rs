@@ -2,64 +2,25 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use clap::{Args as ClapArgs, Subcommand, ValueEnum};
 use criv_state_wire::is_supported_schema;
 use serde::{Deserialize, Serialize};
 
-use crate::config::Config;
+#[cfg(test)]
 use crate::util::{remove_file_in, write_atomic_if_changed_in, write_atomic_in};
 use crate::{CrivError, Result};
 
+#[cfg(test)]
 const STORE_DIR: &str = ".criv/snapshots";
+#[cfg(test)]
 const INDEX_PATH: &str = ".criv/snapshots/index.json";
+#[cfg(test)]
 const LATEST_PATH: &str = ".criv/latest";
 const INDEX_SCHEMA: &str = "criv.snapshot-index.v0";
 
-#[derive(Debug, ClapArgs)]
-pub(crate) struct StateOptions {
-    #[command(subcommand)]
-    command: StateCommand,
-}
-
-#[derive(Debug, Subcommand)]
-enum StateCommand {
-    /// List retained local State snapshots newest first.
-    List(ListOptions),
-    /// Remove the oldest local State snapshots beyond a retention bound.
-    Prune(PruneOptions),
-}
-
-#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, ValueEnum)]
-enum Format {
-    #[default]
-    Text,
-    Json,
-}
-
-#[derive(Debug, ClapArgs)]
-struct ListOptions {
-    /// Select deterministic text rows or a JSON array.
-    #[arg(long, value_enum, default_value_t = Format::Text)]
-    format: Format,
-}
-
-#[derive(Debug, ClapArgs)]
-struct PruneOptions {
-    /// Override the configured number of snapshots to retain for this command.
-    #[arg(long)]
-    keep: Option<NonZeroUsize>,
-    /// Report selected snapshots without changing local files.
-    #[arg(long)]
-    dry_run: bool,
-    /// Select deterministic text rows or a JSON object.
-    #[arg(long, value_enum, default_value_t = Format::Text)]
-    format: Format,
-}
-
+#[cfg(test)]
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub(crate) struct SnapshotRecord {
     hash: String,
@@ -68,6 +29,7 @@ pub(crate) struct SnapshotRecord {
     latest: bool,
 }
 
+#[cfg(test)]
 #[derive(Debug, Eq, PartialEq, Serialize)]
 struct PruneReport {
     keep: usize,
@@ -84,6 +46,7 @@ struct SnapshotIndex {
 
 #[derive(Debug)]
 struct SnapshotFile {
+    #[cfg(test)]
     bytes: u64,
     modified: SystemTime,
 }
@@ -95,23 +58,80 @@ struct StoreView {
     latest: Option<String>,
 }
 
-pub(crate) fn run(root: &Path, options: StateOptions) -> Result<()> {
-    match options.command {
-        StateCommand::List(options) => print_list(&list(root)?, options.format),
-        StateCommand::Prune(options) => {
-            let keep = match options.keep {
-                Some(keep) => keep.get(),
-                None => Config::load(root)?.state_keep,
-            };
-            let report = prune(root, keep, options.dry_run)?;
-            print_prune(&report, options.format)
-        }
-    }
+pub(crate) struct PublicationPlan {
+    pub(crate) index_contents: String,
+    pub(crate) removals: Vec<String>,
 }
 
+#[cfg(test)]
 pub(crate) fn publish(root: &Path, hash: &str, contents: &str, keep: usize) -> Result<()> {
+    plan_publication(root, hash, contents, keep)?;
+    publish_preflighted(root, hash, contents, keep)
+}
+
+pub(crate) fn plan_publication(
+    root: &Path,
+    hash: &str,
+    contents: &str,
+    keep: usize,
+) -> Result<PublicationPlan> {
     validate_keep(keep)?;
     validate_snapshot(hash, contents)?;
+    let mut view = reconcile(root)?;
+    if let Some(latest) = &view.latest
+        && !view.files.contains_key(latest)
+    {
+        return Err(CrivError::new(format!(
+            "local latest snapshot `{latest}` does not resolve"
+        )));
+    }
+    view.order.retain(|existing| existing != hash);
+    view.order.push(hash.to_string());
+    let mut removals = Vec::new();
+    while view.order.len().saturating_sub(removals.len()) > keep {
+        let next = view
+            .order
+            .iter()
+            .find(|candidate| {
+                candidate.as_str() != hash && !removals.iter().any(|removed| removed == *candidate)
+            })
+            .cloned();
+        let Some(next) = next else {
+            break;
+        };
+        removals.push(next);
+    }
+    let removed = removals.iter().collect::<BTreeSet<_>>();
+    let order = view
+        .order
+        .into_iter()
+        .filter(|entry| !removed.contains(entry))
+        .collect::<Vec<_>>();
+    Ok(PublicationPlan {
+        index_contents: index_contents(&order)?,
+        removals,
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn publish_preflighted(
+    root: &Path,
+    hash: &str,
+    contents: &str,
+    keep: usize,
+) -> Result<()> {
+    let mut view = reconcile(root)?;
+    view.order.retain(|existing| existing != hash);
+    view.order.push(hash.to_string());
+    view.files.insert(
+        hash.to_string(),
+        SnapshotFile {
+            #[cfg(test)]
+            bytes: contents.len() as u64,
+            modified: SystemTime::now(),
+        },
+    );
+    view.latest = Some(hash.to_string());
     let snapshot_path = snapshot_relative_path(hash);
     write_atomic_if_changed_in(root, Path::new(".criv"), &snapshot_path, contents)?;
     write_atomic_in(
@@ -120,12 +140,15 @@ pub(crate) fn publish(root: &Path, hash: &str, contents: &str, keep: usize) -> R
         Path::new(LATEST_PATH),
         &format!("{hash}\n"),
     )?;
-    let view = reconcile(root)?;
     apply_prune(root, view, keep, false)?;
     Ok(())
 }
 
 pub(crate) fn load(root: &Path, id: &str) -> Result<Option<String>> {
+    crate::state_publication::load_snapshot(root, id)
+}
+
+pub(crate) fn load_unlocked(root: &Path, id: &str) -> Result<Option<String>> {
     let hash = if id == "latest" {
         read_latest(root)?
             .ok_or_else(|| CrivError::new("local snapshot `latest` does not resolve"))?
@@ -153,17 +176,20 @@ pub(crate) fn load(root: &Path, id: &str) -> Result<Option<String>> {
     Ok(Some(contents))
 }
 
+#[cfg(test)]
 fn list(root: &Path) -> Result<Vec<SnapshotRecord>> {
     let view = reconcile(root)?;
     Ok(records_newest_first(&view))
 }
 
+#[cfg(test)]
 fn prune(root: &Path, keep: usize, dry_run: bool) -> Result<PruneReport> {
     validate_keep(keep)?;
     let view = reconcile(root)?;
     apply_prune(root, view, keep, dry_run)
 }
 
+#[cfg(test)]
 fn apply_prune(
     root: &Path,
     mut view: StoreView,
@@ -263,6 +289,7 @@ fn reconcile(root: &Path) -> Result<StoreView> {
         files.insert(
             hash.to_string(),
             SnapshotFile {
+                #[cfg(test)]
                 bytes: metadata.len(),
                 modified: metadata.modified().unwrap_or(UNIX_EPOCH),
             },
@@ -330,20 +357,26 @@ fn read_latest(root: &Path) -> Result<Option<String>> {
     Ok(Some(hash.to_string()))
 }
 
+#[cfg(test)]
 fn write_index(root: &Path, order: &[String]) -> Result<()> {
+    write_atomic_in(
+        root,
+        Path::new(STORE_DIR),
+        Path::new(INDEX_PATH),
+        &index_contents(order)?,
+    )
+}
+
+fn index_contents(order: &[String]) -> Result<String> {
     let json = serde_json::to_string_pretty(&SnapshotIndex {
         schema: INDEX_SCHEMA.into(),
         order: order.to_vec(),
     })
     .map_err(|err| CrivError::new(format!("failed to serialize snapshot index: {err}")))?;
-    write_atomic_in(
-        root,
-        Path::new(STORE_DIR),
-        Path::new(INDEX_PATH),
-        &format!("{json}\n"),
-    )
+    Ok(format!("{json}\n"))
 }
 
+#[cfg(test)]
 fn records_newest_first(view: &StoreView) -> Vec<SnapshotRecord> {
     view.order
         .iter()
@@ -356,49 +389,6 @@ fn records_newest_first(view: &StoreView) -> Vec<SnapshotRecord> {
             latest: view.latest.as_ref() == Some(hash),
         })
         .collect()
-}
-
-fn print_list(records: &[SnapshotRecord], format: Format) -> Result<()> {
-    match format {
-        Format::Text => {
-            for record in records {
-                println!(
-                    "hash={} position={} bytes={} latest={}",
-                    record.hash, record.position, record.bytes, record.latest
-                );
-            }
-        }
-        Format::Json => println!(
-            "{}",
-            serde_json::to_string(records)
-                .map_err(|err| CrivError::new(format!("failed to serialize snapshots: {err}")))?
-        ),
-    }
-    Ok(())
-}
-
-fn print_prune(report: &PruneReport, format: Format) -> Result<()> {
-    match format {
-        Format::Text => {
-            for record in &report.removed {
-                println!("remove hash={} bytes={}", record.hash, record.bytes);
-            }
-            println!(
-                "prune keep={} removed={} retained={} dry_run={}",
-                report.keep,
-                report.removed.len(),
-                report.retained,
-                report.dry_run
-            );
-        }
-        Format::Json => println!(
-            "{}",
-            serde_json::to_string(report).map_err(|err| {
-                CrivError::new(format!("failed to serialize snapshot prune report: {err}"))
-            })?
-        ),
-    }
-    Ok(())
 }
 
 fn existing_store_dir(root: &Path) -> Result<Option<PathBuf>> {
@@ -484,6 +474,7 @@ fn validate_keep(keep: usize) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn snapshot_relative_path(hash: &str) -> PathBuf {
     Path::new(STORE_DIR).join(format!("{hash}.json"))
 }

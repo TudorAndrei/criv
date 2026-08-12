@@ -684,8 +684,8 @@ fn watch_once_does_not_rebuild_while_watch_lock_is_held() {
 
     criv(root).args(["watch", "--once"]).assert().success();
     let state_before = fs::read_to_string(root.join(".criv/state.json")).unwrap();
-    // The test process is genuinely alive, so this lock must be honored.
-    fs::write(root.join(".criv/watch.lock"), live_pid_lock()).unwrap();
+    let mut watch = WatchProcess::spawn(root);
+    watch.wait_until_running();
     fs::write(root.join("src/lib.rs"), "pub fn changed() {}\n").unwrap();
 
     criv(root)
@@ -693,7 +693,7 @@ fn watch_once_does_not_rebuild_while_watch_lock_is_held() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "active watcher already owns state refresh",
+            "another watch session owns State refresh",
         ))
         .stderr(predicate::str::contains("watch --once"));
 
@@ -713,16 +713,16 @@ fn watch_once_reclaims_a_lock_left_behind_by_a_dead_watcher() {
     criv(root).args(["watch", "--once"]).assert().success();
     let state_before = fs::read_to_string(root.join(".criv/state.json")).unwrap();
 
-    // A watcher that crashed leaves its lock behind; the PID it recorded is not
-    // running, so the next run must reclaim it instead of failing forever.
-    fs::write(root.join(".criv/watch.lock"), dead_pid_lock()).unwrap();
+    let mut watch = WatchProcess::spawn(root);
+    watch.wait_until_running();
+    drop(watch);
     fs::write(root.join("src/lib.rs"), "pub fn changed() {}\n").unwrap();
 
     criv(root).args(["watch", "--once"]).assert().success();
 
     let state_after = fs::read_to_string(root.join(".criv/state.json")).unwrap();
     assert_ne!(state_after, state_before);
-    assert!(!root.join(".criv/watch.lock").exists());
+    assert!(root.join(".criv/watch.lock").is_file());
 }
 
 #[test]
@@ -734,28 +734,18 @@ fn watch_once_reclaims_a_malformed_lock() {
     fs::create_dir_all(root.join("src")).unwrap();
     fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
 
-    // A lock written by an older criv carries no owner; it must not wedge the
-    // repository permanently.
+    // Old metadata has no ownership authority.
     fs::create_dir_all(root.join(".criv")).unwrap();
     fs::write(root.join(".criv/watch.lock"), "active").unwrap();
 
     criv(root).args(["watch", "--once"]).assert().success();
 
-    assert!(!root.join(".criv/watch.lock").exists());
-}
-
-/// A lock owned by this still-running test process.
-fn live_pid_lock() -> String {
-    format!("pid {}\nstart \n", std::process::id())
-}
-
-/// A PID that has exited: spawn a trivial process and wait for it, so the number
-/// is real and reachable-but-gone rather than an arbitrary guess.
-fn dead_pid_lock() -> String {
-    let mut child = std::process::Command::new("true").spawn().unwrap();
-    let pid = child.id();
-    child.wait().unwrap();
-    format!("pid {pid}\nstart Mon Jan  1 00:00:00 2001\n")
+    assert!(root.join(".criv/watch.lock").is_file());
+    assert!(
+        fs::read_to_string(root.join(".criv/watch.lock"))
+            .unwrap()
+            .starts_with("schema criv.watch-lock.v1\n")
+    );
 }
 
 #[test]
@@ -1156,7 +1146,7 @@ fn query_diff_compares_snapshots_and_reports_errors() {
 }
 
 #[test]
-fn state_commands_bound_snapshots_and_preserve_git_ref_diffing() {
+fn automatic_snapshot_retention_has_no_public_maintenance_commands() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     query_fixture(root);
@@ -1182,73 +1172,44 @@ fn state_commands_bound_snapshots_and_preserve_git_ref_diffing() {
         criv(root).args(["watch", "--once"]).assert().success();
     }
 
-    let listed = criv(root)
-        .args(["state", "list", "--format", "json"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let listed: Vec<serde_json::Value> = serde_json::from_slice(&listed).unwrap();
-    assert_eq!(listed.len(), 2);
-    assert_eq!(listed[0]["position"], 1);
-    assert_eq!(listed[0]["latest"], true);
-    assert!(listed.iter().all(|record| record["hash"] != original_hash));
-
-    let preview = criv(root)
-        .args([
-            "state",
-            "prune",
-            "--keep",
-            "1",
-            "--dry-run",
-            "--format",
-            "json",
-        ])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let preview: serde_json::Value = serde_json::from_slice(&preview).unwrap();
-    assert_eq!(preview["removed"].as_array().unwrap().len(), 1);
-    assert_eq!(preview["dry_run"], true);
-    criv(root)
-        .args(["state", "list", "--format", "json"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"position\":2"));
-
-    criv(root)
-        .args(["state", "prune", "--keep", "1"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("removed=1"))
-        .stdout(predicate::str::contains("retained=1"));
-    let after = criv(root)
-        .args(["state", "list", "--format", "json"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    assert_eq!(
-        serde_json::from_slice::<Vec<serde_json::Value>>(&after)
-            .unwrap()
-            .len(),
-        1
+    let snapshots = fs::read_dir(root.join(".criv/snapshots"))
+        .unwrap()
+        .filter_map(|entry| {
+            let name = entry.ok()?.file_name().to_string_lossy().to_string();
+            (name.ends_with(".json") && name != "index.json").then_some(name)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(snapshots.len(), 2);
+    assert!(
+        !snapshots
+            .iter()
+            .any(|name| name == &format!("{original_hash}.json"))
     );
+
+    for args in [vec!["state"], vec!["state", "list"], vec!["state", "prune"]] {
+        criv(root)
+            .args(args)
+            .assert()
+            .failure()
+            .code(2)
+            .stderr(predicate::str::contains("unrecognized subcommand 'state'"));
+    }
+
+    criv(root)
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("state").not());
+    criv(root)
+        .arg("--usage")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"name\":\"state\"").not());
 
     criv(root)
         .args(["query", "diff", "HEAD", "HEAD"])
         .assert()
         .success();
-    criv(root)
-        .args(["state", "prune", "--keep", "0"])
-        .assert()
-        .failure()
-        .code(2)
-        .stderr(predicate::str::contains("invalid value '0'"));
 }
 
 #[test]
@@ -2440,18 +2401,19 @@ fn long_running_watch_takes_lock_before_startup_rebuild() {
     init(root);
     fs::create_dir_all(root.join("src")).unwrap();
     fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+    let mut first = WatchProcess::spawn(root);
+    first.wait_until_running();
     let state_path = root.join(".criv/state.json");
-    fs::write(&state_path, "sentinel\n").unwrap();
-    // A lock owned by a live process (this test) must be honored, so the
-    // watcher fails before it can overwrite the sentinel state.
-    fs::write(root.join(".criv/watch.lock"), live_pid_lock()).unwrap();
+    let state_before = fs::read(&state_path).unwrap();
 
     criv(root)
         .arg("watch")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("watch.lock"));
-    assert_eq!(fs::read_to_string(state_path).unwrap(), "sentinel\n");
+        .stderr(predicate::str::contains(
+            "another watch session owns State refresh",
+        ));
+    assert_eq!(fs::read(state_path).unwrap(), state_before);
 }
 
 #[test]
@@ -2538,6 +2500,43 @@ fn long_running_watch_rebuilds_docs_sources_bursts_and_recovers() {
                 .iter()
                 .any(|node| node["id"].as_str() == Some("code:src/renamed.rs"))
         })
+    });
+}
+
+#[test]
+fn live_watch_replaces_configuration_source_catalog_and_docs_root_together() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn old_source() {}\n").unwrap();
+    let mut watch = WatchProcess::spawn(root);
+    watch.wait_until_running();
+
+    fs::create_dir_all(root.join("generated")).unwrap();
+    fs::create_dir_all(root.join("knowledge/adr")).unwrap();
+    fs::write(root.join("generated/new.rs"), "pub fn new_source() {}\n").unwrap();
+    fs::write(
+        root.join("knowledge/new.md"),
+        "---\nid: new-doc\nkind: doc\ntitle: New docs root\n---\n\n# New docs root\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("criv.toml"),
+        "[vault]\ndocs = \"knowledge\"\nadr = \"adr\"\n\n[source]\nroots = [\"generated\"]\nexclude = [\"**/target/**\"]\n\n[index]\nsource = true\n",
+    )
+    .unwrap();
+
+    wait_for_state(root, "the replacement watch generation", |state| {
+        let nodes = state["graph"]["nodes"].as_array().unwrap();
+        nodes.iter().any(|node| node["id"] == "note:new-doc")
+            && nodes
+                .iter()
+                .any(|node| node["id"] == "symbol:generated/new.rs#fn:new_source")
+            && !nodes
+                .iter()
+                .any(|node| node["id"] == "symbol:src/lib.rs#fn:old_source")
     });
 }
 

@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
 
+import { LoadedRevisionOwner } from "@criv/editor-state";
+
 import { buildC4PreviewHtml, buildC4PreviewStatusHtml } from "./c4PreviewHtml";
 import { c4NavigationTarget, preferredC4ViewId } from "./c4PreviewModel";
 import { COMMAND_OPEN_SOURCE_TARGET } from "./commands";
@@ -71,11 +73,23 @@ class C4PreviewSurface {
     );
   }
 
-  render(webview: vscode.Webview, document: vscode.TextDocument): void {
+  async render(
+    owner: LoadedRevisionOwner<WebviewPreviewRevision>,
+    webview: vscode.Webview,
+    document: vscode.TextDocument,
+  ): Promise<void> {
+    await owner.replace(
+      async () => new WebviewPreviewRevision(this.previewHtml(webview, document)),
+      (candidate) => {
+        webview.html = candidate.html;
+      },
+    );
+  }
+
+  private previewHtml(webview: vscode.Webview, document: vscode.TextDocument): string {
     const status = this.store.status;
     if (status.kind !== "ready" || !status.snapshot.architecture) {
-      webview.html = buildC4PreviewStatusHtml(webview.cspSource, previewStatusMessage(status));
-      return;
+      return buildC4PreviewStatusHtml(webview.cspSource, previewStatusMessage(status));
     }
 
     const relativePath = vscode.workspace.asRelativePath(document.uri, false);
@@ -88,14 +102,13 @@ class C4PreviewSurface {
       ? rememberedViewId
       : preferredC4ViewId(relativePath, model.views);
     if (!viewId) {
-      webview.html = buildC4PreviewStatusHtml(
+      return buildC4PreviewStatusHtml(
         webview.cspSource,
         `${relativePath} declares no named view. Open an architecture file that declares a named view to see a diagram.`,
       );
-      return;
     }
     const nonce = nonceValue();
-    webview.html = buildC4PreviewHtml({
+    return buildC4PreviewHtml({
       cspSource: webview.cspSource,
       nonce,
       rendererUri: webview
@@ -125,8 +138,9 @@ export class C4PreviewEditorProvider implements vscode.CustomTextEditorProvider 
     document: vscode.TextDocument,
     panel: vscode.WebviewPanel,
   ): Promise<void> {
+    const revisions = new LoadedRevisionOwner<WebviewPreviewRevision>();
     this.surface.configure(panel.webview);
-    const render = () => this.surface.render(panel.webview, document);
+    const render = () => void this.surface.render(revisions, panel.webview, document);
     const subscriptions = [
       this.surface.bindMessages(panel.webview, document, panel.viewColumn),
       this.store.onDidChangeStatus(render),
@@ -138,6 +152,7 @@ export class C4PreviewEditorProvider implements vscode.CustomTextEditorProvider 
       vscode.window.onDidChangeActiveColorTheme(render),
     ];
     panel.onDidDispose(() => {
+      revisions.dispose();
       for (const subscription of subscriptions) {
         subscription.dispose();
       }
@@ -150,6 +165,7 @@ export class C4PreviewManager implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;
   private document: vscode.TextDocument | undefined;
   private panelSubscriptions: vscode.Disposable[] = [];
+  private revisions: LoadedRevisionOwner<WebviewPreviewRevision> | undefined;
   private readonly surface: C4PreviewSurface;
 
   constructor(
@@ -183,15 +199,18 @@ export class C4PreviewManager implements vscode.Disposable {
         {},
       );
       this.surface.configure(panel.webview);
+      this.revisions = new LoadedRevisionOwner<WebviewPreviewRevision>();
       this.panelSubscriptions.push(this.surface.bindMessages(panel.webview));
       this.panelSubscriptions.push(
         this.store.onDidChangeStatus(() => {
           if (this.panel && this.document) {
-            this.surface.render(this.panel.webview, this.document);
+            void this.surface.render(this.revisions!, this.panel.webview, this.document);
           }
         }),
       );
       panel.onDidDispose(() => {
+        this.revisions?.dispose();
+        this.revisions = undefined;
         this.panel = undefined;
         for (const subscription of this.panelSubscriptions.splice(0)) {
           subscription.dispose();
@@ -203,7 +222,7 @@ export class C4PreviewManager implements vscode.Disposable {
     this.document = document;
     const relativePath = vscode.workspace.asRelativePath(document.uri, false);
     panel.title = `Preview ${relativePath}`;
-    this.surface.render(panel.webview, document);
+    void this.surface.render(this.revisions!, panel.webview, document);
     panel.reveal(vscode.ViewColumn.Beside, options.preserveFocus ?? false);
   }
 
@@ -213,6 +232,12 @@ export class C4PreviewManager implements vscode.Disposable {
       subscription.dispose();
     }
   }
+}
+
+class WebviewPreviewRevision {
+  constructor(readonly html: string) {}
+
+  dispose(): void {}
 }
 
 function isOpenSourceMessage(value: unknown): value is { type: "openSource"; target: string } {

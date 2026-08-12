@@ -67,8 +67,6 @@ enum Case {
     QueryOrphanDocs,
     QueryNodesDocs,
     DiffLatest,
-    StateList,
-    StatePruneDryRun,
 }
 
 impl Case {
@@ -84,8 +82,6 @@ impl Case {
             Self::QueryOrphanDocs => "query_orphan_docs",
             Self::QueryNodesDocs => "query_nodes_docs",
             Self::DiffLatest => "diff_latest",
-            Self::StateList => "state_list",
-            Self::StatePruneDryRun => "state_prune_dry_run",
         }
     }
 
@@ -94,9 +90,7 @@ impl Case {
             Self::WatchOnceWarm
             | Self::WatchOnceChanged
             | Self::WatchOnceSemanticChanged
-            | Self::DiffLatest
-            | Self::StateList
-            | Self::StatePruneDryRun => "warm",
+            | Self::DiffLatest => "warm",
             _ => "cold",
         }
     }
@@ -113,16 +107,6 @@ impl Case {
             Self::QueryOrphanDocs => &["query", "orphan-docs"],
             Self::QueryNodesDocs => &["query", "nodes", "--kind", "doc"],
             Self::DiffLatest => &["query", "diff", "latest", "latest"],
-            Self::StateList => &["state", "list", "--format", "json"],
-            Self::StatePruneDryRun => &[
-                "state",
-                "prune",
-                "--keep",
-                "20",
-                "--dry-run",
-                "--format",
-                "json",
-            ],
         }
     }
 
@@ -133,8 +117,6 @@ impl Case {
                 | Self::WatchOnceChanged
                 | Self::WatchOnceSemanticChanged
                 | Self::DiffLatest
-                | Self::StateList
-                | Self::StatePruneDryRun
         )
     }
 
@@ -147,14 +129,11 @@ impl Case {
     }
 
     fn snapshot_history(self) -> usize {
-        match self {
-            Self::StateList | Self::StatePruneDryRun => 20,
-            _ => 1,
-        }
+        1
     }
 }
 
-const ALL_CASES: [Case; 12] = [
+const ALL_CASES: [Case; 10] = [
     Case::WatchOnceCold,
     Case::WatchOnceWarm,
     Case::WatchOnceChanged,
@@ -165,8 +144,6 @@ const ALL_CASES: [Case; 12] = [
     Case::QueryOrphanDocs,
     Case::QueryNodesDocs,
     Case::DiffLatest,
-    Case::StateList,
-    Case::StatePruneDryRun,
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -841,32 +818,6 @@ mod tests {
         let first = create_result_dir(root.path(), "same").unwrap();
         let second = create_result_dir(root.path(), "same").unwrap();
         assert_ne!(first, second);
-    }
-
-    #[test]
-    fn snapshot_store_cases_use_seeded_public_cli_operations() {
-        assert!(Case::StateList.needs_seed());
-        assert_eq!(Case::StateList.snapshot_history(), 20);
-        assert_eq!(Case::StateList.cache_state(), "warm");
-        assert_eq!(
-            Case::StateList.args(),
-            &["state", "list", "--format", "json"]
-        );
-        assert!(Case::StatePruneDryRun.needs_seed());
-        assert_eq!(Case::StatePruneDryRun.snapshot_history(), 20);
-        assert_eq!(Case::StatePruneDryRun.cache_state(), "warm");
-        assert_eq!(
-            Case::StatePruneDryRun.args(),
-            &[
-                "state",
-                "prune",
-                "--keep",
-                "20",
-                "--dry-run",
-                "--format",
-                "json"
-            ]
-        );
     }
 
     #[test]

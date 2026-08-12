@@ -640,6 +640,7 @@ dependencies = [
  "globset",
  "ignore",
  "junction",
+ "libc",
  "mime_guess",
  "notify 8.2.0",
  "notify-debouncer-mini",

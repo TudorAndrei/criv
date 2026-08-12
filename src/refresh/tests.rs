@@ -277,9 +277,11 @@ fn failed_refresh_retries_from_the_last_successful_state() {
         .refresh(incremental.path(), RefreshCause::Initial)
         .unwrap();
     let before_hash = session.previous.as_ref().unwrap().state().hash().unwrap();
-    let config_path = incremental.path().join("criv.toml");
-    let valid_config = fs::read_to_string(&config_path).unwrap();
-    fs::write(&config_path, "[vault]\ndocs = \"/outside\"\n").unwrap();
+    let corrupt_snapshot = incremental
+        .path()
+        .join(".criv/snapshots")
+        .join(format!("{}.json", "a".repeat(64)));
+    fs::write(&corrupt_snapshot, "{}\n").unwrap();
 
     assert!(
         session
@@ -291,7 +293,7 @@ fn failed_refresh_retries_from_the_last_successful_state() {
         before_hash
     );
 
-    fs::write(&config_path, valid_config).unwrap();
+    fs::remove_file(corrupt_snapshot).unwrap();
     fs::write(
         incremental.path().join("src/lib.rs"),
         "pub fn recovered() {}\n",

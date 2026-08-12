@@ -41,6 +41,7 @@ fff-search = "0.10.1"
 git2 = { version = "0.21.0", default-features = false }
 globset = "0.4"
 ignore = "0.4"
+libc = "0.2"
 mime_guess = "2"
 notify = "8"
 notify-debouncer-mini = "0.7"

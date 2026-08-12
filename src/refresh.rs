@@ -25,6 +25,7 @@ pub(crate) struct RefreshResult {
 
 #[derive(Debug)]
 pub(crate) struct RefreshSession {
+    config: Config,
     seed_graph: Option<SourceGraphBuild>,
     source_index: SourceIndexLifecycle,
     pending_observation: Option<SourceObservation>,
@@ -35,6 +36,7 @@ impl RefreshSession {
     pub(crate) fn one_shot(root: &Path) -> Result<Self> {
         let config = Config::load(root)?;
         Ok(Self {
+            config: config.clone(),
             seed_graph: source_graph::load_cached(root),
             source_index: SourceIndexLifecycle::for_command(root, &config)?,
             pending_observation: None,
@@ -44,6 +46,7 @@ impl RefreshSession {
 
     pub(crate) fn live(root: &Path, config: &Config) -> Result<Self> {
         Ok(Self {
+            config: config.clone(),
             seed_graph: source_graph::load_cached(root),
             source_index: SourceIndexLifecycle::for_watch(root, config)?,
             pending_observation: None,
@@ -67,6 +70,7 @@ impl RefreshSession {
         };
         let next = execute(
             root,
+            &self.config,
             previous_graph,
             previous_state,
             diagnostic_previous_state,
@@ -92,13 +96,18 @@ impl RefreshSession {
 
 fn execute(
     root: &Path,
+    config: &Config,
     previous_graph: Option<&SourceGraphBuild>,
     previous_state: Option<&State>,
     diagnostic_previous_state: Option<&State>,
     source_catalog: SourceCatalog,
 ) -> Result<RefreshResult> {
-    let mut vault =
-        Vault::load_incremental_with_source_catalog(root, previous_graph, source_catalog.clone())?;
+    let mut vault = Vault::load_incremental_with_config_and_source_catalog(
+        root,
+        config,
+        previous_graph,
+        source_catalog.clone(),
+    )?;
     let blockers = check::publication_blocking_diagnostics(&vault);
     if !blockers.is_empty() {
         return Err(CrivError::new(format!(
@@ -113,8 +122,9 @@ fn execute(
     let changed_files = vault.source_graph().changed_files().to_vec();
     if architecture::write_code_architecture(root, &vault)? {
         let refreshed_graph = vault.source_graph_build().clone();
-        vault = Vault::load_incremental_with_source_catalog(
+        vault = Vault::load_incremental_with_config_and_source_catalog(
             root,
+            config,
             Some(&refreshed_graph),
             source_catalog,
         )?;

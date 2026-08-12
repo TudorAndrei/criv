@@ -702,6 +702,7 @@ class CrivC4View extends FileView {
   private sourceSaveHandlerRegistered = false;
   private likec4Renderer: CrivLikeC4Renderer | null = null;
   private likec4ViewSelect: HTMLSelectElement | null = null;
+  private readonly previewRevisions = new LoadedRevisionOwner<CrivC4PreviewRevision>();
   private revision = 0;
 
   constructor(
@@ -725,6 +726,12 @@ class CrivC4View extends FileView {
     await this.render();
   }
 
+  async onClose(): Promise<void> {
+    this.previewRevisions.dispose();
+    this.likec4Renderer = null;
+    this.likec4ViewSelect = null;
+  }
+
   async onLoadFile(file: TFile): Promise<void> {
     this.source = await this.app.vault.cachedRead(file);
     this.draftSource = this.source;
@@ -746,41 +753,53 @@ class CrivC4View extends FileView {
 
   async render(): Promise<void> {
     this.registerSourceSaveHandler();
-    this.likec4Renderer?.dispose();
-    this.likec4Renderer = null;
-    this.likec4ViewSelect = null;
     const container = this.containerEl.children[1] as HTMLElement;
-    container.empty();
-    container.addClass("criv-c4-view");
-    this.dirtyBadgeEl = null;
-    this.sourceEditorEl = null;
 
     if (!this.file) {
+      this.clearPreviewRevision();
+      container.empty();
+      container.addClass("criv-c4-view");
       container.createEl("p", { cls: "criv-empty", text: "No C4 file selected." });
       return;
     }
 
+    if (this.mode === "preview") {
+      await this.renderPreviewRevision(container, this.file);
+      return;
+    }
+
+    this.clearPreviewRevision();
     await this.sourceForCurrentFile();
     const source = this.currentSource();
+    const chrome = this.buildChrome(container, source, this.file.basename);
+    this.dirtyBadgeEl = chrome.dirtyBadge;
+    this.updateDirtyBadge();
+    this.renderSourceEditor(chrome.body);
+  }
+
+  private buildChrome(
+    container: HTMLElement,
+    source: string,
+    basename: string,
+  ): { body: HTMLElement; dirtyBadge: HTMLElement; toolbar: HTMLElement } {
+    container.empty();
+    container.addClass("criv-c4-view");
     const header = container.createDiv({ cls: "criv-c4-header" });
-    header.createEl("h3", { text: this.file.basename });
+    header.createEl("h3", { text: basename });
     const meta = header.createDiv({ cls: "criv-c4-meta" });
     meta.createSpan({ text: "likec4" });
     meta.createSpan({ text: "model" });
     if (/^\s*\/\/\s*criv:generated\s+true\s*$/m.test(source)) {
       meta.createSpan({ text: "generated" });
     }
-    this.dirtyBadgeEl = meta.createSpan({ cls: "criv-warning criv-c4-dirty", text: "unsaved" });
-    this.updateDirtyBadge();
+    const dirtyBadge = meta.createSpan({
+      cls: "criv-warning criv-c4-dirty",
+      text: "unsaved",
+    });
     const toolbar = header.createDiv({ cls: "criv-c4-toolbar" });
     this.renderToolbar(toolbar);
-
     const body = container.createDiv({ cls: "criv-c4-body" });
-    if (this.mode === "source") {
-      this.renderSourceEditor(body);
-    } else {
-      await this.renderPreview(body);
-    }
+    return { body, dirtyBadge, toolbar };
   }
 
   private async sourceForCurrentFile(): Promise<string> {
@@ -845,53 +864,116 @@ class CrivC4View extends FileView {
     button.onclick = onClick;
   }
 
-  private async renderPreview(body: HTMLElement): Promise<void> {
-    const viewport = body.createDiv({ cls: "criv-c4-preview" });
-    const surface = viewport.createDiv({ cls: "criv-c4-preview-surface" });
-    const state = await this.plugin.getState();
-    const architecture = state?.architecture;
-    if (!architecture) {
-      surface.createEl("p", {
-        cls: "criv-c4-render-error",
-        text: "Run criv watch --once to validate LikeC4 and publish the preview model.",
-      });
-      return;
+  private async renderPreviewRevision(container: HTMLElement, file: TFile): Promise<void> {
+    const selectedViewId = this.likec4Renderer?.currentViewId();
+    if (!this.previewRevisions.current) {
+      const loading = this.buildChrome(container, this.currentSource(), file.basename);
+      loading.body.createEl("p", { cls: "criv-c4-render-status", text: "Loading preview…" });
+      this.dirtyBadgeEl = loading.dirtyBadge;
+      this.updateDirtyBadge();
     }
-    const model: CrivLikeC4Model = {
-      protocolVersion: 1,
-      likec4Version: architecture.likec4Version as "1.59.2",
-      revision: ++this.revision,
-      workspace: architecture.workspace,
-      model: architecture.model.raw,
-      views: architecture.model.views,
-      sourceLinks: architecture.model.sourceLinks,
-    };
-    this.likec4Renderer = new CrivLikeC4Renderer(surface, {
-      colorScheme: document.body.classList.contains("theme-dark") ? "dark" : "light",
-      onOpenSource: (target) => this.plugin.openExternal(target),
-      onSelectView: (viewId) => {
-        if (this.likec4ViewSelect) {
-          this.likec4ViewSelect.value = viewId;
+    const result = await this.previewRevisions.replace(
+      async (attempt) => {
+        const source =
+          this.sourcePath === file.path
+            ? this.currentSource()
+            : await this.app.vault.cachedRead(file);
+        attempt.assertCurrent();
+        const state = await this.plugin.getState();
+        attempt.assertCurrent();
+        const architecture = state?.architecture;
+        if (!architecture) {
+          throw new Error(
+            "Run criv watch --once to validate LikeC4 and publish the preview model.",
+          );
         }
+        const root = document.createElement("div");
+        const chrome = this.buildChrome(root, source, file.basename);
+        const viewport = chrome.body.createDiv({ cls: "criv-c4-preview" });
+        const surface = viewport.createDiv({ cls: "criv-c4-preview-surface" });
+        const model: CrivLikeC4Model = {
+          protocolVersion: 1,
+          likec4Version: architecture.likec4Version as "1.59.2",
+          revision: ++this.revision,
+          workspace: architecture.workspace,
+          model: architecture.model.raw,
+          views: architecture.model.views,
+          sourceLinks: architecture.model.sourceLinks,
+        };
+        const nextViewId =
+          selectedViewId && model.views.some((view) => view.id === selectedViewId)
+            ? selectedViewId
+            : preferredLikeC4ViewId(file.path, model.views);
+        if (!nextViewId) {
+          surface.createEl("p", {
+            cls: "criv-c4-render-status",
+            text: `${file.path} declares no named view. Open an architecture file that declares a named view to see a diagram.`,
+          });
+          return new CrivC4PreviewRevision(root, null, null, chrome.dirtyBadge, source, file.path);
+        }
+        const renderer = new CrivLikeC4Renderer(surface, {
+          colorScheme: document.body.classList.contains("theme-dark") ? "dark" : "light",
+          onOpenSource: (target) => this.plugin.openExternal(target),
+          onSelectView: (viewId) => {
+            if (this.likec4ViewSelect) {
+              this.likec4ViewSelect.value = viewId;
+            }
+          },
+        });
+        renderer.replace(model, nextViewId);
+        const viewSelect = this.renderLikeC4Controls(chrome.toolbar, renderer);
+        return new CrivC4PreviewRevision(
+          root,
+          renderer,
+          viewSelect,
+          chrome.dirtyBadge,
+          source,
+          file.path,
+        );
       },
-    });
-    this.likec4Renderer.replace(model, preferredLikeC4ViewId(this.file?.path ?? "", model.views));
-    this.renderLikeC4Controls();
+      (candidate) => {
+        container.empty();
+        while (candidate.root.firstChild) {
+          container.appendChild(candidate.root.firstChild);
+        }
+        container.addClass("criv-c4-view");
+        this.likec4Renderer = candidate.renderer;
+        this.likec4ViewSelect = candidate.viewSelect;
+        this.dirtyBadgeEl = candidate.dirtyBadge;
+        this.sourceEditorEl = null;
+        if (this.sourcePath !== candidate.sourcePath) {
+          this.source = candidate.source;
+          this.draftSource = candidate.source;
+          this.sourcePath = candidate.sourcePath;
+        }
+        this.updateDirtyBadge();
+      },
+    );
+    if (result.kind === "failed") {
+      this.likec4Renderer = null;
+      this.likec4ViewSelect = null;
+      const failed = this.buildChrome(container, this.currentSource(), file.basename);
+      failed.body.createEl("p", {
+        cls: "criv-c4-render-error",
+        text: result.error instanceof Error ? result.error.message : String(result.error),
+      });
+      this.dirtyBadgeEl = failed.dirtyBadge;
+      this.updateDirtyBadge();
+    }
   }
 
-  private renderLikeC4Controls(): void {
-    const renderer = this.likec4Renderer;
-    const toolbar = this.containerEl.querySelector(".criv-c4-toolbar") as HTMLElement | null;
-    if (!renderer || !toolbar) {
-      return;
-    }
+  private renderLikeC4Controls(
+    toolbar: HTMLElement,
+    renderer: CrivLikeC4Renderer,
+  ): HTMLSelectElement | null {
+    let viewSelect: HTMLSelectElement | null = null;
     const views = renderer.views();
     if (views.length > 1) {
       const select = toolbar.createEl("select", { attr: { "aria-label": "Architecture view" } });
       for (const view of views) {
         select.createEl("option", { text: view.title, value: view.id });
       }
-      this.likec4ViewSelect = select;
+      viewSelect = select;
       select.value = renderer.currentViewId() ?? "";
       select.onchange = () => renderer.selectView(select.value);
     }
@@ -908,6 +990,15 @@ class CrivC4View extends FileView {
       anchor.click();
       URL.revokeObjectURL(url);
     });
+    return viewSelect;
+  }
+
+  private clearPreviewRevision(): void {
+    this.previewRevisions.clear();
+    this.likec4Renderer = null;
+    this.likec4ViewSelect = null;
+    this.dirtyBadgeEl = null;
+    this.sourceEditorEl = null;
   }
 
   private renderSourceEditor(body: HTMLElement): void {
@@ -958,6 +1049,21 @@ class CrivC4View extends FileView {
       return false;
     });
     this.sourceSaveHandlerRegistered = true;
+  }
+}
+
+class CrivC4PreviewRevision {
+  constructor(
+    readonly root: HTMLElement,
+    readonly renderer: CrivLikeC4Renderer | null,
+    readonly viewSelect: HTMLSelectElement | null,
+    readonly dirtyBadge: HTMLElement,
+    readonly source: string,
+    readonly sourcePath: string,
+  ) {}
+
+  dispose(): void {
+    this.renderer?.dispose();
   }
 }
 

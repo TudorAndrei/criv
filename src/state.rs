@@ -17,7 +17,6 @@ use crate::c4::C4Artifact;
 use crate::policy_scan::PolicyScanPlan;
 use crate::source_graph::{Language, SourceFile, SymbolKind};
 use crate::structural;
-use crate::util::write_atomic_in;
 use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
 
@@ -265,28 +264,16 @@ impl State {
         })
     }
 
-    fn write_serialized(&self, root: &Path, serialized: &SerializedState) -> Result<()> {
-        write_atomic_in(
-            root,
-            Path::new(".criv"),
-            Path::new(".criv/state.json"),
-            &serialized.published,
-        )?;
-        #[cfg(test)]
-        record_work(|counts| counts.published_bytes += serialized.published.len());
-        Ok(())
-    }
-
     fn publish_snapshot(
         &self,
         root: &Path,
         serialized: &SerializedState,
         keep: usize,
     ) -> Result<String> {
-        crate::snapshots::publish(root, &serialized.hash, &serialized.published, keep)?;
+        crate::state_publication::publish(root, &serialized.hash, &serialized.published, keep)?;
         #[cfg(test)]
         record_work(|counts| {
-            counts.published_bytes += serialized.published.len() + serialized.hash.len() + 1;
+            counts.published_bytes += serialized.published.len() * 2 + serialized.hash.len() + 1;
         });
         Ok(serialized.hash.clone())
     }
@@ -1212,7 +1199,6 @@ pub(crate) fn write_state_with_policy_plan(
 ) -> Result<(String, State)> {
     let state = State::build_with_policy_plan(root, vault, None, &[], policy_plan)?;
     let serialized = state.serialize()?;
-    state.write_serialized(root, &serialized)?;
     let snapshot = state.publish_snapshot(root, &serialized, vault.config.state_keep)?;
     Ok((snapshot, state))
 }
@@ -1237,7 +1223,6 @@ pub(crate) fn write_state_incremental_with_policy_plan(
 ) -> Result<(String, State)> {
     let state = State::build_with_policy_plan(root, vault, previous, changed_files, policy_plan)?;
     let serialized = state.serialize()?;
-    state.write_serialized(root, &serialized)?;
     let snapshot = state.publish_snapshot(root, &serialized, vault.config.state_keep)?;
     Ok((snapshot, state))
 }
@@ -1733,6 +1718,39 @@ roots = ["src"]
         );
 
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn corrupt_snapshot_preflight_keeps_the_prior_state_authoritative() {
+        let root = unique_temp_dir("criv-state-publication-preflight");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("criv.toml"), "[source]\nroots = [\"src\"]\n").unwrap();
+        std::fs::write(root.join("src/lib.rs"), "pub fn first() {}\n").unwrap();
+        let first_vault = Vault::load(&root).unwrap();
+        write_state(&root, &first_vault).unwrap();
+        let prior_state = std::fs::read(root.join(".criv/state.json")).unwrap();
+
+        let corrupt_hash = "a".repeat(64);
+        std::fs::write(
+            root.join(".criv/snapshots")
+                .join(format!("{corrupt_hash}.json")),
+            "{}\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("src/lib.rs"), "pub fn second() {}\n").unwrap();
+        let second_vault = Vault::load(&root).unwrap();
+
+        let error = write_state(&root, &second_vault).unwrap_err();
+        assert!(error.to_string().contains("corrupt"));
+        assert_eq!(
+            std::fs::read(root.join(".criv/state.json")).unwrap(),
+            prior_state
+        );
+        assert!(
+            root.join(".criv/snapshots")
+                .join(format!("{corrupt_hash}.json"))
+                .exists()
+        );
     }
 
     #[test]

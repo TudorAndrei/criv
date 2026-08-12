@@ -16,6 +16,10 @@ state that other tools can read.
 
 `.criv/` is local generated state and should stay ignored by git.
 
+Before you upgrade to the operating-system watch lock, stop all older
+`criv watch` processes. The `.criv/watch.lock` file is persistent diagnostic data.
+Do not delete this file while `criv` runs.
+
 ## Why
 
 Most repository documentation drifts because it is written beside the code but
@@ -169,10 +173,11 @@ exits zero when the only errors in the vault are of some other kind. Use it for
 focused local inspection, not as a gate.
 
 Local snapshots retain the latest 20 distinct state publications by default.
-Configure another positive bound with `[state] keep`, inspect snapshots with
-`criv state list`, and preview cleanup with `criv state prune --dry-run`. See
-[the local state reference](docs/state-reference.md) for the command and
-configuration contract.
+Configure another positive bound with `[state] keep`. criv applies retention
+automatically after successful State publication. Use `criv query diff` to
+compare `latest`, a retained hash, or a Git reference. See
+[the local state reference](docs/state-reference.md) for the configuration and
+query contract.
 
 ADRs can enforce structural policy directly from their frontmatter:
 

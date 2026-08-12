@@ -290,20 +290,61 @@ pub(crate) fn remove_file_in(root: &Path, allowed_dir: &Path, destination: &Path
         )));
     }
     fs::remove_file(path)?;
+    sync_parent_directory(&root.join(destination))?;
     Ok(())
 }
 
-/// Create a new vault-controlled file without following symlinks.
-pub(crate) fn create_new_in(
+pub(crate) fn rename_file_in(
+    root: &Path,
+    allowed_dir: &Path,
+    source: &Path,
+    destination: &Path,
+) -> Result<()> {
+    let source_path = prepare_confined_write(root, allowed_dir, source)?;
+    let destination_path = prepare_confined_write(root, allowed_dir, destination)?;
+    let metadata = fs::symlink_metadata(&source_path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(CrivError::new(format!(
+            "refusing to move non-file vault path {}",
+            source.display()
+        )));
+    }
+    let source_parent = source_path.parent().map(Path::to_path_buf);
+    fs::rename(source_path, &destination_path)?;
+    if let Some(source_parent) = source_parent {
+        sync_directory(&source_parent)?;
+    }
+    sync_parent_directory(&destination_path)?;
+    Ok(())
+}
+
+/// Open or create one persistent regular file without following the final path.
+pub(crate) fn open_regular_file_in(
     root: &Path,
     allowed_dir: &Path,
     destination: &Path,
 ) -> Result<(PathBuf, fs::File)> {
     let path = prepare_confined_write(root, allowed_dir, destination)?;
-    let file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)?;
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(&path)?;
+    if !file.metadata()?.is_file() {
+        return Err(CrivError::new(format!(
+            "vault path {} must be a regular file",
+            destination.display()
+        )));
+    }
     Ok((path, file))
 }
 
@@ -363,6 +404,7 @@ fn write_atomic_ready_with_permissions(
             let _ = fs::remove_file(&temp_path);
             return Err(err.into());
         }
+        sync_parent_directory(path)?;
         return Ok(());
     }
 
@@ -370,6 +412,27 @@ fn write_atomic_ready_with_permissions(
         "failed to create temporary file for {}",
         path.display()
     )))
+}
+
+fn sync_parent_directory(path: &Path) -> Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    sync_directory(parent)
+}
+
+fn sync_directory(path: &Path) -> Result<()> {
+    #[cfg(windows)]
+    let directory = {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)?
+    };
+    #[cfg(not(windows))]
+    let directory = fs::File::open(path)?;
+    directory.sync_all()?;
+    Ok(())
 }
 
 fn prepare_confined_write(root: &Path, allowed_dir: &Path, destination: &Path) -> Result<PathBuf> {
@@ -478,20 +541,60 @@ fn reject_symlink_components(root: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn walk_files(root: &Path, extension: Option<&str>) -> Result<Vec<PathBuf>> {
+pub(crate) fn walk_files(
+    vault_root: &Path,
+    walk_root: &Path,
+    extension: Option<&str>,
+) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
-    match fs::symlink_metadata(root) {
+    let relative = walk_root.strip_prefix(vault_root).map_err(|_| {
+        CrivError::new(format!(
+            "vault walk root {} is outside vault root {}",
+            walk_root.display(),
+            vault_root.display()
+        ))
+    })?;
+    let mut current = vault_root.to_path_buf();
+    for component in std::iter::once(None).chain(relative.components().map(Some)) {
+        if let Some(component) = component {
+            current.push(component.as_os_str());
+        }
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(CrivError::new(format!(
+                    "refusing to read symlinked vault path {}",
+                    current.display()
+                )));
+            }
+            Ok(metadata) if current != walk_root && !metadata.is_dir() => {
+                return Err(CrivError::new(format!(
+                    "vault path component {} must be a real directory",
+                    current.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(files),
+            Err(err) => return Err(err.into()),
+        }
+    }
+    match fs::symlink_metadata(walk_root) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err(CrivError::new(format!(
                 "refusing to read symlinked vault path {}",
-                root.display()
+                walk_root.display()
+            )));
+        }
+        Ok(metadata) if !metadata.is_dir() => {
+            return Err(CrivError::new(format!(
+                "vault walk root {} must be a real directory",
+                walk_root.display()
             )));
         }
         Ok(_) => {}
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(files),
         Err(err) => return Err(err.into()),
     }
-    walk_files_inner(root, extension, &mut files)?;
+    walk_files_inner(walk_root, extension, &mut files)?;
     files.sort();
     Ok(files)
 }
@@ -502,10 +605,6 @@ fn walk_files_inner(root: &Path, extension: Option<&str>, files: &mut Vec<PathBu
         let path = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if name == ".git" || name == ".criv" || name == "target" || name == "node_modules" {
-            continue;
-        }
-
         let file_type = entry.file_type()?;
         if file_type.is_symlink() {
             return Err(CrivError::new(format!(
@@ -513,6 +612,10 @@ fn walk_files_inner(root: &Path, extension: Option<&str>, files: &mut Vec<PathBu
                 path.display()
             )));
         }
+        if name == ".git" || name == ".criv" || name == "target" || name == "node_modules" {
+            continue;
+        }
+
         if file_type.is_dir() {
             walk_files_inner(&path, extension, files)?;
         } else if file_type.is_file()
@@ -780,7 +883,7 @@ mod tests {
         let outside = tempfile::NamedTempFile::new().unwrap();
         symlink(outside.path(), root.path().join("linked.md")).unwrap();
 
-        let error = walk_files(root.path(), Some("md")).unwrap_err();
+        let error = walk_files(root.path(), root.path(), Some("md")).unwrap_err();
         assert!(
             error
                 .to_string()
@@ -797,12 +900,65 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         symlink(outside.path(), root.path().join("linked-docs")).unwrap();
 
-        let error = walk_files(root.path(), Some("md")).unwrap_err();
+        let error = walk_files(root.path(), root.path(), Some("md")).unwrap_err();
         assert!(
             error
                 .to_string()
                 .contains("refusing to read symlinked vault path")
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vault_walk_rejects_an_exact_symlinked_root() {
+        use std::os::unix::fs::symlink;
+
+        let repository = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        symlink(outside.path(), repository.path().join("docs")).unwrap();
+
+        let error = walk_files(
+            repository.path(),
+            &repository.path().join("docs"),
+            Some("md"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("symlinked vault path"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn vault_walk_rejects_a_symlinked_ancestor_of_the_walk_root() {
+        use std::os::unix::fs::symlink;
+
+        let repository = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::create_dir(outside.path().join("docs")).unwrap();
+        symlink(outside.path(), repository.path().join("linked-parent")).unwrap();
+
+        let error = walk_files(
+            repository.path(),
+            &repository.path().join("linked-parent/docs"),
+            Some("md"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("symlinked vault path"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn vault_walk_rejects_a_windows_junction() {
+        let repository = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        junction::create(outside.path(), repository.path().join("docs")).unwrap();
+
+        let error = walk_files(
+            repository.path(),
+            &repository.path().join("docs"),
+            Some("md"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("symlinked vault path"));
     }
 
     #[test]

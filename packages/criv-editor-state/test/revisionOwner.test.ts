@@ -86,6 +86,27 @@ test("disposes active and late revisions once during shutdown", async () => {
   });
 });
 
+test("clear invalidates pending work and keeps the owner reusable", async () => {
+  const owner = new LoadedRevisionOwner<FakeRevision>();
+  const active = new FakeRevision("active");
+  const late = new FakeRevision("late");
+  const lateLoad = deferred<FakeRevision>();
+  await owner.replace(async () => active, (revision) => revision.name);
+  const lateResult = owner.replace(() => lateLoad.promise, (revision) => revision.name);
+
+  owner.clear();
+  lateLoad.resolve(late);
+
+  assert.deepEqual(await lateResult, { kind: "superseded" });
+  assert.equal(active.disposals, 1);
+  assert.equal(late.disposals, 1);
+  const replacement = new FakeRevision("replacement");
+  assert.deepEqual(await owner.replace(async () => replacement, (revision) => revision.name), {
+    kind: "committed",
+    value: "replacement",
+  });
+});
+
 class FakeRevision {
   disposals = 0;
   readonly name: string;

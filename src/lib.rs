@@ -19,6 +19,7 @@ mod source_index;
 mod source_paths;
 mod source_reconcile;
 mod state;
+mod state_publication;
 mod structural;
 mod util;
 mod vault;
@@ -78,7 +79,6 @@ enum Command {
     Adr(adr::AdrOptions),
     Check(check::CheckOptions),
     Query(query::QueryOptions),
-    State(snapshots::StateOptions),
     Watch(watch::WatchOptions),
     Enforce(enforce::EnforceOptions),
 }
@@ -125,7 +125,6 @@ fn run_command(args: Vec<String>, cwd: &std::path::Path) -> Result<()> {
         Some(Command::Adr(options)) => adr::run(cwd, options),
         Some(Command::Check(options)) => check::run(cwd, options),
         Some(Command::Query(options)) => query::run(cwd, options),
-        Some(Command::State(options)) => snapshots::run(cwd, options),
         Some(Command::Watch(options)) => watch::run(cwd, options),
         Some(Command::Enforce(options)) => enforce::run(cwd, options),
     }
@@ -274,9 +273,9 @@ mod tests {
         assert!(spec.contains("cmd check"));
         assert!(spec.contains("cmd install-editor"));
         assert!(spec.contains("cmd query"));
-        assert!(spec.contains("cmd state"));
-        assert!(spec.contains("cmd list"));
-        assert!(spec.contains("cmd prune"));
+        assert!(!spec.contains("cmd state"));
+        assert!(!spec.contains("cmd list"));
+        assert!(!spec.contains("cmd prune"));
         assert!(spec.contains("cmd enforce"));
         assert!(spec.contains("cmd reconcile-sources"));
 
