@@ -19,6 +19,9 @@ const lookupFixture = JSON.parse(
     "utf8",
   ),
 );
+const architectureFixture = JSON.parse(
+  readFileSync(resolve(__dirname, "../../../../fixtures/editor/likec4-projection.v1.json"), "utf8"),
+);
 
 await esbuild.build({
   entryPoints: [resolve(pluginRoot, "src/wasm.ts")],
@@ -36,7 +39,9 @@ const bridge = bridgeModule.createCrivWasmBridge(async () => compiledWasm);
 const revision = await bridge.loadState(stateRaw);
 const projections = revision.initialProjections();
 
-assert.equal(projections.state.schema, "criv.state.v1");
+assert.equal(projections.summary.schema, "criv.state.v1");
+assert.equal("state" in projections, false);
+assert.deepEqual(projections.registeredPatterns, ["ADR-0001/entrypoint"]);
 assert.equal(projections.summary.node_count, 6);
 assert.deepEqual(
   projections.sources.map((entry) => entry.path),
@@ -44,6 +49,12 @@ assert.deepEqual(
 );
 assert.equal(revision.suggestSelectors("run", 10)[0].target, "src/lib.rs#fn:run");
 revision.dispose();
+
+const architectureRevision = await bridge.loadState(JSON.stringify(architectureFixture.state));
+const architectureProjections = architectureRevision.initialProjections();
+assert.deepEqual(architectureProjections.architecture, architectureFixture.expected.architecture);
+assert.deepEqual(architectureProjections.c4Artifacts, architectureFixture.expected.c4Artifacts);
+architectureRevision.dispose();
 
 const lookupRevision = await bridge.loadState(JSON.stringify(lookupFixture.state));
 for (const expected of lookupFixture.cases) {

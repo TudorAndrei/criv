@@ -11,7 +11,6 @@ import type { WorkspaceStateStatus, WorkspaceStateStore } from "./stateStore";
 export const C4_PREVIEW_VIEW_TYPE = "criv.c4Preview";
 
 class C4PreviewSurface {
-  private revision = 0;
   private readonly selectedViews = new Map<string, string>();
 
   constructor(
@@ -93,10 +92,7 @@ class C4PreviewSurface {
     }
 
     const relativePath = vscode.workspace.asRelativePath(document.uri, false);
-    const model = {
-      ...status.snapshot.architecture,
-      revision: ++this.revision,
-    };
+    const model = status.snapshot.architecture;
     const rememberedViewId = this.selectedViews.get(document.uri.toString());
     const viewId = model.views.some((view) => view.id === rememberedViewId)
       ? rememberedViewId

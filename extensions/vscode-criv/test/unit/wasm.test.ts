@@ -4,7 +4,18 @@ import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import test from "node:test";
 
-import { CRIV_WASM_LOAD_ERROR, CrivWasmLoadError, createCrivWasmBridge } from "../../src/wasm";
+import {
+  CRIV_LIKEC4_ARCHITECTURE_INVALID,
+  CRIV_LIKEC4_MODEL_INVALID,
+  CRIV_LIKEC4_PROTOCOL_UNSUPPORTED,
+  CRIV_LIKEC4_VERSION_UNSUPPORTED,
+  CRIV_STATE_JSON_INVALID,
+  CRIV_STATE_SCHEMA_UNSUPPORTED,
+  CRIV_WASM_LOAD_ERROR,
+  CrivStateContractError,
+  CrivWasmLoadError,
+  createCrivWasmBridge,
+} from "../../src/wasm";
 
 const require = createRequire(__filename);
 const compiledWasm = require(resolve(__dirname, "../../pkg/criv_wasm.js")) as unknown;
@@ -26,13 +37,18 @@ const lookupFixture = JSON.parse(
     total_candidate_count?: number;
   }[];
 };
+const architectureFixture = JSON.parse(
+  readFileSync(resolve(__dirname, "../../../../fixtures/editor/likec4-projection.v1.json"), "utf8"),
+) as { state: unknown; expected: { architecture: unknown; c4Artifacts: unknown } };
 
 test("loads the generated package through the VS Code Wasm adapter", async () => {
   const bridge = createCrivWasmBridge(async () => compiledWasm);
   const revision = await bridge.loadState(stateRaw);
   const projections = revision.initialProjections();
 
-  assert.equal(projections.state.schema, "criv.state.v1");
+  assert.equal(projections.summary.schema, "criv.state.v1");
+  assert.equal("state" in projections, false);
+  assert.deepEqual(projections.registeredPatterns, ["ADR-0001/entrypoint"]);
   assert.equal(projections.summary.node_count, 6);
   assert.deepEqual(
     projections.sources.map((entry) => entry.path),
@@ -71,6 +87,42 @@ test("keeps VS Code recovery text in its package loader adapter", async () => {
   assert.equal(attempts, 1);
 });
 
+test("loads the shared architecture projection without host conversion", async () => {
+  const bridge = createCrivWasmBridge(async () => compiledWasm);
+  const revision = await bridge.loadState(JSON.stringify(architectureFixture.state));
+  const projections = revision.initialProjections();
+
+  assert.deepEqual(projections.architecture, architectureFixture.expected.architecture);
+  assert.deepEqual(projections.c4Artifacts, architectureFixture.expected.c4Artifacts);
+  revision.dispose();
+});
+
+test("reports every generated Wasm State failure with a stable code", async () => {
+  const bridge = createCrivWasmBridge(async () => compiledWasm);
+  const valid = architectureFixture.state as Record<string, unknown>;
+  const cases: [string, unknown][] = [
+    [CRIV_STATE_JSON_INVALID, "{"],
+    [CRIV_STATE_JSON_INVALID, { ...valid, graph: { nodes: true } }],
+    [CRIV_STATE_SCHEMA_UNSUPPORTED, { ...valid, schema: "criv.state.v2" }],
+    [CRIV_LIKEC4_ARCHITECTURE_INVALID, { ...valid, architecture: true }],
+    [CRIV_LIKEC4_PROTOCOL_UNSUPPORTED, withArchitecture(valid, { protocolVersion: 2 })],
+    [CRIV_LIKEC4_VERSION_UNSUPPORTED, withArchitecture(valid, { likec4Version: "2.0.0" })],
+    [
+      CRIV_LIKEC4_MODEL_INVALID,
+      withArchitecture(valid, { model: { raw: true, views: [], sourceLinks: [] } }),
+    ],
+  ];
+
+  for (const [code, input] of cases) {
+    const raw = typeof input === "string" ? input : JSON.stringify(input);
+    await assert.rejects(bridge.loadState(raw), (error: unknown) => {
+      assert.ok(error instanceof CrivStateContractError);
+      assert.equal(error.code, code);
+      return true;
+    });
+  }
+});
+
 test("uses the shared source-target lookup contract", async () => {
   const bridge = createCrivWasmBridge(async () => compiledWasm);
   const revision = await bridge.loadState(JSON.stringify(lookupFixture.state));
@@ -88,3 +140,16 @@ test("uses the shared source-target lookup contract", async () => {
   }
   revision.dispose();
 });
+
+function withArchitecture(
+  state: Record<string, unknown>,
+  changes: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    ...state,
+    architecture: {
+      ...(state.architecture as Record<string, unknown>),
+      ...changes,
+    },
+  };
+}

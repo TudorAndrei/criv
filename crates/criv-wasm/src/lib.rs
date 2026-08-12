@@ -1,10 +1,11 @@
-use std::collections::{BTreeSet, HashMap, hash_map::DefaultHasher};
+use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 
-use criv_state_wire::{Node, SourceIndexEntry, StateDocument, is_supported_schema};
-#[cfg(not(target_arch = "wasm32"))]
-use serde::Deserialize;
-use serde::Serialize;
+use criv_state_wire::{
+    LikeC4ArchitectureState, Node, PatternMatch, SourceIndexEntry, StateDocument,
+    is_supported_schema,
+};
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 const INITIAL_PROJECTIONS_TAKEN: &str = "criv initial projections were already taken";
@@ -66,7 +67,7 @@ impl LoadedState {
     fn load_wasm(raw: &str) -> Result<Self, JsValue> {
         let envelope = js_sys::JSON::parse(raw).map_err(|error| {
             JsValue::from_str(&format!(
-                "invalid criv state JSON: {}",
+                "criv-state-json-invalid: invalid criv state JSON: {}",
                 js_error_message(&error)
             ))
         })?;
@@ -76,13 +77,14 @@ impl LoadedState {
             .unwrap_or_else(|| "<missing>".into());
         if !is_supported_schema(&schema) {
             return Err(JsValue::from_str(&format!(
-                "unsupported criv state schema: {schema}"
+                "criv-state-schema-unsupported: unsupported criv state schema: {schema}"
             )));
         }
-        let state = serde_wasm_bindgen::from_value::<StateDocument>(envelope.clone())
-            .map_err(|error| JsValue::from_str(&format!("invalid criv state JSON: {error}")))?;
-        let prepared = PreparedState::new(state);
-        let initial_projections = initial_projections_from_js(&envelope, &prepared)?;
+        validate_architecture_wrapper_wasm(&envelope)?;
+        let state = serde_wasm_bindgen::from_value::<StateDocument>(envelope)
+            .map_err(|error| JsValue::from_str(&format!("criv-state-json-invalid: {error}")))?;
+        let prepared = PreparedState::new(state).map_err(|error| JsValue::from_str(&error))?;
+        let initial_projections = initial_projections_from_js(&prepared)?;
         Ok(Self {
             #[cfg(not(target_arch = "wasm32"))]
             initial_envelope: None,
@@ -93,16 +95,10 @@ impl LoadedState {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn prepare_initial_projections(&mut self) -> Result<(), JsValue> {
-        let envelope = self
+        let projections = self
             .initial_envelope
             .as_ref()
             .ok_or_else(|| JsValue::from_str(INITIAL_PROJECTIONS_TAKEN))?;
-        let projections = InitialProjections {
-            state: envelope,
-            summary: &self.prepared.summary,
-            sources: &self.prepared.sources,
-            nodes: &self.prepared.nodes,
-        };
         let value = projections
             .serialize(&serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true))
             .map_err(|error| {
@@ -118,18 +114,21 @@ impl LoadedState {
     #[cfg(not(target_arch = "wasm32"))]
     fn load(raw: &str) -> Result<Self, String> {
         let envelope = decode_state_value(raw)?;
+        validate_architecture_wrapper(&envelope)?;
         let state = StateDocument::deserialize(&envelope)
-            .map_err(|error| format!("invalid criv state JSON: {error}"))?;
-        let prepared = PreparedState::new(state);
+            .map_err(|error| format!("criv-state-json-invalid: {error}"))?;
+        let prepared = PreparedState::new(state)?;
+        let initial_envelope = serde_json::to_value(InitialProjections::from(&prepared))
+            .map_err(|error| format!("failed to encode criv initial projections: {error}"))?;
         Ok(Self {
-            initial_envelope: Some(envelope),
+            initial_envelope: Some(initial_envelope),
             initial_projections: None,
             prepared,
         })
     }
 
     #[cfg(test)]
-    fn take_initial_envelope(&mut self) -> Result<serde_json::Value, String> {
+    fn take_initial_projection(&mut self) -> Result<serde_json::Value, String> {
         self.initial_envelope
             .take()
             .ok_or_else(|| INITIAL_PROJECTIONS_TAKEN.to_string())
@@ -137,26 +136,67 @@ impl LoadedState {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn initial_projections_from_js(
-    state: &JsValue,
-    prepared: &PreparedState,
-) -> Result<JsValue, JsValue> {
+fn validate_architecture_wrapper_wasm(envelope: &JsValue) -> Result<(), JsValue> {
+    let architecture = js_sys::Reflect::get(envelope, &JsValue::from_str("architecture"))
+        .unwrap_or(JsValue::UNDEFINED);
+    if architecture.is_undefined() || architecture.is_null() {
+        return Ok(());
+    }
+    serde_wasm_bindgen::from_value::<LikeC4ArchitectureState>(architecture)
+        .map(|_| ())
+        .map_err(|error| JsValue::from_str(&format!("criv-likec4-architecture-invalid: {error}")))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn validate_architecture_wrapper(envelope: &serde_json::Value) -> Result<(), String> {
+    let Some(architecture) = envelope
+        .get("architecture")
+        .filter(|value| !value.is_null())
+    else {
+        return Ok(());
+    };
+    serde_json::from_value::<LikeC4ArchitectureState>(architecture.clone())
+        .map(|_| ())
+        .map_err(|error| format!("criv-likec4-architecture-invalid: {error}"))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn initial_projections_from_js(prepared: &PreparedState) -> Result<JsValue, JsValue> {
     let projections = js_sys::Object::new();
-    set_js_field(&projections, "state", state)?;
     set_js_field(
         &projections,
         "summary",
-        &serde_wasm_bindgen::to_value(&prepared.summary).map_err(js_encode_error)?,
+        &js_projection_value(&prepared.summary)?,
     )?;
     set_js_field(
         &projections,
         "sources",
-        &serde_wasm_bindgen::to_value(&prepared.sources).map_err(js_encode_error)?,
+        &js_projection_value(&prepared.sources)?,
     )?;
     set_js_field(
         &projections,
         "nodes",
-        &serde_wasm_bindgen::to_value(&prepared.nodes).map_err(js_encode_error)?,
+        &js_projection_value(&prepared.nodes)?,
+    )?;
+    set_js_field(
+        &projections,
+        "registeredPatterns",
+        &js_projection_value(&prepared.registered_patterns)?,
+    )?;
+    set_js_field(
+        &projections,
+        "patternMatches",
+        &js_projection_value(&prepared.pattern_matches)?,
+    )?;
+    set_js_field(
+        &projections,
+        "architecture",
+        &js_projection_value(&prepared.architecture)?,
+    )?;
+    set_js_field(
+        &projections,
+        "c4Artifacts",
+        &js_projection_value(&prepared.c4_artifacts)?,
     )?;
     Ok(projections.into())
 }
@@ -181,6 +221,13 @@ fn js_encode_error(error: serde_wasm_bindgen::Error) -> JsValue {
 }
 
 #[cfg(target_arch = "wasm32")]
+fn js_projection_value(value: &impl Serialize) -> Result<JsValue, JsValue> {
+    value
+        .serialize(&serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true))
+        .map_err(js_encode_error)
+}
+
+#[cfg(target_arch = "wasm32")]
 fn js_error_message(error: &JsValue) -> String {
     js_sys::Reflect::get(error, &JsValue::from_str("message"))
         .ok()
@@ -192,13 +239,15 @@ fn js_error_message(error: &JsValue) -> String {
 #[cfg(not(target_arch = "wasm32"))]
 fn decode_state_value(raw: &str) -> Result<serde_json::Value, String> {
     let state = serde_json::from_str::<serde_json::Value>(raw)
-        .map_err(|err| format!("invalid criv state JSON: {err}"))?;
+        .map_err(|err| format!("criv-state-json-invalid: {err}"))?;
     let schema = state
         .get("schema")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("<missing>");
     if !is_supported_schema(schema) {
-        return Err(format!("unsupported criv state schema: {schema}"));
+        return Err(format!(
+            "criv-state-schema-unsupported: unsupported criv state schema: {schema}"
+        ));
     }
     Ok(state)
 }
@@ -355,17 +404,22 @@ fn source_match_score_prepared(lower_path: &str, basename: &str, query: &str) ->
 }
 
 impl PreparedState {
-    fn new(state: StateDocument) -> Self {
+    fn new(state: StateDocument) -> Result<Self, String> {
         let StateDocument {
             schema,
+            architecture,
             graph,
-            registered_patterns,
+            mut registered_patterns,
+            patterns,
             source_index,
-            ..
         } = state;
         let criv_state_wire::Graph { nodes, edges, .. } = graph;
         let sources = take_unique_source_entries(source_index);
         let nodes = take_editor_graph_nodes(nodes);
+        registered_patterns.sort();
+        registered_patterns.dedup();
+        let architecture = prepare_architecture(architecture)?;
+        let c4_artifacts = prepare_c4_artifacts(&sources, &nodes);
         let summary = StateSummary {
             schema,
             node_count: nodes.len(),
@@ -378,21 +432,30 @@ impl PreparedState {
                 .map(|edge| format!("{}:{}:{}", edge.from, edge.kind, edge.to)),
             first_source_path: sources.first().map(|source| source.path.clone()),
         };
-        Self::from_parts(summary, sources, nodes)
+        Ok(Self::from_parts(
+            summary,
+            sources,
+            nodes,
+            registered_patterns,
+            patterns,
+            architecture,
+            c4_artifacts,
+        ))
     }
 
     #[cfg(test)]
     fn from_borrowed(state: &StateDocument) -> Self {
-        let sources = unique_source_entries(&state.source_index);
-        let nodes = editor_graph_nodes(state);
-        let summary = state_summary(state, &sources);
-        Self::from_parts(summary, sources, nodes)
+        Self::new(state.clone()).expect("test State must prepare")
     }
 
     fn from_parts(
         summary: StateSummary,
         sources: Vec<EditorSourceEntry>,
         nodes: Vec<EditorGraphNode>,
+        registered_patterns: Vec<String>,
+        pattern_matches: BTreeMap<String, Vec<PatternMatch>>,
+        architecture: Option<EditorLikeC4Model>,
+        c4_artifacts: Vec<EditorC4Artifact>,
     ) -> Self {
         let source_paths = sources
             .iter()
@@ -456,6 +519,10 @@ impl PreparedState {
             summary,
             sources,
             nodes,
+            registered_patterns,
+            pattern_matches,
+            architecture,
+            c4_artifacts,
             exact_source_lookup,
             legacy_source_lookup,
             selectors,
@@ -562,6 +629,168 @@ impl PreparedState {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LikeC4Contract {
+    protocol_version: u32,
+    likec4_version: String,
+}
+
+fn prepare_architecture(
+    architecture: Option<LikeC4ArchitectureState>,
+) -> Result<Option<EditorLikeC4Model>, String> {
+    let Some(architecture) = architecture else {
+        return Ok(None);
+    };
+    let contract = serde_json::from_str::<LikeC4Contract>(include_str!(
+        "../../../assets/likec4-contract.json"
+    ))
+    .expect("the embedded LikeC4 contract must be valid JSON");
+    if architecture.protocol_version != contract.protocol_version {
+        return Err(format!(
+            "criv-likec4-protocol-unsupported: expected protocol {}; got {}",
+            contract.protocol_version, architecture.protocol_version
+        ));
+    }
+    if architecture.likec4_version != contract.likec4_version {
+        return Err(format!(
+            "criv-likec4-version-unsupported: expected LikeC4 {}; got {}",
+            contract.likec4_version, architecture.likec4_version
+        ));
+    }
+    let workspace = safe_source_path(&architecture.workspace).ok_or_else(|| {
+        format!(
+            "criv-likec4-architecture-invalid: invalid workspace {}",
+            architecture.workspace
+        )
+    })?;
+    let published = serde_json::from_value::<PublishedLikeC4Model>(architecture.model)
+        .map_err(|error| format!("criv-likec4-model-invalid: {error}"))?;
+    validate_raw_likec4_model(&published.raw)?;
+    let mut seen_views = BTreeSet::new();
+    for view in &published.views {
+        if view.id.trim().is_empty()
+            || view.title.trim().is_empty()
+            || !seen_views.insert(view.id.as_str())
+            || view
+                .source_path
+                .as_deref()
+                .is_some_and(|path| safe_source_path(path).is_none())
+        {
+            return Err("criv-likec4-model-invalid: invalid named view".into());
+        }
+    }
+    for link in &published.source_links {
+        let path = link
+            .target
+            .split_once('#')
+            .map_or(link.target.as_str(), |value| value.0);
+        if link.element.trim().is_empty() || safe_source_path(path).is_none() {
+            return Err("criv-likec4-model-invalid: invalid source link".into());
+        }
+    }
+    Ok(Some(EditorLikeC4Model {
+        protocol_version: contract.protocol_version,
+        likec4_version: contract.likec4_version,
+        workspace,
+        model: published.raw,
+        views: published.views,
+        source_links: published.source_links,
+    }))
+}
+
+fn validate_raw_likec4_model(raw: &serde_json::Value) -> Result<(), String> {
+    let Some(raw) = raw.as_object() else {
+        return Err("criv-likec4-model-invalid: raw model must be an object".into());
+    };
+    if raw.get("_stage").and_then(serde_json::Value::as_str) != Some("layouted")
+        || !raw
+            .get("projectId")
+            .is_some_and(serde_json::Value::is_string)
+    {
+        return Err("criv-likec4-model-invalid: raw model must identify a layouted project".into());
+    }
+    for field in [
+        "project",
+        "specification",
+        "elements",
+        "relations",
+        "globals",
+        "views",
+        "imports",
+        "manualLayouts",
+    ] {
+        if !raw.get(field).is_some_and(serde_json::Value::is_object) {
+            return Err(format!(
+                "criv-likec4-model-invalid: raw model field {field} must be an object"
+            ));
+        }
+    }
+    let deployments = raw
+        .get("deployments")
+        .and_then(serde_json::Value::as_object);
+    if !deployments
+        .and_then(|value| value.get("elements"))
+        .is_some_and(serde_json::Value::is_object)
+        || !deployments
+            .and_then(|value| value.get("relations"))
+            .is_some_and(serde_json::Value::is_object)
+    {
+        return Err(
+            "criv-likec4-model-invalid: raw model deployments must contain elements and relations"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn prepare_c4_artifacts(
+    sources: &[EditorSourceEntry],
+    nodes: &[EditorGraphNode],
+) -> Vec<EditorC4Artifact> {
+    let mut artifacts = BTreeMap::<String, EditorC4Artifact>::new();
+    for source in sources {
+        if is_c4_path(&source.path) {
+            artifacts.insert(
+                source.path.clone(),
+                EditorC4Artifact {
+                    path: source.path.clone(),
+                    label: source.path.clone(),
+                    target: source.path.clone(),
+                },
+            );
+        }
+    }
+    for node in nodes {
+        let Some(target) = node.source_target.as_deref().or(node.path.as_deref()) else {
+            continue;
+        };
+        let path = node.path.as_deref().unwrap_or(target);
+        if !is_c4_path(path) {
+            continue;
+        }
+        artifacts.insert(
+            path.to_string(),
+            EditorC4Artifact {
+                path: path.to_string(),
+                label: if node.label.is_empty() {
+                    path.to_string()
+                } else {
+                    node.label.clone()
+                },
+                target: target.to_string(),
+            },
+        );
+    }
+    artifacts.into_values().collect()
+}
+
+fn is_c4_path(path: &str) -> bool {
+    path.split_once('#')
+        .map_or(path, |value| value.0)
+        .ends_with(".c4")
+}
+
 impl PreparedSelector {
     fn new(entry: SelectorEntry, frecency: u32) -> Self {
         Self { entry, frecency }
@@ -658,24 +887,6 @@ fn legacy_node_targets(node: &EditorGraphNode) -> Vec<String> {
     targets
 }
 
-#[cfg(test)]
-fn state_summary(state: &StateDocument, sources: &[EditorSourceEntry]) -> StateSummary {
-    StateSummary {
-        schema: state.schema.clone(),
-        node_count: state.graph.nodes.len(),
-        edge_count: state.graph.edges.len(),
-        source_count: sources.len(),
-        pattern_count: state.registered_patterns.len(),
-        first_node_id: state.graph.nodes.first().map(|node| node.id.clone()),
-        first_edge: state
-            .graph
-            .edges
-            .first()
-            .map(|edge| format!("{}:{}:{}", edge.from, edge.kind, edge.to)),
-        first_source_path: sources.first().map(|source| source.path.clone()),
-    }
-}
-
 fn fuzzy_subsequence_score(value: &str, query: &str) -> Option<i64> {
     let mut query_chars = query.chars();
     let mut current_query = query_chars.next();
@@ -721,16 +932,41 @@ struct StateSummary {
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Serialize)]
 struct InitialProjections<'a> {
-    state: &'a serde_json::Value,
     summary: &'a StateSummary,
     sources: &'a [EditorSourceEntry],
     nodes: &'a [EditorGraphNode],
+    #[serde(rename = "registeredPatterns")]
+    registered_patterns: &'a [String],
+    #[serde(rename = "patternMatches")]
+    pattern_matches: &'a BTreeMap<String, Vec<PatternMatch>>,
+    architecture: &'a Option<EditorLikeC4Model>,
+    #[serde(rename = "c4Artifacts")]
+    c4_artifacts: &'a [EditorC4Artifact],
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<'a> From<&'a PreparedState> for InitialProjections<'a> {
+    fn from(prepared: &'a PreparedState) -> Self {
+        Self {
+            summary: &prepared.summary,
+            sources: &prepared.sources,
+            nodes: &prepared.nodes,
+            registered_patterns: &prepared.registered_patterns,
+            pattern_matches: &prepared.pattern_matches,
+            architecture: &prepared.architecture,
+            c4_artifacts: &prepared.c4_artifacts,
+        }
+    }
 }
 
 struct PreparedState {
     summary: StateSummary,
     sources: Vec<EditorSourceEntry>,
     nodes: Vec<EditorGraphNode>,
+    registered_patterns: Vec<String>,
+    pattern_matches: BTreeMap<String, Vec<PatternMatch>>,
+    architecture: Option<EditorLikeC4Model>,
+    c4_artifacts: Vec<EditorC4Artifact>,
     exact_source_lookup: HashMap<u64, Vec<usize>>,
     legacy_source_lookup: HashMap<u64, Vec<usize>>,
     selectors: Vec<PreparedSelector>,
@@ -752,6 +988,47 @@ struct EditorGraphNode {
     path: Option<String>,
     source_target: Option<String>,
     line_range: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct EditorLikeC4View {
+    id: String,
+    title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+struct EditorLikeC4SourceLink {
+    element: String,
+    target: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EditorLikeC4Model {
+    protocol_version: u32,
+    likec4_version: String,
+    workspace: String,
+    model: serde_json::Value,
+    views: Vec<EditorLikeC4View>,
+    source_links: Vec<EditorLikeC4SourceLink>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PublishedLikeC4Model {
+    raw: serde_json::Value,
+    views: Vec<EditorLikeC4View>,
+    source_links: Vec<EditorLikeC4SourceLink>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EditorC4Artifact {
+    path: String,
+    label: String,
+    target: String,
 }
 
 const MAX_AMBIGUOUS_SOURCE_CANDIDATES: usize = 5;
@@ -814,6 +1091,64 @@ mod tests {
     use super::*;
 
     #[test]
+    fn prepares_the_complete_editor_projection_from_the_shared_fixture() {
+        let fixture = serde_json::from_str::<serde_json::Value>(include_str!(
+            "../../../fixtures/editor/likec4-projection.v1.json"
+        ))
+        .unwrap();
+        let loaded = LoadedState::load(&fixture["state"].to_string()).unwrap();
+
+        assert_eq!(
+            serde_json::to_value(&loaded.prepared.registered_patterns).unwrap(),
+            fixture["expected"]["registeredPatterns"]
+        );
+        assert_eq!(
+            serde_json::to_value(&loaded.prepared.pattern_matches).unwrap(),
+            fixture["state"]["patterns"]
+        );
+        assert_eq!(
+            serde_json::to_value(&loaded.prepared.c4_artifacts).unwrap(),
+            fixture["expected"]["c4Artifacts"]
+        );
+        assert_eq!(
+            serde_json::to_value(&loaded.prepared.architecture).unwrap(),
+            fixture["expected"]["architecture"]
+        );
+    }
+
+    #[test]
+    fn rejects_each_invalid_architecture_contract() {
+        let fixture = serde_json::from_str::<serde_json::Value>(include_str!(
+            "../../../fixtures/editor/likec4-projection.v1.json"
+        ))
+        .unwrap();
+
+        let mut wrong_protocol = fixture["state"].clone();
+        wrong_protocol["architecture"]["protocolVersion"] = 2.into();
+        assert!(
+            load_error(&wrong_protocol.to_string())
+                .starts_with("criv-likec4-protocol-unsupported:")
+        );
+
+        let mut wrong_version = fixture["state"].clone();
+        wrong_version["architecture"]["likec4Version"] = "2.0.0".into();
+        assert!(
+            load_error(&wrong_version.to_string()).starts_with("criv-likec4-version-unsupported:")
+        );
+
+        let mut invalid_model = fixture["state"].clone();
+        invalid_model["architecture"]["model"]["raw"] = true.into();
+        assert!(load_error(&invalid_model.to_string()).starts_with("criv-likec4-model-invalid:"));
+    }
+
+    fn load_error(raw: &str) -> String {
+        match LoadedState::load(raw) {
+            Ok(_) => panic!("expected State load to fail"),
+            Err(error) => error,
+        }
+    }
+
+    #[test]
     fn loaded_state_prepares_one_revision_for_all_operations() {
         let mut loaded =
             LoadedState::load(include_str!("../../../fixtures/state/criv.state.v1.json")).unwrap();
@@ -832,10 +1167,12 @@ mod tests {
             "src/lib.rs#fn:run"
         );
 
-        let envelope = loaded.take_initial_envelope().unwrap();
-        assert_eq!(envelope["schema"], "criv.state.v1");
-        assert!(envelope["patterns"]["ADR-0001/entrypoint"].is_array());
-        assert!(loaded.take_initial_envelope().is_err());
+        let projections = loaded.take_initial_projection().unwrap();
+        assert!(projections.get("state").is_none());
+        assert_eq!(projections["summary"]["schema"], "criv.state.v1");
+        assert_eq!(projections["registeredPatterns"][0], "ADR-0001/entrypoint");
+        assert!(projections["patternMatches"]["ADR-0001/entrypoint"].is_array());
+        assert!(loaded.take_initial_projection().is_err());
     }
 
     #[test]
@@ -863,13 +1200,14 @@ mod tests {
     }
 
     #[test]
-    fn validated_state_preserves_host_consumed_fields() {
-        let state =
-            decode_state_value(include_str!("../../../fixtures/state/criv.state.v1.json")).unwrap();
+    fn initial_projection_does_not_publish_the_raw_state() {
+        let mut loaded =
+            LoadedState::load(include_str!("../../../fixtures/state/criv.state.v1.json")).unwrap();
+        let projections = loaded.take_initial_projection().unwrap();
 
-        assert_eq!(state["schema"], "criv.state.v1");
-        assert_eq!(state["registered-patterns"][0], "ADR-0001/entrypoint");
-        assert!(state["patterns"]["ADR-0001/entrypoint"].is_array());
+        assert!(projections.get("state").is_none());
+        assert!(projections.get("graph").is_none());
+        assert!(projections.get("source-index").is_none());
     }
 
     #[test]

@@ -11,6 +11,9 @@
   "engines": {
     "node": "26.5.1"
   },
+  "scripts": {
+    "check:editor-contracts": "npm --prefix packages/criv-likec4 run check-types && npm --prefix packages/criv-likec4 test && npm --prefix packages/criv-editor-state run check-types && npm --prefix packages/criv-editor-state test && cargo test -p criv-wasm"
+  },
   "devDependencies": {
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.4",

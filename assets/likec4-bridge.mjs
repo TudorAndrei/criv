@@ -64,7 +64,7 @@ try {
       model = { raw: data, elements, relationships, views, sourceLinks };
     }
     process.stdout.write(JSON.stringify({
-      protocolVersion: 1,
+      protocolVersion: __CRIV_LIKEC4_PROTOCOL_VERSION__,
       nodeVersion: process.versions.node,
       likec4Version: packageJson.version,
       revision,
@@ -77,7 +77,7 @@ try {
   }
 } catch (error) {
   process.stdout.write(JSON.stringify({
-    protocolVersion: 1,
+    protocolVersion: __CRIV_LIKEC4_PROTOCOL_VERSION__,
     nodeVersion: process.versions.node,
     likec4Version: 'unknown',
     revision,

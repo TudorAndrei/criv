@@ -4,11 +4,19 @@ import {
   type CrivWasmHost,
   type CrivWasmModuleLoader,
 } from "@criv/editor-state";
+import type { CrivLikeC4Model } from "@criv/likec4/protocol";
 
 export {
+  CRIV_LIKEC4_ARCHITECTURE_INVALID,
+  CRIV_LIKEC4_MODEL_INVALID,
+  CRIV_LIKEC4_PROTOCOL_UNSUPPORTED,
+  CRIV_LIKEC4_VERSION_UNSUPPORTED,
   CRIV_LOADED_STATE_DISPOSED,
+  CRIV_STATE_JSON_INVALID,
+  CRIV_STATE_SCHEMA_UNSUPPORTED,
   CRIV_WASM_LOAD_ERROR,
   CrivLoadedStateDisposedError,
+  CrivStateContractError,
   CrivWasmLoadError,
 } from "@criv/editor-state";
 
@@ -62,23 +70,26 @@ export interface CrivSelectorSuggestion {
   detail: string;
 }
 
-export interface CrivValidatedState {
-  schema?: unknown;
-  graph?: {
-    nodes?: unknown[];
-    edges?: unknown[];
-  };
-  "registered-patterns"?: unknown[];
-  "source-index"?: unknown[];
-  patterns?: Record<string, unknown[]>;
-  [key: string]: unknown;
+export interface CrivPatternMatch {
+  file: string;
+  range?: string;
+  captures: Record<string, string>;
+}
+
+export interface CrivArtifactEntry {
+  path: string;
+  label: string;
+  target: string;
 }
 
 export interface CrivInitialProjections {
-  state: CrivValidatedState;
   summary: CrivStateSummary;
   sources: CrivSourceEntry[];
   nodes: CrivGraphNode[];
+  registeredPatterns: string[];
+  patternMatches: Record<string, CrivPatternMatch[]>;
+  architecture?: CrivLikeC4Model;
+  c4Artifacts: CrivArtifactEntry[];
 }
 
 export type CrivLoadedState = SharedLoadedState<

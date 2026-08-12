@@ -49,7 +49,10 @@ assert.equal(
 );
 const stateContractRaw = readFileSync(stateContractPath, "utf8");
 const stateContract = JSON.parse(stateContractRaw);
-assert.deepEqual(initialProjections(stateContractRaw).state, stateContract);
+const stateContractProjections = initialProjections(stateContractRaw);
+assert.equal("state" in stateContractProjections, false);
+assert.deepEqual(stateContractProjections.registeredPatterns, ["ADR-0001/entrypoint"]);
+assert.deepEqual(stateContractProjections.patternMatches, stateContract.patterns);
 assert.match(
   wasmError(() => new wasm.LoadedState(stateContractRaw.replace("criv.state.v1", "criv.state.v2"))),
   /unsupported criv state schema/i,
@@ -68,15 +71,19 @@ assert.deepEqual(stateContract.patterns, {
 });
 assert.equal(stateContract.patterns["ADR-0002/draft-entrypoint"], undefined);
 assert.equal(
-  core.resolvePattern(stateContract, "match:ADR-0001/entrypoint"),
+  core.resolvePattern(projectedState(stateContract), "match:ADR-0001/entrypoint"),
   "ADR-0001/entrypoint",
 );
-assert.equal(core.resolvePattern(stateContract, "match:ADR-0002/draft-entrypoint"), null);
+assert.equal(
+  core.resolvePattern(projectedState(stateContract), "match:ADR-0002/draft-entrypoint"),
+  null,
+);
 
 const fixture = JSON.parse(
   readFileSync(resolve(pluginRoot, "fixtures/link-resolution.json"), "utf8"),
 );
 const state = fixture.state;
+const projectedFixtureState = projectedState(state);
 const linkRevision = new wasm.LoadedState(JSON.stringify(state));
 const sources = linkRevision.initialProjections().sources;
 const sourceByPath = new Map(sources.map((source) => [source.path, source]));
@@ -87,7 +94,7 @@ const sourceResolver = {
 
 for (const testCase of fixture.cases) {
   const source = core.resolveSource(sourceResolver, testCase.target);
-  const pattern = core.resolvePattern(state, testCase.target);
+  const pattern = core.resolvePattern(projectedFixtureState, testCase.target);
   assert.equal(source?.entry.path ?? null, testCase.source, `source for ${testCase.target}`);
   assert.equal(pattern, testCase.pattern, `pattern for ${testCase.target}`);
 }
@@ -125,7 +132,7 @@ assert.equal(
       id: "ADR-0001",
       policy: { patterns: [{ id: "no-block-on" }] },
     },
-    state,
+    projectedFixtureState,
   )[0].matches[0].range,
   "L1:C1-L1:C10",
 );
@@ -177,7 +184,7 @@ assert.equal(core.decodeSourceLinkTarget("src%2Flib.rs%23fn%3Arun"), "src/lib.rs
 assert.equal(core.decodeSourceLinkTarget("src%2Glib.rs"), null);
 
 const validStateRaw = JSON.stringify(state);
-assert.deepEqual(initialProjections(validStateRaw).state, state);
+assert.equal("state" in initialProjections(validStateRaw), false);
 assert.match(
   wasmError(() => new wasm.LoadedState(validStateRaw.replace("criv.state.v1", "criv.state.v2"))),
   /unsupported criv state schema/i,
@@ -212,7 +219,7 @@ assert.deepEqual(targets, [
 
 const ranges = core.crivLinkRanges(
   "[[src/lib.rs]] [[missing.rs]] [[match:ADR-0001/no-block-on]]",
-  state,
+  projectedFixtureState,
   sourceResolver,
 );
 assert.deepEqual(
@@ -225,3 +232,11 @@ assert.deepEqual(
 );
 unsafeRevision.free();
 linkRevision.free();
+
+function projectedState(state) {
+  return {
+    registeredPatterns: state["registered-patterns"] ?? [],
+    patternMatches: state.patterns ?? {},
+    architecture: state.architecture,
+  };
+}

@@ -76,12 +76,7 @@ export class WorkspaceStateStore implements Disposable {
       },
       (candidate) => {
         const projections = candidate.initialProjections();
-        return buildStateSnapshot(
-          projections.state,
-          projections.summary,
-          projections.sources,
-          projections.nodes,
-        );
+        return buildStateSnapshot(projections);
       },
     );
 

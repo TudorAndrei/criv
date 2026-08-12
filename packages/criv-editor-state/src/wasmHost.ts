@@ -1,5 +1,43 @@
 export const CRIV_WASM_LOAD_ERROR = "criv-wasm-unavailable";
 export const CRIV_LOADED_STATE_DISPOSED = "criv-loaded-state-disposed";
+export const CRIV_STATE_JSON_INVALID = "criv-state-json-invalid";
+export const CRIV_STATE_SCHEMA_UNSUPPORTED = "criv-state-schema-unsupported";
+export const CRIV_LIKEC4_ARCHITECTURE_INVALID = "criv-likec4-architecture-invalid";
+export const CRIV_LIKEC4_PROTOCOL_UNSUPPORTED = "criv-likec4-protocol-unsupported";
+export const CRIV_LIKEC4_VERSION_UNSUPPORTED = "criv-likec4-version-unsupported";
+export const CRIV_LIKEC4_MODEL_INVALID = "criv-likec4-model-invalid";
+
+export type CrivStateContractErrorCode =
+  | typeof CRIV_STATE_JSON_INVALID
+  | typeof CRIV_STATE_SCHEMA_UNSUPPORTED
+  | typeof CRIV_LIKEC4_ARCHITECTURE_INVALID
+  | typeof CRIV_LIKEC4_PROTOCOL_UNSUPPORTED
+  | typeof CRIV_LIKEC4_VERSION_UNSUPPORTED
+  | typeof CRIV_LIKEC4_MODEL_INVALID;
+
+const stateContractErrorCodes = new Set<CrivStateContractErrorCode>([
+  CRIV_STATE_JSON_INVALID,
+  CRIV_STATE_SCHEMA_UNSUPPORTED,
+  CRIV_LIKEC4_ARCHITECTURE_INVALID,
+  CRIV_LIKEC4_PROTOCOL_UNSUPPORTED,
+  CRIV_LIKEC4_VERSION_UNSUPPORTED,
+  CRIV_LIKEC4_MODEL_INVALID,
+]);
+
+export class CrivStateContractError extends Error {
+  readonly code: CrivStateContractErrorCode;
+
+  constructor(
+    code: CrivStateContractErrorCode,
+    message: string,
+    cause: unknown,
+  ) {
+    super(message);
+    this.name = "CrivStateContractError";
+    this.code = code;
+    (this as Error & { cause?: unknown }).cause = cause;
+  }
+}
 
 export class CrivWasmLoadError extends Error {
   readonly code = CRIV_WASM_LOAD_ERROR;
@@ -65,7 +103,12 @@ export function createCrivWasmHost<Projections, LookupResult, Suggestion>(
   return {
     async loadState(raw) {
       const wasm = await loadWasm();
-      const loaded = new wasm.LoadedState(raw);
+      let loaded: CrivWasmLoadedState<Projections, LookupResult, Suggestion>;
+      try {
+        loaded = new wasm.LoadedState(raw);
+      } catch (error) {
+        throw normalizeStateContractError(error);
+      }
       try {
         const projections = loaded.initialProjections();
         return new LoadedStateAdapter(loaded, projections);
@@ -75,6 +118,22 @@ export function createCrivWasmHost<Projections, LookupResult, Suggestion>(
       }
     },
   };
+}
+
+function normalizeStateContractError(error: unknown): unknown {
+  if (error instanceof CrivStateContractError) {
+    return error;
+  }
+  const raw = error instanceof Error ? error.message : String(error);
+  const separator = raw.indexOf(":");
+  if (separator < 0) {
+    return error;
+  }
+  const code = raw.slice(0, separator) as CrivStateContractErrorCode;
+  if (!stateContractErrorCodes.has(code)) {
+    return error;
+  }
+  return new CrivStateContractError(code, raw.slice(separator + 1).trim(), error);
 }
 
 function requireCrivWasmModule<Projections, LookupResult, Suggestion>(

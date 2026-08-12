@@ -7,18 +7,13 @@ model {
 
       modelContract = component 'Model contract' {
         technology 'TypeScript'
-        description 'Defines the stable model, diagnostic, and version contract shared by editor adapters.'
+        description 'Defines the prepared model and view contract that editor adapters pass without conversion.'
         link ../../packages/criv-likec4/src/protocol.ts 'source'
       }
       diagramRenderer = component 'Diagram renderer' {
         technology 'TypeScript, React, and LikeC4'
-        description 'Mounts, navigates, and updates a LikeC4 diagram in an adapter-owned DOM element.'
+        description 'Mounts, navigates, exports, and disposes a LikeC4 diagram in an adapter-owned DOM element.'
         link ../../packages/criv-likec4/src/renderer.ts 'source'
-      }
-      modelCompiler = component 'Model compiler' {
-        technology 'TypeScript and Node.js'
-        description 'Offers a Node.js API that compiles LikeC4 source into the shared model contract.'
-        link ../../packages/criv-likec4/src/node.ts 'source'
       }
     }
   }
@@ -29,7 +24,7 @@ views {
 
   view sharedRendererComponents of criv.sharedRenderer {
     title 'Components / Shared renderer'
-    description 'The model contract, browser renderer, and Node.js compiler in the shared package.'
+    description 'The model contract and browser renderer in the shared package.'
 
     include *
     include

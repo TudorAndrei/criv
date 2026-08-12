@@ -7,9 +7,16 @@ import {
 import type { CrivNode, CrivSourceTargetLookupResult, CrivState, SourceIndexEntry } from "./core";
 
 export {
+  CRIV_LIKEC4_ARCHITECTURE_INVALID,
+  CRIV_LIKEC4_MODEL_INVALID,
+  CRIV_LIKEC4_PROTOCOL_UNSUPPORTED,
+  CRIV_LIKEC4_VERSION_UNSUPPORTED,
   CRIV_LOADED_STATE_DISPOSED,
+  CRIV_STATE_JSON_INVALID,
+  CRIV_STATE_SCHEMA_UNSUPPORTED,
   CRIV_WASM_LOAD_ERROR,
   CrivLoadedStateDisposedError,
+  CrivStateContractError,
   CrivWasmLoadError,
 } from "@criv/editor-state";
 
@@ -33,10 +40,13 @@ export interface CrivSelectorSuggestion {
 }
 
 export interface CrivInitialProjections {
-  state: CrivState;
   summary: CrivStateSummary;
   sources: SourceIndexEntry[];
   nodes: CrivNode[];
+  registeredPatterns: CrivState["registeredPatterns"];
+  patternMatches: CrivState["patternMatches"];
+  architecture?: CrivState["architecture"];
+  c4Artifacts: { path: string; label: string; target: string }[];
 }
 
 export type CrivLoadedState = SharedLoadedState<

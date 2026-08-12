@@ -2,7 +2,7 @@ import type { CrivLikeC4Model } from "@criv/likec4/protocol";
 
 export interface C4PreviewPayload {
   model: CrivLikeC4Model;
-  viewId?: string;
+  viewId: string;
   colorScheme: "light" | "dark";
 }
 

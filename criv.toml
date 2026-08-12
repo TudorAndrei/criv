@@ -28,6 +28,7 @@ roots = [
   "README.md",
   "assets/skills",
   "assets/likec4-bridge.mjs",
+  "assets/likec4-contract.json",
   ".agents/skills",
 ]
 exclude = [

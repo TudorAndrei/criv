@@ -18,7 +18,7 @@ import {
 import type { App, PluginManifest } from "obsidian";
 import { LoadedRevisionOwner } from "@criv/editor-state";
 import { CrivLikeC4Renderer } from "@criv/likec4/renderer";
-import { preferredLikeC4ViewId, type CrivLikeC4Model } from "@criv/likec4/protocol";
+import { preferredLikeC4ViewId } from "@criv/likec4/protocol";
 import { RangeSetBuilder } from "@codemirror/state";
 import {
   Decoration,
@@ -243,7 +243,11 @@ export default class CrivPlugin extends Plugin {
       return this.state;
     }
     if (result.kind === "committed") {
-      this.state = result.value.state;
+      this.state = {
+        registeredPatterns: result.value.registeredPatterns,
+        patternMatches: result.value.patternMatches,
+        architecture: result.value.architecture,
+      };
       this.stateSources = result.value.sources;
       this.stateSourcesByPath = new Map(
         result.value.sources.map((source) => [source.path, source]),
@@ -475,7 +479,7 @@ export default class CrivPlugin extends Plugin {
 
   async patternIds(): Promise<string[]> {
     const state = await this.getState();
-    return state?.["registered-patterns"] ?? [];
+    return state?.registeredPatterns ?? [];
   }
 
   private async handleDocumentMouseOver(event: MouseEvent): Promise<void> {
@@ -703,7 +707,6 @@ class CrivC4View extends FileView {
   private likec4Renderer: CrivLikeC4Renderer | null = null;
   private likec4ViewSelect: HTMLSelectElement | null = null;
   private readonly previewRevisions = new LoadedRevisionOwner<CrivC4PreviewRevision>();
-  private revision = 0;
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -891,15 +894,7 @@ class CrivC4View extends FileView {
         const chrome = this.buildChrome(root, source, file.basename);
         const viewport = chrome.body.createDiv({ cls: "criv-c4-preview" });
         const surface = viewport.createDiv({ cls: "criv-c4-preview-surface" });
-        const model: CrivLikeC4Model = {
-          protocolVersion: 1,
-          likec4Version: architecture.likec4Version as "1.59.2",
-          revision: ++this.revision,
-          workspace: architecture.workspace,
-          model: architecture.model.raw,
-          views: architecture.model.views,
-          sourceLinks: architecture.model.sourceLinks,
-        };
+        const model = architecture;
         const nextViewId =
           selectedViewId && model.views.some((view) => view.id === selectedViewId)
             ? selectedViewId

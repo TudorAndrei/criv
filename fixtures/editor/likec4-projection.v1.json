@@ -1,0 +1,133 @@
+{
+  "state": {
+    "schema": "criv.state.v1",
+    "architecture": {
+      "protocolVersion": 1,
+      "likec4Version": "1.59.2",
+      "revision": 7,
+      "workspace": "docs/architecture",
+      "model": {
+        "raw": {
+          "_stage": "layouted",
+          "projectId": "test",
+          "project": {},
+          "specification": {},
+          "elements": {},
+          "relations": {},
+          "globals": {},
+          "views": {},
+          "deployments": {
+            "elements": {},
+            "relations": {}
+          },
+          "imports": {},
+          "manualLayouts": {}
+        },
+        "elements": [],
+        "relationships": [],
+        "views": [
+          {
+            "id": "index",
+            "title": "System context",
+            "sourcePath": "systems.c4"
+          },
+          {
+            "id": "code",
+            "title": "Code"
+          }
+        ],
+        "sourceLinks": [
+          {
+            "element": "criv",
+            "target": "src/lib.rs"
+          }
+        ]
+      }
+    },
+    "graph": {
+      "nodes": [
+        {
+          "id": "code:docs/architecture/systems.c4",
+          "kind": "module",
+          "label": "System model",
+          "path": "docs/architecture/systems.c4"
+        }
+      ],
+      "edges": []
+    },
+    "registered-patterns": [
+      "ADR-0002/note"
+    ],
+    "patterns": {
+      "ADR-0002/note": [
+        {
+          "file": "docs/architecture/systems.c4",
+          "range": "L1-L2",
+          "captures": {}
+        }
+      ]
+    },
+    "source-index": [
+      {
+        "path": "docs/architecture/systems.c4",
+        "mime": "text/plain",
+        "frecency": 3
+      },
+      {
+        "path": "README.md",
+        "mime": "text/markdown",
+        "frecency": 1
+      }
+    ]
+  },
+  "expected": {
+    "registeredPatterns": [
+      "ADR-0002/note"
+    ],
+    "c4Artifacts": [
+      {
+        "path": "docs/architecture/systems.c4",
+        "label": "System model",
+        "target": "docs/architecture/systems.c4"
+      }
+    ],
+    "architecture": {
+      "protocolVersion": 1,
+      "likec4Version": "1.59.2",
+      "workspace": "docs/architecture",
+      "model": {
+        "_stage": "layouted",
+        "projectId": "test",
+        "project": {},
+        "specification": {},
+        "elements": {},
+        "relations": {},
+        "globals": {},
+        "views": {},
+        "deployments": {
+          "elements": {},
+          "relations": {}
+        },
+        "imports": {},
+        "manualLayouts": {}
+      },
+      "views": [
+        {
+          "id": "index",
+          "title": "System context",
+          "sourcePath": "systems.c4"
+        },
+        {
+          "id": "code",
+          "title": "Code"
+        }
+      ],
+      "sourceLinks": [
+        {
+          "element": "criv",
+          "target": "src/lib.rs"
+        }
+      ]
+    }
+  }
+}

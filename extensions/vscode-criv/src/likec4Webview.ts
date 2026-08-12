@@ -5,7 +5,7 @@ declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
 
 const payload = JSON.parse(document.getElementById("payload")?.textContent ?? "null") as {
   model: CrivLikeC4Model;
-  viewId?: string;
+  viewId: string;
   colorScheme?: "light" | "dark";
 } | null;
 const container = document.getElementById("diagram");

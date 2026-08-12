@@ -2,12 +2,33 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  CRIV_STATE_SCHEMA_UNSUPPORTED,
+  CrivStateContractError,
   CRIV_LOADED_STATE_DISPOSED,
   CRIV_WASM_LOAD_ERROR,
   CrivLoadedStateDisposedError,
   CrivWasmLoadError,
   createCrivWasmHost,
 } from "../src/wasmHost.ts";
+
+test("normalizes Wasm State failures to a stable code and base message", async () => {
+  const host = createCrivWasmHost(async () => ({
+    LoadedState: class {
+      constructor() {
+        throw new Error(
+          "criv-state-schema-unsupported: unsupported criv state schema: criv.state.v2",
+        );
+      }
+    },
+  }), "runtime unavailable");
+
+  await assert.rejects(host.loadState("{}"), (error: unknown) => {
+    assert.ok(error instanceof CrivStateContractError);
+    assert.equal(error.code, CRIV_STATE_SCHEMA_UNSUPPORTED);
+    assert.equal(error.message, "unsupported criv state schema: criv.state.v2");
+    return true;
+  });
+});
 
 test("captures initial projections and delegates prepared queries", async () => {
   let projectionCalls = 0;

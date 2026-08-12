@@ -8,6 +8,11 @@
     ".": "./src/index.ts"
   },
   "scripts": {
+    "check-types": "tsc --noEmit",
     "test": "node --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "26.0.1",
+    "typescript": "6.0.3"
   }
 }

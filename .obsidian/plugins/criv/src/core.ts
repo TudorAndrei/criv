@@ -59,22 +59,9 @@ export interface SourceResolver {
 }
 
 export interface CrivState {
-  schema: string;
-  architecture?: {
-    protocolVersion: number;
-    likec4Version: string;
-    revision: number;
-    workspace: string;
-    model: {
-      raw: unknown;
-      views: { id: string; title: string; sourcePath?: string }[];
-      sourceLinks: { element: string; target: string }[];
-    };
-  };
-  graph?: { nodes?: CrivNode[] };
-  patterns?: Record<string, PatternMatch[]>;
-  "registered-patterns"?: string[];
-  "source-index"?: SourceIndexEntry[];
+  registeredPatterns: string[];
+  patternMatches: Record<string, PatternMatch[]>;
+  architecture?: import("@criv/likec4/protocol").CrivLikeC4Model;
 }
 
 export interface FrontmatterPatternTarget {
@@ -250,7 +237,7 @@ export function resolvePattern(state: CrivState, target: string): string | null 
   if (!id) {
     return null;
   }
-  const ids = state["registered-patterns"] ?? [];
+  const ids = state.registeredPatterns;
   return ids.includes(id) ? id : null;
 }
 
@@ -259,7 +246,7 @@ export function sourceTooltip(source: LinkedSource): string {
 }
 
 export function patternTooltip(state: CrivState, id: string): string {
-  const count = state.patterns?.[id]?.length ?? 0;
+  const count = state.patternMatches[id]?.length ?? 0;
   return `${id}: ${count} match${count === 1 ? "" : "es"}`;
 }
 
@@ -352,12 +339,12 @@ function frontmatterPatternTarget(
     return { id, source, status: "local", matches: [] };
   }
 
-  const matches = state.patterns?.[id] ?? [];
-  const ids = state["registered-patterns"] ?? [];
+  const matches = state.patternMatches[id] ?? [];
+  const ids = state.registeredPatterns;
   return {
     id,
     source,
-    status: ids.includes(id) || state.patterns?.[id] ? "resolved" : "unresolved",
+    status: ids.includes(id) || state.patternMatches[id] ? "resolved" : "unresolved",
     matches,
   };
 }

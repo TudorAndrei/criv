@@ -1,5 +1,6 @@
 /target
 /node_modules/
+packages/*/node_modules/
 .criv/
 .obsidian/graph.json
 .obsidian/workspace.json

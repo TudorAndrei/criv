@@ -47,7 +47,6 @@ class FakeRevision {
 
   initialProjections() {
     return {
-      state: this.state,
       summary: {
         schema: this.state.schema,
         node_count: this.state.graph?.nodes?.length ?? 0,
@@ -57,6 +56,10 @@ class FakeRevision {
       },
       sources: this.state["source-index"] ?? [],
       nodes: [],
+      registeredPatterns: this.state["registered-patterns"] ?? [],
+      patternMatches: this.state.patterns ?? {},
+      architecture: this.state.architecture,
+      c4Artifacts: [],
     };
   }
 
@@ -76,7 +79,7 @@ class FakeRevision {
 {
   const { plugin } = createPlugin({ ".criv/state.json": validStateRaw });
   const loaded = await plugin.loadState();
-  assert.deepEqual(loaded, validState);
+  assert.deepEqual(loaded, projectedState(validState));
   assert.equal(plugin.cachedState(), loaded);
   assert.equal(plugin.stateStatus(), "criv state is unavailable at .criv/state.json.");
 }
@@ -111,7 +114,7 @@ class FakeRevision {
 {
   const { plugin, reads } = createPlugin({ ".criv/state.json": validStateRaw });
   const loaded = await plugin.getState();
-  assert.deepEqual(loaded, validState);
+  assert.deepEqual(loaded, projectedState(validState));
   assert.equal(await plugin.getState(), loaded);
   assert.equal(reads(), 1);
 }
@@ -133,7 +136,10 @@ class FakeRevision {
 
 {
   const current = new FakeRevision(validState);
-  const changed = new FakeRevision({ ...validState, marker: "changed" });
+  const changed = new FakeRevision({
+    ...validState,
+    "registered-patterns": ["ADR-0001/changed"],
+  });
   const revisions = [current, changed];
   let loadCount = 0;
   const { plugin, setStat, reads } = createPlugin(
@@ -150,7 +156,7 @@ class FakeRevision {
   assert.equal(reads(), 1);
 
   await plugin.updateStatePath("state/other.json");
-  assert.equal(plugin.cachedState().marker, "changed");
+  assert.deepEqual(plugin.cachedState().registeredPatterns, ["ADR-0001/changed"]);
   assert.equal(current.disposals, 1);
 
   plugin.onunload();
@@ -160,7 +166,10 @@ class FakeRevision {
 {
   const files = { ".criv/state.json": validStateRaw };
   const current = new FakeRevision(validState);
-  const changed = new FakeRevision({ ...validState, marker: "polled" });
+  const changed = new FakeRevision({
+    ...validState,
+    "registered-patterns": ["ADR-0001/polled"],
+  });
   const revisions = [current, changed];
   let loadCount = 0;
   const { plugin, setStat, reads } = createPlugin(files, async () => revisions[loadCount++]);
@@ -172,8 +181,16 @@ class FakeRevision {
   await plugin.pollState();
 
   assert.equal(reads(), 2);
-  assert.equal(plugin.cachedState().marker, "polled");
+  assert.deepEqual(plugin.cachedState().registeredPatterns, ["ADR-0001/polled"]);
   assert.equal(current.disposals, 1);
+}
+
+function projectedState(state) {
+  return {
+    registeredPatterns: state["registered-patterns"] ?? [],
+    patternMatches: state.patterns ?? {},
+    architecture: state.architecture,
+  };
 }
 
 {

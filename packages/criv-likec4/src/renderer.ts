@@ -5,6 +5,27 @@ import { createRoot, type Root } from "react-dom/client";
 
 import type { CrivLikeC4Model } from "./protocol.js";
 
+export const CRIV_LIKEC4_UNKNOWN_VIEW = "criv-likec4-unknown-view";
+export const CRIV_LIKEC4_RENDERER_DISPOSED = "criv-likec4-renderer-disposed";
+
+export class CrivLikeC4UnknownViewError extends Error {
+  readonly code = CRIV_LIKEC4_UNKNOWN_VIEW;
+
+  constructor(viewId: string) {
+    super(`The LikeC4 view does not exist: ${viewId}.`);
+    this.name = "CrivLikeC4UnknownViewError";
+  }
+}
+
+export class CrivLikeC4RendererDisposedError extends Error {
+  readonly code = CRIV_LIKEC4_RENDERER_DISPOSED;
+
+  constructor() {
+    super("The LikeC4 renderer was disposed.");
+    this.name = "CrivLikeC4RendererDisposedError";
+  }
+}
+
 export interface CrivLikeC4RendererOptions {
   colorScheme?: "light" | "dark";
   onOpenSource?: (target: string) => void;
@@ -15,9 +36,9 @@ export class CrivLikeC4Renderer {
   readonly #container: HTMLElement;
   readonly #options: CrivLikeC4RendererOptions;
   readonly #root: Root;
-  #revision = -1;
   #model: CrivLikeC4Model | null = null;
   #viewId: string | null = null;
+  #disposed = false;
 
   constructor(container: HTMLElement, options: CrivLikeC4RendererOptions = {}) {
     this.#container = container;
@@ -25,23 +46,23 @@ export class CrivLikeC4Renderer {
     this.#root = createRoot(container);
   }
 
-  replace(next: CrivLikeC4Model, viewId?: string): boolean {
-    if (next.revision <= this.#revision) {
-      return false;
+  replace(next: CrivLikeC4Model, viewId: string): void {
+    this.#assertAvailable();
+    if (!next.views.some((view) => view.id === viewId)) {
+      throw new CrivLikeC4UnknownViewError(viewId);
     }
-    this.#revision = next.revision;
     this.#model = next;
-    // A file that owns no named view renders nothing. There is no fallback view.
-    this.#viewId = viewId && next.views.some((view) => view.id === viewId) ? viewId : null;
+    this.#viewId = viewId;
     this.#render();
-    if (this.#viewId) {
-      this.#options.onSelectView?.(this.#viewId);
-    }
-    return true;
+    this.#options.onSelectView?.(viewId);
   }
 
   selectView(viewId: string): boolean {
-    if (!this.#model?.views.some((view) => view.id === viewId) || this.#viewId === viewId) {
+    this.#assertAvailable();
+    if (!this.#model?.views.some((view) => view.id === viewId)) {
+      throw new CrivLikeC4UnknownViewError(viewId);
+    }
+    if (this.#viewId === viewId) {
       return false;
     }
     this.#viewId = viewId;
@@ -51,14 +72,17 @@ export class CrivLikeC4Renderer {
   }
 
   currentViewId(): string | null {
+    this.#assertAvailable();
     return this.#viewId;
   }
 
   views(): readonly { id: string; title: string }[] {
+    this.#assertAvailable();
     return this.#model?.views ?? [];
   }
 
   exportSvg(): string | null {
+    this.#assertAvailable();
     const host = this.#container.querySelector(".likec4-view") as HTMLElement | null;
     const shadow = host?.shadowRoot;
     if (!host || !shadow) {
@@ -77,8 +101,13 @@ export class CrivLikeC4Renderer {
   }
 
   dispose(): void {
+    if (this.#disposed) {
+      return;
+    }
+    this.#disposed = true;
     this.#root.unmount();
     this.#model = null;
+    this.#viewId = null;
   }
 
   #render(): void {
@@ -115,5 +144,11 @@ export class CrivLikeC4Renderer {
         } as never),
       ),
     );
+  }
+
+  #assertAvailable(): void {
+    if (this.#disposed) {
+      throw new CrivLikeC4RendererDisposedError();
+    }
   }
 }

@@ -1,17 +1,27 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::LazyLock;
 use std::thread;
 use std::time::Duration;
 
 use serde::Deserialize;
 
-const PROTOCOL_VERSION: u32 = 1;
-const NODE_VERSION: &str = "26.5.1";
-const LIKEC4_VERSION: &str = "1.59.2";
-
-const BRIDGE_SOURCE: &str = include_str!("../assets/likec4-bridge.mjs");
+const BRIDGE_SOURCE_TEMPLATE: &str = include_str!("../assets/likec4-bridge.mjs");
 const BRIDGE_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_BRIDGE_OUTPUT: usize = 16 * 1024 * 1024;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LikeC4Contract {
+    protocol_version: u32,
+    node_version: String,
+    likec4_version: String,
+}
+
+static LIKEC4_CONTRACT: LazyLock<LikeC4Contract> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("../assets/likec4-contract.json"))
+        .expect("the embedded LikeC4 contract must be valid JSON")
+});
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LikeC4DiagnosticKind {
@@ -98,11 +108,12 @@ pub(crate) fn load(root: &Path, docs_path: &Path, sources: &[PathBuf]) -> LikeC4
         return result;
     }
 
+    let bridge_source = bridge_source();
     let mut child = match Command::new("node")
         .args([
             "--input-type=module",
             "--eval",
-            BRIDGE_SOURCE,
+            bridge_source.as_str(),
             &workspace_arg,
             "0",
         ])
@@ -118,7 +129,8 @@ pub(crate) fn load(root: &Path, docs_path: &Path, sources: &[PathBuf]) -> LikeC4
                 path: workspace,
                 line: None,
                 message: format!(
-                    "LikeC4 source requires Node.js 26.5.1 and local likec4 1.59.2: {error}"
+                    "LikeC4 source requires Node.js {} and local likec4 {}: {error}",
+                    LIKEC4_CONTRACT.node_version, LIKEC4_CONTRACT.likec4_version
                 ),
             });
             return result;
@@ -208,9 +220,9 @@ pub(crate) fn load(root: &Path, docs_path: &Path, sources: &[PathBuf]) -> LikeC4
     };
 
     result.version = Some(response.likec4_version.clone());
-    if response.protocol_version != PROTOCOL_VERSION
-        || response.node_version != NODE_VERSION
-        || response.likec4_version != LIKEC4_VERSION
+    if response.protocol_version != LIKEC4_CONTRACT.protocol_version
+        || response.node_version != LIKEC4_CONTRACT.node_version
+        || response.likec4_version != LIKEC4_CONTRACT.likec4_version
         || response.revision != 0
     {
         result.diagnostics.push(LikeC4Diagnostic {
@@ -218,7 +230,10 @@ pub(crate) fn load(root: &Path, docs_path: &Path, sources: &[PathBuf]) -> LikeC4
             path: workspace,
             line: None,
             message: format!(
-                "LikeC4 bridge version mismatch: expected protocol {PROTOCOL_VERSION}, Node.js {NODE_VERSION}, and LikeC4 {LIKEC4_VERSION}; got protocol {}, Node.js {}, and LikeC4 {}",
+                "LikeC4 bridge version mismatch: expected protocol {}, Node.js {}, and LikeC4 {}; got protocol {}, Node.js {}, and LikeC4 {}",
+                LIKEC4_CONTRACT.protocol_version,
+                LIKEC4_CONTRACT.node_version,
+                LIKEC4_CONTRACT.likec4_version,
                 response.protocol_version, response.node_version, response.likec4_version
             ),
         });
@@ -258,6 +273,13 @@ pub(crate) fn load(root: &Path, docs_path: &Path, sources: &[PathBuf]) -> LikeC4
         result.model = response.model;
     }
     result
+}
+
+fn bridge_source() -> String {
+    BRIDGE_SOURCE_TEMPLATE.replace(
+        "__CRIV_LIKEC4_PROTOCOL_VERSION__",
+        &LIKEC4_CONTRACT.protocol_version.to_string(),
+    )
 }
 
 fn read_capped(mut reader: impl std::io::Read) -> std::io::Result<Vec<u8>> {
@@ -304,4 +326,22 @@ fn relative_path(root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_bridge_uses_the_repository_contract() {
+        let source = bridge_source();
+
+        assert!(source.contains(&format!(
+            "protocolVersion: {}",
+            LIKEC4_CONTRACT.protocol_version
+        )));
+        assert!(!source.contains("__CRIV_LIKEC4_PROTOCOL_VERSION__"));
+        assert_eq!(LIKEC4_CONTRACT.node_version, "26.5.1");
+        assert_eq!(LIKEC4_CONTRACT.likec4_version, "1.59.2");
+    }
 }

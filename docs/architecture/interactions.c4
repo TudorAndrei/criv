@@ -111,10 +111,10 @@ model {
 
   // Shared renderer components.
   criv.sharedRenderer.diagramRenderer -> criv.sharedRenderer.modelContract 'Reads the compiled model contract'
-  criv.sharedRenderer.modelCompiler -> criv.sharedRenderer.modelContract 'Emits the compiled model contract'
 
   // Shared state projection components.
   criv.stateProjection.graphProjection -> criv.stateProjection.stateDecoder 'Prepares the loaded revision'
+  criv.stateProjection.architectureProjection -> criv.stateProjection.stateDecoder 'Validates the architecture projection'
   criv.stateProjection.selectorProjection -> criv.stateProjection.stateDecoder 'Reads prepared revision data'
   criv.stateProjection.selectorProjection -> criv.stateProjection.graphProjection 'Ranks projected graph nodes'
 

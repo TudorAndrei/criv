@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import test from "node:test";
 
 import extensionPackage from "../../package.json";
@@ -23,4 +25,10 @@ test("the preview command supports the official LikeC4 language", () => {
   assert.ok(preview);
   assert.match(preview.when, /likec4/);
   assert.match(preview.when, /criv-c4/);
+});
+
+test("the webview unload path disposes the shared renderer", () => {
+  const source = readFileSync(resolve(__dirname, "../../src/likec4Webview.ts"), "utf8");
+
+  assert.match(source, /window\.addEventListener\("unload", \(\) => renderer\.dispose\(\)\)/);
 });

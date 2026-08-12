@@ -106,7 +106,6 @@ class FakeRevision implements CrivLoadedState {
 
   initialProjections(): CrivInitialProjections {
     return {
-      state: { schema: this.name },
       summary: {
         schema: this.name,
         node_count: 0,
@@ -116,6 +115,9 @@ class FakeRevision implements CrivLoadedState {
       },
       sources: [],
       nodes: [],
+      registeredPatterns: [],
+      patternMatches: {},
+      c4Artifacts: [],
     };
   }
 
