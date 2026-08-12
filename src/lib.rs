@@ -11,6 +11,7 @@ mod install_editor;
 mod likec4;
 mod policy_scan;
 mod query;
+mod reconcile_transaction;
 mod refresh;
 mod snapshots;
 mod source_graph;

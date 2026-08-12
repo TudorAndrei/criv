@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::git;
+use crate::reconcile_transaction::Snapshot;
 use crate::util::{
     file_permissions_in, remove_file_in, write_atomic_in, write_atomic_with_permissions_in,
 };
@@ -15,6 +16,7 @@ use crate::vault::Vault;
 use crate::{CrivError, Result};
 
 const RECEIPT_SCHEMA: &str = "criv.adr-reconcile/3";
+const RECEIPT_PATH: &str = ".criv/adr-reconcile.json";
 const RECONCILIATION_COMMIT_MESSAGE: &str = "docs(adr): reconcile provisional identifiers";
 
 #[derive(Debug, ClapArgs)]
@@ -101,18 +103,6 @@ struct ReceiptSource {
     path: String,
     before_hash: String,
     before_mode: String,
-}
-
-struct TransactionSnapshot {
-    index_tree: String,
-    paths: Vec<PathSnapshot>,
-    receipt: PathSnapshot,
-}
-
-struct PathSnapshot {
-    path: String,
-    contents: Option<String>,
-    permissions: Option<fs::Permissions>,
 }
 
 pub(crate) fn run(root: &Path, options: AdrOptions) -> Result<()> {
@@ -357,7 +347,12 @@ fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
         )));
     }
     let transaction_paths = transaction_paths(root, &plan)?;
-    let snapshot = TransactionSnapshot::capture(root, &transaction_paths)?;
+    let rollback_paths = transaction_paths
+        .iter()
+        .cloned()
+        .chain(std::iter::once(RECEIPT_PATH.to_string()))
+        .collect::<Vec<_>>();
+    let snapshot = Snapshot::capture(root, &rollback_paths)?;
     let commit = (|| {
         apply_plan(root, &plan)?;
         if !git::ref_is_stable(root, &options.base, &plan.target_sha)? {
@@ -388,7 +383,17 @@ fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
     })();
     let commit = match commit {
         Ok(commit) => commit,
-        Err(error) => return Err(snapshot.rollback(root, error)),
+        Err(error) => {
+            let rollback_errors = snapshot.rollback(root);
+            return Err(if rollback_errors.is_empty() {
+                error
+            } else {
+                CrivError::new(format!(
+                    "{error}\nADR reconciliation rollback also failed:\n{}",
+                    rollback_errors.join("\n")
+                ))
+            });
+        }
     };
     println!("ADR reconciliation committed: {commit}");
     Ok(())
@@ -847,81 +852,6 @@ fn print_mapping(mappings: &[Mapping]) {
             "  ADR-{:04} -> ADR-{:04} ({})",
             mapping.old_id, mapping.new_id, mapping.new_path
         );
-    }
-}
-
-impl TransactionSnapshot {
-    fn capture(root: &Path, paths: &[String]) -> Result<Self> {
-        Ok(Self {
-            index_tree: git::index_tree(root)?,
-            paths: paths
-                .iter()
-                .map(|path| PathSnapshot::capture(root, path))
-                .collect::<Result<Vec<_>>>()?,
-            receipt: PathSnapshot::capture(root, ".criv/adr-reconcile.json")?,
-        })
-    }
-
-    fn rollback(self, root: &Path, error: CrivError) -> CrivError {
-        let mut rollback_errors = Vec::new();
-        if let Err(rollback_error) = git::restore_index_tree(root, &self.index_tree) {
-            rollback_errors.push(rollback_error.to_string());
-        }
-        for path in self.paths {
-            if let Err(rollback_error) = path.restore(root) {
-                rollback_errors.push(rollback_error.to_string());
-            }
-        }
-        if let Err(rollback_error) = self.receipt.restore(root) {
-            rollback_errors.push(rollback_error.to_string());
-        }
-        if rollback_errors.is_empty() {
-            error
-        } else {
-            CrivError::new(format!(
-                "{error}\nADR reconciliation rollback also failed:\n{}",
-                rollback_errors.join("\n")
-            ))
-        }
-    }
-}
-
-impl PathSnapshot {
-    fn capture(root: &Path, path: &str) -> Result<Self> {
-        let absolute = root.join(path);
-        if absolute.exists() {
-            Ok(Self {
-                path: path.to_string(),
-                contents: Some(fs::read_to_string(&absolute)?),
-                permissions: Some(file_permissions_in(root, Path::new(path))?),
-            })
-        } else {
-            Ok(Self {
-                path: path.to_string(),
-                contents: None,
-                permissions: None,
-            })
-        }
-    }
-
-    fn restore(self, root: &Path) -> Result<()> {
-        match (self.contents, self.permissions) {
-            (Some(contents), Some(permissions)) => write_atomic_with_permissions_in(
-                root,
-                Path::new("."),
-                Path::new(&self.path),
-                &contents,
-                permissions,
-            ),
-            (None, None) if root.join(&self.path).exists() => {
-                remove_file_in(root, Path::new("."), Path::new(&self.path))
-            }
-            (None, None) => Ok(()),
-            _ => Err(CrivError::new(format!(
-                "cannot restore incomplete snapshot for `{}`",
-                self.path
-            ))),
-        }
     }
 }
 

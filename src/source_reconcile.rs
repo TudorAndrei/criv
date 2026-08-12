@@ -7,9 +7,8 @@ use clap::Args as ClapArgs;
 use serde::{Deserialize, Serialize};
 
 use crate::git::{self, ChangeStatus, ChangedEntry, ChangedSet};
-use crate::util::{
-    file_permissions_in, remove_file_in, write_atomic_in, write_atomic_with_permissions_in,
-};
+use crate::reconcile_transaction::Snapshot;
+use crate::util::write_atomic_in;
 use crate::vault::Vault;
 use crate::{CrivError, Result};
 
@@ -69,18 +68,6 @@ struct ReceiptFile {
     after_hash: String,
 }
 
-struct TransactionSnapshot {
-    index_tree: String,
-    files: Vec<PathSnapshot>,
-    receipt: PathSnapshot,
-}
-
-struct PathSnapshot {
-    path: String,
-    contents: Option<String>,
-    permissions: Option<fs::Permissions>,
-}
-
 #[derive(Debug, Clone, Copy)]
 enum ScalarStyle {
     Plain,
@@ -129,7 +116,12 @@ pub(crate) fn run(root: &Path, options: Options) -> Result<()> {
         .iter()
         .map(|file| file.path.clone())
         .collect::<Vec<_>>();
-    let snapshot = TransactionSnapshot::capture(root, &paths)?;
+    let rollback_paths = paths
+        .iter()
+        .cloned()
+        .chain(std::iter::once(RECEIPT_PATH.to_string()))
+        .collect::<Vec<_>>();
+    let snapshot = Snapshot::capture(root, &rollback_paths)?;
     let result = (|| {
         apply_plan(root, &plan)?;
         ensure_stable_base(root, &plan, "during source reconciliation")?;
@@ -145,7 +137,17 @@ pub(crate) fn run(root: &Path, options: Options) -> Result<()> {
     })();
     let commit = match result {
         Ok(commit) => commit,
-        Err(error) => return Err(snapshot.rollback(root, error)),
+        Err(error) => {
+            let rollback_errors = snapshot.rollback(root);
+            return Err(if rollback_errors.is_empty() {
+                error
+            } else {
+                CrivError::new(format!(
+                    "{error}\nsource reconciliation rollback also failed:\n{}",
+                    rollback_errors.join("\n")
+                ))
+            });
+        }
     };
     println!("source reconciliation committed: {commit}");
     Ok(())
@@ -675,80 +677,6 @@ fn read_receipt(root: &Path) -> Result<Receipt> {
 
 fn hash(contents: &str) -> String {
     blake3::hash(contents.as_bytes()).to_hex().to_string()
-}
-
-impl TransactionSnapshot {
-    fn capture(root: &Path, paths: &[String]) -> Result<Self> {
-        Ok(Self {
-            index_tree: git::index_tree(root)?,
-            files: paths
-                .iter()
-                .map(|path| PathSnapshot::capture(root, path))
-                .collect::<Result<Vec<_>>>()?,
-            receipt: PathSnapshot::capture(root, RECEIPT_PATH)?,
-        })
-    }
-
-    fn rollback(self, root: &Path, error: CrivError) -> CrivError {
-        let mut errors = Vec::new();
-        if let Err(rollback) = git::restore_index_tree(root, &self.index_tree) {
-            errors.push(rollback.to_string());
-        }
-        for file in self.files {
-            if let Err(rollback) = file.restore(root) {
-                errors.push(rollback.to_string());
-            }
-        }
-        if let Err(rollback) = self.receipt.restore(root) {
-            errors.push(rollback.to_string());
-        }
-        if errors.is_empty() {
-            error
-        } else {
-            CrivError::new(format!(
-                "{error}\nsource reconciliation rollback also failed:\n{}",
-                errors.join("\n")
-            ))
-        }
-    }
-}
-
-impl PathSnapshot {
-    fn capture(root: &Path, path: &str) -> Result<Self> {
-        if root.join(path).exists() {
-            Ok(Self {
-                path: path.to_string(),
-                contents: Some(fs::read_to_string(root.join(path))?),
-                permissions: Some(file_permissions_in(root, Path::new(path))?),
-            })
-        } else {
-            Ok(Self {
-                path: path.to_string(),
-                contents: None,
-                permissions: None,
-            })
-        }
-    }
-
-    fn restore(self, root: &Path) -> Result<()> {
-        match (self.contents, self.permissions) {
-            (Some(contents), Some(permissions)) => write_atomic_with_permissions_in(
-                root,
-                Path::new("."),
-                Path::new(&self.path),
-                &contents,
-                permissions,
-            ),
-            (None, None) if root.join(&self.path).exists() => {
-                remove_file_in(root, Path::new("."), Path::new(&self.path))
-            }
-            (None, None) => Ok(()),
-            _ => Err(CrivError::new(format!(
-                "cannot restore incomplete snapshot for `{}`",
-                self.path
-            ))),
-        }
-    }
 }
 
 #[cfg(test)]

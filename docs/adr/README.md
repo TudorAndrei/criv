@@ -111,3 +111,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0098-own-the-latest-vscode-check-result|ADR-0098]] - Own the latest VS Code check result
 - [[0099-enforce-shared-likec4-and-wasm-adapter-boundary|ADR-0099]] - Enforce the shared LikeC4 and Wasm adapter boundary
 - [[0100-agent-authored-language-independent-c4-architecture|ADR-0100]] - Agent-authored language-independent C4 architecture
+- [[0101-one-reconciliation-transaction-owner|ADR-0101]] - One reconciliation transaction owner

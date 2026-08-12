@@ -111,6 +111,11 @@ model {
       description 'Reconciles renamed and deleted source scopes against decisions.'
       link ../../src/source_reconcile.rs 'source'
     }
+    rustReconcileTransaction = module 'criv::reconcile_transaction' {
+      technology 'Rust'
+      description 'Captures and restores the Git index and changed reconciliation files.'
+      link ../../src/reconcile_transaction.rs 'source'
+    }
   }
 
   extend criv.cli.governanceEngine {
@@ -203,8 +208,11 @@ model {
   criv.cli.governanceEngine.rustAdr -> criv.cli.vaultModel.rustConfig 'Reads the decision configuration'
   criv.cli.governanceEngine.rustAdr -> criv.cli.repositoryHistory.rustGit 'Reads decision history'
   criv.cli.governanceEngine.rustAdr -> criv.cli.governanceEngine.rustSourceReconcile 'Reconciles governed source scopes'
+  criv.cli.governanceEngine.rustAdr -> criv.cli.governanceEngine.rustReconcileTransaction 'Captures rollback state'
   criv.cli.governanceEngine.rustSourceReconcile -> criv.cli.repositoryHistory.rustGit 'Reads renames and deletions'
   criv.cli.governanceEngine.rustSourceReconcile -> criv.cli.vaultModel.rustVault 'Reads governed source references'
+  criv.cli.governanceEngine.rustSourceReconcile -> criv.cli.governanceEngine.rustReconcileTransaction 'Captures rollback state'
+  criv.cli.governanceEngine.rustReconcileTransaction -> criv.cli.repositoryHistory.rustGit 'Restores the Git index'
   criv.cli.governanceEngine.rustEnforce -> criv.cli.governanceEngine.rustCheck 'Runs the staged checks'
   criv.cli.governanceEngine.rustEnforce -> criv.cli.governanceEngine.rustPolicyScan 'Runs the staged policy scan'
   criv.cli.governanceEngine.rustEnforce -> criv.cli.governanceEngine.rustAdr 'Reads effective governance'
