@@ -51,6 +51,16 @@
       "pattern": null
     },
     {
+      "target": "source:src/lib.rs#run",
+      "source": "src/lib.rs",
+      "pattern": null
+    },
+    {
+      "target": "source:src/lib.rs#L1-L1",
+      "source": "src/lib.rs",
+      "pattern": null
+    },
+    {
       "target": "match:ADR-0001/no-block-on",
       "source": null,
       "pattern": "ADR-0001/no-block-on"

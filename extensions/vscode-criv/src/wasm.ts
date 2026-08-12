@@ -38,6 +38,22 @@ export interface CrivGraphNode {
   line_range?: string;
 }
 
+export interface CrivSourceTargetCandidate {
+  canonical_target: string;
+  node_id: string;
+  kind: string;
+  label: string;
+}
+
+export type CrivSourceTargetLookupResult =
+  | { kind: "resolved"; canonical_target: string; node: CrivGraphNode }
+  | { kind: "unresolved" }
+  | {
+      kind: "ambiguous";
+      candidates: CrivSourceTargetCandidate[];
+      total_candidate_count: number;
+    };
+
 export interface CrivSelectorSuggestion {
   target: string;
   label: string;
@@ -67,12 +83,12 @@ export interface CrivInitialProjections {
 
 export type CrivLoadedState = SharedLoadedState<
   CrivInitialProjections,
-  CrivGraphNode | undefined,
+  CrivSourceTargetLookupResult,
   CrivSelectorSuggestion
 >;
 export type CrivWasmBridge = CrivWasmHost<
   CrivInitialProjections,
-  CrivGraphNode | undefined,
+  CrivSourceTargetLookupResult,
   CrivSelectorSuggestion
 >;
 export type CrivWasmLoader = CrivWasmModuleLoader;

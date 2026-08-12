@@ -1,4 +1,9 @@
-import type { CrivGraphNode } from "./wasm";
+import { parseLineFragment, parseSourceTarget, type ParsedSourceTarget } from "./sourceTarget";
+import type {
+  CrivGraphNode,
+  CrivSourceTargetCandidate,
+  CrivSourceTargetLookupResult,
+} from "./wasm";
 
 export type SourceReferenceKind =
   | "selector"
@@ -11,13 +16,22 @@ export interface SourceReference {
   target: string;
   canonicalTarget?: string;
   node?: CrivGraphNode;
+  resolutionKind: "resolved" | "unresolved" | "ambiguous" | "malformed";
+  candidates?: CrivSourceTargetCandidate[];
+  totalCandidateCount?: number;
   start: number;
   end: number;
   legacy: boolean;
   shouldDiagnoseUnresolved: boolean;
 }
 
-export type SourceTargetLookup = (target: string) => CrivGraphNode | undefined;
+export type SourceTargetLookup = (target: string) => CrivSourceTargetLookupResult;
+
+export type SourceTargetResolution = CrivSourceTargetLookupResult | { kind: "malformed" };
+
+export type SourceTargetOpenPlan =
+  | { kind: "resolved"; target: ParsedSourceTarget }
+  | Exclude<SourceTargetResolution, { kind: "resolved" }>;
 
 export interface MarkdownSink {
   appendMarkdown(value: string): void;
@@ -70,7 +84,11 @@ export function analyzeSourceReferences(
     }
     const start = match.index + match[0].length - candidate.length;
     const resolved = resolveSourceTarget(lookup, candidate);
-    if (!resolved || overlaps(references, start, start + candidate.length)) {
+    if (
+      resolved.kind === "unresolved" ||
+      resolved.kind === "malformed" ||
+      overlaps(references, start, start + candidate.length)
+    ) {
       continue;
     }
     references.push(referenceFor(lookup, "selector", candidate, start, false));
@@ -89,35 +107,120 @@ export function referenceAtOffset(
 export function resolveSourceTarget(
   lookup: SourceTargetLookup,
   target: string,
-): { canonicalTarget: string; node?: CrivGraphNode } | undefined {
+): SourceTargetResolution {
   const normalized = stripSourcePrefix(target);
-  const node = lookup(normalized);
-  const canonicalTarget = node?.source_target ?? node?.path;
-  if (!canonicalTarget) {
-    return undefined;
+  const fragmentIndex = normalized.indexOf("#");
+  let lookupTarget = normalized;
+  if (fragmentIndex >= 0) {
+    const path = normalized.slice(0, fragmentIndex);
+    const fragment = normalized.slice(fragmentIndex + 1);
+    if (/^l/i.test(fragment)) {
+      if (!parseLineFragment(fragment)) {
+        return { kind: "malformed" };
+      }
+      lookupTarget = path;
+    }
   }
-  return { canonicalTarget, node };
+  const result = lookup(lookupTarget);
+  if (result.kind === "resolved") {
+    return result;
+  }
+  if (result.kind === "ambiguous") {
+    return result;
+  }
+  if (result.kind === "unresolved") {
+    return result;
+  }
+  return { kind: "unresolved" };
+}
+
+export function planSourceTargetOpen(
+  lookup: SourceTargetLookup,
+  target: string,
+): SourceTargetOpenPlan {
+  const result = resolveSourceTarget(lookup, target);
+  if (result.kind === "unresolved") {
+    return result;
+  }
+  if (result.kind === "ambiguous") {
+    return result;
+  }
+  if (result.kind === "malformed") {
+    return result;
+  }
+  if (result.kind !== "resolved") {
+    return { kind: "unresolved" };
+  }
+
+  const canonical = parseSourceTarget(result.node.path ?? result.canonical_target);
+  if (!canonical) {
+    return { kind: "malformed" };
+  }
+  const requested = parseSourceTarget(target);
+  if (requested?.line !== undefined) {
+    canonical.fragment = requested.fragment;
+    canonical.line = requested.line;
+    canonical.endLine = requested.endLine;
+  }
+  return { kind: "resolved", target: canonical };
 }
 
 export function sourceReferenceDiagnostic(reference: SourceReference): string | undefined {
-  if (reference.legacy && reference.canonicalTarget) {
+  if (reference.resolutionKind === "ambiguous") {
+    return ambiguousSourceTargetMessage(
+      reference.target,
+      reference.candidates ?? [],
+      reference.totalCandidateCount ?? 0,
+    );
+  }
+  if (reference.resolutionKind === "malformed") {
+    return `Malformed criv source target: ${reference.target}.`;
+  }
+  if (reference.legacy && reference.resolutionKind === "resolved") {
     return reference.canonicalTarget === stripSourcePrefix(reference.target)
       ? "Legacy source Wikilink; use an AST-aware source selector outside Wikilinks."
       : `Legacy source target; use AST-aware source selector ${reference.canonicalTarget}.`;
   }
 
-  if (reference.shouldDiagnoseUnresolved && !reference.canonicalTarget) {
+  if (reference.shouldDiagnoseUnresolved && reference.resolutionKind === "unresolved") {
     return `Unresolved criv source target: ${reference.target}.`;
   }
 
   return undefined;
 }
 
+export function sourceReferenceDiagnosticCode(reference: SourceReference): string {
+  if (reference.resolutionKind === "ambiguous") {
+    return "ambiguous-source-target";
+  }
+  if (reference.resolutionKind === "malformed") {
+    return "malformed-source-target";
+  }
+  if (reference.resolutionKind === "unresolved") {
+    return "unresolved-source-target";
+  }
+  return "legacy-source-target";
+}
+
 export function appendSourceHoverContents(
   contents: MarkdownSink,
   reference: SourceReference,
 ): void {
-  if (!reference.canonicalTarget) {
+  if (reference.resolutionKind === "ambiguous") {
+    contents.appendText(
+      ambiguousSourceTargetMessage(
+        reference.target,
+        reference.candidates ?? [],
+        reference.totalCandidateCount ?? 0,
+      ),
+    );
+    return;
+  }
+  if (reference.resolutionKind === "malformed") {
+    contents.appendText(`Malformed criv source target: ${reference.target}.`);
+    return;
+  }
+  if (reference.resolutionKind !== "resolved" || !reference.canonicalTarget) {
     contents.appendText(`Unresolved criv source target: ${reference.target}.`);
     return;
   }
@@ -164,13 +267,33 @@ function referenceFor(
   return {
     kind,
     target,
-    canonicalTarget: resolved?.canonicalTarget,
-    node: resolved?.node,
+    canonicalTarget: resolved.kind === "resolved" ? resolved.canonical_target : undefined,
+    node: resolved.kind === "resolved" ? resolved.node : undefined,
+    resolutionKind: resolved.kind,
+    candidates: resolved.kind === "ambiguous" ? resolved.candidates : undefined,
+    totalCandidateCount: resolved.kind === "ambiguous" ? resolved.total_candidate_count : undefined,
     start,
     end: start + target.length,
     legacy,
     shouldDiagnoseUnresolved,
   };
+}
+
+export function ambiguousSourceTargetMessage(
+  target: string,
+  candidates: readonly CrivSourceTargetCandidate[],
+  totalCandidateCount: number,
+): string {
+  const details = candidates.map((candidate) => {
+    const base = `${candidate.canonical_target} (${candidate.kind}: ${candidate.label})`;
+    const duplicateTarget =
+      candidates.filter((other) => other.canonical_target === candidate.canonical_target).length >
+      1;
+    return duplicateTarget ? `${base} [${candidate.node_id}]` : base;
+  });
+  const remaining = totalCandidateCount - candidates.length;
+  const suffix = remaining > 0 ? `; ${remaining} more` : "";
+  return `Ambiguous criv source target ${target}: ${details.join("; ")}${suffix}.`;
 }
 
 function stripSourcePrefix(target: string): string {

@@ -51,7 +51,6 @@ export function runProcess(
       }, forceKillAfterMs);
     };
 
-    options.signal?.addEventListener("abort", cancel, { once: true });
     child.stdout.on("data", (chunk: Buffer) => {
       captureOutput(stdout, stdoutState, chunk, maxOutputBytes);
     });
@@ -76,6 +75,10 @@ export function runProcess(
         cancelled,
       });
     });
+    options.signal?.addEventListener("abort", cancel, { once: true });
+    if (options.signal?.aborted) {
+      cancel();
+    }
   });
 }
 

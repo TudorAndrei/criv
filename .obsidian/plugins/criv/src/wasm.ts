@@ -4,7 +4,7 @@ import {
   type CrivWasmHost,
   type CrivWasmModuleLoader,
 } from "@criv/editor-state";
-import type { CrivNode, CrivState, SourceIndexEntry } from "./core";
+import type { CrivNode, CrivSourceTargetLookupResult, CrivState, SourceIndexEntry } from "./core";
 
 export {
   CRIV_LOADED_STATE_DISPOSED,
@@ -41,12 +41,12 @@ export interface CrivInitialProjections {
 
 export type CrivLoadedState = SharedLoadedState<
   CrivInitialProjections,
-  CrivNode | undefined,
+  CrivSourceTargetLookupResult,
   CrivSelectorSuggestion
 >;
 export type CrivWasmBridge = CrivWasmHost<
   CrivInitialProjections,
-  CrivNode | undefined,
+  CrivSourceTargetLookupResult,
   CrivSelectorSuggestion
 >;
 export type CrivWasmLoader = CrivWasmModuleLoader;

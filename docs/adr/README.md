@@ -102,3 +102,10 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0089-reconcile-effective-query-and-likec4-contracts|ADR-0089]] - Reconcile effective query and LikeC4 contracts
 - [[0090-enforce-runtime-boundary-decisions|ADR-0090]] - Enforce runtime boundary decisions
 - [[0091-enforce-editor-adapter-boundaries|ADR-0091]] - Enforce editor adapter boundaries
+- [[0092-transactional-live-watch-generations|ADR-0092]] - Transactional live watch generations
+- [[0093-recoverable-state-publication-transactions|ADR-0093]] - Recoverable State publication transactions
+- [[0094-automatic-recoverable-state-publication|ADR-0094]] - Automatic recoverable State publication
+- [[0095-operating-system-watch-session-lock|ADR-0095]] - Operating-system watch session lock
+- [[0096-enforce-editor-preview-revision-lifecycle|ADR-0096]] - Enforce editor preview revision lifecycle
+- [[0097-explicit-source-target-lookup-results|ADR-0097]] - Explicit source target lookup results
+- [[0098-own-the-latest-vscode-check-result|ADR-0098]] - Own the latest VS Code check result

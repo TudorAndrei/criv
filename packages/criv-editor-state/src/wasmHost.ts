@@ -20,40 +20,40 @@ export class CrivLoadedStateDisposedError extends Error {
   }
 }
 
-export interface CrivLoadedState<Projections, Node, Suggestion> {
+export interface CrivLoadedState<Projections, LookupResult, Suggestion> {
   initialProjections(): Projections;
-  lookupNode(target: string): Node;
+  lookupSourceTarget(target: string): LookupResult;
   suggestSelectors(query: string, limit?: number): Suggestion[];
   dispose(): void;
 }
 
-export interface CrivWasmHost<Projections, Node, Suggestion> {
-  loadState(raw: string): Promise<CrivLoadedState<Projections, Node, Suggestion>>;
+export interface CrivWasmHost<Projections, LookupResult, Suggestion> {
+  loadState(raw: string): Promise<CrivLoadedState<Projections, LookupResult, Suggestion>>;
 }
 
 export type CrivWasmModuleLoader = () => Promise<unknown>;
 
-type CrivWasmLoadedState<Projections, Node, Suggestion> = {
+type CrivWasmLoadedState<Projections, LookupResult, Suggestion> = {
   initialProjections(): Projections;
-  lookupNode(target: string): Node;
+  lookupSourceTarget(target: string): LookupResult;
   suggestSelectors(query: string, limit: number): Suggestion[];
   free(): void;
 };
 
-type CrivWasmModule<Projections, Node, Suggestion> = {
-  LoadedState: new (raw: string) => CrivWasmLoadedState<Projections, Node, Suggestion>;
+type CrivWasmModule<Projections, LookupResult, Suggestion> = {
+  LoadedState: new (raw: string) => CrivWasmLoadedState<Projections, LookupResult, Suggestion>;
 };
 
-export function createCrivWasmHost<Projections, Node, Suggestion>(
+export function createCrivWasmHost<Projections, LookupResult, Suggestion>(
   loadModule: CrivWasmModuleLoader,
   unavailableMessage: string,
-): CrivWasmHost<Projections, Node, Suggestion> {
-  let moduleLoad: Promise<CrivWasmModule<Projections, Node, Suggestion>> | undefined;
+): CrivWasmHost<Projections, LookupResult, Suggestion> {
+  let moduleLoad: Promise<CrivWasmModule<Projections, LookupResult, Suggestion>> | undefined;
 
-  const loadWasm = (): Promise<CrivWasmModule<Projections, Node, Suggestion>> => {
+  const loadWasm = (): Promise<CrivWasmModule<Projections, LookupResult, Suggestion>> => {
     moduleLoad ??= Promise.resolve()
       .then(loadModule)
-      .then(requireCrivWasmModule<Projections, Node, Suggestion>)
+      .then(requireCrivWasmModule<Projections, LookupResult, Suggestion>)
       .catch((error: unknown) => {
         throw error instanceof CrivWasmLoadError
           ? error
@@ -77,27 +77,27 @@ export function createCrivWasmHost<Projections, Node, Suggestion>(
   };
 }
 
-function requireCrivWasmModule<Projections, Node, Suggestion>(
+function requireCrivWasmModule<Projections, LookupResult, Suggestion>(
   value: unknown,
-): CrivWasmModule<Projections, Node, Suggestion> {
+): CrivWasmModule<Projections, LookupResult, Suggestion> {
   if (!isRecord(value)) {
     throw new Error("criv Wasm module did not export an object");
   }
   if (typeof value.LoadedState !== "function") {
     throw new Error("criv Wasm module is missing export LoadedState");
   }
-  return value as CrivWasmModule<Projections, Node, Suggestion>;
+  return value as CrivWasmModule<Projections, LookupResult, Suggestion>;
 }
 
-class LoadedStateAdapter<Projections, Node, Suggestion>
-  implements CrivLoadedState<Projections, Node, Suggestion>
+class LoadedStateAdapter<Projections, LookupResult, Suggestion>
+  implements CrivLoadedState<Projections, LookupResult, Suggestion>
 {
-  private readonly loaded: CrivWasmLoadedState<Projections, Node, Suggestion>;
+  private readonly loaded: CrivWasmLoadedState<Projections, LookupResult, Suggestion>;
   private readonly projections: Projections;
   private disposed = false;
 
   constructor(
-    loaded: CrivWasmLoadedState<Projections, Node, Suggestion>,
+    loaded: CrivWasmLoadedState<Projections, LookupResult, Suggestion>,
     projections: Projections,
   ) {
     this.loaded = loaded;
@@ -109,9 +109,9 @@ class LoadedStateAdapter<Projections, Node, Suggestion>
     return this.projections;
   }
 
-  lookupNode(target: string): Node {
+  lookupSourceTarget(target: string): LookupResult {
     this.assertAvailable();
-    return this.loaded.lookupNode(target);
+    return this.loaded.lookupSourceTarget(target);
   }
 
   suggestSelectors(query: string, limit = 20): Suggestion[] {

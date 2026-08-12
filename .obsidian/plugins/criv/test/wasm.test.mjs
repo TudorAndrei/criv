@@ -13,6 +13,12 @@ const stateRaw = readFileSync(
   resolve(__dirname, "../../../../fixtures/state/criv.state.v1.json"),
   "utf8",
 );
+const lookupFixture = JSON.parse(
+  readFileSync(
+    resolve(__dirname, "../../../../fixtures/editor/source-target-lookup.v1.json"),
+    "utf8",
+  ),
+);
 
 await esbuild.build({
   entryPoints: [resolve(pluginRoot, "src/wasm.ts")],
@@ -38,6 +44,20 @@ assert.deepEqual(
 );
 assert.equal(revision.suggestSelectors("run", 10)[0].target, "src/lib.rs#fn:run");
 revision.dispose();
+
+const lookupRevision = await bridge.loadState(JSON.stringify(lookupFixture.state));
+for (const expected of lookupFixture.cases) {
+  const actual = lookupRevision.lookupSourceTarget(expected.target);
+  assert.equal(actual.kind, expected.kind, `lookup kind for ${expected.target}`);
+  if (actual.kind === "resolved") {
+    assert.equal(actual.canonical_target, expected.canonical_target);
+  }
+  if (actual.kind === "ambiguous") {
+    assert.equal(actual.total_candidate_count, expected.total_candidate_count);
+    assert(actual.candidates.length <= 5);
+  }
+}
+lookupRevision.dispose();
 
 let attempts = 0;
 const missing = bridgeModule.createCrivWasmBridge(async () => {

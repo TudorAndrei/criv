@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import { C4PreviewEditorProvider, C4PreviewManager, C4_PREVIEW_VIEW_TYPE } from "./c4Preview";
 import { CrivCheckDiagnostics } from "./checkDiagnostics";
 import { CHECK_MAX_OUTPUT_BYTES, completeCheckStdout } from "./checkOutput";
+import { CheckRunOwner } from "./checkRunOwner";
 import {
   COMMAND_OPEN_SOURCE_TARGET,
   COMMAND_OPEN_STATE_JSON,
@@ -16,7 +17,7 @@ import {
 import { runProcess, type CommandResult } from "./commandRunner";
 import { crivConfiguration, executablePathError } from "./config";
 import { registerSourceLanguageFeatures } from "./languageFeatures";
-import { parseSourceTarget } from "./sourceTarget";
+import { ambiguousSourceTargetMessage, planSourceTargetOpen } from "./sourceReferences";
 import { WorkspaceStateStore, type WorkspaceStateStatus } from "./stateStore";
 import { CrivStateTreeProvider } from "./tree";
 import { createVscodeStateHost } from "./vscodeStateHost";
@@ -28,6 +29,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const store = new WorkspaceStateStore(createVscodeStateHost(), { loadState });
   const treeProvider = new CrivStateTreeProvider();
   const checkDiagnostics = new CrivCheckDiagnostics();
+  const checkRuns = new CheckRunOwner();
   const c4Preview = new C4PreviewManager(context, store);
   const c4PreviewEditor = new C4PreviewEditorProvider(context, store);
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
@@ -38,7 +40,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     treeProvider.update(status);
   };
 
-  context.subscriptions.push(store, treeProvider, checkDiagnostics, c4Preview, statusBar);
+  context.subscriptions.push(
+    store,
+    treeProvider,
+    checkDiagnostics,
+    checkRuns,
+    c4Preview,
+    statusBar,
+  );
   context.subscriptions.push(store.onDidChangeStatus(updateSurfaces));
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider("criv.stateView", treeProvider),
@@ -63,7 +72,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await runWatchOnce(store);
     }),
     vscode.commands.registerCommand(COMMAND_RUN_CHECK, async () => {
-      await runCheck(store, checkDiagnostics);
+      await runCheck(store, checkDiagnostics, checkRuns);
     }),
     vscode.commands.registerCommand(COMMAND_QUERY_UNDOCUMENTED_CODE, async () => {
       await runUndocumentedCodeQuery(store);
@@ -72,7 +81,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await c4Preview.open();
     }),
     vscode.workspace.onDidSaveTextDocument(async (document) => {
-      await maybeRunCheckOnSave(store, checkDiagnostics, document);
+      await maybeRunCheckOnSave(store, checkDiagnostics, checkRuns, document);
     }),
     vscode.workspace.onDidChangeWorkspaceFolders(async () => {
       await store.refresh();
@@ -108,20 +117,131 @@ async function runWatchOnce(store: WorkspaceStateStore): Promise<void> {
 async function runCheck(
   store: WorkspaceStateStore,
   checkDiagnostics: CrivCheckDiagnostics,
+  checkRuns: CheckRunOwner,
 ): Promise<void> {
-  const root = await trustedCrivRoot(store);
-  if (!root) {
+  await checkRuns.run(
+    (signal) => collectCheckAttempt(store, signal),
+    (attempt, signal) => publishCheckAttempt(checkDiagnostics, attempt, signal),
+    async (error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      await vscode.window.showWarningMessage(`criv check failed: ${message}`);
+    },
+  );
+}
+
+type CheckAttempt =
+  | { kind: "warning"; message: string }
+  | {
+      kind: "completed";
+      root: vscode.Uri;
+      result: CommandResult;
+      configurationWarning?: string;
+    };
+
+async function collectCheckAttempt(
+  store: WorkspaceStateStore,
+  signal: AbortSignal,
+): Promise<CheckAttempt> {
+  const rootResult = await resolveCheckRoot(store);
+  if (signal.aborted) {
+    return { kind: "warning", message: "" };
+  }
+  if (rootResult.kind === "warning") {
+    return rootResult;
+  }
+
+  const config = crivConfiguration();
+  const executableError = executablePathError(config.binaryPath);
+  if (executableError) {
+    return { kind: "warning", message: executableError };
+  }
+
+  const result = await runCheckWithProgress(rootResult.root, config.binaryPath, signal);
+  return {
+    kind: "completed",
+    root: rootResult.root,
+    result,
+    configurationWarning: config.workspaceExecutionOverrideIgnored
+      ? "Workspace criv command-execution settings were ignored. Configure criv.binaryPath and criv.checkOnSave in user or machine settings."
+      : undefined,
+  };
+}
+
+async function resolveCheckRoot(
+  store: WorkspaceStateStore,
+): Promise<{ kind: "ready"; root: vscode.Uri } | { kind: "warning"; message: string }> {
+  if (!vscode.workspace.isTrusted) {
+    return {
+      kind: "warning",
+      message: "Trust this workspace before running local criv commands.",
+    };
+  }
+
+  const status = await ensureLoadedState(store);
+  return status.kind === "ready"
+    ? { kind: "ready", root: status.root }
+    : { kind: "warning", message: messageForStatus(status) };
+}
+
+async function runCheckWithProgress(
+  root: vscode.Uri,
+  binaryPath: string,
+  ownerSignal: AbortSignal,
+): Promise<CommandResult> {
+  return vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      cancellable: true,
+      title: "criv check",
+    },
+    async (_progress, token) => {
+      const controller = new AbortController();
+      const cancel = () => controller.abort();
+      const cancellation = token.onCancellationRequested(cancel);
+      ownerSignal.addEventListener("abort", cancel, { once: true });
+      if (ownerSignal.aborted) {
+        cancel();
+      }
+      try {
+        return await runProcess(binaryPath, ["check", "--format", "json"], {
+          cwd: root.fsPath,
+          signal: controller.signal,
+          maxOutputBytes: CHECK_MAX_OUTPUT_BYTES,
+        });
+      } finally {
+        cancellation.dispose();
+        ownerSignal.removeEventListener("abort", cancel);
+      }
+    },
+  );
+}
+
+async function publishCheckAttempt(
+  checkDiagnostics: CrivCheckDiagnostics,
+  attempt: CheckAttempt,
+  signal: AbortSignal,
+): Promise<void> {
+  if (signal.aborted) {
+    return;
+  }
+  if (attempt.kind === "warning") {
+    if (attempt.message) {
+      await vscode.window.showWarningMessage(attempt.message);
+    }
+    return;
+  }
+  if (attempt.result.cancelled) {
     return;
   }
 
-  const result = await runCrivWithProgress(root, ["check", "--format", "json"], "criv check", {
-    maxOutputBytes: CHECK_MAX_OUTPUT_BYTES,
-  });
-  if (!result || result.cancelled) {
-    return;
+  if (attempt.configurationWarning) {
+    await vscode.window.showWarningMessage(attempt.configurationWarning);
+    if (signal.aborted) {
+      return;
+    }
   }
 
-  const stdout = completeCheckStdout(result);
+  const stdout = completeCheckStdout(attempt.result);
   if (stdout === undefined) {
     checkDiagnostics.clear();
     await vscode.window.showWarningMessage(
@@ -131,14 +251,14 @@ async function runCheck(
   }
 
   try {
-    checkDiagnostics.setFromJson(root, stdout);
+    checkDiagnostics.setFromJson(attempt.root, stdout);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await vscode.window.showWarningMessage(`Could not parse criv check diagnostics: ${message}`);
     return;
   }
 
-  if (result.code === 0) {
+  if (attempt.result.code === 0) {
     await vscode.window.showInformationMessage("criv check completed.");
   } else {
     await vscode.window.showWarningMessage("criv check completed with diagnostics.");
@@ -177,12 +297,13 @@ async function runUndocumentedCodeQuery(store: WorkspaceStateStore): Promise<voi
 async function maybeRunCheckOnSave(
   store: WorkspaceStateStore,
   checkDiagnostics: CrivCheckDiagnostics,
+  checkRuns: CheckRunOwner,
   document: vscode.TextDocument,
 ): Promise<void> {
   if (!crivConfiguration().checkOnSave || !isCheckOnSaveDocument(document)) {
     return;
   }
-  await runCheck(store, checkDiagnostics);
+  await runCheck(store, checkDiagnostics, checkRuns);
 }
 
 async function runCrivWithProgress(
@@ -294,12 +415,31 @@ async function openSourceTarget(store: WorkspaceStateStore, target: unknown): Pr
     return;
   }
 
-  const node = await store.lookupNode(target);
-  const parsed = parseSourceTarget(node?.source_target ?? node?.path ?? target);
-  if (!parsed) {
+  const result = planSourceTargetOpen(
+    (lookupTarget) => store.lookupSourceTarget(lookupTarget),
+    target,
+  );
+  if (result.kind === "ambiguous") {
+    await vscode.window.showWarningMessage(
+      ambiguousSourceTargetMessage(target, result.candidates, result.total_candidate_count),
+    );
+    return;
+  }
+  if (result.kind === "malformed") {
+    await vscode.window.showWarningMessage(`Malformed criv source target: ${target}`);
+    return;
+  }
+  if (result.kind === "unresolved") {
     await vscode.window.showWarningMessage(`Could not resolve criv source target: ${target}`);
     return;
   }
+  if (result.kind === "resolved") {
+    // Continue with the canonical node below.
+  } else {
+    return;
+  }
+
+  const parsed = result.target;
 
   const uri = vscode.Uri.joinPath(status.root, ...parsed.path.split("/"));
   try {

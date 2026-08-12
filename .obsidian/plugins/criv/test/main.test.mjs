@@ -60,8 +60,8 @@ class FakeRevision {
     };
   }
 
-  lookupNode() {
-    return undefined;
+  lookupSourceTarget() {
+    return { kind: "unresolved" };
   }
 
   suggestSelectors() {

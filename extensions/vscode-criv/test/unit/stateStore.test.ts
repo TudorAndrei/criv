@@ -14,7 +14,8 @@ test("publishes the editor snapshot and delegates queries to the active revision
 
   assert.equal(store.status.kind, "ready");
   assert.equal(store.status.kind === "ready" && store.status.snapshot.summary.schema, "ready");
-  assert.equal(store.lookupNode("target")?.id, "ready:target");
+  const lookup = store.lookupSourceTarget("target");
+  assert.equal(lookup.kind === "resolved" && lookup.node.id, "ready:target");
   assert.equal(store.suggestSelectors("query", 5)[0]?.target, "ready:query");
   assert.equal(host.reads, 1);
 });
@@ -33,7 +34,7 @@ test("clears the current revision when the latest refresh fails", async () => {
 
   assert.equal(store.status.kind, "invalid-state");
   assert.equal(current.disposals, 1);
-  assert.equal(store.lookupNode("target"), undefined);
+  assert.deepEqual(store.lookupSourceTarget("target"), { kind: "unresolved" });
 });
 
 test("disposes the watcher and active revision during editor shutdown", async () => {
@@ -118,8 +119,12 @@ class FakeRevision implements CrivLoadedState {
     };
   }
 
-  lookupNode(target: string) {
-    return { id: `${this.name}:${target}`, kind: "code", label: target };
+  lookupSourceTarget(target: string) {
+    return {
+      kind: "resolved" as const,
+      canonical_target: target,
+      node: { id: `${this.name}:${target}`, kind: "code", label: target },
+    };
   }
 
   suggestSelectors(query: string) {

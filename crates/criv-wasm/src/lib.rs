@@ -40,10 +40,12 @@ impl LoadedState {
             .ok_or_else(|| JsValue::from_str(INITIAL_PROJECTIONS_TAKEN))
     }
 
-    #[wasm_bindgen(js_name = lookupNode)]
-    pub fn lookup_node(&self, target: &str) -> Result<JsValue, JsValue> {
-        serde_wasm_bindgen::to_value(&self.prepared.lookup_node(target)).map_err(|error| {
-            JsValue::from_str(&format!("failed to encode criv graph node: {error}"))
+    #[wasm_bindgen(js_name = lookupSourceTarget)]
+    pub fn lookup_source_target(&self, target: &str) -> Result<JsValue, JsValue> {
+        serde_wasm_bindgen::to_value(&self.prepared.lookup_source_target(target)).map_err(|error| {
+            JsValue::from_str(&format!(
+                "failed to encode criv source-target lookup result: {error}"
+            ))
         })
     }
 
@@ -316,9 +318,10 @@ fn source_selector_suggestions(
 
 #[cfg(test)]
 fn find_editor_graph_node(state: &StateDocument, target: &str) -> Option<EditorGraphNode> {
-    PreparedState::from_borrowed(state)
-        .lookup_node(target)
-        .cloned()
+    match PreparedState::from_borrowed(state).lookup_source_target(target) {
+        SourceTargetLookupResult::Resolved { node, .. } => Some(node),
+        SourceTargetLookupResult::Unresolved | SourceTargetLookupResult::Ambiguous { .. } => None,
+    }
 }
 
 fn source_target(node: &Node) -> Option<String> {
@@ -391,21 +394,25 @@ impl PreparedState {
         sources: Vec<EditorSourceEntry>,
         nodes: Vec<EditorGraphNode>,
     ) -> Self {
-        let mut node_lookup = HashMap::<u64, Vec<usize>>::new();
+        let source_paths = sources
+            .iter()
+            .map(|source| source.path.as_str())
+            .collect::<BTreeSet<_>>();
+        let mut exact_source_lookup = HashMap::<u64, Vec<usize>>::new();
+        let mut legacy_source_lookup = HashMap::<u64, Vec<usize>>::new();
         for (index, node) in nodes.iter().enumerate() {
-            let exact_keys = [
-                Some(node.id.as_str()),
-                node.source_target.as_deref(),
-                node.path.as_deref(),
-            ];
+            if !node_has_prepared_source(node, &source_paths) {
+                continue;
+            }
+            let exact_keys = [Some(node.id.as_str()), canonical_source_target(node)];
             for key in exact_keys.into_iter().flatten() {
-                let indexes = node_lookup.entry(target_hash(key)).or_default();
+                let indexes = exact_source_lookup.entry(target_hash(key)).or_default();
                 if indexes.last() != Some(&index) {
                     indexes.push(index);
                 }
             }
             for key in legacy_node_targets(node) {
-                let indexes = node_lookup.entry(target_hash(&key)).or_default();
+                let indexes = legacy_source_lookup.entry(target_hash(&key)).or_default();
                 if indexes.last() != Some(&index) {
                     indexes.push(index);
                 }
@@ -449,32 +456,68 @@ impl PreparedState {
             summary,
             sources,
             nodes,
-            node_lookup,
+            exact_source_lookup,
+            legacy_source_lookup,
             selectors,
             empty_selector_order,
         }
     }
 
-    fn lookup_node(&self, target: &str) -> Option<&EditorGraphNode> {
-        let candidates = self.node_lookup.get(&target_hash(target))?;
-        if let Some(node) = candidates
-            .iter()
-            .filter_map(|index| self.nodes.get(*index))
-            .find(|node| node_matches_target(node, target))
-        {
-            return Some(node);
+    fn lookup_source_target(&self, target: &str) -> SourceTargetLookupResult {
+        if target.is_empty() || target.contains('\\') {
+            return SourceTargetLookupResult::Unresolved;
         }
 
-        let mut matches = candidates
+        if let Some(indexes) = self.exact_source_lookup.get(&target_hash(target)) {
+            let result =
+                self.lookup_result(indexes, |node| node_matches_exact_target(node, target));
+            if !matches!(result, SourceTargetLookupResult::Unresolved) {
+                return result;
+            }
+        }
+
+        let Some(indexes) = self.legacy_source_lookup.get(&target_hash(target)) else {
+            return SourceTargetLookupResult::Unresolved;
+        };
+        self.lookup_result(indexes, |node| {
+            legacy_node_targets(node)
+                .iter()
+                .any(|alias| alias == target)
+        })
+    }
+
+    fn lookup_result(
+        &self,
+        indexes: &[usize],
+        matches: impl Fn(&EditorGraphNode) -> bool,
+    ) -> SourceTargetLookupResult {
+        let mut matched = indexes
             .iter()
             .filter_map(|index| self.nodes.get(*index))
-            .filter(|node| {
-                legacy_node_targets(node)
-                    .iter()
-                    .any(|alias| alias == target)
-            });
-        let node = matches.next()?;
-        matches.next().is_none().then_some(node)
+            .filter(|node| matches(node))
+            .filter_map(|node| Some((SourceTargetCandidate::from_node(node)?, node.clone())))
+            .collect::<Vec<_>>();
+        matched.sort();
+        matched.dedup_by(|left, right| left.0 == right.0);
+
+        match matched.len() {
+            0 => SourceTargetLookupResult::Unresolved,
+            1 => {
+                let (candidate, node) = matched.pop().expect("one lookup candidate");
+                SourceTargetLookupResult::Resolved {
+                    canonical_target: candidate.canonical_target,
+                    node,
+                }
+            }
+            total_candidate_count => SourceTargetLookupResult::Ambiguous {
+                candidates: matched
+                    .into_iter()
+                    .take(MAX_AMBIGUOUS_SOURCE_CANDIDATES)
+                    .map(|(candidate, _)| candidate)
+                    .collect(),
+                total_candidate_count,
+            },
+        }
     }
 
     fn suggest_selectors(&self, query: &str, limit: usize) -> Vec<SourceSelectorSuggestion> {
@@ -571,10 +614,25 @@ fn target_hash(target: &str) -> u64 {
     hasher.finish()
 }
 
-fn node_matches_target(node: &EditorGraphNode, target: &str) -> bool {
-    node.id == target
-        || node.source_target.as_deref() == Some(target)
-        || node.path.as_deref() == Some(target)
+fn node_matches_exact_target(node: &EditorGraphNode, target: &str) -> bool {
+    node.id == target || canonical_source_target(node) == Some(target)
+}
+
+fn canonical_source_target(node: &EditorGraphNode) -> Option<&str> {
+    node.source_target.as_deref().or_else(|| {
+        node.path
+            .as_deref()
+            .filter(|path| !path.contains("#L") && !path.contains("#l"))
+    })
+}
+
+fn node_has_prepared_source(node: &EditorGraphNode, source_paths: &BTreeSet<&str>) -> bool {
+    let Some(target) = canonical_source_target(node) else {
+        return false;
+    };
+    let path = target.split_once('#').map_or(target, |(path, _)| path);
+    !path.contains('\\')
+        && safe_source_path(path).is_some_and(|path| source_paths.contains(path.as_str()))
 }
 
 fn legacy_node_targets(node: &EditorGraphNode) -> Vec<String> {
@@ -673,7 +731,8 @@ struct PreparedState {
     summary: StateSummary,
     sources: Vec<EditorSourceEntry>,
     nodes: Vec<EditorGraphNode>,
-    node_lookup: HashMap<u64, Vec<usize>>,
+    exact_source_lookup: HashMap<u64, Vec<usize>>,
+    legacy_source_lookup: HashMap<u64, Vec<usize>>,
     selectors: Vec<PreparedSelector>,
     empty_selector_order: Vec<usize>,
 }
@@ -685,7 +744,7 @@ struct EditorSourceEntry {
     frecency: u32,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 struct EditorGraphNode {
     id: String,
     kind: String,
@@ -693,6 +752,41 @@ struct EditorGraphNode {
     path: Option<String>,
     source_target: Option<String>,
     line_range: Option<String>,
+}
+
+const MAX_AMBIGUOUS_SOURCE_CANDIDATES: usize = 5;
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum SourceTargetLookupResult {
+    Resolved {
+        canonical_target: String,
+        node: EditorGraphNode,
+    },
+    Unresolved,
+    Ambiguous {
+        candidates: Vec<SourceTargetCandidate>,
+        total_candidate_count: usize,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+struct SourceTargetCandidate {
+    canonical_target: String,
+    node_id: String,
+    kind: String,
+    label: String,
+}
+
+impl SourceTargetCandidate {
+    fn from_node(node: &EditorGraphNode) -> Option<Self> {
+        Some(Self {
+            canonical_target: canonical_source_target(node)?.to_string(),
+            node_id: node.id.clone(),
+            kind: node.kind.clone(),
+            label: node.label.clone(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -727,14 +821,12 @@ mod tests {
         assert_eq!(loaded.prepared.summary.node_count, 6);
         assert_eq!(loaded.prepared.sources.len(), 1);
         assert_eq!(loaded.prepared.nodes.len(), 6);
-        assert_eq!(
-            loaded
-                .prepared
-                .lookup_node("src/lib.rs#fn:run")
-                .unwrap()
-                .kind,
-            "function"
-        );
+        let SourceTargetLookupResult::Resolved { node, .. } =
+            loaded.prepared.lookup_source_target("src/lib.rs#fn:run")
+        else {
+            panic!("expected an exact source target to resolve");
+        };
+        assert_eq!(node.kind, "function");
         assert_eq!(
             loaded.prepared.suggest_selectors("run", 10)[0].target,
             "src/lib.rs#fn:run"
@@ -968,6 +1060,52 @@ mod tests {
 
         assert!(find_editor_graph_node(&state, "src/lib.rs#run").is_none());
         assert!(find_editor_graph_node(&state, "src/lib.rs#fn:run").is_some());
+    }
+
+    #[test]
+    fn source_target_lookup_matches_the_shared_editor_fixture() {
+        let fixture = serde_json::from_str::<serde_json::Value>(include_str!(
+            "../../../fixtures/editor/source-target-lookup.v1.json"
+        ))
+        .unwrap();
+        let state = serde_json::from_value::<StateDocument>(fixture["state"].clone()).unwrap();
+        let prepared = PreparedState::from_borrowed(&state);
+
+        for case in fixture["cases"].as_array().unwrap() {
+            let target = case["target"].as_str().unwrap();
+            let actual = serde_json::to_value(prepared.lookup_source_target(target)).unwrap();
+            assert_eq!(actual["kind"], case["kind"], "lookup kind for {target}");
+            if let Some(expected) = case.get("canonical_target") {
+                assert_eq!(
+                    actual["canonical_target"], *expected,
+                    "canonical target for {target}"
+                );
+            }
+            if let Some(expected) = case.get("total_candidate_count") {
+                assert_eq!(
+                    actual["total_candidate_count"], *expected,
+                    "candidate count for {target}"
+                );
+            }
+            if target == "common.rs" {
+                let candidates = actual["candidates"].as_array().unwrap();
+                assert_eq!(candidates.len(), MAX_AMBIGUOUS_SOURCE_CANDIDATES);
+                assert_eq!(candidates[0]["canonical_target"], "a/common.rs");
+                assert_eq!(candidates[4]["canonical_target"], "e/common.rs");
+            }
+        }
+
+        let mut reversed =
+            serde_json::from_value::<StateDocument>(fixture["state"].clone()).unwrap();
+        reversed.graph.nodes.reverse();
+        let reversed = PreparedState::from_borrowed(&reversed);
+        for target in ["src/lib.rs#run", "src/dup.rs#fn:work", "common.rs"] {
+            assert_eq!(
+                serde_json::to_value(prepared.lookup_source_target(target)).unwrap(),
+                serde_json::to_value(reversed.lookup_source_target(target)).unwrap(),
+                "lookup result must not depend on State order for {target}"
+            );
+        }
     }
 
     fn editor_state() -> StateDocument {

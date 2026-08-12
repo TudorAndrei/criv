@@ -127,3 +127,27 @@ test("forces cancellation when a command ignores termination", async () => {
 
   assert.equal(result.cancelled, true);
 });
+
+test("cancels a command when its signal was already aborted", async () => {
+  const root = await mkdtemp(join(tmpdir(), "criv-vscode-runner-"));
+  const fakeCriv = join(root, "fake-criv-pre-cancel.mjs");
+  await writeFile(
+    fakeCriv,
+    [
+      "#!/usr/bin/env node",
+      "process.on('SIGTERM', () => {});",
+      "setInterval(() => {}, 1000);",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  const controller = new AbortController();
+  controller.abort();
+
+  const result = await runProcess(fakeCriv, [], {
+    cwd: root,
+    signal: controller.signal,
+    forceKillAfterMs: 25,
+  });
+
+  assert.equal(result.cancelled, true);
+});

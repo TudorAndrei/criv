@@ -1,0 +1,57 @@
+{
+  "state": {
+    "schema": "criv.state.v1",
+    "graph": {
+      "root": "fixture",
+      "nodes": [
+        { "id": "code:src/lib.rs", "hash": "", "kind": "code", "label": "src/lib.rs", "path": "src/lib.rs" },
+        { "id": "symbol:src/lib.rs#fn:run", "hash": "", "kind": "function", "label": "run", "path": "src/lib.rs#L10-L20" },
+        { "id": "symbol:src/lib.rs#method:run", "hash": "", "kind": "method", "label": "run", "path": "src/lib.rs#L30-L40" },
+        { "id": "code:crates/demo/lib.rs", "hash": "", "kind": "code", "label": "crates/demo/lib.rs", "path": "crates/demo/lib.rs" },
+        { "id": "code:src/unique.rs", "hash": "", "kind": "code", "label": "src/unique.rs", "path": "src/unique.rs" },
+        { "id": "code:lib.rs", "hash": "", "kind": "code", "label": "lib.rs", "path": "lib.rs" },
+        { "id": "symbol:src/dup.rs#fn:work", "hash": "", "kind": "function", "label": "work", "path": "src/dup.rs#L10-L20" },
+        { "id": "symbol:src/dup.rs#fn:work", "hash": "", "kind": "method", "label": "work", "path": "src/dup.rs#L30-L40" },
+        { "id": "code:a/common.rs", "hash": "", "kind": "code", "label": "a/common.rs", "path": "a/common.rs" },
+        { "id": "code:b/common.rs", "hash": "", "kind": "code", "label": "b/common.rs", "path": "b/common.rs" },
+        { "id": "code:c/common.rs", "hash": "", "kind": "code", "label": "c/common.rs", "path": "c/common.rs" },
+        { "id": "code:d/common.rs", "hash": "", "kind": "code", "label": "d/common.rs", "path": "d/common.rs" },
+        { "id": "code:e/common.rs", "hash": "", "kind": "code", "label": "e/common.rs", "path": "e/common.rs" },
+        { "id": "code:f/common.rs", "hash": "", "kind": "code", "label": "f/common.rs", "path": "f/common.rs" },
+        { "id": "code:missing/not-indexed.rs", "hash": "", "kind": "code", "label": "missing", "path": "missing/not-indexed.rs" },
+        { "id": "code:../unsafe.rs", "hash": "", "kind": "code", "label": "unsafe", "path": "../unsafe.rs" }
+      ],
+      "edges": []
+    },
+    "registered-patterns": [],
+    "patterns": {},
+    "source-index": [
+      { "path": "src/lib.rs", "frecency": 0 },
+      { "path": "crates/demo/lib.rs", "frecency": 0 },
+      { "path": "src/unique.rs", "frecency": 0 },
+      { "path": "lib.rs", "frecency": 0 },
+      { "path": "src/dup.rs", "frecency": 0 },
+      { "path": "a/common.rs", "frecency": 0 },
+      { "path": "b/common.rs", "frecency": 0 },
+      { "path": "c/common.rs", "frecency": 0 },
+      { "path": "d/common.rs", "frecency": 0 },
+      { "path": "e/common.rs", "frecency": 0 },
+      { "path": "f/common.rs", "frecency": 0 }
+    ]
+  },
+  "cases": [
+    { "target": "code:src/unique.rs", "kind": "resolved", "canonical_target": "src/unique.rs" },
+    { "target": "src/unique.rs", "kind": "resolved", "canonical_target": "src/unique.rs" },
+    { "target": "unique.rs", "kind": "resolved", "canonical_target": "src/unique.rs" },
+    { "target": "src/lib.rs#fn:run", "kind": "resolved", "canonical_target": "src/lib.rs#fn:run" },
+    { "target": "src/lib.rs#run", "kind": "ambiguous", "total_candidate_count": 2 },
+    { "target": "lib.rs", "kind": "resolved", "canonical_target": "lib.rs" },
+    { "target": "src/dup.rs#fn:work", "kind": "ambiguous", "total_candidate_count": 2 },
+    { "target": "common.rs", "kind": "ambiguous", "total_candidate_count": 6 },
+    { "target": "foo/lib.rs", "kind": "unresolved" },
+    { "target": "SRC/UNIQUE.RS", "kind": "unresolved" },
+    { "target": "src\\unique.rs", "kind": "unresolved" },
+    { "target": "missing/not-indexed.rs", "kind": "unresolved" },
+    { "target": "../unsafe.rs", "kind": "unresolved" }
+  ]
+}

@@ -7,6 +7,7 @@ import {
   completionToken,
   referenceAtOffset,
   sourceReferenceDiagnostic,
+  sourceReferenceDiagnosticCode,
   type SourceReference,
 } from "./sourceReferences";
 import type { WorkspaceStateStore } from "./stateStore";
@@ -146,7 +147,7 @@ class SourceDiagnostics implements vscode.Disposable {
         severity,
       );
       diagnostic.source = "criv";
-      diagnostic.code = reference.legacy ? "legacy-source-target" : "unresolved-source-target";
+      diagnostic.code = sourceReferenceDiagnosticCode(reference);
       return [diagnostic];
     });
     this.collection.set(document.uri, diagnostics);
@@ -160,7 +161,7 @@ function documentReferences(
   if (store.status.kind !== "ready" || !isSourceSelectorDocument(document)) {
     return [];
   }
-  return analyzeSourceReferences(document.getText(), (target) => store.lookupNode(target));
+  return analyzeSourceReferences(document.getText(), (target) => store.lookupSourceTarget(target));
 }
 
 function rangeFromOffsets(document: vscode.TextDocument, start: number, end: number): vscode.Range {

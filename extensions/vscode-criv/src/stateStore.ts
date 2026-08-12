@@ -124,8 +124,8 @@ export class WorkspaceStateStore implements Disposable {
     });
   }
 
-  lookupNode(target: string) {
-    return this.revisions.current?.lookupNode(target);
+  lookupSourceTarget(target: string) {
+    return this.revisions.current?.lookupSourceTarget(target) ?? { kind: "unresolved" as const };
   }
 
   suggestSelectors(query: string, limit: number) {

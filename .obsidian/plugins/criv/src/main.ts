@@ -37,13 +37,14 @@ import {
   addTarget,
   addTextTargets,
   crivLinkRanges,
+  decodeSourceLinkTarget,
   frontmatterPatternTargets,
   linkedSourcesFromMarkdown,
   looksLikeSourceOrPattern,
   parseLineRange,
   patternTooltip,
   resolvePattern,
-  resolveSource,
+  resolveSourceResult,
   safeVaultPath,
   sourceTooltip,
 } from "./core";
@@ -279,7 +280,8 @@ export default class CrivPlugin extends Plugin {
 
   cachedSourceResolver(): SourceResolver {
     return {
-      lookupNode: (target) => this.stateRevisions.current?.lookupNode(target),
+      lookupSourceTarget: (target) =>
+        this.stateRevisions.current?.lookupSourceTarget(target) ?? { kind: "unresolved" },
       sourceEntry: (path) => this.stateSourcesByPath.get(path),
     };
   }
@@ -398,11 +400,33 @@ export default class CrivPlugin extends Plugin {
       el.querySelectorAll("[data-href], a.internal-link, a[href]"),
     ) as HTMLElement[];
     for (const anchor of candidates) {
-      const source = resolveSourceFromElement(this.cachedSourceResolver(), anchor);
+      const parsedTargets = linkTargets(anchor);
+      if (parsedTargets.malformed) {
+        anchor.addClass("criv-warning");
+        anchor.setAttribute("title", "Malformed criv source target");
+        continue;
+      }
+      const sourceResult = resolveSourceResultFromTargets(
+        this.cachedSourceResolver(),
+        parsedTargets.targets,
+      );
       const pattern = resolvePatternFromElement(state, anchor);
-      if (source) {
+      if (sourceResult.kind === "resolved") {
+        const source = sourceResult.source;
         anchor.addClass("criv-source-ref");
         anchor.setAttribute("title", sourceTooltip(source));
+        continue;
+      }
+      if (sourceResult.kind === "ambiguous") {
+        anchor.addClass("criv-warning");
+        anchor.setAttribute(
+          "title",
+          ambiguousSourceMessage(
+            parsedTargets.targets[0] ?? "",
+            sourceResult.candidates,
+            sourceResult.totalCandidateCount,
+          ),
+        );
         continue;
       }
       if (pattern) {
@@ -410,7 +434,7 @@ export default class CrivPlugin extends Plugin {
         anchor.setAttribute("title", patternTooltip(state, pattern));
         continue;
       }
-      const target = linkTargets(anchor)[0] ?? "";
+      const target = parsedTargets.targets[0] ?? "";
       if (looksLikeSourceOrPattern(target)) {
         anchor.addClass("criv-warning");
         anchor.setAttribute("title", "Unresolved criv reference");
@@ -1009,17 +1033,35 @@ function resolveSourceFromElement(
   resolver: SourceResolver,
   element: HTMLElement,
 ): LinkedSource | null {
-  for (const target of linkTargets(element)) {
-    const source = resolveSource(resolver, target);
-    if (source) {
-      return source;
+  const parsed = linkTargets(element);
+  if (parsed.malformed) {
+    return null;
+  }
+  const result = resolveSourceResultFromTargets(resolver, parsed.targets);
+  return result.kind === "resolved" ? result.source : null;
+}
+
+function resolveSourceResultFromTargets(
+  resolver: SourceResolver,
+  targets: string[],
+): ReturnType<typeof resolveSourceResult> {
+  for (const target of targets) {
+    const result = resolveSourceResult(resolver, target);
+    if (result.kind === "resolved") {
+      return result;
+    }
+    if (result.kind === "ambiguous") {
+      return result;
+    }
+    if (result.kind === "malformed") {
+      return result;
     }
   }
-  return null;
+  return { kind: "unresolved" };
 }
 
 function resolvePatternFromElement(state: CrivState, element: HTMLElement): string | null {
-  for (const target of linkTargets(element)) {
+  for (const target of linkTargets(element).targets) {
     const pattern = resolvePattern(state, target);
     if (pattern) {
       return pattern;
@@ -1028,7 +1070,7 @@ function resolvePatternFromElement(state: CrivState, element: HTMLElement): stri
   return null;
 }
 
-function linkTargets(element: HTMLElement): string[] {
+function linkTargets(element: HTMLElement): { targets: string[]; malformed: boolean } {
   const targets: string[] = [];
   const dataHref = element.getAttribute("data-href");
   if (dataHref) {
@@ -1045,12 +1087,33 @@ function linkTargets(element: HTMLElement): string[] {
 
   const href = element.getAttribute("href");
   if (href && !href.includes("://")) {
-    addTarget(targets, decodeURIComponent(href.replace(/^#/, "")));
+    const decoded = decodeSourceLinkTarget(href.replace(/^#/, ""));
+    if (decoded === null) {
+      return { targets: [], malformed: true };
+    }
+    addTarget(targets, decoded);
   }
 
   addTextTargets(targets, element.textContent);
   addTextTargets(targets, (element.closest(".cm-line") as HTMLElement | null)?.textContent);
-  return Array.from(new Set(targets));
+  return { targets: Array.from(new Set(targets)), malformed: false };
+}
+
+function ambiguousSourceMessage(
+  target: string,
+  candidates: { canonical_target: string; kind: string; label: string; node_id: string }[],
+  totalCandidateCount: number,
+): string {
+  const details = candidates.map((candidate) => {
+    const base = `${candidate.canonical_target} (${candidate.kind}: ${candidate.label})`;
+    const sameTargetCount = candidates.filter(
+      (other) => other.canonical_target === candidate.canonical_target,
+    ).length;
+    return sameTargetCount > 1 ? `${base} [${candidate.node_id}]` : base;
+  });
+  const remaining = totalCandidateCount - candidates.length;
+  const suffix = remaining > 0 ? `; ${remaining} more` : "";
+  return `Ambiguous criv source target ${target}: ${details.join("; ")}${suffix}`;
 }
 
 function renderPreview(container: HTMLElement, preview: SourcePreview, compact: boolean): void {
@@ -1329,9 +1392,19 @@ class CrivEditorDriftPlugin implements PluginValue {
     for (const { from, to } of view.visibleRanges) {
       const text = view.state.sliceDoc(from, to);
       for (const range of crivLinkRanges(text, state, this.plugin.cachedSourceResolver())) {
-        if (range.status !== "unresolved") {
+        if (range.status === "resolved") {
           continue;
         }
+        const title =
+          range.status === "ambiguous"
+            ? ambiguousSourceMessage(
+                range.target,
+                range.candidates ?? [],
+                range.totalCandidateCount ?? 0,
+              )
+            : range.status === "malformed"
+              ? "Malformed criv source target"
+              : "Unresolved criv reference";
         builder.add(
           from + range.from,
           from + range.to,
@@ -1339,7 +1412,7 @@ class CrivEditorDriftPlugin implements PluginValue {
             class: "criv-editor-warning",
             attributes: {
               "data-criv-target": range.target,
-              title: "Unresolved criv reference",
+              title,
             },
           }),
         );

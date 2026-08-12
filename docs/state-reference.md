@@ -23,30 +23,13 @@ after every successful state publication. Publishing identical content again
 does not consume another slot, but makes that hash the newest publication. The
 snapshot named by `.criv/latest` is always protected.
 
-Inspect retained snapshots newest first:
-
-```sh
-criv state list
-criv state list --format json
-```
-
-Preview or apply pruning with the configured bound:
-
-```sh
-criv state prune --dry-run
-criv state prune
-criv state prune --keep 5
-criv state prune --keep 5 --format json
-```
-
-`--keep` is a one-command positive override; it does not rewrite `criv.toml`.
-`--dry-run` selects and reports the same snapshots without changing local
-files. Corrupt recognized snapshots fail closed and are not deleted
+Snapshot retention is automatic. The CLI does not expose snapshot list or
+prune commands. Corrupt recognized snapshots fail closed and are not deleted
 automatically.
 
 `criv query diff <a> <b>` resolves `latest` and retained hashes from the local
 store. Other values remain embedded Git-ref lookups of `.criv/state.json`.
 Pruning local snapshots does not inspect or alter Git refs.
 
-The lifecycle and compatibility boundary are defined by
-[[0068-bounded-local-snapshot-lifecycle|ADR-0068]].
+The lifecycle and recovery contract are defined by
+[[0094-automatic-recoverable-state-publication|ADR-0094]].

@@ -21,7 +21,7 @@ test("captures initial projections and delegates prepared queries", async () => 
           projectionCalls += 1;
           return projections;
         }
-        lookupNode(target: string) {
+        lookupSourceTarget(target: string) {
           return `node:${target}`;
         }
         suggestSelectors(query: string, limit: number) {
@@ -41,7 +41,7 @@ test("captures initial projections and delegates prepared queries", async () => 
   assert.equal(revision.initialProjections(), projections);
   assert.equal(revision.initialProjections(), projections);
   assert.equal(projectionCalls, 1);
-  assert.equal(revision.lookupNode("target"), "node:target");
+  assert.equal(revision.lookupSourceTarget("target"), "node:target");
   assert.deepEqual(revision.suggestSelectors("query"), ["selector:query"]);
   assert.equal(selectorLimit, 20);
 
@@ -49,7 +49,7 @@ test("captures initial projections and delegates prepared queries", async () => 
   revision.dispose();
   assert.equal(frees, 1);
   assert.throws(
-    () => revision.lookupNode("target"),
+    () => revision.lookupSourceTarget("target"),
     (error: unknown) => {
       assert.ok(error instanceof CrivLoadedStateDisposedError);
       assert.equal(error.code, CRIV_LOADED_STATE_DISPOSED);
@@ -107,7 +107,7 @@ test("keeps State errors distinct and frees failed projection candidates", async
       initialProjections() {
         throw projectionError;
       }
-      lookupNode() {}
+      lookupSourceTarget() {}
       suggestSelectors() {
         return [];
       }

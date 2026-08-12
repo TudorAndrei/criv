@@ -21,13 +21,40 @@ export interface SourceIndexEntry {
 
 export interface LinkedSource {
   target: string;
+  canonicalTarget: string;
   fragment: string | null;
   entry: SourceIndexEntry;
   node: CrivNode;
 }
 
+export interface CrivSourceTargetCandidate {
+  canonical_target: string;
+  node_id: string;
+  kind: string;
+  label: string;
+}
+
+export type CrivSourceTargetLookupResult =
+  | { kind: "resolved"; canonical_target: string; node: CrivNode }
+  | { kind: "unresolved" }
+  | {
+      kind: "ambiguous";
+      candidates: CrivSourceTargetCandidate[];
+      total_candidate_count: number;
+    };
+
+export type SourceResolution =
+  | { kind: "resolved"; source: LinkedSource }
+  | { kind: "unresolved" }
+  | { kind: "malformed" }
+  | {
+      kind: "ambiguous";
+      candidates: CrivSourceTargetCandidate[];
+      totalCandidateCount: number;
+    };
+
 export interface SourceResolver {
-  lookupNode(target: string): CrivNode | undefined;
+  lookupSourceTarget(target: string): CrivSourceTargetLookupResult;
   sourceEntry(path: string): SourceIndexEntry | undefined;
 }
 
@@ -62,7 +89,9 @@ export interface CrivLinkRange {
   to: number;
   target: string;
   kind: "source" | "pattern" | "unknown";
-  status: "resolved" | "unresolved";
+  status: "resolved" | "unresolved" | "ambiguous" | "malformed";
+  candidates?: CrivSourceTargetCandidate[];
+  totalCandidateCount?: number;
 }
 
 export function linkedSourcesFromMarkdown(
@@ -145,28 +174,73 @@ export function addTarget(targets: string[], value: string | null | undefined): 
   }
 }
 
+export function decodeSourceLinkTarget(target: string): string | null {
+  try {
+    return decodeURIComponent(target);
+  } catch {
+    return null;
+  }
+}
+
 export function resolveSource(resolver: SourceResolver, target: string): LinkedSource | null {
+  const result = resolveSourceResult(resolver, target);
+  return result.kind === "resolved" ? result.source : null;
+}
+
+export function resolveSourceResult(resolver: SourceResolver, target: string): SourceResolution {
   const clean = cleanTarget(target);
   const [targetPath, fragment] = clean.split("#", 2);
   if (!targetPath || targetPath.startsWith("match:")) {
-    return null;
+    return { kind: "unresolved" };
   }
-  const lookupTarget = fragment && !parseLineRange(fragment) ? clean : targetPath;
-  const node = resolver.lookupNode(lookupTarget);
-  if (!node) {
-    return null;
+  const sourcePath = targetPath.startsWith("source:")
+    ? targetPath.slice("source:".length)
+    : targetPath;
+  if (!sourcePath) {
+    return { kind: "malformed" };
   }
-  const canonicalTarget = node.source_target ?? node.path;
-  const sourcePath = canonicalTarget?.split("#", 1)[0];
-  const entry = sourcePath ? resolver.sourceEntry(sourcePath) : undefined;
+  let lookupTarget = sourcePath;
+  if (fragment) {
+    if (parseLineRange(fragment)) {
+      lookupTarget = sourcePath;
+    } else if (/^l/i.test(fragment)) {
+      return { kind: "malformed" };
+    } else {
+      lookupTarget = `${sourcePath}#${fragment}`;
+    }
+  }
+
+  const result = resolver.lookupSourceTarget(lookupTarget);
+  if (result.kind === "unresolved") {
+    return { kind: "unresolved" };
+  }
+  if (result.kind === "ambiguous") {
+    return {
+      kind: "ambiguous",
+      candidates: result.candidates,
+      totalCandidateCount: result.total_candidate_count,
+    };
+  }
+  if (result.kind === "resolved") {
+    // Continue with the canonical source below.
+  } else {
+    return { kind: "unresolved" };
+  }
+
+  const canonicalPath = result.canonical_target.split("#", 1)[0];
+  const entry = canonicalPath ? resolver.sourceEntry(canonicalPath) : undefined;
   if (!entry) {
-    return null;
+    return { kind: "unresolved" };
   }
   return {
-    target,
-    fragment: fragment ?? null,
-    entry,
-    node,
+    kind: "resolved",
+    source: {
+      target,
+      canonicalTarget: result.canonical_target,
+      fragment: fragment ?? null,
+      entry,
+      node: result.node,
+    },
   };
 }
 
@@ -223,9 +297,21 @@ export function crivLinkRanges(
     const rawTarget = match[1] ?? "";
     const from = match.index ?? 0;
     const to = from + match[0].length;
-    const source = resolveSource(resolver, rawTarget);
-    if (source) {
+    const source = resolveSourceResult(resolver, rawTarget);
+    if (source.kind === "resolved") {
       ranges.push({ from, to, target: rawTarget, kind: "source", status: "resolved" });
+      continue;
+    }
+    if (source.kind === "ambiguous" || source.kind === "malformed") {
+      ranges.push({
+        from,
+        to,
+        target: rawTarget,
+        kind: "source",
+        status: source.kind,
+        candidates: source.kind === "ambiguous" ? source.candidates : undefined,
+        totalCandidateCount: source.kind === "ambiguous" ? source.totalCandidateCount : undefined,
+      });
       continue;
     }
     const pattern = resolvePattern(state, rawTarget);

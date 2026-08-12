@@ -81,7 +81,7 @@ const linkRevision = new wasm.LoadedState(JSON.stringify(state));
 const sources = linkRevision.initialProjections().sources;
 const sourceByPath = new Map(sources.map((source) => [source.path, source]));
 const sourceResolver = {
-  lookupNode: (target) => linkRevision.lookupNode(target),
+  lookupSourceTarget: (target) => linkRevision.lookupSourceTarget(target),
   sourceEntry: (path) => sourceByPath.get(path),
 };
 
@@ -98,6 +98,26 @@ assert.deepEqual(
     .map((source) => source.entry.path),
   ["src/lib.rs"],
 );
+
+const lookupFixture = JSON.parse(
+  readFileSync(
+    resolve(pluginRoot, "../../../fixtures/editor/source-target-lookup.v1.json"),
+    "utf8",
+  ),
+);
+const lookupRevision = new wasm.LoadedState(JSON.stringify(lookupFixture.state));
+const lookupSources = lookupRevision.initialProjections().sources;
+const lookupResolver = {
+  lookupSourceTarget: (target) => lookupRevision.lookupSourceTarget(target),
+  sourceEntry: (path) => lookupSources.find((source) => source.path === path),
+};
+const ambiguousSource = core.resolveSourceResult(lookupResolver, "source:src/lib.rs#run");
+assert.equal(ambiguousSource.kind, "ambiguous");
+assert.equal(ambiguousSource.totalCandidateCount, 2);
+assert.deepEqual(core.resolveSourceResult(lookupResolver, "foo/lib.rs"), {
+  kind: "unresolved",
+});
+lookupRevision.free();
 
 assert.equal(
   core.frontmatterPatternTargets(
@@ -141,7 +161,7 @@ const unsafeRevision = new wasm.LoadedState(JSON.stringify(unsafeSourceState));
 const safeSources = unsafeRevision.initialProjections().sources;
 const safeSourceByPath = new Map(safeSources.map((source) => [source.path, source]));
 const safeSourceResolver = {
-  lookupNode: (target) => unsafeRevision.lookupNode(target),
+  lookupSourceTarget: (target) => unsafeRevision.lookupSourceTarget(target),
   sourceEntry: (path) => safeSourceByPath.get(path),
 };
 assert.deepEqual(
@@ -153,6 +173,8 @@ assert.equal(core.safeVaultPath("../.ssh/id_rsa"), null);
 assert.equal(core.safeVaultPath("/etc/passwd"), null);
 assert.equal(core.safeVaultPath("C:\\Users\\name\\.ssh\\id_rsa"), null);
 assert.equal(core.safeVaultPath("src\\lib.rs"), "src/lib.rs");
+assert.equal(core.decodeSourceLinkTarget("src%2Flib.rs%23fn%3Arun"), "src/lib.rs#fn:run");
+assert.equal(core.decodeSourceLinkTarget("src%2Glib.rs"), null);
 
 const validStateRaw = JSON.stringify(state);
 assert.deepEqual(initialProjections(validStateRaw).state, state);
