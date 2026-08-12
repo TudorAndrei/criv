@@ -11,7 +11,6 @@ views {
     criv.cli.vaultModel -> criv.cli.architectureService 'Compiles the LikeC4 workspace'
     criv.cli.architectureService -> criv.cli.vaultModel 'Returns the model and diagnostics'
     criv.cli.refreshCoordinator -> criv.cli.governanceEngine 'Checks publication blockers and vault drift'
-    criv.cli.refreshCoordinator -> criv.cli.architectureService 'Generates configured Code architecture'
     criv.cli.refreshCoordinator -> criv.cli.statePublisher 'Builds the next state envelope'
     criv.cli.statePublisher -> criv.stateStore 'Writes state and retained snapshots'
   }

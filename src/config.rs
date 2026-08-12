@@ -14,15 +14,8 @@ pub(crate) struct Config {
     pub(crate) source_exclude: Vec<String>,
     pub(crate) source_index: bool,
     pub(crate) state_keep: usize,
-    pub(crate) architecture_code: Option<ArchitectureCodeConfig>,
     pub(crate) enforce_stages: Vec<String>,
     pub(crate) import_policies: Vec<ImportPolicy>,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct ArchitectureCodeConfig {
-    pub(crate) output: String,
-    pub(crate) title: String,
 }
 
 #[derive(Debug, Clone)]
@@ -42,7 +35,6 @@ impl Default for Config {
             source_exclude: vec!["**/target/**".into(), "**/node_modules/**".into()],
             source_index: true,
             state_keep: 20,
-            architecture_code: None,
             enforce_stages: vec!["commit".into(), "push".into(), "ci".into()],
             import_policies: Vec::new(),
         }
@@ -93,6 +85,10 @@ impl RawConfig {
                 "criv.toml [patterns.*] is no longer supported; move persistent patterns into an ADR policy.patterns entry and use its ADR-NNNN/local-id",
             ));
         }
+        crate::architecture::validate_agent_authored_config(
+            self.architecture.code.is_some(),
+            &docs_dir,
+        )?;
         Ok(Config {
             docs_dir: docs_dir.clone(),
             adr_dir: vault_path("vault.adr", &self.vault.adr.unwrap_or(defaults.adr_dir))?,
@@ -106,11 +102,6 @@ impl RawConfig {
             source_exclude: self.source.exclude.unwrap_or(defaults.source_exclude),
             source_index: self.index.source.unwrap_or(defaults.source_index),
             state_keep: positive_state_keep(self.state.keep.unwrap_or(defaults.state_keep))?,
-            architecture_code: self
-                .architecture
-                .code
-                .map(|code| code.into_config(&docs_dir))
-                .transpose()?,
             enforce_stages: self.enforce.stages.unwrap_or(defaults.enforce_stages),
             import_policies: self
                 .enforce
@@ -192,43 +183,7 @@ fn positive_state_keep(keep: usize) -> Result<usize> {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct RawArchitecture {
-    code: Option<RawArchitectureCode>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct RawArchitectureCode {
-    output: Option<String>,
-    title: Option<String>,
-}
-
-impl RawArchitectureCode {
-    fn into_config(self, docs_dir: &str) -> Result<ArchitectureCodeConfig> {
-        let output = vault_path(
-            "architecture.code.output",
-            &self
-                .output
-                .unwrap_or_else(|| format!("{docs_dir}/architecture/04-code.c4")),
-        )?;
-        if !Path::new(&output).starts_with(Path::new(docs_dir)) {
-            return Err(CrivError::new(format!(
-                "architecture.code.output must be inside vault.docs ({docs_dir})"
-            )));
-        }
-        if Path::new(&output)
-            .extension()
-            .and_then(|extension| extension.to_str())
-            != Some("c4")
-        {
-            return Err(CrivError::new(
-                "architecture.code.output must use the .c4 extension",
-            ));
-        }
-        Ok(ArchitectureCodeConfig {
-            output,
-            title: self.title.unwrap_or_else(|| "Code diagram for criv".into()),
-        })
-    }
+    code: Option<toml::Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -421,7 +376,7 @@ pattern = "println!($$$ARGS)"
     }
 
     #[test]
-    fn parses_architecture_code_config_without_source_glob() {
+    fn rejects_removed_architecture_code_config_with_migration_guidance() {
         let raw = toml::from_str::<RawConfig>(
             r#"
 [architecture.code]
@@ -431,49 +386,26 @@ title = "Code diagram for criv"
         )
         .unwrap();
 
-        let config = raw.into_config().unwrap();
-        assert_eq!(
-            config.architecture_code,
-            Some(ArchitectureCodeConfig {
-                output: "docs/architecture/04-code.c4".into(),
-                title: "Code diagram for criv".into(),
-            })
-        );
+        let message = raw.into_config().unwrap_err().to_string();
+        assert!(message.contains("[architecture.code] was removed"));
+        assert!(message.contains("delete it"));
+        assert!(message.contains("coding agent"));
+        assert!(message.contains("docs/architecture/"));
     }
 
     #[test]
-    fn parses_architecture_code_c4_output_path() {
+    fn rejects_removed_architecture_code_title_without_compatibility() {
         let raw = toml::from_str::<RawConfig>(
             r#"
 [architecture.code]
-output = "docs/architecture/04-code.c4"
-title = "Code diagram for criv"
+title = "Repository architecture"
 "#,
         )
         .unwrap();
 
-        let config = raw.into_config().unwrap();
-        assert_eq!(
-            config.architecture_code,
-            Some(ArchitectureCodeConfig {
-                output: "docs/architecture/04-code.c4".into(),
-                title: "Code diagram for criv".into(),
-            })
-        );
-    }
-
-    #[test]
-    fn rejects_architecture_code_glob_config() {
-        let error = toml::from_str::<RawConfig>(
-            r#"
-[architecture.code]
-output = "docs/architecture/04-code.md"
-glob = "src/**"
-"#,
-        )
-        .unwrap_err();
-
-        assert!(error.to_string().contains("unknown field `glob`"));
+        let message = raw.into_config().unwrap_err().to_string();
+        assert!(message.contains("[architecture.code] was removed"));
+        assert!(!message.contains("default"));
     }
 
     #[test]
@@ -486,9 +418,6 @@ adr = "./adr"
 
 [source]
 roots = ["./src", ".github/workflows", "Cargo.toml"]
-
-[architecture.code]
-output = "./docs/architecture/04-code.c4"
 "#,
         )
         .unwrap();
@@ -499,10 +428,6 @@ output = "./docs/architecture/04-code.c4"
         assert_eq!(
             config.source_roots,
             vec!["src", ".github/workflows", "Cargo.toml"]
-        );
-        assert_eq!(
-            config.architecture_code.unwrap().output,
-            "docs/architecture/04-code.c4"
         );
     }
 
@@ -534,38 +459,5 @@ roots = ["src", "../outside"]
         let error = raw.into_config().unwrap_err();
         assert!(error.to_string().contains("source.roots"));
         assert!(error.to_string().contains("parent-directory"));
-    }
-
-    #[test]
-    fn rejects_empty_vault_paths() {
-        let raw = toml::from_str::<RawConfig>(
-            r#"
-[architecture.code]
-output = "  "
-"#,
-        )
-        .unwrap();
-
-        let error = raw.into_config().unwrap_err();
-        assert!(error.to_string().contains("architecture.code.output"));
-        assert!(error.to_string().contains("must not be empty"));
-    }
-
-    #[test]
-    fn rejects_architecture_output_outside_docs_directory() {
-        let raw = toml::from_str::<RawConfig>(
-            r#"
-[vault]
-docs = "guides"
-
-[architecture.code]
-output = "docs/architecture/04-code.md"
-"#,
-        )
-        .unwrap();
-
-        let error = raw.into_config().unwrap_err();
-        assert!(error.to_string().contains("architecture.code.output"));
-        assert!(error.to_string().contains("vault.docs (guides)"));
     }
 }

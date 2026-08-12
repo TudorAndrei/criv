@@ -229,7 +229,7 @@ the tab tracks the diagram. Use
 **Reopen Editor With → Text Editor** to edit the DSL. The preview webview uses packaged extension
 resources and does not use a CDN or a global LikeC4 command. Run `criv watch
 --once` after architecture or extension source changes. This keeps architecture
-state current. The repository Code model and views are hand-authored under
+state current. The coding agent authors the repository Code model and views under
 `docs/architecture/code/`, so watch does not replace them.
 
 `npm --prefix extensions/vscode-criv run package` and `mise run

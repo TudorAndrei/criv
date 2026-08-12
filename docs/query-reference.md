@@ -340,31 +340,6 @@ Select text rows or a JSON array of rows
 
 **Default:** `text`
 
-## `criv query c4-code`
-
-- **Usage**: `criv query c4-code [--format <FORMAT>] <PATH_GLOB>`
-
-Emit focused LikeC4 source for modules in a source path glob
-
-### Arguments
-
-#### `<PATH_GLOB>`
-
-Source path or component/module glob
-
-### Flags
-
-#### `--format <FORMAT>`
-
-Select text rows or a JSON array of rows
-
-**Choices:**
-
-- `text`
-- `json`
-
-**Default:** `text`
-
 ## `criv query diff`
 
 - **Usage**: `criv query diff [--format <FORMAT>] <REF_A> <REF_B>`

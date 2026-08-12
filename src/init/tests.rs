@@ -65,8 +65,10 @@ fn init_installs_c4_authoring_skill() {
     ] {
         let skill = std::fs::read_to_string(root.join(path)).unwrap();
         assert!(skill.contains("name: c4-authoring"));
-        assert!(skill.contains("`docs/architecture/` is one LikeC4 workspace"));
-        assert!(skill.contains("LikeC4 merges every source file in the workspace into one model"));
+        assert!(skill.contains("one architecture **map**"));
+        assert!(skill.contains("coding agent owns the meaning"));
+        assert!(skill.contains("has one component as its scope"));
+        assert!(skill.contains("Run `criv watch --once`"));
         assert!(skill.contains("The work is complete when the vault is green"));
     }
 

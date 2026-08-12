@@ -132,7 +132,6 @@ impl Note {
 
 #[derive(Debug)]
 pub(crate) struct Vault {
-    pub(crate) root: PathBuf,
     pub(crate) config: Config,
     pub(crate) notes: Vec<Note>,
     pub(crate) c4_artifacts: Vec<c4::C4Artifact>,
@@ -256,7 +255,6 @@ impl Vault {
         };
 
         let mut vault = Self {
-            root: root.to_path_buf(),
             config,
             notes,
             c4_artifacts,
@@ -438,10 +436,6 @@ impl Vault {
             .canonical_symbol_target(&format!("{path}#{fragment}"))
     }
 
-    pub(crate) fn source_files_matching_glob(&self, pattern: &str) -> Vec<String> {
-        self.source_files_matching_globs(&[pattern.to_string()])
-    }
-
     pub(crate) fn source_files_matching_globs(&self, patterns: &[String]) -> Vec<String> {
         let matcher = GlobMatcher::from_valid_patterns(patterns);
         let mut matches_by_pattern = vec![Vec::new(); patterns.len()];
@@ -495,10 +489,6 @@ impl Vault {
 
     pub(crate) fn source_graph_build(&self) -> &SourceGraphBuild {
         &self.source_graph
-    }
-
-    pub(crate) fn retain_source_graph_changes_from(&mut self, previous: &SourceGraphBuild) {
-        self.source_graph.retain_changed_files_from(previous);
     }
 
     pub(crate) fn source_entries(&self) -> &[IndexedSource] {
@@ -575,7 +565,6 @@ impl Vault {
         let patterns = registered_policy_patterns(&notes, &effective_decisions);
 
         let mut vault = Self {
-            root: PathBuf::from("."),
             config: Config::default(),
             notes,
             c4_artifacts: Vec::new(),

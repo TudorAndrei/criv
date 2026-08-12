@@ -1,6 +1,5 @@
 use std::path::Path;
 
-use crate::architecture;
 use crate::check;
 use crate::config::Config;
 use crate::policy_scan::PolicyScanPlan;
@@ -102,11 +101,11 @@ fn execute(
     diagnostic_previous_state: Option<&State>,
     source_catalog: SourceCatalog,
 ) -> Result<RefreshResult> {
-    let mut vault = Vault::load_incremental_with_config_and_source_catalog(
+    let vault = Vault::load_incremental_with_config_and_source_catalog(
         root,
         config,
         previous_graph,
-        source_catalog.clone(),
+        source_catalog,
     )?;
     let blockers = check::publication_blocking_diagnostics(&vault);
     if !blockers.is_empty() {
@@ -120,16 +119,6 @@ fn execute(
         )));
     }
     let changed_files = vault.source_graph().changed_files().to_vec();
-    if architecture::write_code_architecture(root, &vault)? {
-        let refreshed_graph = vault.source_graph_build().clone();
-        vault = Vault::load_incremental_with_config_and_source_catalog(
-            root,
-            config,
-            Some(&refreshed_graph),
-            source_catalog,
-        )?;
-        vault.retain_source_graph_changes_from(&refreshed_graph);
-    }
 
     let policy_plan = PolicyScanPlan::new(&vault);
     let diagnostics = check::validate_with_previous_state_and_policy_plan(

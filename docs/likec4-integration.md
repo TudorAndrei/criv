@@ -8,42 +8,35 @@ targets:
     - assets/likec4-bridge.mjs
     - packages/criv-likec4/src/protocol.ts
     - packages/criv-likec4/src/renderer.ts
-    - src/c4_code.rs
     - extensions/vscode-criv/src/c4Preview.ts
     - .obsidian/plugins/criv/src/main.ts
 ---
 
 # LikeC4 Integration
 
-[[0074-likec4-as-the-architecture-source-and-renderer|ADR-0074]] defines the
+[[0100-agent-authored-language-independent-c4-architecture|ADR-0100]] defines the
 architecture contract. This document gives the implementation specification.
 
 ## Source and ownership
 
 One vault has one LikeC4 workspace at `docs/architecture/`. All architecture
 source files use the `.c4` extension. LikeC4 owns the language grammar, model
-rules, layout, and visual output. Agents write the source. criv does not read a
-Mermaid C4 or DOT format and does not provide a migration command.
+rules, layout, and visual output. The coding agent writes the source. It chooses
+clear element names, responsibilities, relationships, and view titles. criv
+does not create architecture source from source files, modules, imports, or
+programming languages.
 
-The workspace can contain manual models at every C4 level. When a vault enables
-`[architecture.code]`, criv writes the configured Code file. A generated file
-contains only language modules and import relations:
+The workspace can contain agent-authored models at every useful C4 level. The
+complete workspace describes one software architecture. Each view tells one
+focused story at one level. A title names the level and the system, container,
+component, or workflow in scope. A Code view is optional and zooms into one
+important component. It does not group the repository by programming language.
 
-- Rust crates and `mod` declarations
-- TypeScript and JavaScript modules and namespaces
-- Python modules and packages
-- Go packages
+This repository keeps agent-authored Code models and their focused views under
+`docs/architecture/code/`. Each view explains one component or workflow instead
+of copying the complete source index.
 
-The generator does not make nodes for files, classes, functions, methods, or
-calls. A file is only a source location for a module. Each language gets a
-focused named view. There is no full Code view.
-
-This repository keeps hand-authored module models and their focused views under
-`docs/architecture/code/`. It does not enable `[architecture.code]`. Each view
-explains one component or workflow instead of copying the complete source
-index.
-
-A hand-authored Code model must stay a true roll-up of the component model. If
+A Code model must stay a true roll-up of the component model. If
 a module in component A imports a module in component B, the component model
 must also show a relationship from A to B. Cross-cutting helper modules,
 re-export barrels, and bundler shims stay outside the architecture; name them
@@ -67,7 +60,7 @@ docs/architecture/
   vscode.c4               VS Code components and their primary view
   shared-renderer.c4      renderer components and their primary view
   state-projection.c4     WebAssembly components and their primary view
-  code/                   language modules and focused Code views
+  code/                   selected component implementations and Code views
   views/dynamic/          cross-domain runtime sequences
 ```
 
@@ -85,24 +78,10 @@ process, a language, or a storage boundary.
 Hosting belongs to the deployment model. A container diagram shows what a
 container depends on. It does not show which application process contains it.
 
-Module identity and nesting use these rules:
-
-- Rust starts at the nearest `Cargo.toml` package. Hyphens become underscores.
-  `lib.rs` and `main.rs` identify the crate, file-backed modules follow their
-  path below `src/`, and nested `mod` declarations append their AST nesting.
-  A `src/bin` target starts a separate crate identity.
-- TypeScript and JavaScript use the repository-relative ES module path.
-  Declared namespaces append their AST nesting to that module.
-- Python strips the longest configured source root. A normal file is an
-  importable module. An `__init__.py` file identifies its package.
-- Go groups all files with the same directory and `package` declaration into
-  one package node.
-
-Private and public modules are both architecture nodes. Architecture describes
-ownership, not only a public API. A repeated module or Go package has one node;
-the first repository path in lexical order is its source anchor. Module ids are
-stable hashes of the language and normalized module identity. Import edges are
-present only when the imported module resolves to another generated node.
+The source graph can show modules, symbols, calls, and imports as evidence for
+the coding agent. These facts do not become C4 elements by themselves. The
+agent selects the architecture boundary, gives each selected element a useful
+name and responsibility, and links it to a stable source file or symbol.
 External package imports do not create placeholder nodes.
 
 ## CLI validation flow

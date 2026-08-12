@@ -3,7 +3,6 @@ use std::path::Path;
 
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
 
-use crate::c4_code;
 use crate::vault::{
     NoteKind, ResolvedLink, SourceTargetResolution, Vault, source_fragment_name,
     source_fragment_path,
@@ -50,8 +49,6 @@ enum QueryCommand {
     Coverage(CoverageOptions),
     /// List source, note, or decision nodes.
     Nodes(NodesOptions),
-    /// Emit focused LikeC4 source for modules in a source path glob.
-    C4Code(PathGlobOptions),
     /// Compare two state snapshots or git refs.
     Diff(DiffOptions),
 }
@@ -82,8 +79,7 @@ impl QueryCommand {
             | Self::Governs(_)
             | Self::Governing(_)
             | Self::Coverage(_)
-            | Self::Nodes(_)
-            | Self::C4Code(_) => QueryCapability::Sources,
+            | Self::Nodes(_) => QueryCapability::Sources,
         }
     }
 }
@@ -154,14 +150,6 @@ struct NodesOptions {
 }
 
 #[derive(Debug, ClapArgs)]
-struct PathGlobOptions {
-    /// Source path or component/module glob.
-    path_glob: String,
-    #[command(flatten)]
-    output: OutputOptions,
-}
-
-#[derive(Debug, ClapArgs)]
 struct DiffOptions {
     /// Left snapshot hash, `latest`, or git ref.
     ref_a: String,
@@ -224,10 +212,6 @@ pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
             let rows = nodes(&vault, options.kind, options.without_docs);
             (rows, options.output.format)
         }
-        QueryCommand::C4Code(options) => (
-            c4_code::for_glob(&vault, &options.path_glob),
-            options.output.format,
-        ),
         QueryCommand::Diff(_) => unreachable!("snapshot queries return before vault loading"),
     };
 
@@ -699,13 +683,6 @@ mod tests {
                 QueryCapability::Sources,
             ),
             (query_nodes_command(None, false), QueryCapability::Sources),
-            (
-                QueryCommand::C4Code(PathGlobOptions {
-                    path_glob: "src/**".into(),
-                    output: query_output_options(),
-                }),
-                QueryCapability::Sources,
-            ),
             (
                 QueryCommand::Diff(DiffOptions {
                     ref_a: "latest".into(),

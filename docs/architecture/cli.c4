@@ -32,7 +32,7 @@ model {
       }
       architectureService = component 'Architecture service' {
         technology 'Rust, Node.js, and LikeC4'
-        description 'Compiles the authored LikeC4 workspace and optionally generates module-level Code architecture.'
+        description 'Compiles and validates the agent-authored LikeC4 workspace.'
         link ../../src/likec4.rs 'source'
       }
       governanceEngine = component 'Governance engine' {

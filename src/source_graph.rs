@@ -250,14 +250,6 @@ impl SourceGraphBuild {
         &self.graph
     }
 
-    pub(crate) fn retain_changed_files_from(&mut self, previous: &Self) {
-        self.graph
-            .changed_files
-            .extend(previous.graph.changed_files.iter().cloned());
-        self.graph.changed_files.sort();
-        self.graph.changed_files.dedup();
-    }
-
     pub(crate) fn publish(mut self, root: &Path) -> Result<Self> {
         if self.cache == CacheDisposition::Dirty {
             store_cached(root, &self.graph)?;

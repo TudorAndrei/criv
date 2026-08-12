@@ -29,7 +29,7 @@ when terms actually get resolved.
 ├── docs/
 │   ├── adr/                ← 47 decisions, criv-governed
 │   ├── agents/             ← this configuration
-│   ├── architecture/       ← generated C4 artifacts
+│   ├── architecture/       ← agent-authored LikeC4 workspace
 │   └── query-reference.md
 └── src/
 ```

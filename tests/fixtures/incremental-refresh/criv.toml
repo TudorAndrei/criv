@@ -8,7 +8,3 @@ exclude = []
 
 [index]
 source = true
-
-[architecture.code]
-output = "docs/architecture/04-generated-code.c4"
-title = "Generated fixture code"

@@ -777,7 +777,7 @@ fn disabled_source_index_is_observed_through_cli_boundary() {
 }
 
 #[test]
-fn architecture_code_output_cannot_escape_vault_root() {
+fn removed_architecture_code_config_fails_with_migration_guidance() {
     let parent = TempDir::new().unwrap();
     let root = parent.path().join("vault");
     fs::create_dir_all(&root).unwrap();
@@ -811,8 +811,10 @@ output = "../outside.c4"
         .args(["watch", "--once"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("architecture.code.output"))
-        .stderr(predicate::str::contains("parent-directory"));
+        .stderr(predicate::str::contains("[architecture.code] was removed"))
+        .stderr(predicate::str::contains("delete it"))
+        .stderr(predicate::str::contains("coding agent"))
+        .stderr(predicate::str::contains("docs/architecture/"));
     assert!(!parent.path().join("outside.c4").exists());
 }
 
@@ -1040,7 +1042,6 @@ fn query_usage_errors_are_reported() {
         "governing",
         "coverage",
         "nodes",
-        "c4-code",
         "diff",
     ] {
         assert!(stderr.contains(name), "missing query subcommand {name}");
@@ -1619,7 +1620,7 @@ Range [[src/lib.rs#L1-L1]]
 }
 
 #[test]
-fn likec4_module_query_cli_smoke_test() {
+fn removed_c4_code_query_is_not_a_cli_command() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
 
@@ -1638,11 +1639,11 @@ fn likec4_module_query_cli_smoke_test() {
     criv(root)
         .args(["query", "c4-code", "src/**"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("element module"))
-        .stdout(predicate::str::contains("src::helper"))
-        .stdout(predicate::str::contains("'imports'"))
-        .stdout(predicate::str::contains("classDiagram").not());
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "unrecognized subcommand 'c4-code'",
+        ));
 
     criv(root)
         .args(["query", "c4-elements", "c4"])

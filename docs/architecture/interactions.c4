@@ -68,11 +68,10 @@ model {
   criv.cli.refreshCoordinator -> criv.cli.vaultModel 'Loads the current vault'
   criv.cli.refreshCoordinator -> criv.cli.sourceIntelligence 'Reuses incremental source data'
   criv.cli.refreshCoordinator -> criv.cli.governanceEngine 'Validates before and after publication'
-  criv.cli.refreshCoordinator -> criv.cli.architectureService 'Requests configured architecture output'
   criv.cli.refreshCoordinator -> criv.cli.statePublisher 'Publishes the refreshed graph'
 
   criv.cli.vaultModel -> criv.cli.sourceIntelligence 'Builds source indexes and relations'
-  criv.cli.vaultModel -> criv.cli.architectureService 'Compiles the LikeC4 workspace' {
+  criv.cli.vaultModel -> criv.cli.architectureService 'Validates agent-authored architecture' {
     technology 'Node.js bridge process'
   }
 
@@ -85,11 +84,9 @@ model {
   criv.cli.knowledgeQueries -> criv.cli.vaultModel 'Reads the repository knowledge graph'
   criv.cli.knowledgeQueries -> criv.cli.sourceIntelligence 'Reads indexed source data'
   criv.cli.knowledgeQueries -> criv.cli.repositoryHistory 'Reads commit history and stored revisions'
-  criv.cli.knowledgeQueries -> criv.cli.architectureService 'Builds focused module projections'
   criv.cli.knowledgeQueries -> criv.cli.statePublisher 'Reads retained snapshots'
 
-  criv.cli.architectureService -> criv.cli.vaultModel 'Reads architecture sources and configuration'
-  criv.cli.architectureService -> criv.cli.sourceIntelligence 'Reads module and import relations'
+  criv.cli.architectureService -> criv.cli.vaultModel 'Reads agent-authored architecture sources'
   criv.cli.statePublisher -> criv.cli.vaultModel 'Builds the state envelope from vault facts'
   criv.cli.statePublisher -> criv.cli.sourceIntelligence 'Serializes source graph facts'
   criv.cli.statePublisher -> criv.stateStore 'Writes state and retained snapshots' {

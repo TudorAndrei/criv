@@ -1,62 +1,70 @@
 ---
 name: c4-authoring
-description: Use when authoring or reviewing the LikeC4 architecture workspace in docs/architecture — models, named views, source links, or architecture drift.
+description: Author or review the LikeC4 architecture map in docs/architecture. Use for C4 elements, boundaries, named views, view titles, source links, and architecture drift.
 metadata:
-  criv-template: blake3:bae18c3c32e81fbc
+  criv-template: blake3:8f099f757d561eeb
 ---
 
 # C4 authoring
 
-`docs/architecture/` is one LikeC4 workspace. LikeC4 DSL is the only
-architecture source, and LikeC4 is the renderer.
+Treat `docs/architecture/` as one architecture **map**. LikeC4 source defines
+the map. A named view is one **zoom** that tells one story to one audience. The
+coding agent owns the meaning; criv validates it; LikeC4 renders it.
 
-## 1. Pick one level
+## 1. Set the story
 
-Read the workspace, then choose the level the change belongs to:
+Read the complete workspace and the source that the request affects. State the
+audience, the question the zoom must answer, and one C4 level:
 
 - System Context — people, the system in scope, and external systems
 - Container — the runnable parts of one software system
 - Component — the responsibilities inside one container
-- Code — language modules and import relations
+- Code — selected code elements that implement one important component
 - Dynamic — the order of one runtime workflow
 - Deployment — which process contains each container instance
 
-Declare each element once, at one level. A store that only this system writes
-is a container of the system, not a context-level element. Tag every external
-person and system with `external` and grey it in every view, so a reader sees
-the system boundary.
+Use the least detailed level that answers the question. A Code zoom is optional
+and has one component as its scope. The repository programming languages do not
+define the view scope.
 
-Hosting belongs to the deployment model. An adapter depends on its host
-application through the host API; a container diagram states dependency, and a
-deployment diagram states containment.
+This step is complete when the audience, question, level, and element in scope
+fit in one sentence.
 
-LikeC4 merges every source file in the workspace into one model. A domain file
-may contain its model declarations and the named views that explain that
-domain. This does not copy an element: declare each element and relationship
-once, then select it from any view. Keep cross-domain workflow views under
-`views/dynamic/` or another focused `views/` folder.
+## 2. Trace the real boundary
 
-Prefer one primary view for each domain file. A large Code domain may own more
-than one focused view when each view answers a different module question. A
-shared specification or relationship file may own no view. The editor uses the
-LikeC4 `sourcePath` of each named view, so a file preview shows only views that
-the file declares.
+Use modules, symbols, calls, imports, processes, and stores as evidence. Find
+the code and runtime boundaries that implement the story. Then choose clear
+architecture names and short responsibilities. A source name becomes an
+architecture element only when it is important to the story.
 
-Done when each changed element has one model identity at one level, and each
-planned view has a stated level and the question it answers.
+Keep uncertain boundaries explicit in your report. Do not invent a system,
+container, component, or relationship that the repository does not prove.
 
-## 2. Author the view
+This step is complete when every planned element and relationship has code,
+deployment, configuration, or accepted-ADR evidence.
 
-Name an element with a noun, and put a qualifier such as "optional" in the
-description or a tag. Select shared elements with LikeC4 view rules rather than
-copying model declarations. Put repeated styles and selections in global style
-or predicate groups. Extend a view only when the new view is a more detailed
-form of the base view.
+## 3. Change the map
+
+Declare each element and relationship once. Name an element with a noun and
+give it one short responsibility. Keep each element at one C4 level:
+
+- A system delivers value to people or other systems.
+- A container is an application or data store inside a system.
+- A component is a responsibility inside one container.
+- A code element helps implement one component.
+
+A store that only this system writes is a container of the system. Hosting is a
+deployment fact. At Container level, an adapter depends on its host through the
+host API. At Deployment level, the host process contains the adapter instance.
+
+Tag external people and systems with `external` and use the shared external
+style. When a Code relationship crosses a component boundary, show the same
+dependency at Component level.
 
 A relationship label reads as *Source, label, Destination*: start it with a
-capital letter and a present-tense verb, and end it on the object rather than a
-preposition. Carry a `technology` when the relationship crosses a process, a
-language, or a storage boundary.
+capital letter and a present-tense verb, and end it on the object. Add a
+`technology` when the relationship crosses a process, language, or storage
+boundary.
 
 ```likec4
 model {
@@ -69,39 +77,41 @@ model {
 }
 ```
 
+This step is complete when every changed element has one identity, one level,
+one responsibility, and all cross-boundary relationships roll up correctly.
+
+## 4. Author the zoom
+
+Select existing map elements with view rules. Use a title that names the level
+and scope, such as `Components / CLI` or `Dynamic / State / Publish a
+revision`. Make the system or container boundary visible. Include only elements
+and relationships that answer the stated question.
+
+Keep a primary named view beside the domain model that it explains. Put
+cross-domain workflow views under a focused `views/` folder. A shared
+specification or relationship file can own no view. Prefer one primary view per
+domain file; add another only when it answers a different question.
+
+Use global style and predicate groups for repeated selections and styles.
+Extend a view only when the new zoom is a more detailed form of the base zoom.
+
+This step is complete when the view is readable without spoken explanation and
+every included element helps answer the stated question.
+
+## 5. Anchor the map
+
 A `source` link resolves from `docs/architecture/` and accepts a criv file,
-line, symbol, or pattern selector. Point it at a stable module or public
-interface.
+line, symbol, or pattern selector. Prefer a stable module or public interface.
+Use one link for each implementation boundary that the map claims.
 
-Done when every view is readable on its own, every domain file opens its owned
-view, and every element that claims an implementation boundary has one
-resolvable source link.
+This step is complete when every changed implementation element has a
+resolvable source link and no link points outside the boundary it claims.
 
-## 3. Keep Code architecture at module level
-
-A Code node is a language module: a Rust crate or `mod`, a TypeScript or
-JavaScript module or namespace, a Python module or package, a Go package.
-Files and symbols are source locations for those modules.
-
-A hand-authored Code model must be a true roll-up of the component model: when
-a module in component A imports a module in component B, the component model
-states a relationship from A to B. Keep cross-cutting helpers, re-export
-barrels, and bundler shims outside the architecture, and name them in a comment
-at the top of the Code model file.
-
-When `[architecture.code]` names a Code file, `criv watch --once` owns that
-file, and the way to change it is to change source boundaries or generator
-behaviour. Enable that setting when the roll-up cost outgrows its value.
-
-Done when every Code node is a language module, every cross-component import
-has a component-level relationship, and each view is focused by language or
-another bounded module concern.
-
-## 4. Validate
+## 6. Prove the zoom
 
 Run `criv watch --once`, then `criv check`, as the `checking-drift` skill
-describes. Open each changed view in the editor preview and confirm it renders
-the boundary you intended.
+describes. Open each changed named view in the editor preview. Check its title,
+level, boundary, labels, layout, navigation, and source actions.
 
-The work is complete when the vault is green, every source link resolves, and
-every changed view renders its intended boundary.
+The work is complete when the vault is green and every changed zoom tells its
+stated story with valid source evidence.

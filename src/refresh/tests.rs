@@ -25,52 +25,34 @@ struct RefreshSnapshot {
     state_hash: String,
     latest: String,
     snapshot_json: String,
-    generated_architecture: String,
     diagnostics: Vec<check::Diagnostic>,
 }
 
 #[test]
-fn generated_code_architecture_is_included_in_the_same_refresh_state() {
+fn refresh_does_not_create_architecture_source() {
     let temp = TempDir::new().unwrap();
-    write_architecture_fixture(temp.path());
+    write_source_fixture(temp.path());
     state::reset_work_counts();
     let mut refresh = one_shot_session(temp.path());
 
     let result = refresh.refresh(temp.path(), RefreshCause::Initial).unwrap();
 
     let work = state::work_counts();
-    assert_eq!(work.partitions_rebuilt, 3);
+    assert_eq!(work.partitions_rebuilt, 2);
     assert_eq!(work.source_partitions_rebuilt, 1);
     assert_eq!(work.note_partitions_rebuilt, 0);
-    assert_eq!(work.c4_partitions_rebuilt, 1);
+    assert_eq!(work.c4_partitions_rebuilt, 0);
     assert_eq!(work.policy_partitions_rebuilt, 0);
     assert_eq!(work.source_index_partitions_rebuilt, 1);
     assert_eq!(work.serializations, 1);
-    assert!(
-        result
-            .vault()
-            .c4_artifacts
-            .iter()
-            .any(|artifact| artifact.rel_path == "docs/architecture/04-code.c4")
-    );
-    let state: Value =
-        serde_json::from_str(&fs::read_to_string(temp.path().join(".criv/state.json")).unwrap())
-            .unwrap();
-    assert!(
-        state["graph"]["nodes"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|node| {
-                node["id"].as_str() == Some("architecture-source:docs/architecture/04-code.c4")
-            })
-    );
+    assert!(result.vault().c4_artifacts.is_empty());
+    assert!(!temp.path().join("docs/architecture/04-code.c4").exists());
 }
 
 #[test]
 fn warm_one_shot_reuses_the_cached_source_graph() {
     let temp = TempDir::new().unwrap();
-    write_architecture_fixture(temp.path());
+    write_source_fixture(temp.path());
     let mut cold = one_shot_session(temp.path());
     let cold = cold.refresh(temp.path(), RefreshCause::Initial).unwrap();
     assert_eq!(
@@ -147,15 +129,10 @@ fn live_refresh_reuses_the_observation_that_reported_a_source_change() {
 fn disabled_source_refresh_materializes_no_source_catalog() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    write_architecture_fixture(root);
-    let config_path = root.join("criv.toml");
-    let config = fs::read_to_string(&config_path).unwrap();
+    write_source_fixture(root);
     fs::write(
-        &config_path,
-        config.replace(
-            "[architecture.code]",
-            "[index]\nsource = false\n\n[architecture.code]",
-        ),
+        root.join("criv.toml"),
+        "[source]\nroots = [\"src\"]\n\n[index]\nsource = false\n",
     )
     .unwrap();
     let mut session = one_shot_session(root);
@@ -321,15 +298,10 @@ fn unresolved_effective_governance_keeps_last_good_state_and_recovers() {
     let root = temp.path();
     fs::create_dir_all(root.join("src")).unwrap();
     fs::create_dir_all(root.join("docs/adr")).unwrap();
-    fs::create_dir_all(root.join("docs/architecture")).unwrap();
     fs::write(
         root.join("criv.toml"),
         r#"[source]
 roots = ["src"]
-
-[architecture.code]
-output = "docs/architecture/04-code.c4"
-title = "Code"
 "#,
     )
     .unwrap();
@@ -359,8 +331,6 @@ policy:
     session.refresh(root, RefreshCause::Initial).unwrap();
     let state_before = fs::read_to_string(root.join(".criv/state.json")).unwrap();
     let latest_before = fs::read_to_string(root.join(".criv/latest")).unwrap();
-    let architecture_before =
-        fs::read_to_string(root.join("docs/architecture/04-code.c4")).unwrap();
     let mut snapshots_before = fs::read_dir(root.join(".criv/snapshots"))
         .unwrap()
         .map(|entry| entry.unwrap().file_name())
@@ -387,10 +357,6 @@ policy:
     assert_eq!(
         fs::read_to_string(root.join(".criv/latest")).unwrap(),
         latest_before
-    );
-    assert_eq!(
-        fs::read_to_string(root.join("docs/architecture/04-code.c4")).unwrap(),
-        architecture_before
     );
     let mut snapshots_after = fs::read_dir(root.join(".criv/snapshots"))
         .unwrap()
@@ -546,10 +512,6 @@ fn refresh_snapshot(
         state_hash: result.state().hash().unwrap(),
         latest,
         snapshot_json,
-        generated_architecture: fs::read_to_string(
-            root.join("docs/architecture/04-generated-code.c4"),
-        )
-        .unwrap(),
         diagnostics: check::validate_with_previous_state(result.vault(), previous_state),
     }
 }
@@ -561,7 +523,7 @@ fn assert_refresh_eq(name: &str, incremental: &RefreshSnapshot, full: &RefreshSn
     );
 }
 
-fn write_architecture_fixture(root: &Path) {
+fn write_source_fixture(root: &Path) {
     fs::create_dir_all(root.join("src")).unwrap();
     fs::create_dir_all(root.join("docs")).unwrap();
     fs::write(
@@ -569,10 +531,6 @@ fn write_architecture_fixture(root: &Path) {
         r#"
 [source]
 roots = ["src"]
-
-[architecture.code]
-output = "docs/architecture/04-code.c4"
-title = "Code diagram for criv"
 "#,
     )
     .unwrap();

@@ -110,3 +110,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0097-explicit-source-target-lookup-results|ADR-0097]] - Explicit source target lookup results
 - [[0098-own-the-latest-vscode-check-result|ADR-0098]] - Own the latest VS Code check result
 - [[0099-enforce-shared-likec4-and-wasm-adapter-boundary|ADR-0099]] - Enforce the shared LikeC4 and Wasm adapter boundary
+- [[0100-agent-authored-language-independent-c4-architecture|ADR-0100]] - Agent-authored language-independent C4 architecture

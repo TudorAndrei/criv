@@ -263,6 +263,7 @@ pub(crate) fn write_atomic_with_permissions_in(
 }
 
 /// Like [`write_atomic_in`], but leaves an identical existing file untouched.
+#[cfg(test)]
 pub(crate) fn write_atomic_if_changed_in(
     root: &Path,
     allowed_dir: &Path,
