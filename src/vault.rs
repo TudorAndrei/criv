@@ -13,7 +13,7 @@ use crate::source_graph::{SourceGraph, SourceGraphBuild};
 use crate::source_index::{IndexedSource, SourceCatalog, SourceIndexLifecycle};
 use crate::util::{
     GlobMatcher, find_wiki_links_with_lines, is_adr_id, kebab,
-    markdown_headings as parse_markdown_headings, read_to_string, strip_prefix, walk_files,
+    markdown_headings as parse_markdown_headings, read_to_string, strip_prefix, walk_vault_files,
 };
 
 #[cfg(test)]
@@ -211,11 +211,11 @@ impl Vault {
     ) -> Result<Self> {
         let config = config.map_or_else(|| Config::load(root), Ok)?;
         let docs_path = config.docs_path(root);
-        let notes = walk_files(root, &docs_path, Some("md"))?
+        let notes = walk_vault_files(root, &docs_path, Some("md"))?
             .into_iter()
             .map(|path| parse_note(root, &docs_path, &path))
             .collect::<Result<Vec<_>>>()?;
-        let c4_artifacts = walk_files(root, &docs_path, Some("c4"))?
+        let c4_artifacts = walk_vault_files(root, &docs_path, Some("c4"))?
             .into_iter()
             .map(|path| c4::parse_file(root, &docs_path, &path))
             .collect::<Result<Vec<_>>>()?;

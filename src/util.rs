@@ -542,20 +542,20 @@ fn reject_symlink_components(root: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn walk_files(
-    vault_root: &Path,
-    walk_root: &Path,
+pub(crate) fn walk_vault_files(
+    repository_root: &Path,
+    docs_root: &Path,
     extension: Option<&str>,
 ) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
-    let relative = walk_root.strip_prefix(vault_root).map_err(|_| {
+    let relative = docs_root.strip_prefix(repository_root).map_err(|_| {
         CrivError::new(format!(
             "vault walk root {} is outside vault root {}",
-            walk_root.display(),
-            vault_root.display()
+            docs_root.display(),
+            repository_root.display()
         ))
     })?;
-    let mut current = vault_root.to_path_buf();
+    let mut current = repository_root.to_path_buf();
     for component in std::iter::once(None).chain(relative.components().map(Some)) {
         if let Some(component) = component {
             current.push(component.as_os_str());
@@ -567,7 +567,7 @@ pub(crate) fn walk_files(
                     current.display()
                 )));
             }
-            Ok(metadata) if current != walk_root && !metadata.is_dir() => {
+            Ok(metadata) if current != docs_root && !metadata.is_dir() => {
                 return Err(CrivError::new(format!(
                     "vault path component {} must be a real directory",
                     current.display()
@@ -578,24 +578,24 @@ pub(crate) fn walk_files(
             Err(err) => return Err(err.into()),
         }
     }
-    match fs::symlink_metadata(walk_root) {
+    match fs::symlink_metadata(docs_root) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err(CrivError::new(format!(
                 "refusing to read symlinked vault path {}",
-                walk_root.display()
+                docs_root.display()
             )));
         }
         Ok(metadata) if !metadata.is_dir() => {
             return Err(CrivError::new(format!(
                 "vault walk root {} must be a real directory",
-                walk_root.display()
+                docs_root.display()
             )));
         }
         Ok(_) => {}
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(files),
         Err(err) => return Err(err.into()),
     }
-    walk_files_inner(walk_root, extension, &mut files)?;
+    walk_files_inner(docs_root, extension, &mut files)?;
     files.sort();
     Ok(files)
 }
@@ -884,7 +884,7 @@ mod tests {
         let outside = tempfile::NamedTempFile::new().unwrap();
         symlink(outside.path(), root.path().join("linked.md")).unwrap();
 
-        let error = walk_files(root.path(), root.path(), Some("md")).unwrap_err();
+        let error = walk_vault_files(root.path(), root.path(), Some("md")).unwrap_err();
         assert!(
             error
                 .to_string()
@@ -901,7 +901,7 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         symlink(outside.path(), root.path().join("linked-docs")).unwrap();
 
-        let error = walk_files(root.path(), root.path(), Some("md")).unwrap_err();
+        let error = walk_vault_files(root.path(), root.path(), Some("md")).unwrap_err();
         assert!(
             error
                 .to_string()
@@ -918,7 +918,7 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         symlink(outside.path(), repository.path().join("docs")).unwrap();
 
-        let error = walk_files(
+        let error = walk_vault_files(
             repository.path(),
             &repository.path().join("docs"),
             Some("md"),
@@ -937,7 +937,7 @@ mod tests {
         fs::create_dir(outside.path().join("docs")).unwrap();
         symlink(outside.path(), repository.path().join("linked-parent")).unwrap();
 
-        let error = walk_files(
+        let error = walk_vault_files(
             repository.path(),
             &repository.path().join("linked-parent/docs"),
             Some("md"),
@@ -953,7 +953,7 @@ mod tests {
         let outside = tempfile::tempdir().unwrap();
         junction::create(outside.path(), repository.path().join("docs")).unwrap();
 
-        let error = walk_files(
+        let error = walk_vault_files(
             repository.path(),
             &repository.path().join("docs"),
             Some("md"),
