@@ -50,6 +50,13 @@ pub(crate) fn work_counts() -> WorkCounts {
     WORK_COUNTS.with(Cell::get)
 }
 
+#[cfg(test)]
+impl WorkCounts {
+    pub(crate) fn source_target_resolutions(self) -> usize {
+        self.source_target_resolutions
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NoteKind {
     Doc,

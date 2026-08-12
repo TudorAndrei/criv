@@ -6,6 +6,7 @@ exec cargo run \
   --quiet \
   --manifest-path "$repository_root/Cargo.toml" \
   -p criv-perf-harness \
+  --bin criv-perf-harness \
   -- \
   --repository-root "$repository_root" \
   "$@"

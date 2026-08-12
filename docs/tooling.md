@@ -148,10 +148,11 @@ mise run perf -- --binary target/release/criv --profile release
 ```
 
 The script records repeated samples for cold, warm, and changed `watch --once`,
-source-index file search startup, validation, CI enforcement, docs-only
-`next-adr-id`, `orphan-docs`, and `nodes --kind doc` queries, and a no-op
-snapshot diff. Five samples are collected by default; use `--samples` to
-change the count or repeat `--case` to select cases:
+validation, CI enforcement, docs-only `next-adr-id`, `orphan-docs`, and
+`nodes --kind doc` queries, the source-backed
+`nodes --kind code --without-docs` query, and a no-op snapshot diff. Five
+samples are collected by default; use `--samples` to change the count or repeat
+`--case` to select cases:
 
 ```sh
 mise run perf -- --binary target/release/criv --profile release --samples 9

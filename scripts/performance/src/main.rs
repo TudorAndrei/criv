@@ -66,6 +66,7 @@ enum Case {
     QueryNextAdrId,
     QueryOrphanDocs,
     QueryNodesDocs,
+    QueryNodesCodeWithoutDocs,
     DiffLatest,
 }
 
@@ -81,6 +82,7 @@ impl Case {
             Self::QueryNextAdrId => "query_next_adr_id",
             Self::QueryOrphanDocs => "query_orphan_docs",
             Self::QueryNodesDocs => "query_nodes_docs",
+            Self::QueryNodesCodeWithoutDocs => "query_nodes_code_without_docs",
             Self::DiffLatest => "diff_latest",
         }
     }
@@ -106,6 +108,9 @@ impl Case {
             Self::QueryNextAdrId => &["query", "next-adr-id"],
             Self::QueryOrphanDocs => &["query", "orphan-docs"],
             Self::QueryNodesDocs => &["query", "nodes", "--kind", "doc"],
+            Self::QueryNodesCodeWithoutDocs => {
+                &["query", "nodes", "--kind", "code", "--without-docs"]
+            }
             Self::DiffLatest => &["query", "diff", "latest", "latest"],
         }
     }
@@ -133,7 +138,7 @@ impl Case {
     }
 }
 
-const ALL_CASES: [Case; 10] = [
+const ALL_CASES: [Case; 11] = [
     Case::WatchOnceCold,
     Case::WatchOnceWarm,
     Case::WatchOnceChanged,
@@ -143,6 +148,7 @@ const ALL_CASES: [Case; 10] = [
     Case::QueryNextAdrId,
     Case::QueryOrphanDocs,
     Case::QueryNodesDocs,
+    Case::QueryNodesCodeWithoutDocs,
     Case::DiffLatest,
 ];
 
@@ -826,5 +832,18 @@ mod tests {
         assert!(Case::WatchOnceSemanticChanged.needs_semantic_mutation());
         assert_eq!(Case::WatchOnceSemanticChanged.cache_state(), "warm");
         assert_eq!(Case::WatchOnceSemanticChanged.args(), &["watch", "--once"]);
+    }
+
+    #[test]
+    fn undocumented_code_case_measures_the_reverse_reference_query() {
+        assert_eq!(
+            Case::QueryNodesCodeWithoutDocs.id(),
+            "query_nodes_code_without_docs"
+        );
+        assert_eq!(
+            Case::QueryNodesCodeWithoutDocs.args(),
+            &["query", "nodes", "--kind", "code", "--without-docs"]
+        );
+        assert_eq!(Case::QueryNodesCodeWithoutDocs.cache_state(), "cold");
     }
 }

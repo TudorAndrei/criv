@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
@@ -82,6 +82,135 @@ impl QueryCommand {
             | Self::Nodes(_) => QueryCapability::Sources,
         }
     }
+
+    fn reverse_index_scope(&self) -> Option<ReverseIndexScope> {
+        match self {
+            Self::CitedBy(_) | Self::OrphanDocs(_) => Some(ReverseIndexScope::Notes),
+            Self::References(_)
+            | Self::Nodes(NodesOptions {
+                kind: Some(NodeKind::Code),
+                without_docs: true,
+                ..
+            }) => Some(ReverseIndexScope::Sources),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReverseIndexScope {
+    Notes,
+    Sources,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum SourceReferenceKey {
+    Path(String),
+    Symbol { path: String, fragment: String },
+}
+
+#[derive(Debug)]
+struct QueryReverseIndex {
+    citing_notes: BTreeMap<String, Vec<usize>>,
+    notes_with_outgoing_citations: Vec<bool>,
+    source_references: BTreeMap<SourceReferenceKey, Vec<usize>>,
+}
+
+impl QueryReverseIndex {
+    fn build(vault: &Vault, scope: ReverseIndexScope) -> Self {
+        let include_notes = scope == ReverseIndexScope::Notes;
+        let include_sources = scope == ReverseIndexScope::Sources;
+        let mut citing_notes = BTreeMap::<String, Vec<usize>>::new();
+        let mut notes_with_outgoing_citations = if include_notes {
+            vec![false; vault.notes.len()]
+        } else {
+            Vec::new()
+        };
+        let mut source_references = BTreeMap::<SourceReferenceKey, Vec<usize>>::new();
+
+        for (note_index, note) in vault.notes.iter().enumerate() {
+            let mut cited_note_ids = BTreeSet::new();
+            let mut source_keys = BTreeSet::new();
+
+            for link in &note.wiki_links {
+                if include_notes && let ResolvedLink::Note { id } = vault.resolve_link(&link.target)
+                {
+                    notes_with_outgoing_citations[note_index] = true;
+                    if id != note.display_id() {
+                        cited_note_ids.insert(id);
+                    }
+                }
+                if include_sources {
+                    collect_source_reference_keys(vault, &link.target, &mut source_keys);
+                }
+            }
+            if include_sources {
+                for target in &note.targets_symbols {
+                    collect_source_reference_keys(vault, target, &mut source_keys);
+                }
+            }
+
+            for cited_id in cited_note_ids {
+                citing_notes.entry(cited_id).or_default().push(note_index);
+            }
+            for key in source_keys {
+                source_references.entry(key).or_default().push(note_index);
+            }
+        }
+
+        Self {
+            citing_notes,
+            notes_with_outgoing_citations,
+            source_references,
+        }
+    }
+
+    fn citing_notes(&self, vault: &Vault, note_id: &str) -> Vec<String> {
+        sorted_note_ids(vault, self.citing_notes.get(note_id).map(Vec::as_slice))
+    }
+
+    fn references(&self, vault: &Vault, symbol: &str) -> Vec<String> {
+        let source_path = source_fragment_path(symbol);
+        let requested_fragment = source_fragment_name(symbol);
+        let Some((path, _)) = vault.resolve_source_path(source_path) else {
+            return Vec::new();
+        };
+        let key = match requested_fragment {
+            Some(fragment) => SourceReferenceKey::Symbol {
+                path,
+                fragment: fragment.to_string(),
+            },
+            None => SourceReferenceKey::Path(path),
+        };
+        sorted_note_ids(vault, self.source_references.get(&key).map(Vec::as_slice))
+    }
+}
+
+fn collect_source_reference_keys(
+    vault: &Vault,
+    target: &str,
+    keys: &mut BTreeSet<SourceReferenceKey>,
+) {
+    let SourceTargetResolution::Resolved { path, .. } = vault.resolve_source_target(target) else {
+        return;
+    };
+    keys.insert(SourceReferenceKey::Path(path.clone()));
+    if let Some(fragment) = source_fragment_name(target) {
+        keys.insert(SourceReferenceKey::Symbol {
+            path,
+            fragment: fragment.to_string(),
+        });
+    }
+}
+
+fn sorted_note_ids(vault: &Vault, note_indexes: Option<&[usize]>) -> Vec<String> {
+    let mut rows = note_indexes
+        .into_iter()
+        .flatten()
+        .map(|index| vault.notes[*index].display_id().to_string())
+        .collect::<Vec<_>>();
+    rows.sort();
+    rows
 }
 
 #[derive(Debug, ClapArgs)]
@@ -166,6 +295,10 @@ pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
     }
 
     let vault = load_query_vault(root, &options.command)?;
+    let reverse_index = options
+        .command
+        .reverse_index_scope()
+        .map(|scope| QueryReverseIndex::build(&vault, scope));
     let (rows, format) = match options.command {
         QueryCommand::NextAdrId(output) => (vec![next_adr_id(&vault)], output.format),
         QueryCommand::Callers(options) => {
@@ -188,12 +321,29 @@ pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
             (rows, options.output.format)
         }
         QueryCommand::CitedBy(options) => {
-            let rows = cited_by(&vault, &options.note_id)?;
+            let rows = cited_by(
+                &vault,
+                reverse_index
+                    .as_ref()
+                    .expect("cited-by declares a reverse index"),
+                &options.note_id,
+            )?;
             (rows, options.output.format)
         }
-        QueryCommand::OrphanDocs(output) => (orphan_docs(&vault), output.format),
+        QueryCommand::OrphanDocs(output) => (
+            orphan_docs(
+                &vault,
+                reverse_index
+                    .as_ref()
+                    .expect("orphan-docs declares a reverse index"),
+            ),
+            output.format,
+        ),
         QueryCommand::References(options) => {
-            let rows = references(&vault, &options.symbol);
+            let rows = reverse_index
+                .as_ref()
+                .expect("references declares a reverse index")
+                .references(&vault, &options.symbol);
             (rows, options.output.format)
         }
         QueryCommand::Governs(options) => {
@@ -209,7 +359,12 @@ pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
             (rows, options.output.format)
         }
         QueryCommand::Nodes(options) => {
-            let rows = nodes(&vault, options.kind, options.without_docs);
+            let rows = nodes(
+                &vault,
+                reverse_index.as_ref(),
+                options.kind,
+                options.without_docs,
+            );
             (rows, options.output.format)
         }
         QueryCommand::Diff(_) => unreachable!("snapshot queries return before vault loading"),
@@ -276,90 +431,29 @@ fn cites(vault: &Vault, id: &str, note_only: bool) -> Result<Vec<String>> {
     Ok(rows)
 }
 
-fn cited_by(vault: &Vault, id: &str) -> Result<Vec<String>> {
+fn cited_by(vault: &Vault, index: &QueryReverseIndex, id: &str) -> Result<Vec<String>> {
     let target = vault
         .resolve_note(id)
         .ok_or_else(|| CrivError::new(format!("note `{id}` does not resolve")))?;
     let target_id = target.display_id();
-    let mut rows = Vec::new();
-
-    for note in &vault.notes {
-        if note.display_id() == target_id {
-            continue;
-        }
-        for link in &note.wiki_links {
-            if let ResolvedLink::Note { id } = vault.resolve_link(&link.target)
-                && id == target_id
-            {
-                rows.push(note.display_id().to_string());
-                break;
-            }
-        }
-    }
-
-    rows.sort();
-    Ok(rows)
+    Ok(index.citing_notes(vault, target_id))
 }
 
-fn orphan_docs(vault: &Vault) -> Vec<String> {
+fn orphan_docs(vault: &Vault, index: &QueryReverseIndex) -> Vec<String> {
     let mut rows = Vec::new();
-    for note in &vault.notes {
+    for (note_index, note) in vault.notes.iter().enumerate() {
         if note.kind != NoteKind::Doc {
             continue;
         }
         let id = note.display_id();
-        let outgoing = cites(vault, id, true).unwrap_or_default();
-        let incoming = cited_by(vault, id).unwrap_or_default();
-        if outgoing.is_empty() && incoming.is_empty() {
+        let has_outgoing = index.notes_with_outgoing_citations[note_index];
+        let has_incoming = index.citing_notes.contains_key(id);
+        if !has_outgoing && !has_incoming {
             rows.push(id.to_string());
         }
     }
     rows.sort();
     rows
-}
-
-fn references(vault: &Vault, symbol: &str) -> Vec<String> {
-    let source_path = source_fragment_path(symbol);
-    let requested_fragment = source_fragment_name(symbol);
-    let Some((path, _)) = vault.resolve_source_path(source_path) else {
-        return Vec::new();
-    };
-
-    let mut rows = Vec::new();
-    for note in &vault.notes {
-        let frontmatter_refs = note
-            .targets_symbols
-            .iter()
-            .any(|target| target_matches_source(vault, target, &path, requested_fragment));
-        let body_refs = note
-            .wiki_links
-            .iter()
-            .any(|link| target_matches_source(vault, &link.target, &path, requested_fragment));
-        if frontmatter_refs || body_refs {
-            rows.push(note.display_id().to_string());
-        }
-    }
-    rows.sort();
-    rows.dedup();
-    rows
-}
-
-fn target_matches_source(
-    vault: &Vault,
-    target: &str,
-    resolved_path: &str,
-    requested_fragment: Option<&str>,
-) -> bool {
-    let SourceTargetResolution::Resolved { path, .. } = vault.resolve_source_target(target) else {
-        return false;
-    };
-    if path != resolved_path {
-        return false;
-    }
-    match requested_fragment {
-        Some(fragment) => source_fragment_name(target) == Some(fragment),
-        None => true,
-    }
 }
 
 fn governs(vault: &Vault, adr_id: &str) -> Result<Vec<String>> {
@@ -459,13 +553,23 @@ fn coverage_by_adr(vault: &Vault) -> Vec<String> {
     rows
 }
 
-fn nodes(vault: &Vault, kind: Option<NodeKind>, without_docs: bool) -> Vec<String> {
+fn nodes(
+    vault: &Vault,
+    reverse_index: Option<&QueryReverseIndex>,
+    kind: Option<NodeKind>,
+    without_docs: bool,
+) -> Vec<String> {
     let mut rows = Vec::new();
     match kind {
         Some(NodeKind::Code) => {
             for symbol in vault.source_graph().symbols() {
                 let display = symbol.id.display();
-                if without_docs && !references(vault, &display).is_empty() {
+                if without_docs
+                    && !reverse_index
+                        .expect("undocumented code nodes declare a reverse index")
+                        .references(vault, &display)
+                        .is_empty()
+                {
                     continue;
                 }
                 rows.push(display);
@@ -748,6 +852,72 @@ mod tests {
     }
 
     #[test]
+    fn source_reverse_index_bounds_work_and_stored_rows() {
+        let temp = TempDir::new().unwrap();
+        write_reverse_query_fixture(temp.path());
+        let vault = Vault::load(temp.path()).unwrap();
+
+        crate::vault::reset_work_counts();
+        let reverse_index = QueryReverseIndex::build(&vault, ReverseIndexScope::Sources);
+        assert_eq!(
+            nodes(&vault, Some(&reverse_index), Some(NodeKind::Code), true),
+            vec!["src/lib.rs#fn:undocumented"]
+        );
+        let input_targets = vault
+            .notes
+            .iter()
+            .map(|note| note.targets_symbols.len() + note.wiki_links.len())
+            .sum::<usize>();
+        let stored_rows = reverse_index
+            .source_references
+            .values()
+            .map(Vec::len)
+            .sum::<usize>();
+        assert_eq!(
+            crate::vault::work_counts().source_target_resolutions(),
+            input_targets
+        );
+        assert!(stored_rows <= input_targets * 2);
+        assert!(reverse_index.citing_notes.is_empty());
+        assert!(reverse_index.notes_with_outgoing_citations.is_empty());
+    }
+
+    #[test]
+    fn note_reverse_index_bounds_stored_rows() {
+        let temp = TempDir::new().unwrap();
+        write_reverse_query_fixture(temp.path());
+        let vault = Vault::load_docs_only(temp.path()).unwrap();
+
+        let reverse_index = QueryReverseIndex::build(&vault, ReverseIndexScope::Notes);
+        let input_links = vault
+            .notes
+            .iter()
+            .map(|note| note.wiki_links.len())
+            .sum::<usize>();
+        let stored_rows = reverse_index
+            .citing_notes
+            .values()
+            .map(Vec::len)
+            .sum::<usize>();
+
+        assert!(stored_rows <= input_links);
+        assert_eq!(
+            reverse_index.citing_notes(&vault, "ADR-0001"),
+            vec!["guide"]
+        );
+        assert!(reverse_index.citing_notes(&vault, "guide").is_empty());
+        assert_eq!(
+            reverse_index
+                .notes_with_outgoing_citations
+                .iter()
+                .filter(|value| **value)
+                .count(),
+            1
+        );
+        assert!(reverse_index.source_references.is_empty());
+    }
+
+    #[test]
     fn snapshot_hash_shape() {
         assert!(is_snapshot_hash("abc123"));
         assert!(!is_snapshot_hash("../../etc/passwd"));
@@ -819,5 +989,50 @@ fn helper() {}
         )
         .unwrap();
         fs::write(root.join("other/out.rs"), "fn external() {}\n").unwrap();
+    }
+
+    fn write_reverse_query_fixture(root: &Path) {
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("docs/adr")).unwrap();
+        fs::write(
+            root.join("criv.toml"),
+            r#"
+[vault]
+docs = "docs"
+adr = "adr"
+
+[source]
+roots = ["src"]
+exclude = []
+"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub fn run() {}\npub fn helper() {}\npub fn undocumented() {}\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("docs/guide.md"),
+            r#"---
+id: guide
+kind: doc
+title: Guide
+targets:
+  symbols:
+    - src/lib.rs#fn:run
+---
+
+# Guide
+
+See [[ADR-0001]], [[src/lib.rs#fn:helper]], and [[guide]].
+"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("docs/adr/0001-test.md"),
+            "---\nid: ADR-0001\nkind: decision\ntitle: Test\nstatus: accepted\n---\n",
+        )
+        .unwrap();
     }
 }

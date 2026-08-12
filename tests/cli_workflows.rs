@@ -951,6 +951,59 @@ fn query_subcommands_cover_docs_sources_and_governance() {
 }
 
 #[test]
+fn reverse_queries_keep_exact_public_rows() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    query_fixture(root);
+    fs::write(
+        root.join("src/unreferenced.rs"),
+        "pub fn undocumented() {}\n",
+    )
+    .unwrap();
+
+    for (args, expected) in [
+        (
+            vec!["query", "cited-by", "ADR-0001", "--format", "json"],
+            vec!["guide"],
+        ),
+        (
+            vec!["query", "cited-by", "guide", "--format", "json"],
+            vec![],
+        ),
+        (
+            vec!["query", "orphan-docs", "--format", "json"],
+            vec!["ADR-README", "orphan"],
+        ),
+        (
+            vec![
+                "query",
+                "references",
+                "src/lib.rs#fn:run",
+                "--format",
+                "json",
+            ],
+            vec!["guide"],
+        ),
+        (
+            vec![
+                "query",
+                "nodes",
+                "--kind",
+                "code",
+                "--without-docs",
+                "--format",
+                "json",
+            ],
+            vec!["src/unreferenced.rs#fn:undocumented"],
+        ),
+    ] {
+        let assert = criv(root).args(args).assert().success();
+        let rows: Vec<String> = serde_json::from_slice(&assert.get_output().stdout).unwrap();
+        assert_eq!(rows, expected);
+    }
+}
+
+#[test]
 fn snapshot_and_docs_queries_do_not_touch_the_source_graph_cache() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

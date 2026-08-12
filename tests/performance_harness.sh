@@ -7,13 +7,14 @@ trap 'rm -rf "$test_root"' EXIT
 fake_binary="$repository_root/tests/fixtures/performance/fake-criv.sh"
 manifest="$repository_root/fixtures/performance/barrs-small.toml"
 
-if cargo run --quiet -p criv-perf-harness -- --profile test 2>"$test_root/missing.err"; then
+if cargo run --quiet -p criv-perf-harness --bin criv-perf-harness -- \
+  --profile test 2>"$test_root/missing.err"; then
   echo "missing binary unexpectedly succeeded" >&2
   exit 1
 fi
 grep -q -- "--binary" "$test_root/missing.err"
 
-if cargo run --quiet -p criv-perf-harness -- \
+if cargo run --quiet -p criv-perf-harness --bin criv-perf-harness -- \
   --binary "$fake_binary" \
   --binary "$fake_binary" \
   --profile test \
@@ -25,7 +26,7 @@ fi
 grep -q "cannot be used multiple times" "$test_root/duplicate.err"
 
 run_harness() {
-  cargo run --quiet -p criv-perf-harness -- \
+  cargo run --quiet -p criv-perf-harness --bin criv-perf-harness -- \
     --binary "$fake_binary" \
     --profile test \
     --allow-non-release \
