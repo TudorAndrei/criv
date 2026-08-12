@@ -2594,6 +2594,128 @@ fn live_watch_replaces_configuration_source_catalog_and_docs_root_together() {
     });
 }
 
+#[test]
+fn live_watch_rebuilds_each_configuration_dimension_and_matches_one_shot() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::create_dir_all(root.join("alt")).unwrap();
+    fs::create_dir_all(root.join("knowledge/adr")).unwrap();
+    fs::write(root.join("src/old.rs"), "pub fn old_source() {}\n").unwrap();
+    fs::write(root.join("alt/visible.rs"), "pub fn visible() {}\n").unwrap();
+    fs::write(root.join("alt/hidden.rs"), "pub fn hidden() {}\n").unwrap();
+    fs::write(
+        root.join("knowledge/configured.md"),
+        "---\nid: configured-docs\nkind: doc\ntitle: Configured docs\n---\n\n# Configured docs\n",
+    )
+    .unwrap();
+    write_watch_config(root, "docs", vec!["src"], vec![], true);
+    let mut watch = WatchProcess::spawn(root);
+    watch.wait_until_running();
+
+    write_watch_config(root, "docs", vec!["alt"], vec![], true);
+    wait_for_state(root, "the source.roots replacement", |state| {
+        state_has_node(state, "symbol:alt/visible.rs#fn:visible")
+            && !state_has_node(state, "symbol:src/old.rs#fn:old_source")
+    });
+
+    write_watch_config(root, "docs", vec!["alt"], vec!["**/hidden.rs"], true);
+    wait_for_state(root, "the source.exclude replacement", |state| {
+        state_has_node(state, "symbol:alt/visible.rs#fn:visible")
+            && !state_has_node(state, "symbol:alt/hidden.rs#fn:hidden")
+    });
+
+    write_watch_config(root, "docs", vec!["alt"], vec!["**/hidden.rs"], false);
+    wait_for_state(root, "the index.source replacement", |state| {
+        !state_has_node(state, "code:alt/visible.rs")
+    });
+
+    write_watch_config(root, "knowledge", vec!["alt"], vec!["**/hidden.rs"], false);
+    wait_for_state(root, "the vault.docs replacement", |state| {
+        state_has_node(state, "note:configured-docs")
+    });
+
+    assert_live_state_matches_one_shot(root, watch);
+}
+
+#[test]
+fn live_watch_recovers_when_the_configured_docs_root_appears() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    write_watch_config(root, "docs", vec![], vec![], false);
+    let mut watch = WatchProcess::spawn(root);
+    watch.wait_until_running();
+    let last_good_state = fs::read_to_string(root.join(".criv/state.json")).unwrap();
+
+    fs::create_dir(root.join("knowledge")).unwrap();
+    write_watch_config(root, "knowledge/docs", vec![], vec![], false);
+    assert_state_remains(root, &last_good_state, "a missing configured docs root");
+
+    fs::create_dir_all(root.join("knowledge/docs/adr")).unwrap();
+    fs::write(
+        root.join("knowledge/docs/recovered.md"),
+        "---\nid: recovered-docs\nkind: doc\ntitle: Recovered docs\n---\n\n# Recovered docs\n",
+    )
+    .unwrap();
+    wait_for_state(root, "the recovered docs root", |state| {
+        state_has_node(state, "note:recovered-docs")
+    });
+
+    assert_live_state_matches_one_shot(root, watch);
+}
+
+#[test]
+fn live_watch_tracks_missing_and_type_changing_source_roots() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir(root.join("dynamic")).unwrap();
+    write_watch_config(root, "docs", vec!["dynamic/source.rs"], vec![], true);
+    let mut watch = WatchProcess::spawn(root);
+    watch.wait_until_running();
+
+    fs::write(
+        root.join("dynamic/source.rs"),
+        "pub fn appeared_as_file() {}\n",
+    )
+    .unwrap();
+    wait_for_state(root, "the missing source file", |state| {
+        state_has_node(state, "symbol:dynamic/source.rs#fn:appeared_as_file")
+    });
+
+    fs::remove_file(root.join("dynamic/source.rs")).unwrap();
+    fs::create_dir(root.join("dynamic/source.rs")).unwrap();
+    fs::write(
+        root.join("dynamic/source.rs/nested.rs"),
+        "pub fn appeared_as_directory() {}\n",
+    )
+    .unwrap();
+    wait_for_state(root, "the source file replaced by a directory", |state| {
+        state_has_node(
+            state,
+            "symbol:dynamic/source.rs/nested.rs#fn:appeared_as_directory",
+        )
+    });
+
+    fs::remove_dir_all(root.join("dynamic/source.rs")).unwrap();
+    fs::write(
+        root.join("dynamic/source.rs"),
+        "pub fn returned_as_file() {}\n",
+    )
+    .unwrap();
+    wait_for_state(root, "the source directory replaced by a file", |state| {
+        state_has_node(state, "symbol:dynamic/source.rs#fn:returned_as_file")
+            && !state_has_node(state, "code:dynamic/source.rs/nested.rs")
+    });
+
+    assert_live_state_matches_one_shot(root, watch);
+}
+
 struct WatchProcess {
     child: Child,
     lines: Receiver<String>,
@@ -2691,6 +2813,51 @@ fn assert_state_remains(root: &Path, expected: &str, description: &str) {
         assert_eq!(actual, expected, "state changed during {description}");
         thread::sleep(Duration::from_millis(50));
     }
+}
+
+fn state_has_node(state: &serde_json::Value, id: &str) -> bool {
+    state["graph"]["nodes"]
+        .as_array()
+        .is_some_and(|nodes| nodes.iter().any(|node| node["id"] == id))
+}
+
+fn assert_live_state_matches_one_shot(root: &Path, watch: WatchProcess) {
+    let live = serde_json::from_str::<serde_json::Value>(
+        &fs::read_to_string(root.join(".criv/state.json")).unwrap(),
+    )
+    .unwrap();
+    drop(watch);
+    criv(root).args(["watch", "--once"]).assert().success();
+    let one_shot = serde_json::from_str::<serde_json::Value>(
+        &fs::read_to_string(root.join(".criv/state.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(live, one_shot);
+}
+
+fn write_watch_config(
+    root: &Path,
+    docs: &str,
+    roots: Vec<&str>,
+    exclude: Vec<&str>,
+    source_index: bool,
+) {
+    let config = toml::toml! {
+        [vault]
+        docs = docs
+        adr = "adr"
+
+        [source]
+        roots = roots
+        exclude = exclude
+
+        [index]
+        source = source_index
+
+        [enforce]
+        stages = ["commit", "push", "ci"]
+    };
+    fs::write(root.join("criv.toml"), config.to_string()).unwrap();
 }
 
 fn write_criv_config(root: &Path, roots: Vec<&str>, exclude: Vec<&str>, source_index: bool) {

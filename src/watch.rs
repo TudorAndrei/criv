@@ -1,7 +1,8 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use clap::Args as ClapArgs;
@@ -33,94 +34,216 @@ pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
         run_once(root)?;
         return Ok(());
     }
-    let (mut _debouncer, mut rx) = start_repository_watcher(root)?;
     let mut session = LiveWatchSession::start(root)?;
 
     println!("criv watch running");
 
     loop {
-        let signal = match rx.recv_timeout(Duration::from_millis(250)) {
-            Ok(event) => match event {
-                Ok(events) if events.is_empty() => WatchSignal::Idle,
-                Ok(events) => {
-                    WatchSignal::Paths(events.into_iter().map(|event| event.path).collect())
-                }
-                Err(err) => {
-                    eprintln!("criv watch: watcher error: {err}");
-                    session.suspend("watcher adapter error");
-                    loop {
-                        std::thread::sleep(Duration::from_secs(1));
-                        match start_repository_watcher(root) {
-                            Ok((replacement, replacement_rx)) => {
-                                _debouncer = replacement;
-                                rx = replacement_rx;
-                                session.reconfigure(root);
-                                break;
-                            }
-                            Err(restart_error) => {
-                                session.suspend(&format!("watcher adapter error: {restart_error}"));
-                            }
-                        }
-                    }
-                    continue;
-                }
-            },
-            Err(mpsc::RecvTimeoutError::Timeout) => WatchSignal::Idle,
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(CrivError::new("watcher event channel disconnected"));
-            }
-        };
-
-        if session.must_reconfigure(root, &signal) {
-            session.reconfigure(root);
-            continue;
-        }
-
-        let source_changed = match session.refresh.observe_source_change() {
-            Ok(SourceChange::Changed) => true,
-            Ok(SourceChange::Unchanged | SourceChange::Disabled) => false,
-            Err(err) => {
-                eprintln!("criv watch: source index error: {err}");
-                session.suspend(&format!("source index error: {err}"));
-                false
-            }
-        };
-        if session.suspended {
-            continue;
-        }
-
-        let docs_changed = session.docs_changed(&signal);
-        match watch_decision(docs_changed, source_changed) {
-            WatchDecision::Rebuild { docs_changed } => {
-                let cause = if docs_changed {
-                    RefreshCause::DocsChanged
-                } else {
-                    RefreshCause::SourceChanged
-                };
-                match session.refresh.refresh(root, cause) {
-                    Ok(_) => {}
-                    Err(err) => eprintln!("criv watch: {err}"),
-                }
-            }
-            WatchDecision::Continue => {}
-        }
+        session.step(Duration::from_millis(250))?;
     }
 }
 
 type RepositoryDebouncer = Debouncer<RecommendedWatcher>;
 type WatchEventReceiver = mpsc::Receiver<DebounceEventResult>;
 
-fn start_repository_watcher(root: &Path) -> Result<(RepositoryDebouncer, WatchEventReceiver)> {
-    let (tx, rx) = mpsc::channel::<DebounceEventResult>();
-    let mut debouncer = new_debouncer(Duration::from_millis(250), move |event| {
-        let _ = tx.send(event);
-    })
-    .map_err(|err| CrivError::new(format!("failed to start watcher: {err}")))?;
-    debouncer
-        .watcher()
-        .watch(root, RecursiveMode::Recursive)
-        .map_err(|err| CrivError::new(format!("failed to watch repository: {err}")))?;
-    Ok((debouncer, rx))
+#[derive(Debug, Clone, Eq, PartialEq)]
+enum WatcherPoll {
+    Paths(Vec<PathBuf>),
+    Idle,
+    Error(String),
+    Disconnected,
+}
+
+trait WatcherAdapter: std::fmt::Debug {
+    fn poll(&mut self, timeout: Duration) -> WatcherPoll;
+}
+
+trait WatcherFactory: std::fmt::Debug {
+    fn start(&self, set: &WatchSet) -> Result<Box<dyn WatcherAdapter>>;
+}
+
+#[derive(Debug)]
+struct NotifyWatcherFactory;
+
+impl WatcherFactory for NotifyWatcherFactory {
+    fn start(&self, set: &WatchSet) -> Result<Box<dyn WatcherAdapter>> {
+        Ok(Box::new(NotifyWatcherAdapter::start(set)?))
+    }
+}
+
+#[derive(Debug)]
+struct NotifyWatcherAdapter {
+    _debouncer: RepositoryDebouncer,
+    receiver: WatchEventReceiver,
+}
+
+impl NotifyWatcherAdapter {
+    fn start(set: &WatchSet) -> Result<Self> {
+        let (tx, receiver) = mpsc::channel::<DebounceEventResult>();
+        let mut debouncer = new_debouncer(Duration::from_millis(250), move |event| {
+            let _ = tx.send(event);
+        })
+        .map_err(|err| CrivError::new(format!("failed to start watcher: {err}")))?;
+        for target in &set.targets {
+            let mode = match target.depth {
+                WatchDepth::NonRecursive => RecursiveMode::NonRecursive,
+                WatchDepth::Recursive => RecursiveMode::Recursive,
+            };
+            debouncer
+                .watcher()
+                .watch(&target.path, mode)
+                .map_err(|err| {
+                    CrivError::new(format!("failed to watch {}: {err}", target.path.display()))
+                })?;
+        }
+        Ok(Self {
+            _debouncer: debouncer,
+            receiver,
+        })
+    }
+}
+
+impl WatcherAdapter for NotifyWatcherAdapter {
+    fn poll(&mut self, timeout: Duration) -> WatcherPoll {
+        match self.receiver.recv_timeout(timeout) {
+            Ok(Ok(events)) if events.is_empty() => WatcherPoll::Idle,
+            Ok(Ok(events)) => {
+                WatcherPoll::Paths(events.into_iter().map(|event| event.path).collect())
+            }
+            Ok(Err(err)) => WatcherPoll::Error(err.to_string()),
+            Err(mpsc::RecvTimeoutError::Timeout) => WatcherPoll::Idle,
+            Err(mpsc::RecvTimeoutError::Disconnected) => WatcherPoll::Disconnected,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct WatchSet {
+    targets: Vec<WatchTarget>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct WatchTarget {
+    path: PathBuf,
+    depth: WatchDepth,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum WatchDepth {
+    NonRecursive,
+    Recursive,
+}
+
+impl WatchTarget {
+    fn non_recursive(path: PathBuf) -> Self {
+        Self {
+            path,
+            depth: WatchDepth::NonRecursive,
+        }
+    }
+
+    fn recursive(path: PathBuf) -> Self {
+        Self {
+            path,
+            depth: WatchDepth::Recursive,
+        }
+    }
+}
+
+impl WatchSet {
+    fn active(root: &Path, config: &Config) -> Self {
+        let mut targets = BTreeMap::new();
+        insert_watch_target(&mut targets, root.to_path_buf(), WatchDepth::NonRecursive);
+        insert_existing_or_ancestor(&mut targets, root, &config.docs_path(root));
+        for source_root in &config.source_roots {
+            insert_existing_or_ancestor(&mut targets, root, &root.join(source_root));
+        }
+        Self {
+            targets: targets
+                .into_iter()
+                .map(|(path, depth)| match depth {
+                    WatchDepth::NonRecursive => WatchTarget::non_recursive(path),
+                    WatchDepth::Recursive => WatchTarget::recursive(path),
+                })
+                .collect(),
+        }
+    }
+
+    fn recovery(root: &Path, config: Option<&Config>) -> Self {
+        let mut targets = BTreeMap::new();
+        insert_watch_target(&mut targets, root.to_path_buf(), WatchDepth::NonRecursive);
+        if let Some(config) = config {
+            insert_existing_or_ancestor(&mut targets, root, &config.docs_path(root));
+            for source_root in &config.source_roots {
+                let path = root.join(source_root);
+                if matches!(path_kind(&path), PathKind::Missing | PathKind::Unsafe) {
+                    insert_watch_target(
+                        &mut targets,
+                        nearest_existing_directory(root, &path),
+                        WatchDepth::NonRecursive,
+                    );
+                }
+            }
+        }
+        Self {
+            targets: targets
+                .into_iter()
+                .map(|(path, depth)| match depth {
+                    WatchDepth::NonRecursive => WatchTarget::non_recursive(path),
+                    WatchDepth::Recursive => WatchTarget::recursive(path),
+                })
+                .collect(),
+        }
+    }
+}
+
+fn insert_existing_or_ancestor(
+    targets: &mut BTreeMap<PathBuf, WatchDepth>,
+    root: &Path,
+    requested: &Path,
+) {
+    match path_kind(requested) {
+        PathKind::Directory => {
+            insert_watch_target(targets, requested.to_path_buf(), WatchDepth::Recursive);
+        }
+        PathKind::File => {
+            insert_watch_target(targets, requested.to_path_buf(), WatchDepth::NonRecursive);
+        }
+        PathKind::Missing | PathKind::Unsafe => {
+            insert_watch_target(
+                targets,
+                nearest_existing_directory(root, requested),
+                WatchDepth::NonRecursive,
+            );
+        }
+    }
+}
+
+fn insert_watch_target(
+    targets: &mut BTreeMap<PathBuf, WatchDepth>,
+    path: PathBuf,
+    depth: WatchDepth,
+) {
+    targets
+        .entry(path)
+        .and_modify(|current| {
+            if depth == WatchDepth::Recursive {
+                *current = WatchDepth::Recursive;
+            }
+        })
+        .or_insert(depth);
+}
+
+fn nearest_existing_directory(root: &Path, requested: &Path) -> PathBuf {
+    let mut candidate = requested.to_path_buf();
+    loop {
+        if candidate.starts_with(root) && path_kind(&candidate) == PathKind::Directory {
+            return candidate;
+        }
+        if candidate == root || !candidate.pop() {
+            return root.to_path_buf();
+        }
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -159,12 +282,90 @@ enum PathKind {
 }
 
 #[derive(Debug)]
-struct LiveWatchSession {
+struct WatchBinding {
+    set: WatchSet,
+    adapter: Box<dyn WatcherAdapter>,
+}
+
+impl WatchBinding {
+    fn start(factory: &dyn WatcherFactory, set: WatchSet) -> Result<Self> {
+        let adapter = factory.start(&set)?;
+        Ok(Self { set, adapter })
+    }
+}
+
+#[derive(Debug)]
+struct ActiveWatchGeneration {
     config: Config,
     config_source: Option<String>,
     refresh: RefreshSession,
     docs_path: PathBuf,
     topology: WatchTopology,
+    watcher: WatchBinding,
+}
+
+#[derive(Debug)]
+struct CandidateFailure {
+    error: CrivError,
+    watcher_unavailable: bool,
+}
+
+impl CandidateFailure {
+    fn candidate(error: CrivError) -> Self {
+        Self {
+            error,
+            watcher_unavailable: false,
+        }
+    }
+
+    fn watcher(error: CrivError) -> Self {
+        Self {
+            error,
+            watcher_unavailable: true,
+        }
+    }
+}
+
+impl From<CrivError> for CandidateFailure {
+    fn from(error: CrivError) -> Self {
+        Self::candidate(error)
+    }
+}
+
+impl ActiveWatchGeneration {
+    fn candidate(
+        root: &Path,
+        config: Config,
+        config_source: Option<String>,
+        factory: &dyn WatcherFactory,
+    ) -> std::result::Result<Self, CandidateFailure> {
+        let docs_path = config.docs_path(root);
+        require_real_docs_root(&docs_path).map_err(CandidateFailure::candidate)?;
+        let topology = WatchTopology::observe(root, &config);
+        let watcher = WatchBinding::start(factory, WatchSet::active(root, &config))
+            .map_err(CandidateFailure::watcher)?;
+        let mut refresh =
+            RefreshSession::live(root, &config).map_err(CandidateFailure::candidate)?;
+        refresh
+            .refresh(root, RefreshCause::Initial)
+            .map_err(CandidateFailure::candidate)?;
+        Ok(Self {
+            config,
+            config_source,
+            refresh,
+            docs_path,
+            topology,
+            watcher,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct LiveWatchSession {
+    root: PathBuf,
+    active: ActiveWatchGeneration,
+    recovery: Option<WatchBinding>,
+    watcher_factory: Arc<dyn WatcherFactory>,
     suspended: bool,
     failure: Option<String>,
     next_retry: Instant,
@@ -172,59 +373,149 @@ struct LiveWatchSession {
 
 impl LiveWatchSession {
     fn start(root: &Path) -> Result<Self> {
-        let config_source = read_config_source(root)?;
-        let config = Config::parse(config_source.as_deref())?;
-        Self::candidate(root, config, config_source)
+        Self::start_with_factory(root, Arc::new(NotifyWatcherFactory))
     }
 
-    fn candidate(root: &Path, config: Config, config_source: Option<String>) -> Result<Self> {
-        let docs_path = config.docs_path(root);
-        require_real_docs_root(&docs_path)?;
-        let topology = WatchTopology::observe(root, &config);
-        let mut refresh = RefreshSession::live(root, &config)?;
-        refresh.refresh(root, RefreshCause::Initial)?;
+    fn start_with_factory(root: &Path, watcher_factory: Arc<dyn WatcherFactory>) -> Result<Self> {
+        let config_source = read_config_source(root)?;
+        let config = Config::parse(config_source.as_deref())?;
+        let active =
+            ActiveWatchGeneration::candidate(root, config, config_source, watcher_factory.as_ref())
+                .map_err(|failure| failure.error)?;
         Ok(Self {
-            config,
-            config_source,
-            refresh,
-            docs_path,
-            topology,
+            root: root.to_path_buf(),
+            active,
+            recovery: None,
+            watcher_factory,
             suspended: false,
             failure: None,
             next_retry: Instant::now(),
         })
     }
 
-    fn docs_changed(&self, signal: &WatchSignal) -> bool {
-        matches!(signal, WatchSignal::Paths(paths) if paths.iter().any(|path| path.starts_with(&self.docs_path)))
+    fn step(&mut self, timeout: Duration) -> Result<()> {
+        let signal = self.poll(timeout)?;
+        if self.must_reconfigure(&signal) {
+            self.reconfigure();
+            return Ok(());
+        }
+        if self.suspended {
+            return Ok(());
+        }
+
+        let source_changed = match self.active.refresh.observe_source_change() {
+            Ok(SourceChange::Changed) => true,
+            Ok(SourceChange::Unchanged | SourceChange::Disabled) => false,
+            Err(err) => {
+                eprintln!("criv watch: source index error: {err}");
+                self.recovery = None;
+                self.suspend(&format!("source index error: {err}"));
+                return Ok(());
+            }
+        };
+        let docs_changed = self.docs_changed(&signal);
+        if let WatchDecision::Rebuild { docs_changed } =
+            watch_decision(docs_changed, source_changed)
+        {
+            let cause = if docs_changed {
+                RefreshCause::DocsChanged
+            } else {
+                RefreshCause::SourceChanged
+            };
+            if let Err(err) = self.active.refresh.refresh(&self.root, cause) {
+                eprintln!("criv watch: {err}");
+            }
+        }
+        Ok(())
     }
 
-    fn must_reconfigure(&self, root: &Path, signal: &WatchSignal) -> bool {
+    fn poll(&mut self, timeout: Duration) -> Result<WatchSignal> {
+        let poll = if self.suspended {
+            match self.recovery.as_mut() {
+                Some(recovery) => recovery.adapter.poll(timeout),
+                None => {
+                    if !timeout.is_zero() {
+                        std::thread::sleep(timeout);
+                    }
+                    WatcherPoll::Idle
+                }
+            }
+        } else {
+            self.active.watcher.adapter.poll(timeout)
+        };
+        match poll {
+            WatcherPoll::Paths(paths) if paths.is_empty() => Ok(WatchSignal::Idle),
+            WatcherPoll::Paths(paths) => Ok(WatchSignal::Paths(paths)),
+            WatcherPoll::Idle => Ok(WatchSignal::Idle),
+            WatcherPoll::Error(error) => {
+                eprintln!("criv watch: watcher error: {error}");
+                self.recovery = None;
+                self.suspend("watcher adapter error");
+                Ok(WatchSignal::Idle)
+            }
+            WatcherPoll::Disconnected => Err(CrivError::new("watcher event channel disconnected")),
+        }
+    }
+
+    fn docs_changed(&self, signal: &WatchSignal) -> bool {
+        matches!(signal, WatchSignal::Paths(paths) if paths.iter().any(|path| path.starts_with(&self.active.docs_path)))
+    }
+
+    fn must_reconfigure(&self, signal: &WatchSignal) -> bool {
         if self.suspended {
             return !matches!(signal, WatchSignal::Idle) || Instant::now() >= self.next_retry;
         }
-        let config_changed = match read_config_source(root) {
-            Ok(source) => source != self.config_source,
+        let config_changed = match read_config_source(&self.root) {
+            Ok(source) => source != self.active.config_source,
             Err(_) => true,
         };
         matches!(signal, WatchSignal::Paths(_))
-            && (config_changed || WatchTopology::observe(root, &self.config) != self.topology)
+            && (config_changed
+                || WatchTopology::observe(&self.root, &self.active.config) != self.active.topology
+                || WatchSet::active(&self.root, &self.active.config) != self.active.watcher.set)
     }
 
-    fn reconfigure(&mut self, root: &Path) {
-        let candidate = read_config_source(root).and_then(|config_source| {
-            Config::parse(config_source.as_deref())
-                .and_then(|config| Self::candidate(root, config, config_source))
-        });
+    fn reconfigure(&mut self) {
+        let root = self.root.clone();
+        let mut recovery_config = None;
+        let candidate = (|| {
+            let config_source = read_config_source(&root)?;
+            let config = Config::parse(config_source.as_deref())?;
+            recovery_config = Some(config.clone());
+            ActiveWatchGeneration::candidate(
+                &root,
+                config,
+                config_source,
+                self.watcher_factory.as_ref(),
+            )
+        })();
         match candidate {
-            Ok(mut candidate) => {
+            Ok(candidate) => {
                 if self.suspended {
                     eprintln!("criv watch: reconfiguration recovered");
                 }
-                candidate.failure = None;
-                *self = candidate;
+                self.active = candidate;
+                self.recovery = None;
+                self.suspended = false;
+                self.failure = None;
+                self.next_retry = Instant::now();
             }
-            Err(err) => self.suspend(&err.to_string()),
+            Err(failure) => {
+                let mut cause = failure.error.to_string();
+                if failure.watcher_unavailable {
+                    self.recovery = None;
+                } else {
+                    let recovery_set = WatchSet::recovery(&root, recovery_config.as_ref());
+                    match WatchBinding::start(self.watcher_factory.as_ref(), recovery_set) {
+                        Ok(recovery) => self.recovery = Some(recovery),
+                        Err(watcher_error) => {
+                            self.recovery = None;
+                            cause.push_str(&format!("; watcher adapter error: {watcher_error}"));
+                        }
+                    }
+                }
+                self.suspend(&cause);
+            }
         }
     }
 
@@ -385,12 +676,189 @@ fn read_watch_lock_record(file: &mut fs::File) -> Option<WatchLockRecord> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::VecDeque;
     use std::fs;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Barrier};
+    use std::sync::{Arc, Barrier, Mutex};
     use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    fn active_watch_set_covers_config_docs_and_source_topology() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("generated")).unwrap();
+        let config = Config::parse(Some(
+            "[vault]\ndocs = \"docs\"\n\n[source]\nroots = [\"src\", \"generated/api/file.rs\"]\n",
+        ))
+        .unwrap();
+
+        let set = WatchSet::active(root, &config);
+
+        assert_eq!(
+            set.targets,
+            vec![
+                WatchTarget::non_recursive(root.to_path_buf()),
+                WatchTarget::recursive(root.join("docs")),
+                WatchTarget::non_recursive(root.join("generated")),
+                WatchTarget::recursive(root.join("src")),
+            ]
+        );
+    }
+
+    #[test]
+    fn recovery_watch_set_keeps_only_candidate_recovery_paths() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("generated")).unwrap();
+        let config = Config::parse(Some(
+            "[vault]\ndocs = \"docs\"\n\n[source]\nroots = [\"src\", \"generated/api/file.rs\"]\n",
+        ))
+        .unwrap();
+
+        let set = WatchSet::recovery(root, Some(&config));
+
+        assert_eq!(
+            set.targets,
+            vec![
+                WatchTarget::non_recursive(root.to_path_buf()),
+                WatchTarget::recursive(root.join("docs")),
+                WatchTarget::non_recursive(root.join("generated")),
+            ]
+        );
+    }
+
+    #[derive(Debug)]
+    struct DisconnectedWatcherFactory;
+
+    impl WatcherFactory for DisconnectedWatcherFactory {
+        fn start(&self, _set: &WatchSet) -> Result<Box<dyn WatcherAdapter>> {
+            Ok(Box::new(DisconnectedWatcher))
+        }
+    }
+
+    #[derive(Debug)]
+    struct DisconnectedWatcher;
+
+    impl WatcherAdapter for DisconnectedWatcher {
+        fn poll(&mut self, _timeout: Duration) -> WatcherPoll {
+            WatcherPoll::Disconnected
+        }
+    }
+
+    #[test]
+    fn live_session_treats_its_disconnected_watcher_as_fatal() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("docs/adr")).unwrap();
+        fs::write(root.join("criv.toml"), "[index]\nsource = false\n").unwrap();
+        let mut session =
+            LiveWatchSession::start_with_factory(root, Arc::new(DisconnectedWatcherFactory))
+                .unwrap();
+
+        let error = session.step(Duration::ZERO).unwrap_err();
+
+        assert_eq!(error.to_string(), "watcher event channel disconnected");
+    }
+
+    #[derive(Debug)]
+    struct ScriptedWatcherFactory {
+        starts: Mutex<Vec<WatchSet>>,
+        scripts: Mutex<VecDeque<VecDeque<WatcherPoll>>>,
+    }
+
+    impl ScriptedWatcherFactory {
+        fn new(scripts: Vec<Vec<WatcherPoll>>) -> Self {
+            Self {
+                starts: Mutex::new(Vec::new()),
+                scripts: Mutex::new(
+                    scripts
+                        .into_iter()
+                        .map(VecDeque::from)
+                        .collect::<VecDeque<_>>(),
+                ),
+            }
+        }
+    }
+
+    impl WatcherFactory for ScriptedWatcherFactory {
+        fn start(&self, set: &WatchSet) -> Result<Box<dyn WatcherAdapter>> {
+            self.starts.lock().unwrap().push(set.clone());
+            let polls = self.scripts.lock().unwrap().pop_front().unwrap_or_default();
+            Ok(Box::new(ScriptedWatcher { polls }))
+        }
+    }
+
+    #[derive(Debug)]
+    struct ScriptedWatcher {
+        polls: VecDeque<WatcherPoll>,
+    }
+
+    impl WatcherAdapter for ScriptedWatcher {
+        fn poll(&mut self, _timeout: Duration) -> WatcherPoll {
+            self.polls.pop_front().unwrap_or(WatcherPoll::Idle)
+        }
+    }
+
+    #[test]
+    fn live_session_restarts_the_watcher_after_an_adapter_error() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("docs/adr")).unwrap();
+        fs::write(root.join("criv.toml"), "[index]\nsource = false\n").unwrap();
+        let factory = Arc::new(ScriptedWatcherFactory::new(vec![
+            vec![WatcherPoll::Error("injected watcher failure".into())],
+            vec![],
+        ]));
+        let mut session = LiveWatchSession::start_with_factory(root, factory.clone()).unwrap();
+
+        session.step(Duration::ZERO).unwrap();
+        assert_eq!(factory.starts.lock().unwrap().len(), 1);
+
+        session.next_retry = Instant::now();
+        session.step(Duration::ZERO).unwrap();
+
+        assert_eq!(factory.starts.lock().unwrap().len(), 2);
+        assert!(!session.suspended);
+    }
+
+    #[derive(Debug, Default)]
+    struct FailingWatcherFactory {
+        starts: AtomicUsize,
+    }
+
+    impl WatcherFactory for FailingWatcherFactory {
+        fn start(&self, _set: &WatchSet) -> Result<Box<dyn WatcherAdapter>> {
+            let attempt = self.starts.fetch_add(1, Ordering::SeqCst);
+            if attempt == 0 {
+                return Ok(Box::new(ScriptedWatcher {
+                    polls: VecDeque::from([WatcherPoll::Error("adapter stopped".into())]),
+                }));
+            }
+            Err(CrivError::new("injected adapter start failure"))
+        }
+    }
+
+    #[test]
+    fn watcher_creation_failure_is_retried_only_once_per_interval() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("docs/adr")).unwrap();
+        fs::write(root.join("criv.toml"), "[index]\nsource = false\n").unwrap();
+        let factory = Arc::new(FailingWatcherFactory::default());
+        let mut session = LiveWatchSession::start_with_factory(root, factory.clone()).unwrap();
+        session.step(Duration::ZERO).unwrap();
+
+        session.next_retry = Instant::now();
+        session.step(Duration::ZERO).unwrap();
+
+        assert_eq!(factory.starts.load(Ordering::SeqCst), 2);
+    }
 
     #[test]
     fn watch_decisions_distinguish_docs_and_source_changes() {
