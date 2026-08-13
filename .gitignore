@@ -1,4 +1,5 @@
 /target
+/scripts/performance/container-test/target/
 /node_modules/
 packages/*/node_modules/
 .criv/

@@ -1,0 +1,13 @@
+[package]
+name = "criv-perf-container-test"
+version = "0.8.0"
+edition = "2024"
+rust-version = "1.97.1"
+publish = false
+
+[workspace]
+
+[dev-dependencies]
+blake3 = "1"
+tempfile = "3"
+testcontainers = { version = "0.27.3", features = ["blocking"] }

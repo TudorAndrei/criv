@@ -38,7 +38,7 @@ run = "bash scripts/measure-performance.sh"
 
 [tasks.perf-container]
 description = "Smoke-test the performance harness in a pinned Docker environment"
-run = "cargo test --locked --test performance_container performance_harness_runs_in_pinned_container -- --ignored --nocapture"
+run = "cargo test --locked --manifest-path scripts/performance/container-test/Cargo.toml --test performance_container performance_harness_runs_in_pinned_container -- --ignored --nocapture"
 
 [tasks.vscode-build]
 description = "Build the VS Code-compatible companion extension"

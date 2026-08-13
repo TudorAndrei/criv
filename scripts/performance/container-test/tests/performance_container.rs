@@ -20,8 +20,11 @@ const READY_MESSAGE: &str = "criv-performance-container-ok";
 #[test]
 #[ignore = "requires a Docker-compatible runtime and builds a release image"]
 fn performance_harness_runs_in_pinned_container() {
-    let repository = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let context = stage_build_context(repository);
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .canonicalize()
+        .expect("resolve repository root");
+    let context = stage_build_context(&repository);
     let tag = context_digest(context.path());
     let dockerfile = format!(
         r#"FROM {RUST_IMAGE}
