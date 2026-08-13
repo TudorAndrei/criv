@@ -20,7 +20,7 @@ local staged_docs = new Step {
 local full_docs = new Step {
   glob = List("**/*.md", "criv.toml", ".rumdl.toml")
   check_first = true
-  check = "cargo run --locked --quiet -- check"
+  check = "cargo run --locked --quiet -- check${GITHUB_ACTIONS:+ --format github}"
   fix = "cargo run --locked --quiet -- check --fix"
 }
 
@@ -48,6 +48,10 @@ local hawk = new Step {
     "hk.pkl",
   )
   check = "cargo hawk check --manifest-path Cargo.toml --target-dir target/hawk --exclude-crate criv_wasm -D warnings"
+  env {
+    ["RUSTC_WRAPPER"] = ""
+    ["SCCACHE_GHA_ENABLED"] = "false"
+  }
 }
 
 local toml_fmt = (Builtins.taplo_format) {
@@ -77,6 +81,18 @@ local zizmor = new Step {
     ".github/dependabot.yaml",
   )
   check = "zizmor --offline --strict-collection ."
+}
+
+local ci_cargo_clippy = (cargo_clippy) {
+  depends = List("cargo-test")
+}
+
+local ci_full_docs = (full_docs) {
+  depends = List("cargo-clippy")
+}
+
+local ci_enforce = (enforce_ci) {
+  depends = List("criv-check")
 }
 
 hooks {
@@ -112,14 +128,14 @@ hooks {
     steps {
       ["cargo-fmt"] = cargo_fmt
       ["toml-fmt"] = toml_fmt
-      ["cargo-clippy"] = cargo_clippy
+      ["cargo-clippy"] = ci_cargo_clippy
       ["actionlint"] = actionlint
       ["zizmor"] = zizmor
       ["cargo-test"] = cargo_test
       ["hawk"] = hawk
       ["cargo-audit"] = cargo_audit
-      ["criv-check"] = full_docs
-      ["criv-enforce-ci"] = enforce_ci
+      ["criv-check"] = ci_full_docs
+      ["criv-enforce-ci"] = ci_enforce
     }
   }
 

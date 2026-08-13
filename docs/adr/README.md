@@ -118,3 +118,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0105-owner-scoped-rust-module-layout|ADR-0105]] - Use owner-scoped Rust module layout
 - [[0106-enforce-current-runtime-module-paths|ADR-0106]] - Enforce current runtime module paths
 - [[0107-group-obsidian-host-files-by-owner-scope|ADR-0107]] - Group Obsidian host files by owner scope
+- [[0108-bounded-hosted-rust-compilation|ADR-0108]] - Bounded hosted Rust compilation
