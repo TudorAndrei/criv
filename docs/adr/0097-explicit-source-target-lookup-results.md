@@ -7,13 +7,13 @@ date: 2026-08-12
 governs:
   - crates/criv-wasm/src/lib.rs
   - packages/criv-editor-state/src/wasmHost.ts
-  - extensions/vscode-criv/src/wasm.ts
-  - extensions/vscode-criv/src/stateStore.ts
-  - extensions/vscode-criv/src/sourceReferences.ts
-  - extensions/vscode-criv/src/languageFeatures.ts
+  - extensions/vscode-criv/src/state/wasm.ts
+  - extensions/vscode-criv/src/state/store.ts
+  - extensions/vscode-criv/src/navigation/references.ts
+  - extensions/vscode-criv/src/navigation/languageFeatures.ts
   - extensions/vscode-criv/src/extension.ts
-  - .obsidian/plugins/criv/src/wasm.ts
-  - .obsidian/plugins/criv/src/core.ts
+  - .obsidian/plugins/criv/src/state/wasm.ts
+  - .obsidian/plugins/criv/src/source/model.ts
   - .obsidian/plugins/criv/src/main.ts
 policy:
   patterns:

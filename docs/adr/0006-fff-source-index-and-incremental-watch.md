@@ -5,11 +5,11 @@ title: Fff Source Index And Incremental Watch
 status: accepted
 date: 2026-05-13
 governs:
-  - src/source_index.rs
+  - src/source/index.rs
   - src/watch.rs
   - src/vault.rs
   - src/state.rs
-  - src/source_graph.rs
+  - src/source/graph.rs
 ---
 
 # Fff Source Index And Incremental Watch
