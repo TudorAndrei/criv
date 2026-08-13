@@ -1,11 +1,12 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tempfile::TempDir;
 
 use super::*;
+use crate::util::copy_fixture_tree;
 use crate::{policy_scan, source, structural, vault as vault_module};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -402,9 +403,10 @@ fn incremental_fixture(prefix: &str) -> TempDir {
         .tempdir()
         .unwrap();
     copy_fixture_tree(
-        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/incremental-refresh"),
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/incremental-refresh"),
         temp.path(),
-    );
+    )
+    .unwrap();
     temp
 }
 
@@ -430,19 +432,6 @@ fn wait_for_source_change(session: &mut RefreshSession, label: &str) {
             "timed out observing {label} in the live source catalog"
         );
         std::thread::sleep(Duration::from_millis(25));
-    }
-}
-
-fn copy_fixture_tree(source: &Path, destination: &Path) {
-    fs::create_dir_all(destination).unwrap();
-    for entry in fs::read_dir(source).unwrap() {
-        let entry = entry.unwrap();
-        let target = destination.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_fixture_tree(&entry.path(), &target);
-        } else {
-            fs::copy(entry.path(), target).unwrap();
-        }
     }
 }
 

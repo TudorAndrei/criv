@@ -1,5 +1,4 @@
 mod adr;
-mod architecture;
 mod c4;
 mod check;
 mod config;

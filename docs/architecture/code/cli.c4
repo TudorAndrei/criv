@@ -60,11 +60,6 @@ model {
       description 'Runs the LikeC4 bridge and returns models and diagnostics.'
       link ../../src/likec4.rs 'source'
     }
-    rustArchitecture = module 'criv::architecture' {
-      technology 'Rust'
-      description 'Rejects removed automatic architecture configuration with migration guidance.'
-      link ../../src/architecture.rs 'source'
-    }
   }
 
   extend criv.cli.sourceIntelligence {
@@ -190,7 +185,6 @@ model {
   criv.cli.vaultModel.rustVault -> criv.cli.vaultModel.rustC4 'Creates C4 artifacts'
   criv.cli.vaultModel.rustVault -> criv.cli.vaultModel.rustConfig 'Reads the vault configuration'
   criv.cli.vaultModel.rustVault -> criv.cli.architectureService.rustLikeC4 'Compiles C4 sources'
-  criv.cli.vaultModel.rustConfig -> criv.cli.architectureService.rustArchitecture 'Rejects removed generator configuration'
   criv.cli.vaultModel.rustVault -> criv.cli.sourceIntelligence.rustSourceIndex 'Indexes configured sources'
   criv.cli.vaultModel.rustVault -> criv.cli.sourceIntelligence.rustSourceGraph 'Builds module and import relations'
 
@@ -256,7 +250,6 @@ views {
     include criv.cli.sourceIntelligence.rustSourceGraph
     include criv.cli.governanceEngine.rustCheck
     include criv.cli.architectureService.rustLikeC4
-    include criv.cli.architectureService.rustArchitecture
     include criv.cli.statePublisher.rustState
   }
 

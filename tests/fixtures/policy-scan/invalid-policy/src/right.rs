@@ -1,0 +1,2 @@
+fn right() {}
+struct Right;
