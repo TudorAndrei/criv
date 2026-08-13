@@ -1940,7 +1940,9 @@ fn editor_source_lookup_policies_accept_the_contract_and_reject_regressions() {
     fs::create_dir_all(root.join("src")).unwrap();
     write_criv_config(root, vec!["src"], vec![], true);
 
-    let decision = include_str!("../docs/adr/0097-explicit-source-target-lookup-results.md");
+    let decision = normalize_newlines(include_str!(
+        "../docs/adr/0097-explicit-source-target-lookup-results.md"
+    ));
     let frontmatter = decision
         .strip_prefix("---\n")
         .unwrap()
