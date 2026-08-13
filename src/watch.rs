@@ -13,7 +13,7 @@ use notify_debouncer_mini::{
 
 use crate::config::Config;
 use crate::refresh::{RefreshCause, RefreshSession};
-use crate::source_index::SourceChange;
+use crate::source::SourceChange;
 use crate::util::open_regular_file_in;
 use crate::{CrivError, Result};
 

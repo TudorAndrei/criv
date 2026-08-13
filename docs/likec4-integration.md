@@ -8,7 +8,7 @@ targets:
     - assets/likec4-bridge.mjs
     - packages/criv-likec4/src/protocol.ts
     - packages/criv-likec4/src/renderer.ts
-    - extensions/vscode-criv/src/c4Preview.ts
+    - extensions/vscode-criv/src/c4/preview.ts
     - .obsidian/plugins/criv/src/main.ts
 ---
 

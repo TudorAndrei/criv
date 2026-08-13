@@ -5,8 +5,8 @@ title: Enforce Editor Preview Revision Lifecycle
 status: accepted
 date: 2026-08-11
 governs:
-  - extensions/vscode-criv/src/c4Preview.ts
-  - extensions/vscode-criv/src/stateStore.ts
+  - extensions/vscode-criv/src/c4/preview.ts
+  - extensions/vscode-criv/src/state/store.ts
   - .obsidian/plugins/criv/src/main.ts
 policy:
   patterns:

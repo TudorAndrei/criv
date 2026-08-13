@@ -7,7 +7,7 @@ date: 2026-08-06
 governs:
   - scripts/performance/**
   - src/state.rs
-  - src/snapshots.rs
+  - src/state/snapshots.rs
   - src/query.rs
   - crates/criv-wasm/src/lib.rs
 ---

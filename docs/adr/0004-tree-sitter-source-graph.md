@@ -5,7 +5,7 @@ title: Tree Sitter Source Graph
 status: accepted
 date: 2026-05-12
 governs:
-  - src/source_graph.rs
+  - src/source/graph.rs
   - src/state.rs
   - src/query.rs
 ---

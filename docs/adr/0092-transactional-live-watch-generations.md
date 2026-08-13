@@ -9,7 +9,7 @@ supersedes:
 governs:
   - src/watch.rs
   - src/refresh.rs
-  - src/source_index.rs
+  - src/source/index.rs
   - src/vault.rs
 ---
 

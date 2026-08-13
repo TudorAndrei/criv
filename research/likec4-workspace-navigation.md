@@ -164,7 +164,7 @@ The shared criv renderer needs these changes:
 
 The VS Code host already selects a view from the opened file's `sourcePath`.
 This makes one view per source file the safest initial layout. See
-[`c4PreviewModel.ts`](../extensions/vscode-criv/src/c4PreviewModel.ts#L7).
+[`previewModel.ts`](../extensions/vscode-criv/src/c4/previewModel.ts#L4).
 
 The Obsidian adapter currently opens the first view in the model and does not
 select by the opened file's `sourcePath`. It must supply the file-owned view when

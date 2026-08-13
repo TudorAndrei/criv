@@ -13,7 +13,7 @@ model {
       obsidianStateOwner = component 'State lifecycle' {
         technology 'TypeScript and Obsidian file API'
         description 'Loads one validated State revision, polls its file token, and publishes status generations.'
-        link ../../.obsidian/plugins/criv/src/state-owner.ts 'source'
+        link ../../.obsidian/plugins/criv/src/state/owner.ts 'source'
       }
       obsidianC4View = component 'C4 view lifecycle' {
         technology 'TypeScript, Obsidian FileView, and React'
@@ -23,32 +23,32 @@ model {
       obsidianSourcePanel = component 'Source panel' {
         technology 'TypeScript and Obsidian ItemView'
         description 'Owns the singleton panel that shows source links and policy matches for the active note.'
-        link ../../.obsidian/plugins/criv/src/source-panel.ts 'source'
+        link ../../.obsidian/plugins/criv/src/source/panel.ts 'source'
       }
       obsidianSourceReferences = component 'Source reference editor' {
         technology 'TypeScript, Obsidian editor API, and CodeMirror'
         description 'Owns source suggestions, Markdown link decoration, hover previews, and editor drift marks.'
-        link ../../.obsidian/plugins/criv/src/source-references.ts 'source'
+        link ../../.obsidian/plugins/criv/src/source/references.ts 'source'
       }
       obsidianSourcePreview = component 'Source preview renderer' {
         technology 'TypeScript and DOM'
         description 'Reads confined source excerpts and renders lifecycle-free highlighted previews.'
-        link ../../.obsidian/plugins/criv/src/source-preview.ts 'source'
+        link ../../.obsidian/plugins/criv/src/source/preview.ts 'source'
       }
       obsidianSettings = component 'Settings lifecycle' {
         technology 'TypeScript and Obsidian settings API'
         description 'Loads, persists, and presents the State path and external editor settings.'
         link ../../.obsidian/plugins/criv/src/settings.ts 'source'
       }
-      obsidianState = component 'State model' {
+      obsidianState = component 'Source model' {
         technology 'TypeScript'
         description 'Defines validated state data and pure navigation and presentation operations.'
-        link ../../.obsidian/plugins/criv/src/core.ts 'source'
+        link ../../.obsidian/plugins/criv/src/source/model.ts 'source'
       }
       obsidianWasm = component 'WebAssembly adapter' {
         technology 'TypeScript'
         description 'Loads, calls, and disposes revisions from the packaged state projection library.'
-        link ../../.obsidian/plugins/criv/src/wasm.ts 'source'
+        link ../../.obsidian/plugins/criv/src/state/wasm.ts 'source'
       }
     }
   }

@@ -7,7 +7,7 @@ date: 2026-06-21
 supersedes:
   - ADR-0033
 governs:
-  - src/source_graph.rs
+  - src/source/graph.rs
   - src/vault.rs
   - src/check.rs
   - src/c4.rs

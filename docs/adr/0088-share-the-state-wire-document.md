@@ -14,17 +14,17 @@ governs:
   - crates/criv-wasm/Cargo.toml
   - crates/criv-wasm/src/lib.rs
   - src/state.rs
-  - src/snapshots.rs
+  - src/state/snapshots.rs
   - src/init/templates.rs
   - scripts/performance/Cargo.toml
   - scripts/performance/src/bin/criv-state-storage-baseline.rs
   - scripts/performance/state-store-prototype/Cargo.toml
   - scripts/performance/state-store-prototype/src/lib.rs
-  - extensions/vscode-criv/src/wasm.ts
-  - extensions/vscode-criv/src/stateStore.ts
-  - extensions/vscode-criv/src/languageFeatures.ts
-  - .obsidian/plugins/criv/src/wasm.ts
-  - .obsidian/plugins/criv/src/core.ts
+  - extensions/vscode-criv/src/state/wasm.ts
+  - extensions/vscode-criv/src/state/store.ts
+  - extensions/vscode-criv/src/navigation/languageFeatures.ts
+  - .obsidian/plugins/criv/src/state/wasm.ts
+  - .obsidian/plugins/criv/src/source/model.ts
   - .obsidian/plugins/criv/src/main.ts
 ---
 

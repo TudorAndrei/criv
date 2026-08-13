@@ -10,7 +10,7 @@ governs:
   - src/config.rs
   - src/lib.rs
   - src/state.rs
-  - src/snapshots.rs
+  - src/state/snapshots.rs
   - src/refresh.rs
   - src/query.rs
 ---

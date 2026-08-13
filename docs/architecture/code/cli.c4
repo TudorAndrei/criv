@@ -68,20 +68,20 @@ model {
   }
 
   extend criv.cli.sourceIntelligence {
-    rustSourceIndex = module 'criv::source_index' {
+    rustSourceIndex = module 'criv::source::index' {
       technology 'Rust'
       description 'Indexes repository source paths for one-shot and live workflows.'
-      link ../../src/source_index.rs 'source'
+      link ../../src/source/index.rs 'source'
     }
-    rustSourcePaths = module 'criv::source_paths' {
+    rustSourcePaths = module 'criv::source::paths' {
       technology 'Rust'
       description 'Selects and reads source paths from configured roots.'
-      link ../../src/source_paths.rs 'source'
+      link ../../src/source/paths.rs 'source'
     }
-    rustSourceGraph = module 'criv::source_graph' {
+    rustSourceGraph = module 'criv::source::graph' {
       technology 'Rust and tree-sitter'
       description 'Extracts language modules, imports, and symbols from indexed sources.'
-      link ../../src/source_graph.rs 'source'
+      link ../../src/source/graph.rs 'source'
     }
     rustStructural = module 'criv::structural' {
       technology 'Rust and ast-grep'
@@ -145,10 +145,15 @@ model {
       description 'Builds and serializes the validated repository state envelope.'
       link ../../src/state.rs 'source'
     }
-    rustSnapshots = module 'criv::snapshots' {
+    rustStatePublication = module 'criv::state::publication' {
+      technology 'Rust'
+      description 'Owns the publication transaction, recovery, index, latest pointer, and retention.'
+      link ../../src/state/publication.rs 'source'
+    }
+    rustSnapshots = module 'criv::state::snapshots' {
       technology 'Rust and blake3'
-      description 'Publishes and retains immutable content-addressed state snapshots.'
-      link ../../src/snapshots.rs 'source'
+      description 'Stores and reads immutable content-addressed state snapshots.'
+      link ../../src/state/snapshots.rs 'source'
     }
   }
 
@@ -225,14 +230,15 @@ model {
   criv.cli.statePublisher.rustState -> criv.cli.vaultModel.rustC4 'Serializes C4 artifacts'
   criv.cli.statePublisher.rustState -> criv.cli.sourceIntelligence.rustSourceGraph 'Serializes source relations'
   criv.cli.statePublisher.rustState -> criv.cli.sourceIntelligence.rustStructural 'Serializes structural matches'
-  criv.cli.statePublisher.rustState -> criv.cli.statePublisher.rustSnapshots 'Publishes retained snapshots'
+  criv.cli.statePublisher.rustState -> criv.cli.statePublisher.rustStatePublication 'Publishes validated State'
+  criv.cli.statePublisher.rustStatePublication -> criv.cli.statePublisher.rustSnapshots 'Stores retained snapshots'
 
   // Queries.
   criv.cli.knowledgeQueries.rustQuery -> criv.cli.vaultModel.rustVault 'Resolves graph questions'
   criv.cli.knowledgeQueries.rustQuery -> criv.cli.sourceIntelligence.rustSourceIndex 'Reads indexed sources'
   criv.cli.knowledgeQueries.rustQuery -> criv.cli.sourceIntelligence.rustSourceGraph 'Reads module and import relations'
   criv.cli.knowledgeQueries.rustQuery -> criv.cli.repositoryHistory.rustGit 'Reads commit history'
-  criv.cli.knowledgeQueries.rustQuery -> criv.cli.statePublisher.rustSnapshots 'Reads published snapshots'
+  criv.cli.knowledgeQueries.rustQuery -> criv.cli.statePublisher.rustStatePublication 'Reads published snapshots'
   // Vault initialization.
   criv.cli.scaffoldInstaller.rustInit -> criv.cli.scaffoldInstaller.rustGeneratedSkills 'Installs the skill inventory'
 }

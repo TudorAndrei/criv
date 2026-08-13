@@ -13,10 +13,10 @@ model {
     }
   }
   extend criv.obsidianPlugin.obsidianStateOwner {
-    stateOwnerModule = module 'criv-obsidian::state-owner' {
+    stateOwnerModule = module 'criv-obsidian::state::owner' {
       technology 'TypeScript'
       description 'Owns file tokens, loaded revisions, status generations, queries, and disposal.'
-      link ../../.obsidian/plugins/criv/src/state-owner.ts 'source'
+      link ../../.obsidian/plugins/criv/src/state/owner.ts 'source'
     }
   }
   extend criv.obsidianPlugin.obsidianC4View {
@@ -27,24 +27,24 @@ model {
     }
   }
   extend criv.obsidianPlugin.obsidianSourcePanel {
-    sourcePanelModule = module 'criv-obsidian::source-panel' {
+    sourcePanelModule = module 'criv-obsidian::source::panel' {
       technology 'TypeScript'
       description 'Owns the singleton source-panel leaf and its active-note rendering.'
-      link ../../.obsidian/plugins/criv/src/source-panel.ts 'source'
+      link ../../.obsidian/plugins/criv/src/source/panel.ts 'source'
     }
   }
   extend criv.obsidianPlugin.obsidianSourceReferences {
-    sourceReferencesModule = module 'criv-obsidian::source-references' {
+    sourceReferencesModule = module 'criv-obsidian::source::references' {
       technology 'TypeScript and CodeMirror'
       description 'Owns suggestions, hover lifecycle, link decoration, and drift decoration.'
-      link ../../.obsidian/plugins/criv/src/source-references.ts 'source'
+      link ../../.obsidian/plugins/criv/src/source/references.ts 'source'
     }
   }
   extend criv.obsidianPlugin.obsidianSourcePreview {
-    sourcePreviewModule = module 'criv-obsidian::source-preview' {
+    sourcePreviewModule = module 'criv-obsidian::source::preview' {
       technology 'TypeScript and DOM'
       description 'Reads, highlights, and renders source excerpts without lifecycle state.'
-      link ../../.obsidian/plugins/criv/src/source-preview.ts 'source'
+      link ../../.obsidian/plugins/criv/src/source/preview.ts 'source'
     }
   }
   extend criv.obsidianPlugin.obsidianSettings {
@@ -55,17 +55,17 @@ model {
     }
   }
   extend criv.obsidianPlugin.obsidianState {
-    coreModule = module 'criv-obsidian::core' {
+    coreModule = module 'criv-obsidian::source::model' {
       technology 'TypeScript'
       description 'Defines the plugin state model and pure source-reference operations.'
-      link ../../.obsidian/plugins/criv/src/core.ts 'source'
+      link ../../.obsidian/plugins/criv/src/source/model.ts 'source'
     }
   }
   extend criv.obsidianPlugin.obsidianWasm {
-    wasmModule = module 'criv-obsidian::wasm' {
+    wasmModule = module 'criv-obsidian::state::wasm' {
       technology 'TypeScript and Rust WebAssembly'
       description 'Loads the WebAssembly API used to validate and query criv State.'
-      link ../../.obsidian/plugins/criv/src/wasm.ts 'source'
+      link ../../.obsidian/plugins/criv/src/state/wasm.ts 'source'
     }
   }
 

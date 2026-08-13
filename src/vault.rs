@@ -9,8 +9,9 @@ use serde::Deserialize;
 use crate::Result;
 use crate::c4;
 use crate::config::Config;
-use crate::source_graph::{SourceGraph, SourceGraphBuild};
-use crate::source_index::{IndexedSource, SourceCatalog, SourceIndexLifecycle};
+use crate::source::{
+    IndexedSource, SourceCatalog, SourceGraph, SourceGraphBuild, SourceIndexLifecycle,
+};
 use crate::util::{
     GlobMatcher, find_wiki_links_with_lines, is_adr_id, kebab,
     markdown_headings as parse_markdown_headings, read_to_string, strip_prefix, walk_vault_files,
@@ -170,7 +171,7 @@ pub(crate) enum SourceTargetResolution {
 
 impl Vault {
     pub(crate) fn load(root: &Path) -> Result<Self> {
-        let cached = crate::source_graph::load_cached(root);
+        let cached = crate::source::load_cached(root);
         Self::load_with_source_facilities(root, cached.as_ref(), None, true, None)
     }
 

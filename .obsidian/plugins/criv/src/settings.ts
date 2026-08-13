@@ -1,6 +1,6 @@
 import { PluginSettingTab, Setting } from "obsidian";
 import type { App, Plugin } from "obsidian";
-import { safeVaultPath } from "./core";
+import { safeVaultPath } from "./source/model";
 
 export interface CrivSettings {
   statePath: string;
