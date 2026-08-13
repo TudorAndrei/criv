@@ -5,7 +5,7 @@ import type { WorkspaceStateStatus } from "./stateStore";
 import type { CrivSourceEntry } from "./wasm";
 
 export class CrivStateTreeProvider implements vscode.TreeDataProvider<CrivTreeItem> {
-  private status: WorkspaceStateStatus = { kind: "loading" };
+  private status: WorkspaceStateStatus = { generation: 0, kind: "loading" };
   private readonly didChangeTreeData = new vscode.EventEmitter<CrivTreeItem | undefined>();
 
   readonly onDidChangeTreeData = this.didChangeTreeData.event;
@@ -41,10 +41,9 @@ export class CrivStateTreeProvider implements vscode.TreeDataProvider<CrivTreeIt
         return readyRootItems(this.status.snapshot);
       case "loading":
         return [new CrivTreeItem("Loading criv state", "message")];
-      case "missing-workspace":
-      case "missing-state":
-      case "wasm-unavailable":
-      case "invalid-state":
+      case "missing":
+      case "unavailable":
+      case "invalid":
         return [new CrivTreeItem(this.status.message, "message")];
     }
   }

@@ -5,12 +5,37 @@ import { buildStateSnapshot, type CrivStateSnapshot } from "./stateModel";
 import { CrivWasmLoadError, type CrivLoadedState, type CrivWasmBridge } from "./wasm";
 
 export type WorkspaceStateStatus =
-  | { kind: "loading" }
-  | { kind: "ready"; root: vscode.Uri; stateUri: vscode.Uri; snapshot: CrivStateSnapshot }
-  | { kind: "missing-workspace"; message: string }
-  | { kind: "missing-state"; root: vscode.Uri; stateUri: vscode.Uri; message: string }
-  | { kind: "wasm-unavailable"; root: vscode.Uri; stateUri: vscode.Uri; message: string }
-  | { kind: "invalid-state"; root: vscode.Uri; stateUri: vscode.Uri; message: string };
+  | { generation: number; kind: "loading" }
+  | {
+      generation: number;
+      kind: "ready";
+      root: vscode.Uri;
+      stateUri: vscode.Uri;
+      snapshot: CrivStateSnapshot;
+    }
+  | { generation: number; kind: "missing"; reason: "workspace"; message: string }
+  | {
+      generation: number;
+      kind: "missing";
+      reason: "state";
+      root: vscode.Uri;
+      stateUri: vscode.Uri;
+      message: string;
+    }
+  | {
+      generation: number;
+      kind: "unavailable";
+      root: vscode.Uri;
+      stateUri: vscode.Uri;
+      message: string;
+    }
+  | {
+      generation: number;
+      kind: "invalid";
+      root: vscode.Uri;
+      stateUri: vscode.Uri;
+      message: string;
+    };
 
 export interface Disposable {
   dispose(): void;
@@ -24,7 +49,8 @@ export interface WorkspaceStateHost {
 }
 
 export class WorkspaceStateStore implements Disposable {
-  private statusValue: WorkspaceStateStatus = { kind: "loading" };
+  private statusValue: WorkspaceStateStatus = { generation: 0, kind: "loading" };
+  private nextGeneration = 0;
   private watcher: Disposable | undefined;
   private watcherRootValue: string | undefined;
   private readonly revisions = new LoadedRevisionOwner<CrivLoadedState>();
@@ -49,8 +75,9 @@ export class WorkspaceStateStore implements Disposable {
     if (this.disposed) {
       return this.statusValue;
     }
+    const generation = ++this.nextGeneration;
     if (!this.revisions.current) {
-      this.setStatus({ kind: "loading" });
+      this.setStatus({ generation, kind: "loading" });
     }
 
     let root: vscode.Uri | undefined;
@@ -85,6 +112,7 @@ export class WorkspaceStateStore implements Disposable {
     }
     if (result.kind === "committed") {
       return this.setStatus({
+        generation,
         kind: "ready",
         root: root!,
         stateUri: stateUri!,
@@ -96,20 +124,25 @@ export class WorkspaceStateStore implements Disposable {
     if (error instanceof WorkspaceStateHostError && error.kind === "missing-workspace") {
       this.disposeWatcher();
       return this.setStatus({
-        kind: "missing-workspace",
+        generation,
+        kind: "missing",
+        reason: "workspace",
         message: "Open a workspace containing criv.toml.",
       });
     }
     if (error instanceof WorkspaceStateHostError && error.kind === "missing-state") {
       return this.setStatus({
-        kind: "missing-state",
+        generation,
+        kind: "missing",
+        reason: "state",
         root: root!,
         stateUri: stateUri!,
         message: `Could not read .criv/state.json: ${messageFromError(error.cause)}`,
       });
     }
     return this.setStatus({
-      kind: error instanceof CrivWasmLoadError ? "wasm-unavailable" : "invalid-state",
+      generation,
+      kind: error instanceof CrivWasmLoadError ? "unavailable" : "invalid",
       root: root!,
       stateUri: stateUri!,
       message:

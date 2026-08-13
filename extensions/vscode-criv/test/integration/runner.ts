@@ -32,12 +32,9 @@ export async function run(): Promise<void> {
 async function assertC4UsesCustomPreview(): Promise<void> {
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   assert.ok(workspaceFolder, "Expected the repository root to be opened as the test workspace.");
-  const uri = vscode.Uri.joinPath(
-    workspaceFolder.uri,
-    "docs",
-    "architecture",
-    "01-system-context.c4",
-  );
+  const uri = vscode.Uri.joinPath(workspaceFolder.uri, "docs", "architecture", "systems.c4");
+  const file = await vscode.workspace.fs.stat(uri);
+  assert.equal(file.type, vscode.FileType.File, "Expected the C4 integration fixture to exist.");
 
   await vscode.commands.executeCommand("vscode.open", uri);
   await delay(250);

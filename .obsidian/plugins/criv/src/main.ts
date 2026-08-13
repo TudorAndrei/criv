@@ -16,7 +16,7 @@ import {
   WorkspaceLeaf,
 } from "obsidian";
 import type { App, PluginManifest } from "obsidian";
-import { LoadedRevisionOwner } from "@criv/editor-state";
+import { GenerationRevisionOwner, LoadedRevisionOwner } from "@criv/editor-state";
 import { CrivLikeC4Renderer } from "@criv/likec4/renderer";
 import { preferredLikeC4ViewId } from "@criv/likec4/protocol";
 import { RangeSetBuilder } from "@codemirror/state";
@@ -104,6 +104,17 @@ interface StateFileToken {
   size: number;
 }
 
+export type ObsidianStateStatus =
+  | { generation: number; kind: "loading" }
+  | { generation: number; kind: "ready"; state: CrivState }
+  | { generation: number; kind: "missing"; message: string }
+  | { generation: number; kind: "invalid"; message: string }
+  | { generation: number; kind: "unavailable"; message: string };
+
+interface DisposableSubscription {
+  dispose(): void;
+}
+
 export default class CrivPlugin extends Plugin {
   settings!: CrivSettings;
   private state: CrivState | null = null;
@@ -113,6 +124,9 @@ export default class CrivPlugin extends Plugin {
   private readonly stateRevisions = new LoadedRevisionOwner<CrivLoadedState>();
   private stateToken: StateFileToken | null = null;
   private stateError: string | null = null;
+  private stateStatusValue: ObsidianStateStatus = { generation: 0, kind: "loading" };
+  private nextStateGeneration = 0;
+  private readonly stateStatusListeners = new Set<(status: ObsidianStateStatus) => void>();
   private unloading = false;
   private wasmFailureNotified = false;
   private hoverEl: HTMLElement | null = null;
@@ -172,6 +186,12 @@ export default class CrivPlugin extends Plugin {
 
   onunload() {
     this.unloading = true;
+    for (const leaf of this.app.workspace.getLeavesOfType(C4_VIEW_TYPE)) {
+      if (leaf.view instanceof CrivC4View) {
+        leaf.view.shutdown();
+      }
+    }
+    this.stateStatusListeners.clear();
     this.stateRevisions.dispose();
     this.clearStateCache();
     this.hideHoverPreview();
@@ -220,6 +240,13 @@ export default class CrivPlugin extends Plugin {
   }
 
   async loadState(observedToken?: StateFileToken | null): Promise<CrivState | null> {
+    if (this.unloading) {
+      return this.state;
+    }
+    const generation = ++this.nextStateGeneration;
+    if (!this.stateRevisions.current) {
+      this.publishStateStatus({ generation, kind: "loading" });
+    }
     const configuredPath = this.settings.statePath;
     let statePath: string | null = null;
     let token: StateFileToken | null = null;
@@ -232,7 +259,12 @@ export default class CrivPlugin extends Plugin {
         token =
           observedToken === undefined ? await this.readStateFileToken(statePath) : observedToken;
         attempt.assertCurrent();
-        const raw = await this.app.vault.adapter.read(statePath);
+        let raw: string;
+        try {
+          raw = await this.app.vault.adapter.read(statePath);
+        } catch (error) {
+          throw new ObsidianStateReadError(error);
+        }
         attempt.assertCurrent();
         return this.loadWasmRevision(raw);
       },
@@ -255,6 +287,7 @@ export default class CrivPlugin extends Plugin {
       this.stateSummary = result.value.summary;
       this.stateToken = token;
       this.stateError = null;
+      this.publishStateStatus({ generation, kind: "ready", state: this.state });
       return this.state;
     }
 
@@ -264,10 +297,40 @@ export default class CrivPlugin extends Plugin {
     this.stateError =
       statePath === null
         ? `Invalid criv state path ${configuredPath}.`
-        : result.error instanceof CrivWasmLoadError
-          ? result.error.message
-          : `Could not read ${statePath}: ${errorMessage(result.error)}`;
+        : result.error instanceof ObsidianStateReadError
+          ? `Could not read ${statePath}: ${errorMessage(result.error.cause)}`
+          : result.error instanceof CrivWasmLoadError
+            ? result.error.message
+            : `Could not read ${statePath}: ${errorMessage(result.error)}`;
+    this.publishStateStatus({
+      generation,
+      kind:
+        result.error instanceof ObsidianStateReadError
+          ? "missing"
+          : result.error instanceof CrivWasmLoadError
+            ? "unavailable"
+            : "invalid",
+      message: this.stateError,
+    });
     return null;
+  }
+
+  currentStateStatus(): ObsidianStateStatus {
+    return this.stateStatusValue;
+  }
+
+  onStateStatusChange(listener: (status: ObsidianStateStatus) => void): DisposableSubscription {
+    this.stateStatusListeners.add(listener);
+    let disposed = false;
+    return {
+      dispose: () => {
+        if (disposed) {
+          return;
+        }
+        disposed = true;
+        this.stateStatusListeners.delete(listener);
+      },
+    };
   }
 
   async getState(): Promise<CrivState | null> {
@@ -310,6 +373,16 @@ export default class CrivPlugin extends Plugin {
     this.stateToken = null;
   }
 
+  private publishStateStatus(status: ObsidianStateStatus): void {
+    if (this.unloading) {
+      return;
+    }
+    this.stateStatusValue = status;
+    for (const listener of this.stateStatusListeners) {
+      listener(status);
+    }
+  }
+
   private async readStateFileToken(path: string): Promise<StateFileToken | null> {
     try {
       const stat = await this.app.vault.adapter.stat(path);
@@ -339,7 +412,7 @@ export default class CrivPlugin extends Plugin {
       .getLeavesOfType(C4_VIEW_TYPE)
       .map((leaf) => leaf.view)
       .filter((view): view is CrivC4View => view instanceof CrivC4View);
-    await Promise.all(views.map((view) => view.render()));
+    await Promise.all(views.map((view) => view.acceptStateStatus(this.stateStatusValue)));
   }
 
   async pollState(): Promise<void> {
@@ -470,6 +543,15 @@ export default class CrivPlugin extends Plugin {
   openExternal(path: string) {
     const url = this.settings.externalEditorUrl.replace("{path}", encodeURI(path));
     window.open(url);
+  }
+
+  openValidatedSource(target: string): void {
+    const result = resolveSourceResult(this.cachedSourceResolver(), target);
+    if (result.kind === "resolved") {
+      this.openExternal(result.source.entry.path);
+      return;
+    }
+    new Notice(`Could not resolve criv source target ${target}.`);
   }
 
   async sourceEntries(): Promise<SourceIndexEntry[]> {
@@ -696,7 +778,7 @@ class CrivSourceView extends ItemView {
   }
 }
 
-class CrivC4View extends FileView {
+export class CrivC4View extends FileView {
   private source = "";
   private draftSource = "";
   private sourcePath: string | null = null;
@@ -706,11 +788,17 @@ class CrivC4View extends FileView {
   private sourceSaveHandlerRegistered = false;
   private likec4Renderer: CrivLikeC4Renderer | null = null;
   private likec4ViewSelect: HTMLSelectElement | null = null;
-  private readonly previewRevisions = new LoadedRevisionOwner<CrivC4PreviewRevision>();
+  private readonly previewRevisions = new GenerationRevisionOwner<CrivC4PreviewRevision>();
+  private stateStatusSubscription: DisposableSubscription | null = null;
+  private previewClosed = false;
 
   constructor(
     leaf: WorkspaceLeaf,
     private plugin: CrivPlugin,
+    private readonly createLikeC4Renderer: (
+      surface: HTMLElement,
+      options: ConstructorParameters<typeof CrivLikeC4Renderer>[1],
+    ) => CrivLikeC4Renderer = (surface, options) => new CrivLikeC4Renderer(surface, options),
   ) {
     super(leaf);
     this.registerSourceSaveHandler();
@@ -725,12 +813,27 @@ class CrivC4View extends FileView {
   }
 
   async onOpen(): Promise<void> {
+    this.previewClosed = false;
     this.registerSourceSaveHandler();
-    await this.render();
+    this.stateStatusSubscription ??= this.plugin.onStateStatusChange((status) => {
+      void this.acceptStateStatus(status);
+    });
+    await this.acceptStateStatus(this.plugin.currentStateStatus());
   }
 
   async onClose(): Promise<void> {
     this.previewRevisions.dispose();
+    this.shutdown();
+  }
+
+  shutdown(): void {
+    if (this.previewClosed) {
+      return;
+    }
+    this.previewClosed = true;
+    this.previewRevisions.dispose();
+    this.stateStatusSubscription?.dispose();
+    this.stateStatusSubscription = null;
     this.likec4Renderer = null;
     this.likec4ViewSelect = null;
   }
@@ -767,7 +870,7 @@ class CrivC4View extends FileView {
     }
 
     if (this.mode === "preview") {
-      await this.renderPreviewRevision(container, this.file);
+      await this.acceptStateStatus(this.plugin.currentStateStatus());
       return;
     }
 
@@ -778,6 +881,40 @@ class CrivC4View extends FileView {
     this.dirtyBadgeEl = chrome.dirtyBadge;
     this.updateDirtyBadge();
     this.renderSourceEditor(chrome.body);
+  }
+
+  async acceptStateStatus(status: ObsidianStateStatus): Promise<void> {
+    if (this.previewClosed) {
+      return;
+    }
+    const container = this.containerEl.children[1] as HTMLElement;
+    if (!this.file) {
+      this.clearPreviewRevision();
+      container.empty();
+      container.addClass("criv-c4-view");
+      container.createEl("p", { cls: "criv-empty", text: "No C4 file selected." });
+      return;
+    }
+    if (this.mode !== "preview") {
+      if (status.kind !== "ready" && status.kind !== "loading") {
+        this.clearPreviewForStatus(status.generation);
+      }
+      return;
+    }
+    if (status.kind === "loading") {
+      if (!this.previewRevisions.current) {
+        this.renderPreviewStatus(container, this.file, "Loading preview…", false);
+      }
+      return;
+    }
+    if (status.kind !== "ready") {
+      if (this.previewRevisions.clear(status.generation)) {
+        this.resetPreviewReferences();
+        this.renderPreviewStatus(container, this.file, status.message, true);
+      }
+      return;
+    }
+    await this.renderPreviewRevision(container, this.file, status);
   }
 
   private buildChrome(
@@ -867,7 +1004,11 @@ class CrivC4View extends FileView {
     button.onclick = onClick;
   }
 
-  private async renderPreviewRevision(container: HTMLElement, file: TFile): Promise<void> {
+  private async renderPreviewRevision(
+    container: HTMLElement,
+    file: TFile,
+    status: Extract<ObsidianStateStatus, { kind: "ready" }>,
+  ): Promise<void> {
     const selectedViewId = this.likec4Renderer?.currentViewId();
     if (!this.previewRevisions.current) {
       const loading = this.buildChrome(container, this.currentSource(), file.basename);
@@ -876,15 +1017,14 @@ class CrivC4View extends FileView {
       this.updateDirtyBadge();
     }
     const result = await this.previewRevisions.replace(
+      status.generation,
       async (attempt) => {
         const source =
           this.sourcePath === file.path
             ? this.currentSource()
             : await this.app.vault.cachedRead(file);
         attempt.assertCurrent();
-        const state = await this.plugin.getState();
-        attempt.assertCurrent();
-        const architecture = state?.architecture;
+        const architecture = status.state.architecture;
         if (!architecture) {
           throw new Error(
             "Run criv watch --once to validate LikeC4 and publish the preview model.",
@@ -906,9 +1046,9 @@ class CrivC4View extends FileView {
           });
           return new CrivC4PreviewRevision(root, null, null, chrome.dirtyBadge, source, file.path);
         }
-        const renderer = new CrivLikeC4Renderer(surface, {
+        const renderer = this.createLikeC4Renderer(surface, {
           colorScheme: document.body.classList.contains("theme-dark") ? "dark" : "light",
-          onOpenSource: (target) => this.plugin.openExternal(target),
+          onOpenSource: (target) => this.plugin.openValidatedSource(target),
           onSelectView: (viewId) => {
             if (this.likec4ViewSelect) {
               this.likec4ViewSelect.value = viewId;
@@ -989,11 +1129,37 @@ class CrivC4View extends FileView {
   }
 
   private clearPreviewRevision(): void {
-    this.previewRevisions.clear();
+    this.previewRevisions.invalidate();
+    this.resetPreviewReferences();
+  }
+
+  private clearPreviewForStatus(generation: number): void {
+    if (this.previewRevisions.clear(generation)) {
+      this.resetPreviewReferences();
+    }
+  }
+
+  private resetPreviewReferences(): void {
     this.likec4Renderer = null;
     this.likec4ViewSelect = null;
     this.dirtyBadgeEl = null;
     this.sourceEditorEl = null;
+  }
+
+  private renderPreviewStatus(
+    container: HTMLElement,
+    file: TFile,
+    message: string,
+    error: boolean,
+  ): void {
+    const chrome = this.buildChrome(container, this.currentSource(), file.basename);
+    chrome.body.createEl("p", {
+      cls: error ? "criv-c4-render-error" : "criv-c4-render-status",
+      text: message,
+    });
+    this.dirtyBadgeEl = chrome.dirtyBadge;
+    this.sourceEditorEl = null;
+    this.updateDirtyBadge();
   }
 
   private renderSourceEditor(body: HTMLElement): void {
@@ -1458,6 +1624,16 @@ function literalSet(language: string): Set<string> {
 
 function safeCssSegment(value: string): string {
   return /^[a-z0-9_-]+$/i.test(value) ? value : "text";
+}
+
+class ObsidianStateReadError extends Error {
+  readonly cause: unknown;
+
+  constructor(cause: unknown) {
+    super("The criv State file could not be read.");
+    this.name = "ObsidianStateReadError";
+    this.cause = cause;
+  }
 }
 
 function errorMessage(error: unknown): string {

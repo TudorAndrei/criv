@@ -1,9 +1,8 @@
 import { randomBytes } from "node:crypto";
 import * as vscode from "vscode";
 
-import { LoadedRevisionOwner } from "@criv/editor-state";
-
 import { buildC4PreviewHtml, buildC4PreviewStatusHtml } from "./c4PreviewHtml";
+import { C4PreviewLifecycle } from "./c4PreviewLifecycle";
 import { c4NavigationTarget, preferredC4ViewId } from "./c4PreviewModel";
 import { COMMAND_OPEN_SOURCE_TARGET } from "./commands";
 import type { WorkspaceStateStatus, WorkspaceStateStore } from "./stateStore";
@@ -73,21 +72,39 @@ class C4PreviewSurface {
   }
 
   async render(
-    owner: LoadedRevisionOwner<WebviewPreviewRevision>,
+    lifecycle: C4PreviewLifecycle<WebviewPreviewRevision>,
     webview: vscode.Webview,
     document: vscode.TextDocument,
   ): Promise<void> {
-    await owner.replace(
-      async () => new WebviewPreviewRevision(this.previewHtml(webview, document)),
+    const status = this.store.status;
+    const load =
+      status.kind === "ready"
+        ? async () => new WebviewPreviewRevision(this.previewHtml(webview, document, status))
+        : undefined;
+    await lifecycle.publish(
+      status,
+      load,
       (candidate) => {
         webview.html = candidate.html;
+      },
+      (current) => {
+        webview.html = buildC4PreviewStatusHtml(webview.cspSource, previewStatusMessage(current));
+      },
+      (error) => {
+        webview.html = buildC4PreviewStatusHtml(
+          webview.cspSource,
+          `Could not render the LikeC4 preview: ${messageFromError(error)}`,
+        );
       },
     );
   }
 
-  private previewHtml(webview: vscode.Webview, document: vscode.TextDocument): string {
-    const status = this.store.status;
-    if (status.kind !== "ready" || !status.snapshot.architecture) {
+  private previewHtml(
+    webview: vscode.Webview,
+    document: vscode.TextDocument,
+    status: Extract<WorkspaceStateStatus, { kind: "ready" }>,
+  ): string {
+    if (!status.snapshot.architecture) {
       return buildC4PreviewStatusHtml(webview.cspSource, previewStatusMessage(status));
     }
 
@@ -134,7 +151,7 @@ export class C4PreviewEditorProvider implements vscode.CustomTextEditorProvider 
     document: vscode.TextDocument,
     panel: vscode.WebviewPanel,
   ): Promise<void> {
-    const revisions = new LoadedRevisionOwner<WebviewPreviewRevision>();
+    const revisions = new C4PreviewLifecycle<WebviewPreviewRevision>();
     this.surface.configure(panel.webview);
     const render = () => void this.surface.render(revisions, panel.webview, document);
     const subscriptions = [
@@ -161,7 +178,7 @@ export class C4PreviewManager implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;
   private document: vscode.TextDocument | undefined;
   private panelSubscriptions: vscode.Disposable[] = [];
-  private revisions: LoadedRevisionOwner<WebviewPreviewRevision> | undefined;
+  private revisions: C4PreviewLifecycle<WebviewPreviewRevision> | undefined;
   private readonly surface: C4PreviewSurface;
 
   constructor(
@@ -195,7 +212,7 @@ export class C4PreviewManager implements vscode.Disposable {
         {},
       );
       this.surface.configure(panel.webview);
-      this.revisions = new LoadedRevisionOwner<WebviewPreviewRevision>();
+      this.revisions = new C4PreviewLifecycle<WebviewPreviewRevision>();
       this.panelSubscriptions.push(this.surface.bindMessages(panel.webview));
       this.panelSubscriptions.push(
         this.store.onDidChangeStatus(() => {
@@ -274,4 +291,8 @@ function previewStatusMessage(status: WorkspaceStateStatus): string {
     return "Run criv watch --once to validate LikeC4 and publish the preview model.";
   }
   return status.message;
+}
+
+function messageFromError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
