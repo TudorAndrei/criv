@@ -1,0 +1,2 @@
+fn left() {}
+struct Left;

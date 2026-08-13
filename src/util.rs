@@ -14,6 +14,21 @@ pub(crate) fn read_to_string(path: &Path) -> Result<String> {
     Ok(fs::read_to_string(path)?)
 }
 
+#[cfg(test)]
+pub(crate) fn copy_fixture_tree(source: &Path, destination: &Path) -> Result<()> {
+    fs::create_dir_all(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let target = destination.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_fixture_tree(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn is_text_file(path: &Path) -> Result<bool> {
     let mut file = fs::File::open(path)?;
     let mut buffer = Vec::with_capacity(8192);

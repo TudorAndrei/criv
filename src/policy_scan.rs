@@ -370,26 +370,16 @@ fn diagnostic_kind(local_id: &str, error: PolicyCompileError) -> PolicyDiagnosti
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::{Path, PathBuf};
 
     use tempfile::TempDir;
 
     use super::*;
+    use crate::util::copy_fixture_tree;
 
     #[test]
     fn policy_free_accepted_adrs_resolve_no_policy_scopes() {
-        let (_temp, vault) = policy_fixture(
-            r#"---
-id: ADR-0001
-kind: decision
-title: No policy
-status: accepted
-governs:
-  - src/**
----
-
-# No policy
-"#,
-        );
+        let (_temp, vault) = policy_fixture("policy-free");
         reset_work_counts();
         structural::reset_work_counts();
 
@@ -403,7 +393,7 @@ governs:
 
     #[test]
     fn owner_scope_and_compiled_policies_are_reused_by_the_batch() {
-        let (temp, vault) = policy_fixture(&two_policy_adr());
+        let (temp, vault) = policy_fixture("two-policies");
         reset_work_counts();
         structural::reset_work_counts();
 
@@ -459,7 +449,7 @@ governs:
 
     #[test]
     fn changed_file_filter_preserves_policy_ids_and_limits_paths() {
-        let (temp, vault) = policy_fixture(&two_policy_adr());
+        let (temp, vault) = policy_fixture("two-policies");
         let plan = PolicyScanPlan::new(&vault);
         let changed = BTreeSet::from(["src/right.rs".to_string()]);
 
@@ -479,22 +469,10 @@ governs:
 
     #[test]
     fn superseded_accepted_policies_are_compiled_for_diagnostics_but_not_scanned() {
-        let (temp, _) = policy_fixture(&two_policy_adr());
-        fs::write(
+        let (temp, _) = policy_fixture("two-policies");
+        fs::copy(
+            policy_fixture_root().join("mutations/0002-successor.md"),
             temp.path().join("docs/adr/0002-successor.md"),
-            r#"---
-id: ADR-0002
-kind: decision
-title: Successor
-status: accepted
-supersedes:
-  - ADR-0001
-governs:
-  - src/**
----
-
-# Successor
-"#,
         )
         .unwrap();
         let vault = Vault::load(temp.path()).unwrap();
@@ -513,24 +491,7 @@ governs:
 
     #[test]
     fn invalid_policy_reports_once_without_resolving_its_scope() {
-        let (_temp, vault) = policy_fixture(
-            r#"---
-id: ADR-0001
-kind: decision
-title: Invalid policy
-status: accepted
-governs:
-  - src/**
-policy:
-  patterns:
-    - id: invalid
-      language: rust
-      rule: "not: [valid"
----
-
-# Invalid policy
-"#,
-        );
+        let (_temp, vault) = policy_fixture("invalid-policy");
         reset_work_counts();
         structural::reset_work_counts();
 
@@ -555,27 +516,7 @@ policy:
 
     #[test]
     fn duplicate_ids_are_diagnosed_without_suppressing_executable_entries() {
-        let (temp, vault) = policy_fixture(
-            r#"---
-id: ADR-0001
-kind: decision
-title: Duplicate policies
-status: accepted
-governs:
-  - src/**
-policy:
-  patterns:
-    - id: duplicate
-      language: rust
-      pattern: "fn $NAME() { $$$ }"
-    - id: duplicate
-      language: rust
-      pattern: "struct $NAME;"
----
-
-# Duplicate policies
-"#,
-        );
+        let (temp, vault) = policy_fixture("duplicate-policies");
 
         let plan = PolicyScanPlan::new(&vault);
         let violations = plan.scan(temp.path(), &vault, None).unwrap();
@@ -612,45 +553,14 @@ policy:
         );
     }
 
-    fn two_policy_adr() -> String {
-        r#"---
-id: ADR-0001
-kind: decision
-title: Two policies
-status: accepted
-governs:
-  - src/**
-policy:
-  patterns:
-    - id: functions
-      language: rust
-      pattern: "fn $NAME() { $$$ }"
-    - id: structs
-      language: rust
-      pattern: "struct $NAME;"
----
-
-# Two policies
-"#
-        .to_string()
+    fn policy_fixture_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/policy-scan")
     }
 
-    fn policy_fixture(adr: &str) -> (TempDir, Vault) {
+    fn policy_fixture(name: &str) -> (TempDir, Vault) {
         let temp = TempDir::new().unwrap();
-        let root = temp.path();
-        fs::create_dir_all(root.join("src")).unwrap();
-        fs::create_dir_all(root.join("docs/adr")).unwrap();
-        fs::write(
-            root.join("criv.toml"),
-            r#"[source]
-roots = ["src"]
-"#,
-        )
-        .unwrap();
-        fs::write(root.join("src/left.rs"), "fn left() {}\nstruct Left;\n").unwrap();
-        fs::write(root.join("src/right.rs"), "fn right() {}\nstruct Right;\n").unwrap();
-        fs::write(root.join("docs/adr/0001-policy.md"), adr).unwrap();
-        let vault = Vault::load(root).unwrap();
+        copy_fixture_tree(&policy_fixture_root().join(name), temp.path()).unwrap();
+        let vault = Vault::load(temp.path()).unwrap();
         (temp, vault)
     }
 }

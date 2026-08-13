@@ -777,48 +777,6 @@ fn disabled_source_index_is_observed_through_cli_boundary() {
 }
 
 #[test]
-fn removed_architecture_code_config_fails_with_migration_guidance() {
-    let parent = TempDir::new().unwrap();
-    let root = parent.path().join("vault");
-    fs::create_dir_all(&root).unwrap();
-
-    init(&root);
-    fs::create_dir_all(root.join("src")).unwrap();
-    fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
-    fs::write(
-        root.join("criv.toml"),
-        r#"[vault]
-docs = "docs"
-adr = "adr"
-
-[source]
-roots = ["src"]
-exclude = []
-
-[index]
-source = true
-
-[enforce]
-stages = ["commit", "push", "ci"]
-
-[architecture.code]
-output = "../outside.c4"
-"#,
-    )
-    .unwrap();
-
-    criv(&root)
-        .args(["watch", "--once"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("[architecture.code] was removed"))
-        .stderr(predicate::str::contains("delete it"))
-        .stderr(predicate::str::contains("coding agent"))
-        .stderr(predicate::str::contains("docs/architecture/"));
-    assert!(!parent.path().join("outside.c4").exists());
-}
-
-#[test]
 fn check_accepts_valid_crlf_frontmatter() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

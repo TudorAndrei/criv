@@ -71,7 +71,6 @@ struct RawConfig {
     source: RawSource,
     index: RawIndex,
     state: RawState,
-    architecture: RawArchitecture,
     enforce: RawEnforce,
     patterns: BTreeMap<String, toml::Value>,
 }
@@ -85,10 +84,6 @@ impl RawConfig {
                 "criv.toml [patterns.*] is no longer supported; move persistent patterns into an ADR policy.patterns entry and use its ADR-NNNN/local-id",
             ));
         }
-        crate::architecture::validate_agent_authored_config(
-            self.architecture.code.is_some(),
-            &docs_dir,
-        )?;
         Ok(Config {
             docs_dir: docs_dir.clone(),
             adr_dir: vault_path("vault.adr", &self.vault.adr.unwrap_or(defaults.adr_dir))?,
@@ -178,12 +173,6 @@ fn positive_state_keep(keep: usize) -> Result<usize> {
         return Err(CrivError::new("state.keep must be a positive integer"));
     }
     Ok(keep)
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct RawArchitecture {
-    code: Option<toml::Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -373,39 +362,6 @@ pattern = "println!($$$ARGS)"
         assert!(message.contains("[patterns.*]"));
         assert!(message.contains("ADR policy.patterns"));
         assert!(message.contains("ADR-NNNN/local-id"));
-    }
-
-    #[test]
-    fn rejects_removed_architecture_code_config_with_migration_guidance() {
-        let raw = toml::from_str::<RawConfig>(
-            r#"
-[architecture.code]
-output = "docs/architecture/04-code.c4"
-title = "Code diagram for criv"
-"#,
-        )
-        .unwrap();
-
-        let message = raw.into_config().unwrap_err().to_string();
-        assert!(message.contains("[architecture.code] was removed"));
-        assert!(message.contains("delete it"));
-        assert!(message.contains("coding agent"));
-        assert!(message.contains("docs/architecture/"));
-    }
-
-    #[test]
-    fn rejects_removed_architecture_code_title_without_compatibility() {
-        let raw = toml::from_str::<RawConfig>(
-            r#"
-[architecture.code]
-title = "Repository architecture"
-"#,
-        )
-        .unwrap();
-
-        let message = raw.into_config().unwrap_err().to_string();
-        assert!(message.contains("[architecture.code] was removed"));
-        assert!(!message.contains("default"));
     }
 
     #[test]
