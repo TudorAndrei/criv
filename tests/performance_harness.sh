@@ -96,8 +96,8 @@ foreign_sample="$test_root/foreign-sample"
 mkdir -p "$foreign_sample"
 cp "$note_fixture/run.json" "$note_fixture/summary.json" "$note_fixture/samples.jsonl" \
   "$foreign_sample"
-jq -c '.run_id = "another-run"' \
-  "$note_fixture/samples.jsonl" | head -1 >"$foreign_sample/samples.jsonl"
+jq -cs '.[0] | .run_id = "another-run"' \
+  "$note_fixture/samples.jsonl" >"$foreign_sample/samples.jsonl"
 if "$repository_root/scripts/performance/render-git-note.sh" \
   "$foreign_sample" \
   "$test_root/foreign-sample-note.json" \
