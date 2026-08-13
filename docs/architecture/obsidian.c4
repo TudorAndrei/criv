@@ -5,10 +5,40 @@ model {
       description 'Shows state, source references, policy matches, and LikeC4 previews inside Obsidian.'
       link ../../.obsidian/plugins/criv/src/main.ts 'source'
 
-      obsidianController = component 'Obsidian adapter' {
+      obsidianController = component 'Plugin composition' {
         technology 'TypeScript and Obsidian plugin API'
-        description 'Connects Obsidian views, editor actions, and repository files to criv features.'
+        description 'Constructs lifecycle owners, registers their Obsidian surfaces, and shuts them down in order.'
         link ../../.obsidian/plugins/criv/src/main.ts 'source'
+      }
+      obsidianStateOwner = component 'State lifecycle' {
+        technology 'TypeScript and Obsidian file API'
+        description 'Loads one validated State revision, polls its file token, and publishes status generations.'
+        link ../../.obsidian/plugins/criv/src/state-owner.ts 'source'
+      }
+      obsidianC4View = component 'C4 view lifecycle' {
+        technology 'TypeScript, Obsidian FileView, and React'
+        description 'Owns C4 source editing, preview generations, named-view selection, navigation, and renderer disposal.'
+        link ../../.obsidian/plugins/criv/src/c4-view.ts 'source'
+      }
+      obsidianSourcePanel = component 'Source panel' {
+        technology 'TypeScript and Obsidian ItemView'
+        description 'Owns the singleton panel that shows source links and policy matches for the active note.'
+        link ../../.obsidian/plugins/criv/src/source-panel.ts 'source'
+      }
+      obsidianSourceReferences = component 'Source reference editor' {
+        technology 'TypeScript, Obsidian editor API, and CodeMirror'
+        description 'Owns source suggestions, Markdown link decoration, hover previews, and editor drift marks.'
+        link ../../.obsidian/plugins/criv/src/source-references.ts 'source'
+      }
+      obsidianSourcePreview = component 'Source preview renderer' {
+        technology 'TypeScript and DOM'
+        description 'Reads confined source excerpts and renders lifecycle-free highlighted previews.'
+        link ../../.obsidian/plugins/criv/src/source-preview.ts 'source'
+      }
+      obsidianSettings = component 'Settings lifecycle' {
+        technology 'TypeScript and Obsidian settings API'
+        description 'Loads, persists, and presents the State path and external editor settings.'
+        link ../../.obsidian/plugins/criv/src/settings.ts 'source'
       }
       obsidianState = component 'State model' {
         technology 'TypeScript'
@@ -29,7 +59,7 @@ views {
 
   view obsidianComponents of criv.obsidianPlugin {
     title 'Components / Obsidian'
-    description 'How the Obsidian plugin reads state and draws architecture previews.'
+    description 'How lifecycle owners connect Obsidian surfaces to State, source references, and architecture previews.'
 
     include *
     include criv.stateStore

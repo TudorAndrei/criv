@@ -116,17 +116,28 @@ model {
   criv.stateProjection.selectorProjection -> criv.stateProjection.graphProjection 'Ranks projected graph nodes'
 
   // Obsidian components.
-  criv.obsidianPlugin.obsidianController -> criv.obsidianPlugin.obsidianState 'Builds vault views and previews'
-  criv.obsidianPlugin.obsidianController -> criv.obsidianPlugin.obsidianWasm 'Requests safe state projections' {
+  criv.obsidianPlugin.obsidianController -> criv.obsidianPlugin.obsidianStateOwner 'Registers State commands and status publication'
+  criv.obsidianPlugin.obsidianController -> criv.obsidianPlugin.obsidianC4View 'Registers the C4 file view'
+  criv.obsidianPlugin.obsidianController -> criv.obsidianPlugin.obsidianSourcePanel 'Registers the singleton source panel'
+  criv.obsidianPlugin.obsidianController -> criv.obsidianPlugin.obsidianSourceReferences 'Registers source-reference editor features'
+  criv.obsidianPlugin.obsidianController -> criv.obsidianPlugin.obsidianSettings 'Registers persisted settings'
+  criv.obsidianPlugin.obsidianStateOwner -> criv.obsidianPlugin.obsidianWasm 'Requests safe State projections' {
     technology 'Asynchronous TypeScript call'
   }
-  criv.obsidianPlugin.obsidianController -> criv.sharedRenderer.diagramRenderer 'Renders and navigates named views'
-  criv.obsidianPlugin.obsidianController -> criv.sharedRenderer.modelContract 'Reads the compiled model contract'
+  criv.obsidianPlugin.obsidianStateOwner -> criv.obsidianPlugin.obsidianState 'Publishes projected editor data'
+  criv.obsidianPlugin.obsidianC4View -> criv.obsidianPlugin.obsidianStateOwner 'Subscribes to State status generations'
+  criv.obsidianPlugin.obsidianC4View -> criv.sharedRenderer.diagramRenderer 'Renders and navigates named views'
+  criv.obsidianPlugin.obsidianC4View -> criv.sharedRenderer.modelContract 'Reads the compiled model contract'
+  criv.obsidianPlugin.obsidianSourcePanel -> criv.obsidianPlugin.obsidianStateOwner 'Reads linked sources and policy matches'
+  criv.obsidianPlugin.obsidianSourcePanel -> criv.obsidianPlugin.obsidianSourcePreview 'Renders source excerpts'
+  criv.obsidianPlugin.obsidianSourceReferences -> criv.obsidianPlugin.obsidianStateOwner 'Resolves source targets and selector suggestions'
+  criv.obsidianPlugin.obsidianSourceReferences -> criv.obsidianPlugin.obsidianSourcePreview 'Renders hover excerpts'
+  criv.obsidianPlugin.obsidianSettings -> criv.obsidianPlugin.obsidianStateOwner 'Requests a reload after a State path change'
   criv.obsidianPlugin.obsidianWasm -> criv.stateProjection 'Calls the packaged state API' {
     technology 'WebAssembly call'
   }
   criv.obsidianPlugin.obsidianWasm -> criv.obsidianPlugin.obsidianState 'Returns projected editor data'
-  criv.obsidianPlugin.obsidianController -> criv.stateStore 'Reads the current state envelope' {
+  criv.obsidianPlugin.obsidianStateOwner -> criv.stateStore 'Reads the current State envelope' {
     technology 'Obsidian file API'
   }
 

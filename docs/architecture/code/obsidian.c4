@@ -3,8 +3,55 @@ model {
   extend criv.obsidianPlugin.obsidianController {
     mainModule = module 'criv-obsidian::main' {
       technology 'TypeScript'
-      description 'Activates the plugin and connects Obsidian views and editor features.'
+      description 'Constructs owners and connects their Obsidian registrations and disposal.'
       link ../../.obsidian/plugins/criv/src/main.ts 'source'
+    }
+    portsModule = module 'criv-obsidian::ports' {
+      technology 'TypeScript'
+      description 'Defines the immutable State status and narrow injected owner ports.'
+      link ../../.obsidian/plugins/criv/src/ports.ts 'source'
+    }
+  }
+  extend criv.obsidianPlugin.obsidianStateOwner {
+    stateOwnerModule = module 'criv-obsidian::state-owner' {
+      technology 'TypeScript'
+      description 'Owns file tokens, loaded revisions, status generations, queries, and disposal.'
+      link ../../.obsidian/plugins/criv/src/state-owner.ts 'source'
+    }
+  }
+  extend criv.obsidianPlugin.obsidianC4View {
+    c4ViewModule = module 'criv-obsidian::c4-view' {
+      technology 'TypeScript'
+      description 'Owns the C4 FileView, preview transaction, navigation, export, save, and cleanup.'
+      link ../../.obsidian/plugins/criv/src/c4-view.ts 'source'
+    }
+  }
+  extend criv.obsidianPlugin.obsidianSourcePanel {
+    sourcePanelModule = module 'criv-obsidian::source-panel' {
+      technology 'TypeScript'
+      description 'Owns the singleton source-panel leaf and its active-note rendering.'
+      link ../../.obsidian/plugins/criv/src/source-panel.ts 'source'
+    }
+  }
+  extend criv.obsidianPlugin.obsidianSourceReferences {
+    sourceReferencesModule = module 'criv-obsidian::source-references' {
+      technology 'TypeScript and CodeMirror'
+      description 'Owns suggestions, hover lifecycle, link decoration, and drift decoration.'
+      link ../../.obsidian/plugins/criv/src/source-references.ts 'source'
+    }
+  }
+  extend criv.obsidianPlugin.obsidianSourcePreview {
+    sourcePreviewModule = module 'criv-obsidian::source-preview' {
+      technology 'TypeScript and DOM'
+      description 'Reads, highlights, and renders source excerpts without lifecycle state.'
+      link ../../.obsidian/plugins/criv/src/source-preview.ts 'source'
+    }
+  }
+  extend criv.obsidianPlugin.obsidianSettings {
+    settingsModule = module 'criv-obsidian::settings' {
+      technology 'TypeScript'
+      description 'Owns settings data, persistence, and the Obsidian settings tab.'
+      link ../../.obsidian/plugins/criv/src/settings.ts 'source'
     }
   }
   extend criv.obsidianPlugin.obsidianState {
@@ -17,29 +64,37 @@ model {
   extend criv.obsidianPlugin.obsidianWasm {
     wasmModule = module 'criv-obsidian::wasm' {
       technology 'TypeScript and Rust WebAssembly'
-      description 'Loads the WebAssembly API used to validate and query criv state.'
+      description 'Loads the WebAssembly API used to validate and query criv State.'
       link ../../.obsidian/plugins/criv/src/wasm.ts 'source'
     }
   }
 
-  criv.obsidianPlugin.obsidianController.mainModule -> criv.obsidianPlugin.obsidianState.coreModule 'Builds editor views'
-  criv.obsidianPlugin.obsidianController.mainModule -> criv.obsidianPlugin.obsidianWasm.wasmModule 'Owns loaded state revisions'
-  criv.obsidianPlugin.obsidianController.mainModule -> criv.sharedRenderer.diagramRenderer.rendererModule 'Renders C4 diagrams'
-  criv.obsidianPlugin.obsidianController.mainModule -> criv.sharedRenderer.modelContract.protocolModule 'Reads the model contract'
-  criv.obsidianPlugin.obsidianWasm.wasmModule -> criv.obsidianPlugin.obsidianState.coreModule 'Maps validated state to editor snapshots'
+  criv.obsidianPlugin.obsidianController.mainModule -> criv.obsidianPlugin.obsidianController.portsModule 'Injects narrow owner ports'
+  criv.obsidianPlugin.obsidianController.mainModule -> criv.obsidianPlugin.obsidianStateOwner 'Constructs the State lifecycle'
+  criv.obsidianPlugin.obsidianController.mainModule -> criv.obsidianPlugin.obsidianC4View 'Registers the C4 FileView'
+  criv.obsidianPlugin.obsidianController.mainModule -> criv.obsidianPlugin.obsidianSourcePanel 'Registers the source panel'
+  criv.obsidianPlugin.obsidianController.mainModule -> criv.obsidianPlugin.obsidianSourceReferences 'Registers source-reference features'
+  criv.obsidianPlugin.obsidianController.mainModule -> criv.obsidianPlugin.obsidianSettings 'Registers settings'
+  criv.obsidianPlugin.obsidianStateOwner.stateOwnerModule -> criv.obsidianPlugin.obsidianWasm.wasmModule 'Loads and queries validated revisions'
+  criv.obsidianPlugin.obsidianStateOwner.stateOwnerModule -> criv.obsidianPlugin.obsidianState.coreModule 'Publishes editor projections'
+  criv.obsidianPlugin.obsidianC4View.c4ViewModule -> criv.sharedRenderer.diagramRenderer.rendererModule 'Owns a renderer revision'
+  criv.obsidianPlugin.obsidianC4View.c4ViewModule -> criv.sharedRenderer.modelContract.protocolModule 'Selects a named view'
+  criv.obsidianPlugin.obsidianSourcePanel.sourcePanelModule -> criv.obsidianPlugin.obsidianSourcePreview.sourcePreviewModule 'Renders panel excerpts'
+  criv.obsidianPlugin.obsidianSourceReferences.sourceReferencesModule -> criv.obsidianPlugin.obsidianSourcePreview.sourcePreviewModule 'Renders hover excerpts'
 }
 
 views {
   global style architectureTheme
 
   view codeObsidianAdapter of criv.obsidianPlugin.obsidianController {
-    title 'Code / Obsidian / Adapter'
-    description 'The TypeScript modules that connect Obsidian to state and the renderer.'
+    title 'Code / Obsidian / Composition'
+    description 'How the composition module injects ports and registers each lifecycle owner.'
 
     include *
-    include criv.obsidianPlugin.obsidianState.*
-    include criv.obsidianPlugin.obsidianWasm.*
-    include criv.sharedRenderer.diagramRenderer.*
-    include criv.sharedRenderer.modelContract.*
+    include criv.obsidianPlugin.obsidianStateOwner
+    include criv.obsidianPlugin.obsidianC4View
+    include criv.obsidianPlugin.obsidianSourcePanel
+    include criv.obsidianPlugin.obsidianSourceReferences
+    include criv.obsidianPlugin.obsidianSettings
   }
 }
