@@ -633,7 +633,7 @@ fn diff(root: &Path, left: &str, right: &str) -> Result<Vec<String>> {
 
 fn load_snapshot(root: &Path, id: &str) -> Result<serde_json::Value> {
     let local = if id == "latest" || is_snapshot_hash(id) {
-        crate::snapshots::load(root, id)?
+        crate::state::load_snapshot(root, id)?
     } else {
         None
     };
@@ -814,17 +814,17 @@ mod tests {
             query_nodes_command(Some(NodeKind::Decision), false),
         ];
 
-        crate::source_index::reset_work_counts();
-        crate::source_graph::reset_work_counts();
+        crate::source::reset_index_work_counts();
+        crate::source::reset_graph_work_counts();
         for command in &commands {
             let vault = load_query_vault(temp.path(), command).unwrap();
             assert!(vault.source_files().is_empty());
             assert!(vault.source_graph().files.is_empty());
         }
 
-        let source_index = crate::source_index::work_counts();
+        let source_index = crate::source::index_work_counts();
         assert_eq!(source_index.observations, 0);
-        let source_graph = crate::source_graph::work_counts();
+        let source_graph = crate::source::graph_work_counts();
         assert_eq!(source_graph.cache_loads, 0);
         assert_eq!(source_graph.parsed_files, 0);
         assert_eq!(source_graph.reused_files, 0);
@@ -838,13 +838,13 @@ mod tests {
         write_query_fixture(temp.path());
         let command = QueryCommand::AttackSurface(query_output_options());
 
-        crate::source_index::reset_work_counts();
-        crate::source_graph::reset_work_counts();
+        crate::source::reset_index_work_counts();
+        crate::source::reset_graph_work_counts();
         let vault = load_query_vault(temp.path(), &command).unwrap();
 
         assert_eq!(vault.source_files().len(), 2);
-        assert_eq!(crate::source_index::work_counts().observations, 1);
-        let source_graph = crate::source_graph::work_counts();
+        assert_eq!(crate::source::index_work_counts().observations, 1);
+        let source_graph = crate::source::graph_work_counts();
         assert_eq!(source_graph.cache_loads, 1);
         assert_eq!(source_graph.parsed_files, 2);
         assert_eq!(source_graph.cache_publications, 1);

@@ -10,102 +10,102 @@ model {
   }
 
   extend criv.vscodeExtension.vscodePreview {
-    previewModule = module 'criv-vscode::c4Preview' {
+    previewModule = module 'criv-vscode::c4::preview' {
       technology 'TypeScript'
       description 'Implements the VS Code custom editor for C4 previews.'
-      link ../../extensions/vscode-criv/src/c4Preview.ts 'source'
+      link ../../extensions/vscode-criv/src/c4/preview.ts 'source'
     }
-    previewHtmlModule = module 'criv-vscode::c4PreviewHtml' {
+    previewHtmlModule = module 'criv-vscode::c4::previewHtml' {
       technology 'TypeScript'
       description 'Builds the secure webview document and preview bootstrap data.'
-      link ../../extensions/vscode-criv/src/c4PreviewHtml.ts 'source'
+      link ../../extensions/vscode-criv/src/c4/previewHtml.ts 'source'
     }
-    previewModelModule = module 'criv-vscode::c4PreviewModel' {
+    previewModelModule = module 'criv-vscode::c4::previewModel' {
       technology 'TypeScript'
       description 'Selects the named view owned by the opened C4 artifact.'
-      link ../../extensions/vscode-criv/src/c4PreviewModel.ts 'source'
+      link ../../extensions/vscode-criv/src/c4/previewModel.ts 'source'
     }
-    webviewModule = module 'criv-vscode::likec4Webview' {
+    webviewModule = module 'criv-vscode::c4::webview' {
       technology 'TypeScript'
       description 'Mounts the shared renderer inside the webview and synchronizes navigation.'
-      link ../../extensions/vscode-criv/src/likec4Webview.ts 'source'
+      link ../../extensions/vscode-criv/src/c4/webview.ts 'source'
     }
   }
 
   extend criv.vscodeExtension.vscodeState {
-    stateStoreModule = module 'criv-vscode::stateStore' {
+    stateStoreModule = module 'criv-vscode::state::store' {
       technology 'TypeScript'
       description 'Loads and broadcasts the current workspace state.'
-      link ../../extensions/vscode-criv/src/stateStore.ts 'source'
+      link ../../extensions/vscode-criv/src/state/store.ts 'source'
     }
-    stateModelModule = module 'criv-vscode::stateModel' {
+    stateModelModule = module 'criv-vscode::state::model' {
       technology 'TypeScript'
       description 'Converts validated state into extension-facing snapshots and C4 artifacts.'
-      link ../../extensions/vscode-criv/src/stateModel.ts 'source'
+      link ../../extensions/vscode-criv/src/state/model.ts 'source'
     }
-    wasmModule = module 'criv-vscode::wasm' {
+    wasmModule = module 'criv-vscode::state::wasm' {
       technology 'TypeScript and Rust WebAssembly'
       description 'Loads the WebAssembly API used to validate and query criv state.'
-      link ../../extensions/vscode-criv/src/wasm.ts 'source'
+      link ../../extensions/vscode-criv/src/state/wasm.ts 'source'
     }
-    configModule = module 'criv-vscode::config' {
+    configModule = module 'criv-vscode::config::reader' {
       technology 'TypeScript'
       description 'Reads the extension settings for the active workspace.'
-      link ../../extensions/vscode-criv/src/config.ts 'source'
+      link ../../extensions/vscode-criv/src/config/reader.ts 'source'
     }
-    configModelModule = module 'criv-vscode::configModel' {
+    configModelModule = module 'criv-vscode::config::model' {
       technology 'TypeScript'
       description 'Defines and validates the extension settings model.'
-      link ../../extensions/vscode-criv/src/configModel.ts 'source'
+      link ../../extensions/vscode-criv/src/config/model.ts 'source'
     }
   }
 
   extend criv.vscodeExtension.vscodeNavigation {
-    languageFeaturesModule = module 'criv-vscode::languageFeatures' {
+    languageFeaturesModule = module 'criv-vscode::navigation::languageFeatures' {
       technology 'TypeScript'
       description 'Provides document links, hovers, definitions, and references.'
-      link ../../extensions/vscode-criv/src/languageFeatures.ts 'source'
+      link ../../extensions/vscode-criv/src/navigation/languageFeatures.ts 'source'
     }
-    sourceReferencesModule = module 'criv-vscode::sourceReferences' {
+    sourceReferencesModule = module 'criv-vscode::navigation::references' {
       technology 'TypeScript'
       description 'Resolves wiki-link source references against validated state.'
-      link ../../extensions/vscode-criv/src/sourceReferences.ts 'source'
+      link ../../extensions/vscode-criv/src/navigation/references.ts 'source'
     }
-    sourceTargetModule = module 'criv-vscode::sourceTarget' {
+    sourceTargetModule = module 'criv-vscode::navigation::target' {
       technology 'TypeScript'
       description 'Converts resolved selectors into editor locations.'
-      link ../../extensions/vscode-criv/src/sourceTarget.ts 'source'
+      link ../../extensions/vscode-criv/src/navigation/target.ts 'source'
     }
   }
 
   extend criv.vscodeExtension.vscodeDiagnostics {
-    checkDiagnosticsModule = module 'criv-vscode::checkDiagnostics' {
+    checkDiagnosticsModule = module 'criv-vscode::diagnostics::publisher' {
       technology 'TypeScript'
       description 'Publishes criv check results as workspace diagnostics.'
-      link ../../extensions/vscode-criv/src/checkDiagnostics.ts 'source'
+      link ../../extensions/vscode-criv/src/diagnostics/publisher.ts 'source'
     }
-    checkDiagnosticModelModule = module 'criv-vscode::checkDiagnosticModel' {
+    checkDiagnosticModelModule = module 'criv-vscode::diagnostics::model' {
       technology 'TypeScript'
       description 'Parses criv check JSON into a diagnostic model.'
-      link ../../extensions/vscode-criv/src/checkDiagnosticModel.ts 'source'
+      link ../../extensions/vscode-criv/src/diagnostics/model.ts 'source'
     }
-    checkOutputModule = module 'criv-vscode::checkOutput' {
+    checkOutputModule = module 'criv-vscode::diagnostics::output' {
       technology 'TypeScript'
       description 'Writes criv check output to the extension output channel.'
-      link ../../extensions/vscode-criv/src/checkOutput.ts 'source'
+      link ../../extensions/vscode-criv/src/diagnostics/output.ts 'source'
     }
   }
 
   extend criv.vscodeExtension.vscodeCommands {
-    commandsModule = module 'criv-vscode::commands' {
+    commandsModule = module 'criv-vscode::commands::identifiers' {
       technology 'TypeScript'
       description 'Declares the command identifiers registered by the extension.'
-      link ../../extensions/vscode-criv/src/commands.ts 'source'
+      link ../../extensions/vscode-criv/src/commands/identifiers.ts 'source'
     }
-    commandRunnerModule = module 'criv-vscode::commandRunner' {
+    commandRunnerModule = module 'criv-vscode::commands::runner' {
       technology 'TypeScript and Node.js child processes'
       description 'Runs the criv binary in the workspace and returns its result.'
-      link ../../extensions/vscode-criv/src/commandRunner.ts 'source'
+      link ../../extensions/vscode-criv/src/commands/runner.ts 'source'
     }
   }
 

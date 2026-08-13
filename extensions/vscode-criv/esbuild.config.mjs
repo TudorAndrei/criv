@@ -14,7 +14,7 @@ const context = await esbuild.context({
   target: "node18",
   external: [
     "vscode",
-    "../pkg/criv_wasm.js",
+    "../../pkg/criv_wasm.js",
     ...builtinModules,
     ...builtinModules.map((name) => `node:${name}`),
   ],
@@ -26,7 +26,7 @@ const context = await esbuild.context({
 });
 
 const webviewContext = await esbuild.context({
-  entryPoints: ["src/likec4Webview.ts"],
+  entryPoints: ["src/c4/webview.ts"],
   bundle: true,
   format: "iife",
   platform: "browser",

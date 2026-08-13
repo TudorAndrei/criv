@@ -15,10 +15,15 @@ use serde::{Serialize, Serializer};
 
 use crate::c4::C4Artifact;
 use crate::policy_scan::PolicyScanPlan;
-use crate::source_graph::{Language, SourceFile, SymbolKind};
+use crate::source::{Language, SourceFile, SymbolKind};
 use crate::structural;
 use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
+
+mod publication;
+mod snapshots;
+
+pub(crate) use publication::load_snapshot;
 
 #[derive(Debug, Clone)]
 pub(crate) struct State {
@@ -270,7 +275,7 @@ impl State {
         keep: usize,
         precommit_check: impl FnOnce() -> Result<()>,
     ) -> Result<String> {
-        crate::state_publication::publish_with_precommit_check(
+        publication::publish_with_precommit_check(
             root,
             &serialized.hash,
             &serialized.published,

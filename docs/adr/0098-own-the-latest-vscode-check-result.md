@@ -5,8 +5,8 @@ title: Own The Latest VS Code Check Result
 status: accepted
 date: 2026-08-12
 governs:
-  - extensions/vscode-criv/src/checkRunOwner.ts
-  - extensions/vscode-criv/src/commandRunner.ts
+  - extensions/vscode-criv/src/diagnostics/runs.ts
+  - extensions/vscode-criv/src/commands/runner.ts
   - extensions/vscode-criv/src/extension.ts
 policy:
   patterns:

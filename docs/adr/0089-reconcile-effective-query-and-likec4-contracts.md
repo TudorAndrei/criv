@@ -13,8 +13,8 @@ governs:
   - src/lib.rs
   - packages/criv-likec4/src/protocol.ts
   - packages/criv-likec4/src/renderer.ts
-  - extensions/vscode-criv/src/c4Preview.ts
-  - extensions/vscode-criv/src/c4PreviewModel.ts
+  - extensions/vscode-criv/src/c4/preview.ts
+  - extensions/vscode-criv/src/c4/previewModel.ts
   - .obsidian/plugins/criv/src/main.ts
 ---
 

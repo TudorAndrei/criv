@@ -6,13 +6,13 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 use super::*;
-use crate::{policy_scan, source_graph, source_index, structural, vault as vault_module};
+use crate::{policy_scan, source, structural, vault as vault_module};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 struct RefreshWork {
     policy_scan: policy_scan::WorkCounts,
-    source_index: source_index::WorkCounts,
-    source_graph: source_graph::WorkCounts,
+    source_index: source::IndexWorkCounts,
+    source_graph: source::GraphWorkCounts,
     vault: vault_module::WorkCounts,
     structural: structural::WorkCounts,
     state: state::WorkCounts,
@@ -20,7 +20,7 @@ struct RefreshWork {
 
 #[derive(Debug, Eq, PartialEq)]
 struct RefreshSnapshot {
-    source_graph: source_graph::SourceGraph,
+    source_graph: source::SourceGraph,
     state_json: String,
     state_hash: String,
     latest: String,
@@ -68,11 +68,11 @@ fn warm_one_shot_reuses_the_cached_source_graph() {
 
 #[test]
 fn live_refresh_reuses_exactly_one_source_index_adapter() {
-    let _live_test = source_index::lock_live_test();
+    let _live_test = source::lock_live_test();
     let fixture = incremental_fixture("one-live-adapter");
-    source_index::reset_work_counts();
+    source::reset_index_work_counts();
     let mut session = live_session(fixture.path());
-    assert_eq!(source_index::work_counts().fff_starts, 1);
+    assert_eq!(source::index_work_counts().fff_starts, 1);
 
     session
         .refresh(fixture.path(), RefreshCause::Initial)
@@ -81,7 +81,7 @@ fn live_refresh_reuses_exactly_one_source_index_adapter() {
         .refresh(fixture.path(), RefreshCause::DocsChanged)
         .unwrap();
 
-    assert_eq!(source_index::work_counts().fff_starts, 1);
+    assert_eq!(source::index_work_counts().fff_starts, 1);
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn one_shot_refresh_uses_one_full_source_observation() {
 
 #[test]
 fn live_refresh_reuses_the_observation_that_reported_a_source_change() {
-    let _live_test = source_index::lock_live_test();
+    let _live_test = source::lock_live_test();
     let fixture = incremental_fixture("one-live-source-catalog");
     let root = fixture.path();
     let mut session = live_session(root);
@@ -158,7 +158,7 @@ fn one_shot_refresh_reuses_one_compiled_policy_plan_for_state() {
 
 #[test]
 fn live_refresh_reuses_one_policy_plan_for_no_op_and_changed_sources() {
-    let _live_test = source_index::lock_live_test();
+    let _live_test = source::lock_live_test();
     let fixture = incremental_fixture("shared-live-policy-plan");
     let root = fixture.path();
     let mut session = live_session(root);
@@ -246,7 +246,7 @@ fn invalid_graph_cache_schema_converges_with_a_cache_free_build() {
 
 #[test]
 fn failed_refresh_retries_from_the_last_successful_state() {
-    let _live_test = source_index::lock_live_test();
+    let _live_test = source::lock_live_test();
     let incremental = incremental_fixture("failed-refresh-incremental");
     let full = incremental_fixture("failed-refresh-full");
     let mut session = live_session(incremental.path());
@@ -293,7 +293,7 @@ fn failed_refresh_retries_from_the_last_successful_state() {
 
 #[test]
 fn unresolved_effective_governance_keeps_last_good_state_and_recovers() {
-    let _live_test = source_index::lock_live_test();
+    let _live_test = source::lock_live_test();
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     fs::create_dir_all(root.join("src")).unwrap();
@@ -421,9 +421,9 @@ fn wait_for_source_change(session: &mut RefreshSession, label: &str) {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         match session.observe_source_change().unwrap() {
-            source_index::SourceChange::Changed => return,
-            source_index::SourceChange::Unchanged => {}
-            source_index::SourceChange::Disabled => panic!("{label} used a disabled source index"),
+            source::SourceChange::Changed => return,
+            source::SourceChange::Unchanged => {}
+            source::SourceChange::Disabled => panic!("{label} used a disabled source index"),
         }
         assert!(
             Instant::now() < deadline,
@@ -448,8 +448,8 @@ fn copy_fixture_tree(source: &Path, destination: &Path) {
 
 fn reset_refresh_work() {
     policy_scan::reset_work_counts();
-    source_index::reset_work_counts();
-    source_graph::reset_work_counts();
+    source::reset_index_work_counts();
+    source::reset_graph_work_counts();
     vault_module::reset_work_counts();
     structural::reset_work_counts();
     state::reset_work_counts();
@@ -458,8 +458,8 @@ fn reset_refresh_work() {
 fn refresh_work() -> RefreshWork {
     RefreshWork {
         policy_scan: policy_scan::work_counts(),
-        source_index: source_index::work_counts(),
-        source_graph: source_graph::work_counts(),
+        source_index: source::index_work_counts(),
+        source_graph: source::graph_work_counts(),
         vault: vault_module::work_counts(),
         structural: structural::work_counts(),
         state: state::work_counts(),
@@ -481,7 +481,7 @@ fn assert_policy_refresh_work(work: RefreshWork, ast_parses: usize) {
 fn assert_source_catalog_work(work: RefreshWork, materializations: usize) {
     assert_eq!(
         work.source_index,
-        source_index::WorkCounts {
+        source::IndexWorkCounts {
             fff_starts: 0,
             observations: materializations,
         }

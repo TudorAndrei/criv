@@ -1,13 +1,17 @@
 import { Plugin } from "obsidian";
 import type { App, PluginManifest } from "obsidian";
 import { C4_VIEW_TYPE, CrivC4View, patchNativeSaveCommand, shutdownC4Views } from "./c4-view";
-import type { CrivState } from "./core";
+import type { CrivState } from "./source/model";
 import type { C4ViewPort, DisposableSubscription, ObsidianStateStatus } from "./ports";
 import { ObsidianSettingsOwner, type CrivSettings } from "./settings";
-import { ObsidianSourcePanelOwner, SOURCE_PANEL_VIEW_TYPE } from "./source-panel";
-import { ObsidianSourceReferencesOwner } from "./source-references";
-import { ObsidianStateOwner } from "./state-owner";
-import { loadState as loadWasmState, type CrivLoadedState, type CrivStateSummary } from "./wasm";
+import { ObsidianSourcePanelOwner, SOURCE_PANEL_VIEW_TYPE } from "./source/panel";
+import { ObsidianSourceReferencesOwner } from "./source/references";
+import { ObsidianStateOwner } from "./state/owner";
+import {
+  loadState as loadWasmState,
+  type CrivLoadedState,
+  type CrivStateSummary,
+} from "./state/wasm";
 
 const STATE_POLL_INTERVAL_MS = 2_000;
 

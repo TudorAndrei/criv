@@ -1,9 +1,9 @@
 import * as vscode from "vscode";
 
-import { C4PreviewEditorProvider, C4PreviewManager, C4_PREVIEW_VIEW_TYPE } from "./c4Preview";
-import { CrivCheckDiagnostics } from "./checkDiagnostics";
-import { CHECK_MAX_OUTPUT_BYTES, completeCheckStdout } from "./checkOutput";
-import { CheckRunOwner } from "./checkRunOwner";
+import { C4PreviewEditorProvider, C4PreviewManager, C4_PREVIEW_VIEW_TYPE } from "./c4/preview";
+import { CrivCheckDiagnostics } from "./diagnostics/publisher";
+import { CHECK_MAX_OUTPUT_BYTES, completeCheckStdout } from "./diagnostics/output";
+import { CheckRunOwner } from "./diagnostics/runs";
 import {
   COMMAND_OPEN_SOURCE_TARGET,
   COMMAND_OPEN_STATE_JSON,
@@ -13,15 +13,15 @@ import {
   COMMAND_RUN_CHECK,
   COMMAND_RUN_WATCH_ONCE,
   CRIV_COMMANDS,
-} from "./commands";
-import { runProcess, type CommandResult } from "./commandRunner";
-import { crivConfiguration, executablePathError } from "./config";
-import { registerSourceLanguageFeatures } from "./languageFeatures";
-import { ambiguousSourceTargetMessage, planSourceTargetOpen } from "./sourceReferences";
-import { WorkspaceStateStore, type WorkspaceStateStatus } from "./stateStore";
+} from "./commands/identifiers";
+import { runProcess, type CommandResult } from "./commands/runner";
+import { crivConfiguration, executablePathError } from "./config/reader";
+import { registerSourceLanguageFeatures } from "./navigation/languageFeatures";
+import { ambiguousSourceTargetMessage, planSourceTargetOpen } from "./navigation/references";
+import { WorkspaceStateStore, type WorkspaceStateStatus } from "./state/store";
 import { CrivStateTreeProvider } from "./tree";
-import { createVscodeStateHost } from "./vscodeStateHost";
-import { loadState } from "./wasm";
+import { createVscodeStateHost } from "./state/host";
+import { loadState } from "./state/wasm";
 
 export { CRIV_COMMANDS };
 

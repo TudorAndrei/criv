@@ -12,7 +12,7 @@ governs:
   - src/lib.rs
   - src/config.rs
   - src/init/templates.rs
-  - src/source_index.rs
+  - src/source/index.rs
   - scripts/performance/src/main.rs
   - assets/skills/**
   - .agents/skills/**
