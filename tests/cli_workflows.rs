@@ -2488,7 +2488,7 @@ fn long_running_watch_rebuilds_docs_sources_bursts_and_recovers() {
         "---\nid: live\nkind: doc\ntitle: Live note\n---\n\n# Live note\n",
     )
     .unwrap();
-    wait_for_state(root, "the docs update", |state| {
+    wait_for_state(&mut watch, root, "the docs update", |state| {
         state["graph"]["nodes"].as_array().is_some_and(|nodes| {
             nodes
                 .iter()
@@ -2497,7 +2497,7 @@ fn long_running_watch_rebuilds_docs_sources_bursts_and_recovers() {
     });
 
     fs::write(root.join("src/lib.rs"), "pub fn source_update() {}\n").unwrap();
-    wait_for_state(root, "the source update", |state| {
+    wait_for_state(&mut watch, root, "the source update", |state| {
         state["graph"]["nodes"].as_array().is_some_and(|nodes| {
             nodes
                 .iter()
@@ -2516,27 +2516,37 @@ fn long_running_watch_rebuilds_docs_sources_bursts_and_recovers() {
 
     fs::write(root.join("criv.toml"), config).unwrap();
     fs::write(root.join("src/lib.rs"), "pub fn recovered() {}\n").unwrap();
-    wait_for_state(root, "recovery after a failed rebuild", |state| {
-        state["graph"]["nodes"].as_array().is_some_and(|nodes| {
-            nodes
-                .iter()
-                .any(|node| node["id"].as_str() == Some("symbol:src/lib.rs#fn:recovered"))
-        })
-    });
+    wait_for_state(
+        &mut watch,
+        root,
+        "recovery after a failed rebuild",
+        |state| {
+            state["graph"]["nodes"].as_array().is_some_and(|nodes| {
+                nodes
+                    .iter()
+                    .any(|node| node["id"].as_str() == Some("symbol:src/lib.rs#fn:recovered"))
+            })
+        },
+    );
 
     fs::write(root.join("src/lib.rs"), "pub fn burst_one() {}\n").unwrap();
     fs::write(root.join("src/lib.rs"), "pub fn burst_two() {}\n").unwrap();
     fs::write(root.join("src/lib.rs"), "pub fn burst_final() {}\n").unwrap();
-    wait_for_state(root, "the final debounced source burst", |state| {
-        state["graph"]["nodes"].as_array().is_some_and(|nodes| {
-            nodes
-                .iter()
-                .any(|node| node["id"].as_str() == Some("symbol:src/lib.rs#fn:burst_final"))
-        })
-    });
+    wait_for_state(
+        &mut watch,
+        root,
+        "the final debounced source burst",
+        |state| {
+            state["graph"]["nodes"].as_array().is_some_and(|nodes| {
+                nodes
+                    .iter()
+                    .any(|node| node["id"].as_str() == Some("symbol:src/lib.rs#fn:burst_final"))
+            })
+        },
+    );
 
     fs::rename(root.join("src/lib.rs"), root.join("src/renamed.rs")).unwrap();
-    wait_for_state(root, "a renamed source file", |state| {
+    wait_for_state(&mut watch, root, "a renamed source file", |state| {
         state["graph"]["nodes"].as_array().is_some_and(|nodes| {
             nodes
                 .iter()
@@ -2548,7 +2558,7 @@ fn long_running_watch_rebuilds_docs_sources_bursts_and_recovers() {
     });
 
     fs::remove_file(root.join("src/renamed.rs")).unwrap();
-    wait_for_state(root, "a deleted source file", |state| {
+    wait_for_state(&mut watch, root, "a deleted source file", |state| {
         state["graph"]["nodes"].as_array().is_some_and(|nodes| {
             !nodes
                 .iter()
@@ -2582,16 +2592,21 @@ fn live_watch_replaces_configuration_source_catalog_and_docs_root_together() {
     )
     .unwrap();
 
-    wait_for_state(root, "the replacement watch generation", |state| {
-        let nodes = state["graph"]["nodes"].as_array().unwrap();
-        nodes.iter().any(|node| node["id"] == "note:new-doc")
-            && nodes
-                .iter()
-                .any(|node| node["id"] == "symbol:generated/new.rs#fn:new_source")
-            && !nodes
-                .iter()
-                .any(|node| node["id"] == "symbol:src/lib.rs#fn:old_source")
-    });
+    wait_for_state(
+        &mut watch,
+        root,
+        "the replacement watch generation",
+        |state| {
+            let nodes = state["graph"]["nodes"].as_array().unwrap();
+            nodes.iter().any(|node| node["id"] == "note:new-doc")
+                && nodes
+                    .iter()
+                    .any(|node| node["id"] == "symbol:generated/new.rs#fn:new_source")
+                && !nodes
+                    .iter()
+                    .any(|node| node["id"] == "symbol:src/lib.rs#fn:old_source")
+        },
+    );
 }
 
 #[test]
@@ -2616,24 +2631,29 @@ fn live_watch_rebuilds_each_configuration_dimension_and_matches_one_shot() {
     watch.wait_until_running();
 
     write_watch_config(root, "docs", vec!["alt"], vec![], true);
-    wait_for_state(root, "the source.roots replacement", |state| {
+    wait_for_state(&mut watch, root, "the source.roots replacement", |state| {
         state_has_node(state, "symbol:alt/visible.rs#fn:visible")
             && !state_has_node(state, "symbol:src/old.rs#fn:old_source")
     });
 
     write_watch_config(root, "docs", vec!["alt"], vec!["**/hidden.rs"], true);
-    wait_for_state(root, "the source.exclude replacement", |state| {
-        state_has_node(state, "symbol:alt/visible.rs#fn:visible")
-            && !state_has_node(state, "symbol:alt/hidden.rs#fn:hidden")
-    });
+    wait_for_state(
+        &mut watch,
+        root,
+        "the source.exclude replacement",
+        |state| {
+            state_has_node(state, "symbol:alt/visible.rs#fn:visible")
+                && !state_has_node(state, "symbol:alt/hidden.rs#fn:hidden")
+        },
+    );
 
     write_watch_config(root, "docs", vec!["alt"], vec!["**/hidden.rs"], false);
-    wait_for_state(root, "the index.source replacement", |state| {
+    wait_for_state(&mut watch, root, "the index.source replacement", |state| {
         !state_has_node(state, "code:alt/visible.rs")
     });
 
     write_watch_config(root, "knowledge", vec!["alt"], vec!["**/hidden.rs"], false);
-    wait_for_state(root, "the vault.docs replacement", |state| {
+    wait_for_state(&mut watch, root, "the vault.docs replacement", |state| {
         state_has_node(state, "note:configured-docs")
     });
 
@@ -2661,7 +2681,7 @@ fn live_watch_recovers_when_the_configured_docs_root_appears() {
         "---\nid: recovered-docs\nkind: doc\ntitle: Recovered docs\n---\n\n# Recovered docs\n",
     )
     .unwrap();
-    wait_for_state(root, "the recovered docs root", |state| {
+    wait_for_state(&mut watch, root, "the recovered docs root", |state| {
         state_has_node(state, "note:recovered-docs")
     });
 
@@ -2684,7 +2704,7 @@ fn live_watch_tracks_missing_and_type_changing_source_roots() {
         "pub fn appeared_as_file() {}\n",
     )
     .unwrap();
-    wait_for_state(root, "the missing source file", |state| {
+    wait_for_state(&mut watch, root, "the missing source file", |state| {
         state_has_node(state, "symbol:dynamic/source.rs#fn:appeared_as_file")
     });
 
@@ -2695,12 +2715,17 @@ fn live_watch_tracks_missing_and_type_changing_source_roots() {
         "pub fn appeared_as_directory() {}\n",
     )
     .unwrap();
-    wait_for_state(root, "the source file replaced by a directory", |state| {
-        state_has_node(
-            state,
-            "symbol:dynamic/source.rs/nested.rs#fn:appeared_as_directory",
-        )
-    });
+    wait_for_state(
+        &mut watch,
+        root,
+        "the source file replaced by a directory",
+        |state| {
+            state_has_node(
+                state,
+                "symbol:dynamic/source.rs/nested.rs#fn:appeared_as_directory",
+            )
+        },
+    );
 
     fs::remove_dir_all(root.join("dynamic/source.rs")).unwrap();
     fs::write(
@@ -2708,10 +2733,15 @@ fn live_watch_tracks_missing_and_type_changing_source_roots() {
         "pub fn returned_as_file() {}\n",
     )
     .unwrap();
-    wait_for_state(root, "the source directory replaced by a file", |state| {
-        state_has_node(state, "symbol:dynamic/source.rs#fn:returned_as_file")
-            && !state_has_node(state, "code:dynamic/source.rs/nested.rs")
-    });
+    wait_for_state(
+        &mut watch,
+        root,
+        "the source directory replaced by a file",
+        |state| {
+            state_has_node(state, "symbol:dynamic/source.rs#fn:returned_as_file")
+                && !state_has_node(state, "code:dynamic/source.rs/nested.rs")
+        },
+    );
 
     assert_live_state_matches_one_shot(root, watch);
 }
@@ -2774,6 +2804,33 @@ impl WatchProcess {
         }
         panic!("timed out waiting for criv watch running; stdout: {output:?}");
     }
+
+    fn wait_for_snapshot(&mut self, state: &str, description: &str) {
+        let snapshot = blake3::hash(state.trim_end_matches('\n').as_bytes())
+            .to_hex()
+            .to_string();
+        let marker = format!("state updated: snapshot {snapshot},");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut output = Vec::new();
+        while Instant::now() < deadline {
+            match self.lines.recv_timeout(Duration::from_millis(100)) {
+                Ok(line) => {
+                    if line.starts_with(&marker) {
+                        return;
+                    }
+                    output.push(line);
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            if let Some(status) = self.child.try_wait().expect("poll watch process") {
+                panic!(
+                    "criv watch exited before {description} completed with {status}; stdout: {output:?}"
+                );
+            }
+        }
+        panic!("timed out waiting for {description} to complete; stdout: {output:?}");
+    }
 }
 
 impl Drop for WatchProcess {
@@ -2788,7 +2845,12 @@ impl Drop for WatchProcess {
     }
 }
 
-fn wait_for_state(root: &Path, description: &str, predicate: impl Fn(&serde_json::Value) -> bool) {
+fn wait_for_state(
+    watch: &mut WatchProcess,
+    root: &Path,
+    description: &str,
+    predicate: impl Fn(&serde_json::Value) -> bool,
+) {
     let deadline = Instant::now() + Duration::from_secs(10);
     let state_path = root.join(".criv/state.json");
     let mut latest = String::new();
@@ -2798,6 +2860,7 @@ fn wait_for_state(root: &Path, description: &str, predicate: impl Fn(&serde_json
             if let Ok(state) = serde_json::from_str(&latest)
                 && predicate(&state)
             {
+                watch.wait_for_snapshot(&latest, description);
                 return;
             }
         }

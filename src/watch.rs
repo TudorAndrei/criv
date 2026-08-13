@@ -413,6 +413,10 @@ impl LiveWatchSession {
                 return Ok(());
             }
         };
+        if self.must_reconfigure(&signal) {
+            self.reconfigure();
+            return Ok(());
+        }
         let docs_changed = self.docs_changed(&signal);
         if let WatchDecision::Rebuild { docs_changed } =
             watch_decision(docs_changed, source_changed)
@@ -422,7 +426,25 @@ impl LiveWatchSession {
             } else {
                 RefreshCause::SourceChanged
             };
-            if let Err(err) = self.active.refresh.refresh(&self.root, cause) {
+            let expected_config_source = self.active.config_source.clone();
+            let root = self.root.clone();
+            let result =
+                self.active
+                    .refresh
+                    .refresh_with_prepublication_check(&root, cause, || {
+                        match read_config_source(&root) {
+                            Ok(source) if source == expected_config_source => Ok(()),
+                            Ok(_) => Err(CrivError::new(
+                                "watch configuration changed before State publication",
+                            )),
+                            Err(err) => Err(err),
+                        }
+                    });
+            if read_config_source(&self.root).ok() != Some(self.active.config_source.clone()) {
+                self.reconfigure();
+                return Ok(());
+            }
+            if let Err(err) = result {
                 eprintln!("criv watch: {err}");
             }
         }
@@ -905,7 +927,11 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let root = temp.path();
         fs::create_dir_all(root.join(".criv")).unwrap();
-        fs::write(root.join(".criv/watch.lock"), "not a lock record\n").unwrap();
+        let (_, mut file) =
+            open_regular_file_in(root, Path::new(".criv"), Path::new(".criv/watch.lock")).unwrap();
+        file.write_all(b"not a lock record\n").unwrap();
+        file.sync_all().unwrap();
+        drop(file);
 
         let lock = super::WatchSessionLock::acquire(root, super::WatchMode::Live).unwrap();
 

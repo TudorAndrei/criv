@@ -430,4 +430,7 @@ jobs:
         run: rustup toolchain install 1.97.1 --profile minimal --no-self-update
 
       - name: Test watch lock
-        run: cargo +1.97.1 test --locked watch
+        run: |
+          cargo +1.97.1 test --locked --lib watch::tests::
+          cargo +1.97.1 test --locked --test cli_workflows watch_once
+          cargo +1.97.1 test --locked --test cli_workflows long_running_watch_takes_lock_before_startup_rebuild
