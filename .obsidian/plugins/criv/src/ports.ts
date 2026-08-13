@@ -1,5 +1,5 @@
-import type { CrivState, SourceIndexEntry, SourceResolver } from "./core";
-import type { CrivSelectorSuggestion, CrivStateSummary } from "./wasm";
+import type { CrivState, SourceIndexEntry, SourceResolver } from "./source/model";
+import type { CrivSelectorSuggestion, CrivStateSummary } from "./state/wasm";
 
 export type ObsidianStateStatus =
   | { generation: number; kind: "loading" }

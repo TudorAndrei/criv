@@ -650,7 +650,7 @@ function aliasPlugin() {
   return {
     name: "alias-stubs",
     setup(build) {
-      build.onResolve({ filter: /^\.\/pkg\/criv_wasm\.js$/ }, () => ({
+      build.onResolve({ filter: /^\.\.\/\.\.\/pkg\/criv_wasm\.js$/ }, () => ({
         path: wasmPath,
         external: true,
       }));

@@ -12,7 +12,7 @@ use ast_grep_core::meta_var::MetaVariable;
 use ast_grep_core::{Doc, NodeMatch, Pattern};
 use ast_grep_language::{Language, LanguageExt, SupportLang};
 
-use crate::source_paths::read_source_to_string;
+use crate::source::read_source_to_string;
 use crate::vault::{PolicyPattern, Vault};
 use crate::{CrivError, Result};
 

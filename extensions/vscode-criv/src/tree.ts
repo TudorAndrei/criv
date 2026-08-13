@@ -1,8 +1,8 @@
 import * as vscode from "vscode";
 
-import type { CrivArtifactEntry, CrivStateSnapshot } from "./stateModel";
-import type { WorkspaceStateStatus } from "./stateStore";
-import type { CrivSourceEntry } from "./wasm";
+import type { CrivArtifactEntry, CrivStateSnapshot } from "./state/model";
+import type { WorkspaceStateStatus } from "./state/store";
+import type { CrivSourceEntry } from "./state/wasm";
 
 export class CrivStateTreeProvider implements vscode.TreeDataProvider<CrivTreeItem> {
   private status: WorkspaceStateStatus = { generation: 0, kind: "loading" };

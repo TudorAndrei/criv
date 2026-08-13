@@ -28,7 +28,7 @@ model {
       sourceIntelligence = component 'Source intelligence' {
         technology 'Rust, fff, and tree-sitter'
         description 'Indexes source files and builds module, import, symbol, call, and structural-match data.'
-        link ../../src/source_index.rs 'source'
+        link ../../src/source.rs 'source'
       }
       architectureService = component 'Architecture service' {
         technology 'Rust, Node.js, and LikeC4'
@@ -60,7 +60,7 @@ model {
     stateStore = dataStore 'Published state store' {
       technology 'JSON files under .criv/'
       description 'Holds the latest state envelope, the source graph cache, and retained content-addressed snapshots.'
-      link ../../src/snapshots.rs 'source'
+      link ../../src/state/publication.rs 'source'
     }
   }
 

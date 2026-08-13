@@ -3,8 +3,9 @@ use std::path::Path;
 use crate::check;
 use crate::config::Config;
 use crate::policy_scan::PolicyScanPlan;
-use crate::source_graph::{self, SourceGraphBuild};
-use crate::source_index::{SourceCatalog, SourceChange, SourceIndexLifecycle, SourceObservation};
+use crate::source::{
+    self, SourceCatalog, SourceChange, SourceGraphBuild, SourceIndexLifecycle, SourceObservation,
+};
 use crate::state::{self, State};
 use crate::vault::Vault;
 use crate::{CrivError, Result};
@@ -36,7 +37,7 @@ impl RefreshSession {
         let config = Config::load(root)?;
         Ok(Self {
             config: config.clone(),
-            seed_graph: source_graph::load_cached(root),
+            seed_graph: source::load_cached(root),
             source_index: SourceIndexLifecycle::for_command(root, &config)?,
             pending_observation: None,
             previous: None,
@@ -46,7 +47,7 @@ impl RefreshSession {
     pub(crate) fn live(root: &Path, config: &Config) -> Result<Self> {
         Ok(Self {
             config: config.clone(),
-            seed_graph: source_graph::load_cached(root),
+            seed_graph: source::load_cached(root),
             source_index: SourceIndexLifecycle::for_watch(root, config)?,
             pending_observation: None,
             previous: None,

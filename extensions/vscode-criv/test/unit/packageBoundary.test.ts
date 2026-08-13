@@ -28,7 +28,7 @@ test("the preview command supports the official LikeC4 language", () => {
 });
 
 test("the webview unload path disposes the shared renderer", () => {
-  const source = readFileSync(resolve(__dirname, "../../src/likec4Webview.ts"), "utf8");
+  const source = readFileSync(resolve(__dirname, "../../src/c4/webview.ts"), "utf8");
 
   assert.match(source, /window\.addEventListener\("unload", \(\) => renderer\.dispose\(\)\)/);
 });
