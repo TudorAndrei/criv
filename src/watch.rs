@@ -933,9 +933,11 @@ mod tests {
         file.sync_all().unwrap();
         drop(file);
 
-        let lock = super::WatchSessionLock::acquire(root, super::WatchMode::Live).unwrap();
+        let mut lock = super::WatchSessionLock::acquire(root, super::WatchMode::Live).unwrap();
 
-        let contents = fs::read_to_string(root.join(".criv/watch.lock")).unwrap();
+        lock._file.rewind().unwrap();
+        let mut contents = String::new();
+        lock._file.read_to_string(&mut contents).unwrap();
         assert_eq!(
             contents,
             format!(

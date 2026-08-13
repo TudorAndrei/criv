@@ -487,9 +487,11 @@ fn is_hash_reference(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::{self, File, FileTimes};
+    use std::fs::{File, FileTimes};
     use std::time::Duration;
 
+    #[cfg(unix)]
+    use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::symlink;
 
