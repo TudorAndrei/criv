@@ -420,17 +420,15 @@ fn sync_parent_directory(path: &Path) -> Result<()> {
     sync_directory(parent)
 }
 
+#[cfg(windows)]
+fn sync_directory(_path: &Path) -> Result<()> {
+    // Windows commits directory-entry changes with the file operation. A
+    // directory handle cannot be synchronized with FlushFileBuffers.
+    Ok(())
+}
+
+#[cfg(not(windows))]
 fn sync_directory(path: &Path) -> Result<()> {
-    #[cfg(windows)]
-    let directory = {
-        use std::os::windows::fs::OpenOptionsExt;
-        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
-        OpenOptions::new()
-            .read(true)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-            .open(path)?
-    };
-    #[cfg(not(windows))]
     let directory = fs::File::open(path)?;
     directory.sync_all()?;
     Ok(())
