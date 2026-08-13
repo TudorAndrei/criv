@@ -115,4 +115,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0102-request-local-query-reverse-indexes|ADR-0102]] - Request local query reverse indexes
 - [[0103-required-repository-self-governance|ADR-0103]] - Required repository self governance
 - [[0104-split-the-obsidian-host-by-lifecycle-owner|ADR-0104]] - Split the Obsidian host by lifecycle owner
-- [[0105-bounded-hosted-rust-compilation|ADR-0105]] - Bounded hosted Rust compilation
+- [[0108-bounded-hosted-rust-compilation|ADR-0108]] - Bounded hosted Rust compilation

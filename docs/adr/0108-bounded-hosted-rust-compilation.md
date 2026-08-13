@@ -1,5 +1,5 @@
 ---
-id: ADR-0105
+id: ADR-0108
 kind: decision
 title: Bounded hosted Rust compilation
 status: accepted
