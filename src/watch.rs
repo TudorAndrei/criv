@@ -428,18 +428,16 @@ impl LiveWatchSession {
             };
             let expected_config_source = self.active.config_source.clone();
             let root = self.root.clone();
-            let result =
-                self.active
-                    .refresh
-                    .refresh_with_prepublication_check(&root, cause, || {
-                        match read_config_source(&root) {
-                            Ok(source) if source == expected_config_source => Ok(()),
-                            Ok(_) => Err(CrivError::new(
-                                "watch configuration changed before State publication",
-                            )),
-                            Err(err) => Err(err),
-                        }
-                    });
+            let result = self
+                .active
+                .refresh
+                .refresh_with_precommit_check(&root, cause, || match read_config_source(&root) {
+                    Ok(source) if source == expected_config_source => Ok(()),
+                    Ok(_) => Err(CrivError::new(
+                        "watch configuration changed before State publication",
+                    )),
+                    Err(err) => Err(err),
+                });
             if read_config_source(&self.root).ok() != Some(self.active.config_source.clone()) {
                 self.reconfigure();
                 return Ok(());

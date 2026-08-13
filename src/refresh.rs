@@ -54,14 +54,14 @@ impl RefreshSession {
     }
 
     pub(crate) fn refresh(&mut self, root: &Path, cause: RefreshCause) -> Result<&RefreshResult> {
-        self.refresh_with_prepublication_check(root, cause, || Ok(()))
+        self.refresh_with_precommit_check(root, cause, || Ok(()))
     }
 
-    pub(crate) fn refresh_with_prepublication_check(
+    pub(crate) fn refresh_with_precommit_check(
         &mut self,
         root: &Path,
         cause: RefreshCause,
-        prepublication_check: impl FnOnce() -> Result<()>,
+        precommit_check: impl FnOnce() -> Result<()>,
     ) -> Result<&RefreshResult> {
         let previous_graph = self
             .previous
@@ -83,7 +83,7 @@ impl RefreshSession {
             previous_state,
             diagnostic_previous_state,
             observation.into_catalog(),
-            prepublication_check,
+            precommit_check,
         )?;
 
         self.seed_graph = None;
@@ -110,7 +110,7 @@ fn execute(
     previous_state: Option<&State>,
     diagnostic_previous_state: Option<&State>,
     source_catalog: SourceCatalog,
-    prepublication_check: impl FnOnce() -> Result<()>,
+    precommit_check: impl FnOnce() -> Result<()>,
 ) -> Result<RefreshResult> {
     let vault = Vault::load_incremental_with_config_and_source_catalog(
         root,
@@ -137,16 +137,21 @@ fn execute(
         diagnostic_previous_state,
         &policy_plan,
     );
-    prepublication_check()?;
     let (snapshot, state) = match previous_state {
-        Some(previous_state) => state::write_state_incremental_with_policy_plan(
+        Some(previous_state) => state::write_state_incremental_with_policy_plan_and_check(
             root,
             &vault,
             Some(previous_state),
             &changed_files,
             &policy_plan,
+            precommit_check,
         )?,
-        None => state::write_state_with_policy_plan(root, &vault, &policy_plan)?,
+        None => state::write_state_with_policy_plan_and_check(
+            root,
+            &vault,
+            &policy_plan,
+            precommit_check,
+        )?,
     };
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();

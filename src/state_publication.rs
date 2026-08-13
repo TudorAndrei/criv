@@ -75,16 +75,39 @@ struct RealFileSystem;
 
 impl PublicationFileSystem for RealFileSystem {}
 
-pub(crate) fn publish(root: &Path, hash: &str, contents: &str, keep: usize) -> Result<()> {
+#[cfg(test)]
+fn publish(root: &Path, hash: &str, contents: &str, keep: usize) -> Result<()> {
     publish_with(root, hash, contents, keep, &RealFileSystem)
 }
 
+pub(crate) fn publish_with_precommit_check(
+    root: &Path,
+    hash: &str,
+    contents: &str,
+    keep: usize,
+    precommit_check: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    publish_with_check(root, hash, contents, keep, &RealFileSystem, precommit_check)
+}
+
+#[cfg(test)]
 fn publish_with(
     root: &Path,
     hash: &str,
     contents: &str,
     keep: usize,
     control: &impl PublicationFileSystem,
+) -> Result<()> {
+    publish_with_check(root, hash, contents, keep, control, || Ok(()))
+}
+
+fn publish_with_check(
+    root: &Path,
+    hash: &str,
+    contents: &str,
+    keep: usize,
+    control: &impl PublicationFileSystem,
+    precommit_check: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     let _lock = PublicationLock::acquire(root)?;
     recover_locked(root)?;
@@ -117,6 +140,7 @@ fn publish_with(
         .and_then(|_| install_candidate_controlled(root, &record, control))
         .and_then(|_| set_phase(root, &mut record, TransactionPhase::Installed))
         .and_then(|_| control.checkpoint(PublicationStep::BeforeCommit))
+        .and_then(|_| precommit_check())
         .and_then(|_| {
             write_atomic_in(
                 root,

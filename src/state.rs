@@ -263,13 +263,20 @@ impl State {
         })
     }
 
-    fn publish_snapshot(
+    fn publish_snapshot_with_check(
         &self,
         root: &Path,
         serialized: &SerializedState,
         keep: usize,
+        precommit_check: impl FnOnce() -> Result<()>,
     ) -> Result<String> {
-        crate::state_publication::publish(root, &serialized.hash, &serialized.published, keep)?;
+        crate::state_publication::publish_with_precommit_check(
+            root,
+            &serialized.hash,
+            &serialized.published,
+            keep,
+            precommit_check,
+        )?;
         #[cfg(test)]
         record_work(|counts| {
             counts.published_bytes += serialized.published.len() * 2 + serialized.hash.len() + 1;
@@ -1176,14 +1183,29 @@ fn write_state(root: &Path, vault: &Vault) -> Result<(String, State)> {
     write_state_with_policy_plan(root, vault, &policy_plan)
 }
 
-pub(crate) fn write_state_with_policy_plan(
+#[cfg(test)]
+fn write_state_with_policy_plan(
     root: &Path,
     vault: &Vault,
     policy_plan: &PolicyScanPlan,
 ) -> Result<(String, State)> {
+    write_state_with_policy_plan_and_check(root, vault, policy_plan, || Ok(()))
+}
+
+pub(crate) fn write_state_with_policy_plan_and_check(
+    root: &Path,
+    vault: &Vault,
+    policy_plan: &PolicyScanPlan,
+    precommit_check: impl FnOnce() -> Result<()>,
+) -> Result<(String, State)> {
     let state = State::build_with_policy_plan(root, vault, None, &[], policy_plan)?;
     let serialized = state.serialize()?;
-    let snapshot = state.publish_snapshot(root, &serialized, vault.config.state_keep)?;
+    let snapshot = state.publish_snapshot_with_check(
+        root,
+        &serialized,
+        vault.config.state_keep,
+        precommit_check,
+    )?;
     Ok((snapshot, state))
 }
 
@@ -1198,16 +1220,40 @@ fn write_state_incremental(
     write_state_incremental_with_policy_plan(root, vault, previous, changed_files, &policy_plan)
 }
 
-pub(crate) fn write_state_incremental_with_policy_plan(
+#[cfg(test)]
+fn write_state_incremental_with_policy_plan(
     root: &Path,
     vault: &Vault,
     previous: Option<&State>,
     changed_files: &[String],
     policy_plan: &PolicyScanPlan,
 ) -> Result<(String, State)> {
+    write_state_incremental_with_policy_plan_and_check(
+        root,
+        vault,
+        previous,
+        changed_files,
+        policy_plan,
+        || Ok(()),
+    )
+}
+
+pub(crate) fn write_state_incremental_with_policy_plan_and_check(
+    root: &Path,
+    vault: &Vault,
+    previous: Option<&State>,
+    changed_files: &[String],
+    policy_plan: &PolicyScanPlan,
+    precommit_check: impl FnOnce() -> Result<()>,
+) -> Result<(String, State)> {
     let state = State::build_with_policy_plan(root, vault, previous, changed_files, policy_plan)?;
     let serialized = state.serialize()?;
-    let snapshot = state.publish_snapshot(root, &serialized, vault.config.state_keep)?;
+    let snapshot = state.publish_snapshot_with_check(
+        root,
+        &serialized,
+        vault.config.state_keep,
+        precommit_check,
+    )?;
     Ok((snapshot, state))
 }
 
