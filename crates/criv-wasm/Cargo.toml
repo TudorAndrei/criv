@@ -2,6 +2,7 @@
 name = "criv-wasm"
 version = "0.8.0"
 edition = "2024"
+rust-version = "1.97.1"
 license = "MIT"
 description = "WASM helpers for the criv Obsidian plugin"
 repository = "https://github.com/TudorAndrei/criv"

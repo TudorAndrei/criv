@@ -5,35 +5,36 @@ local cargo_fmt = (Builtins.cargo_fmt) {
   workspace_indicator = "Cargo.toml"
 }
 
-local cargo_clippy = (Builtins.cargo_clippy) {
-  workspace_indicator = "Cargo.toml"
+local cargo_clippy = new Step {
+  glob = List("**/*.rs", "Cargo.toml", "Cargo.lock")
+  check = "cargo clippy --locked --workspace --all-targets -- -D warnings"
 }
 
 local staged_docs = new Step {
   glob = List("**/*.md", "criv.toml", ".rumdl.toml")
   check_first = true
-  check = "cargo run --quiet -- check --changed"
-  fix = "cargo run --quiet -- check --fix"
+  check = "cargo run --locked --quiet -- check --changed"
+  fix = "cargo run --locked --quiet -- check --fix"
 }
 
 local full_docs = new Step {
   glob = List("**/*.md", "criv.toml", ".rumdl.toml")
   check_first = true
-  check = "cargo run --quiet -- check"
-  fix = "cargo run --quiet -- check --fix"
+  check = "cargo run --locked --quiet -- check"
+  fix = "cargo run --locked --quiet -- check --fix"
 }
 
 local enforce_commit = new Step {
-  check = "cargo run --quiet -- enforce --stage commit"
+  check = "cargo run --locked --quiet -- enforce --stage commit"
 }
 
 local enforce_push = new Step {
-  check = "cargo run --quiet -- enforce --stage push"
+  check = "cargo run --locked --quiet -- enforce --stage push"
 }
 
 local cargo_test = new Step {
   glob = List("**/*.rs", "Cargo.toml", "Cargo.lock")
-  check = "cargo test --workspace"
+  check = "cargo test --locked --workspace"
 }
 
 local hawk = new Step {
@@ -54,7 +55,7 @@ local toml_fmt = (Builtins.taplo_format) {
 }
 
 local enforce_ci = new Step {
-  check = "cargo run --quiet -- enforce --stage ci"
+  check = "cargo run --locked --quiet -- enforce --stage ci"
 }
 
 local cargo_audit = new Step {

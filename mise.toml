@@ -9,6 +9,7 @@ actionlint = "1.7.12"
 cocogitto = "7.0.0"
 "cargo:cargo-release" = "1.1.2"
 "cargo:cargo-audit" = "0.22.2"
+"cargo:mdbook" = "0.5.4"
 taplo = "0.10.0"
 "github:astral-sh/hawk" = "0.1.9"
 
@@ -37,7 +38,7 @@ run = "bash scripts/measure-performance.sh"
 
 [tasks.perf-container]
 description = "Smoke-test the performance harness in a pinned Docker environment"
-run = "cargo test --test performance_container performance_harness_runs_in_pinned_container -- --ignored --nocapture"
+run = "cargo test --locked --test performance_container performance_harness_runs_in_pinned_container -- --ignored --nocapture"
 
 [tasks.vscode-build]
 description = "Build the VS Code-compatible companion extension"

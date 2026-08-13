@@ -13,6 +13,9 @@ extensions/vscode-criv/node_modules/
 extensions/vscode-criv/pkg/
 extensions/vscode-criv/.vscode-test/
 extensions/vscode-criv/*.vsix
+.site-build/
+site/architecture/
+site/docs/
 hk.local.pkl
 .config/hk.local.pkl
 .claude/settings.local.json

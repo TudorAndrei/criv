@@ -2,13 +2,9 @@ name: CI
 
 on:
   pull_request:
-    paths-ignore:
-      - site/**
   push:
     branches:
       - main
-    paths-ignore:
-      - site/**
 
 permissions:
   contents: read
@@ -17,6 +13,50 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    name: Classify changed paths
+    runs-on: ubuntu-24.04
+    outputs:
+      performance: ${{ steps.classify.outputs.performance }}
+      site: ${{ steps.classify.outputs.site }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Classify changes
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          site=false
+          performance=false
+          zero=0000000000000000000000000000000000000000
+          if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "$zero" ] || ! git cat-file -e "$BASE_SHA^{commit}"; then
+            site=true
+            performance=true
+          else
+            while IFS= read -r path; do
+              case "$path" in
+                docs/*|site/*|scripts/prepare-docs-site.mjs|package.json|package-lock.json|mise.toml|mise.lock|.github/workflows/ci.yml|.github/workflows/pages.yml)
+                  site=true
+                  ;;
+              esac
+              case "$path" in
+                Cargo.toml|Cargo.lock|crates/criv-state-wire/*|scripts/measure-performance.sh|scripts/performance/*|tests/performance_*|tests/fixtures/performance/*|fixtures/performance/*|.github/workflows/ci.yml|.github/workflows/performance-notes.yml)
+                  performance=true
+                  ;;
+              esac
+            done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          fi
+          echo "site=$site" >> "$GITHUB_OUTPUT"
+          echo "performance=$performance" >> "$GITHUB_OUTPUT"
+
   core:
     name: Core repository checks
     runs-on: ubuntu-24.04
@@ -73,7 +113,7 @@ jobs:
 
       - name: Emit criv annotations
         continue-on-error: true
-        run: cargo run --quiet -- check --format github
+        run: cargo run --locked --quiet -- check --format github
 
       - name: Run core repository checks
         run: hk check --all
@@ -107,6 +147,47 @@ jobs:
 
       - name: Build Wasm helper
         run: npm --prefix .obsidian/plugins/criv run build:wasm
+
+  editor-contracts:
+    name: Shared editor contracts
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Cache Cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/git
+            ~/.cargo/registry
+            target
+          key: cargo-editor-contracts-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-editor-contracts-${{ runner.os }}-
+
+      - name: Cache npm
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: npm-editor-contracts-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            npm-editor-contracts-${{ runner.os }}-
+
+      - name: Install mise tools
+        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+        with:
+          install: true
+          cache: true
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Check shared editor contracts
+        run: npm run check:editor-contracts
 
   obsidian:
     name: Obsidian companion
@@ -192,13 +273,78 @@ jobs:
       - name: Run extension-host integration tests
         run: xvfb-run -a npm --prefix extensions/vscode-criv run test:integration
 
+  site:
+    name: Site build
+    needs: changes
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Skip site build for unrelated changes
+        if: needs.changes.outputs.site != 'true'
+        run: echo "No site input changed."
+
+      - name: Checkout
+        if: needs.changes.outputs.site == 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install mise tools
+        if: needs.changes.outputs.site == 'true'
+        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+        with:
+          install: true
+          cache: true
+
+      - name: Install JavaScript dependencies
+        if: needs.changes.outputs.site == 'true'
+        run: npm ci --ignore-scripts
+
+      - name: Build site
+        if: needs.changes.outputs.site == 'true'
+        run: npm run build:site
+
+  performance-smoke:
+    name: Performance tooling smoke tests
+    needs: changes
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Skip performance smoke tests for unrelated changes
+        if: needs.changes.outputs.performance != 'true'
+        run: echo "No performance tooling input changed."
+
+      - name: Checkout
+        if: needs.changes.outputs.performance == 'true'
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install mise tools
+        if: needs.changes.outputs.performance == 'true'
+        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+        with:
+          install: true
+          cache: true
+
+      - name: Test performance tooling
+        if: needs.changes.outputs.performance == 'true'
+        run: |
+          bash tests/performance_harness.sh
+          bash tests/performance_git_note.sh
+          node --test scripts/performance/measure-state-wasm.test.mjs
+
   check:
     name: Repository checks
     runs-on: ubuntu-24.04
     needs:
+      - changes
       - core
+      - editor-contracts
       - wasm
       - obsidian
+      - performance-smoke
+      - site
       - vscode
       - windows
       - macos-watch-lock
@@ -207,16 +353,24 @@ jobs:
     steps:
       - name: Require all lanes
         env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
           CORE_RESULT: ${{ needs.core.result }}
+          EDITOR_CONTRACTS_RESULT: ${{ needs.editor-contracts.result }}
           WASM_RESULT: ${{ needs.wasm.result }}
           OBSIDIAN_RESULT: ${{ needs.obsidian.result }}
+          PERFORMANCE_SMOKE_RESULT: ${{ needs.performance-smoke.result }}
+          SITE_RESULT: ${{ needs.site.result }}
           VSCODE_RESULT: ${{ needs.vscode.result }}
           WINDOWS_RESULT: ${{ needs.windows.result }}
           MACOS_WATCH_LOCK_RESULT: ${{ needs.macos-watch-lock.result }}
         run: |
+          test "$CHANGES_RESULT" = success
           test "$CORE_RESULT" = success
+          test "$EDITOR_CONTRACTS_RESULT" = success
           test "$WASM_RESULT" = success
           test "$OBSIDIAN_RESULT" = success
+          test "$PERFORMANCE_SMOKE_RESULT" = success
+          test "$SITE_RESULT" = success
           test "$VSCODE_RESULT" = success
           test "$WINDOWS_RESULT" = success
           test "$MACOS_WATCH_LOCK_RESULT" = success
@@ -246,10 +400,10 @@ jobs:
         run: rustup toolchain install 1.97.1 --profile minimal --no-self-update
 
       - name: Build
-        run: cargo +1.97.1 build --workspace
+        run: cargo +1.97.1 build --locked --workspace
 
       - name: Test
-        run: cargo +1.97.1 test --workspace
+        run: cargo +1.97.1 test --locked --workspace
 
   macos-watch-lock:
     name: macOS watch lock tests
@@ -276,4 +430,4 @@ jobs:
         run: rustup toolchain install 1.97.1 --profile minimal --no-self-update
 
       - name: Test watch lock
-        run: cargo +1.97.1 test watch
+        run: cargo +1.97.1 test --locked watch

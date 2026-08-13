@@ -146,11 +146,10 @@
     }
   },
   "scripts": {
-    "build": "npm run build:wasm && npm run check:contracts && npm run build:host && npm run smoke:wasm",
+    "build": "npm run build:wasm && npm run build:host && npm run smoke:wasm",
     "build:host": "npm run check-types && node esbuild.config.mjs --production",
-    "build:wasm": "mise exec cargo:wasm-pack@0.15.0 rust@1.97.1 -- wasm-pack build ../../crates/criv-wasm --target nodejs --out-dir ../../extensions/vscode-criv/pkg",
+    "build:wasm": "mise exec cargo:wasm-pack@0.15.0 rust@1.97.1 -- wasm-pack build --target nodejs --out-dir ../../extensions/vscode-criv/pkg ../../crates/criv-wasm -- --locked",
     "check-types": "tsc --noEmit",
-    "check:contracts": "npm --prefix ../.. run check:editor-contracts",
     "compile": "npm run check-types && node esbuild.config.mjs",
     "compile:integration-tests": "esbuild test/integration/runner.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist-test/integration/runner.js",
     "compile:unit-tests": "node scripts/compile-unit-tests.mjs",
@@ -159,7 +158,7 @@
     "lint": "oxlint src test scripts esbuild.config.mjs",
     "package": "vsce package --no-dependencies --out vscode-criv.vsix",
     "smoke:wasm": "node scripts/wasm-smoke.mjs",
-    "test": "npm run build:wasm && npm run check:contracts && npm run compile && npm run compile:unit-tests && node --test dist-test/unit/*.test.js",
+    "test": "npm run build:wasm && npm run compile && npm run compile:unit-tests && node --test dist-test/unit/*.test.js",
     "test:integration": "npm run compile && npm run compile:integration-tests && node test/run-integration.mjs",
     "vscode:prepublish": "npm run build",
     "watch": "node esbuild.config.mjs --watch"

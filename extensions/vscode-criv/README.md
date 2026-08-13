@@ -36,8 +36,8 @@ criv install-editor --editor code
 criv install-editor --editor cursor
 ```
 
-Direct installation is an explicit editor-level action. `criv init` should
-recommend the extension for a workspace, but should not install it by default.
+Direct installation is an explicit editor-level action. `criv init` does not
+recommend or install the extension.
 
 Use **Reopen Editor With → Text Editor** when an agent or maintainer must edit
 the LikeC4 DSL. The `criv: Preview C4 Artifact` command can open a second

@@ -56,12 +56,12 @@ echo "cutting release $tag"
 
 cargo release version "$version" --workspace --execute --no-confirm
 
-cargo test --workspace
+cargo test --locked --workspace
 cargo fmt --check
-cargo run --quiet -- check
-cargo run --quiet -- enforce --stage ci
-cargo run --quiet -- watch --once
-cargo run --quiet -- query diff latest latest
+cargo run --locked --quiet -- check
+cargo run --locked --quiet -- enforce --stage ci
+cargo run --locked --quiet -- watch --once
+cargo run --locked --quiet -- query diff latest latest
 
 git add :/Cargo.toml :/Cargo.lock ':(glob)**/Cargo.toml'
 git commit -m "chore(release): $tag"

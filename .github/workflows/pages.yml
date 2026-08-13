@@ -9,6 +9,8 @@ on:
       - docs/**
       - package.json
       - package-lock.json
+      - mise.toml
+      - mise.lock
       - scripts/prepare-docs-site.mjs
       - .github/workflows/pages.yml
   workflow_dispatch:
@@ -42,23 +44,17 @@ jobs:
       - name: Configure Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
 
+      - name: Install mise tools
+        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+        with:
+          install: true
+          cache: true
+
       - name: Install JavaScript dependencies
         run: npm ci --ignore-scripts
 
-      - name: Prepare documentation site
-        run: node scripts/prepare-docs-site.mjs
-
-      - name: Build C4 explorer
-        run: node_modules/.bin/likec4 build --output site/architecture --base /criv/architecture/ --use-hash-history docs/architecture
-
-      - name: Install mise
-        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
-        with:
-          install: false
-          cache: true
-
-      - name: Build documentation
-        run: mise x cargo:mdbook@latest -- mdbook build .site-build/docs-book
+      - name: Build site
+        run: npm run build:site
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4.0.0

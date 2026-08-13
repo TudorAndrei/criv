@@ -94,6 +94,10 @@ backend = "cargo:cargo-audit"
 version = "1.1.2"
 backend = "cargo:cargo-release"
 
+[[tools."cargo:mdbook"]]
+version = "0.5.4"
+backend = "cargo:mdbook"
+
 [[tools."cargo:wasm-pack"]]
 version = "0.15.0"
 backend = "cargo:wasm-pack"

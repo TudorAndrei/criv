@@ -2,6 +2,7 @@
 name = "criv"
 version = "0.8.0"
 edition = "2024"
+rust-version = "1.97.1"
 license = "MIT"
 description = "Local docs-to-code knowledge graph validator and query tool"
 repository = "https://github.com/TudorAndrei/criv"

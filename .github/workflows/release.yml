@@ -81,9 +81,9 @@ jobs:
 
       - name: Install Rust
         run: |
-          rustup toolchain install 1.95.0 --profile minimal
-          rustup default 1.95.0
-          rustup target add "${{ matrix.target }}" --toolchain 1.95.0
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup default 1.97.1
+          rustup target add "${{ matrix.target }}" --toolchain 1.97.1
 
       - name: Build
         run: cargo build --locked --release --target "${{ matrix.target }}" --bin criv
