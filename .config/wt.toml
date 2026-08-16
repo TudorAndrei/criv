@@ -44,13 +44,13 @@ fix = "mise run fix"
 # the exact stale worktree this config exists to prevent. Teardown never blocks.
 tmux = "test -f {{ repo_path }}/.config/wt-tmux.sh && bash {{ repo_path }}/.config/wt-tmux.sh stop {{ branch }} {{ repo }} || true"
 
-# Reclaim the Rust build artifacts explicitly rather than relying on the
-# directory removal. target/ is gitignored, and git will not remove a worktree
-# with untracked content unless forced; clearing it first keeps `wt remove`
-# clean and fast, and makes the reclamation visible in the log.
+# Reclaim every heavy tree that `wt step copy-ignored` added. These paths are
+# gitignored, and clearing them first keeps `wt remove` clean and makes the
+# reclaimed storage visible in the hook log. Keep this list symmetric with
+# `.worktreeinclude`.
 #
 # This is scoped to {{ worktree_path }} on purpose. Never `cargo clean` here:
 # with no CARGO_TARGET_DIR set, cargo resolves the target directory from the
 # workspace it is invoked in, so a bare `cargo clean` from the primary worktree
 # would delete the primary's build cache instead of this branch's.
-cargo = "rm -rf {{ worktree_path }}/target"
+artifacts = "rm -rf {{ worktree_path }}/target {{ worktree_path }}/.obsidian/plugins/criv/node_modules {{ worktree_path }}/extensions/vscode-criv/node_modules {{ worktree_path }}/extensions/vscode-criv/.vscode-test"
