@@ -34,6 +34,12 @@ fn discovery_probe_source_files(root: &std::path::Path) -> Result<Vec<String>> {
 }
 
 #[cfg(test)]
+fn discovery_probe_source_candidates(root: &std::path::Path) -> Result<Vec<String>> {
+    let config = config::Config::load(root)?;
+    discovery::discover_source_candidates(root, &config)
+}
+
+#[cfg(test)]
 fn discovery_probe_vault_files(root: &std::path::Path) -> Result<(Vec<String>, Vec<String>)> {
     let config = config::Config::load(root)?;
     let selected = discovery::discover_vault(root, &config.docs_dir)?;

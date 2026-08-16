@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use ignore::{DirEntry, Error as WalkError, ParallelVisitor, ParallelVisitorBuilder, WalkBuilder};
 
 use crate::config::Config;
-use crate::util::{GlobMatcher, is_text_file};
+use crate::util::GlobMatcher;
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,7 +106,7 @@ impl Profile {
     }
 }
 
-pub(crate) fn discover_source(root: &Path, config: &Config) -> Result<Vec<String>> {
+pub(crate) fn discover_source_candidates(root: &Path, config: &Config) -> Result<Vec<String>> {
     if !config.source_index {
         return Ok(Vec::new());
     }
@@ -481,7 +481,7 @@ impl Collector {
             return;
         }
         let accessible = match kind {
-            SelectionKind::Source => is_text_file(path),
+            SelectionKind::Source => Ok(true),
             SelectionKind::VaultMarkdown | SelectionKind::VaultC4 | SelectionKind::Markdown => {
                 fs::File::open(path).map(|_| true).map_err(CrivError::from)
             }
@@ -547,16 +547,10 @@ fn collect_explicit_source(
             .push(format!("refusing to discover file link `{relative}`"));
         return;
     }
-    match is_text_file(&path) {
-        Ok(true) => collected.selections.push(Selection {
-            kind: SelectionKind::Source,
-            path: relative.to_string(),
-        }),
-        Ok(false) => {}
-        Err(error) => collected.errors.push(format!(
-            "failed to read selected file `{relative}`: {error}"
-        )),
-    }
+    collected.selections.push(Selection {
+        kind: SelectionKind::Source,
+        path: relative.to_string(),
+    });
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -803,11 +797,19 @@ fn is_junction(_path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source::SourceBuild;
     use tempfile::TempDir;
 
     fn write(path: &Path, contents: &[u8]) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, contents).unwrap();
+    }
+
+    fn discover_source(root: &Path, config: &Config) -> Result<Vec<String>> {
+        Ok(SourceBuild::build_incremental(root, config, None)?
+            .catalog()
+            .paths()
+            .to_vec())
     }
 
     #[test]

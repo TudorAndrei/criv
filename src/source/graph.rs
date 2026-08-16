@@ -8,7 +8,7 @@ use std::{cell::Cell, thread_local};
 use serde::{Deserialize, Serialize};
 use tree_sitter::{Node, Parser};
 
-use super::paths::read_source_to_string;
+use super::paths::read_source_bytes;
 use crate::util::write_atomic_in;
 use crate::{CrivError, Result};
 
@@ -19,7 +19,7 @@ const GRAPH_CACHE_SCHEMA: &str = "criv.source-graph/2";
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub(crate) struct WorkCounts {
     pub(crate) cache_loads: usize,
-    source_reads: usize,
+    pub(crate) source_reads: usize,
     pub(crate) parsed_files: usize,
     pub(crate) reused_files: usize,
     cache_serializations: usize,
@@ -250,6 +250,10 @@ impl SourceGraphBuild {
         &self.graph
     }
 
+    pub(crate) fn paths(&self) -> Vec<String> {
+        self.graph.files.keys().cloned().collect()
+    }
+
     pub(crate) fn publish(mut self, root: &Path) -> Result<Self> {
         if self.cache == CacheDisposition::Dirty {
             store_cached(root, &self.graph)?;
@@ -385,8 +389,16 @@ impl SourceGraph {
         for source_file in source_files {
             #[cfg(test)]
             record_work(|counts| counts.source_reads += 1);
-            let contents = read_source_to_string(root, source_file)?;
-            let fingerprint = blake3::hash(contents.as_bytes()).to_hex().to_string();
+            let bytes = read_source_bytes(root, source_file).map_err(|error| {
+                CrivError::new(format!(
+                    "failed to read selected file `{source_file}`: {error}"
+                ))
+            })?;
+            if !content_inspector::inspect(&bytes).is_text() {
+                continue;
+            }
+            let fingerprint = blake3::hash(&bytes).to_hex().to_string();
+            let contents = String::from_utf8_lossy(&bytes);
             let reused = previous
                 .filter(|previous| {
                     previous.file_fingerprints.get(source_file) == Some(&fingerprint)

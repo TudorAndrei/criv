@@ -13,13 +13,22 @@ diff --git a/src/lib.rs b/src/lib.rs
 index 0d63350..b6746ef 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -22,0 +23,46 @@ mod watch;
+@@ -22,0 +23,55 @@ mod watch;
 +#[cfg(test)]
 +#[path = "../scripts/performance/discovery_probe.rs"]
 +mod discovery_probe;
 +
 +#[cfg(test)]
 +fn discovery_probe_source_files(root: &std::path::Path) -> Result<Vec<String>> {
++    let config = config::Config::load(root)?;
++    let mut lifecycle = source::SourceIndexLifecycle::for_command(root, &config)?;
++    let catalog = lifecycle.observe()?.into_catalog();
++    let graph = source::SourceGraphBuild::build_incremental(root, catalog.paths(), None)?;
++    Ok(graph.graph().files.keys().cloned().collect())
++}
++
++#[cfg(test)]
++fn discovery_probe_source_candidates(root: &std::path::Path) -> Result<Vec<String>> {
 +    let config = config::Config::load(root)?;
 +    let mut lifecycle = source::SourceIndexLifecycle::for_command(root, &config)?;
 +    Ok(lifecycle.observe()?.into_catalog().paths().to_vec())

@@ -143,11 +143,13 @@ The governing decision is
 
 ## File-discovery release gates
 
-File-discovery acceptance has two evidence layers. A release-profile,
-test-only selector probe measures Source, Vault, and Markdown selection. The
-normal release binary measures cold and warm publication, changed checks, and
-live readiness and convergence. Both layers record path identities and
-per-child peak resident memory. The production CLI has no measurement API.
+File-discovery acceptance has two evidence layers. Release-profile test probes
+measure Source candidate traversal, the complete Source build, Vault
+selection, and Markdown selection. The Source build includes binary
+classification, content hashing, and parsing. The normal release binary
+measures cold and warm publication, changed checks, and live readiness and
+convergence. Both layers record path identities and per-child peak resident
+memory. The production CLI has no measurement API.
 
 The gate verifier checks five stable samples, matched machine and workload
 identity, output parity, the accepted time and memory limits, four target
@@ -160,5 +162,5 @@ The controlled workflow writes the accepted receipt to
 the exact commit, toolchain, evidence digests, workflow artifact, and four
 measured binaries. The release workflow packages these measured binaries. It
 does not rebuild them. See
-[[0112-direct-ignore-file-discovery|ADR-0112]] and [[releasing]] for the
+[[0115-single-read-source-build|ADR-0115]] and [[releasing]] for the
 release sequence.

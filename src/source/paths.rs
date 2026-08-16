@@ -21,9 +21,13 @@ fn checked_source_path(root: &Path, source_path: &str) -> Result<PathBuf> {
 }
 
 pub(crate) fn read_source_to_string(root: &Path, source_path: &str) -> Result<String> {
+    let contents = read_source_bytes(root, source_path)?;
+    Ok(String::from_utf8_lossy(&contents).into_owned())
+}
+
+pub(super) fn read_source_bytes(root: &Path, source_path: &str) -> Result<Vec<u8>> {
     let path = checked_source_path(root, source_path)?;
-    let contents = fs::read_to_string(path)?;
-    Ok(contents)
+    Ok(fs::read(path)?)
 }
 
 fn validate_relative_source_path(field: &str, value: &str) -> Result<()> {

@@ -1,6 +1,6 @@
 use std::fs;
 use std::fs::OpenOptions;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -27,15 +27,6 @@ pub(crate) fn copy_fixture_tree(source: &Path, destination: &Path) -> Result<()>
         }
     }
     Ok(())
-}
-
-pub(crate) fn is_text_file(path: &Path) -> Result<bool> {
-    let mut file = fs::File::open(path)?;
-    let mut buffer = Vec::with_capacity(8192);
-    Read::by_ref(&mut file)
-        .take(8192)
-        .read_to_end(&mut buffer)?;
-    Ok(content_inspector::inspect(&buffer).is_text())
 }
 
 /// Create `destination` and its missing parents, under the same confinement

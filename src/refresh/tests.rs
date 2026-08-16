@@ -106,16 +106,23 @@ fn live_refresh_rescans_source_after_a_content_event() {
 
     reset_refresh_work();
     session.refresh(root, RefreshCause::Initial).unwrap();
-    assert_source_catalog_work(refresh_work(), 1);
+    let initial = refresh_work();
+    assert_source_catalog_work(initial, 1);
+    assert!(initial.source_graph.source_reads > 0);
+    let source_reads = initial.source_graph.source_reads;
 
     reset_refresh_work();
     session.refresh(root, RefreshCause::DocsChanged).unwrap();
-    assert_source_catalog_work(refresh_work(), 0);
+    let docs_changed = refresh_work();
+    assert_source_catalog_work(docs_changed, 0);
+    assert_eq!(docs_changed.source_graph.source_reads, 0);
 
     fs::write(root.join("src/lib.rs"), "pub fn changed() {}\n").unwrap();
     reset_refresh_work();
     session.refresh(root, RefreshCause::SourceChanged).unwrap();
-    assert_source_catalog_work(refresh_work(), 1);
+    let source_changed = refresh_work();
+    assert_source_catalog_work(source_changed, 1);
+    assert_eq!(source_changed.source_graph.source_reads, source_reads);
 }
 
 #[test]

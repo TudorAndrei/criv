@@ -559,7 +559,9 @@ fn gate_scaling(
         "selected count and path digest match the approved scaling workload",
     );
 
-    let elapsed_ratio_limit = if pair.profile == "source" && pair.selected_files >= 90_000 {
+    let elapsed_ratio_limit = if matches!(pair.profile.as_str(), "source" | "source_candidates")
+        && pair.selected_files >= 90_000
+    {
         0.50
     } else {
         1.10
@@ -629,9 +631,9 @@ fn gate_scaling_metric(
 
 fn scaling_elapsed_limit(profile: &str, selected: usize) -> Option<f64> {
     match (profile, selected) {
-        ("source", 9_000) => Some(0.2673),
-        ("source", 90_000) => Some(1.1875),
-        ("source", 225_000) => Some(10.3725),
+        ("source_candidates", 9_000) => Some(0.2673),
+        ("source_candidates", 90_000) => Some(1.1875),
+        ("source_candidates", 225_000) => Some(10.3725),
         ("vault", 9_000) => Some(0.07282),
         ("vault", 90_000) => Some(0.5830),
         ("vault", 225_000) => Some(4.4902),
@@ -644,9 +646,9 @@ fn scaling_elapsed_limit(profile: &str, selected: usize) -> Option<f64> {
 
 fn scaling_rss_limit(profile: &str, selected: usize) -> Option<f64> {
     match (profile, selected) {
-        ("source", 9_000) => Some(30_400_000.0),
-        ("source", 90_000) => Some(182_800_000.0),
-        ("source", 225_000) => Some(442_800_000.0),
+        ("source_candidates", 9_000) => Some(30_400_000.0),
+        ("source_candidates", 90_000) => Some(182_800_000.0),
+        ("source_candidates", 225_000) => Some(442_800_000.0),
         ("vault", 9_000) => Some(13_310_000.0),
         ("vault", 90_000) => Some(49_720_000.0),
         ("vault", 225_000) => Some(107_030_000.0),
@@ -662,7 +664,7 @@ fn gate_scaling_coverage(
     coverage: &BTreeSet<(String, String, usize)>,
     checks: &mut Vec<GateCheck>,
 ) {
-    for profile in ["source", "vault", "markdown"] {
+    for profile in ["source", "source_candidates", "vault", "markdown"] {
         for selected in [9_000, 90_000, 225_000] {
             check(
                 checks,
@@ -673,12 +675,14 @@ fn gate_scaling_coverage(
         }
     }
     for target in RELEASE_TARGETS {
-        check(
-            checks,
-            format!("cross-platform-source-90000-{target}"),
-            coverage.contains(&(target.to_string(), "source".into(), 90_000)),
-            "release platform has the matched 100k-entry Source workload",
-        );
+        for profile in ["source", "source_candidates"] {
+            check(
+                checks,
+                format!("cross-platform-{profile}-90000-{target}"),
+                coverage.contains(&(target.to_string(), profile.into(), 90_000)),
+                "release platform has the matched 100k-entry Source workload",
+            );
+        }
     }
 }
 
@@ -1022,7 +1026,11 @@ mod tests {
             command_rss_limit("check_changed_source"),
             Some(277_900_000.0)
         );
-        assert_eq!(scaling_elapsed_limit("source", 90_000), Some(1.1875));
+        assert_eq!(scaling_elapsed_limit("source", 90_000), None);
+        assert_eq!(
+            scaling_elapsed_limit("source_candidates", 90_000),
+            Some(1.1875)
+        );
         assert_eq!(scaling_rss_limit("markdown", 225_000), Some(61_820_000.0));
     }
 

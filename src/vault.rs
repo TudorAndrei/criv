@@ -10,7 +10,7 @@ use crate::Result;
 use crate::c4;
 use crate::config::Config;
 use crate::discovery::discover_vault;
-use crate::source::{IndexedSource, SourceCatalog, SourceGraph, SourceGraphBuild};
+use crate::source::{IndexedSource, SourceBuild, SourceCatalog, SourceGraph, SourceGraphBuild};
 use crate::util::{
     GlobMatcher, find_wiki_links_with_lines, is_adr_id, kebab,
     markdown_headings as parse_markdown_headings, read_to_string, strip_prefix,
@@ -179,24 +179,19 @@ impl Vault {
     }
 
     #[cfg(test)]
-    fn load_incremental_with_source_catalog(
-        root: &Path,
-        previous_graph: Option<&SourceGraphBuild>,
-        source_catalog: SourceCatalog,
-    ) -> Result<Self> {
-        Self::load_with_source_facilities(root, previous_graph, Some(source_catalog), true, None)
+    fn load_incremental_with_source_build(root: &Path, source_build: SourceBuild) -> Result<Self> {
+        Self::load_with_source_facilities(root, None, Some(source_build), true, None)
     }
 
-    pub(crate) fn load_incremental_with_config_and_source_catalog(
+    pub(crate) fn load_incremental_with_config_and_source_build(
         root: &Path,
         config: &Config,
-        previous_graph: Option<&SourceGraphBuild>,
-        source_catalog: SourceCatalog,
+        source_build: SourceBuild,
     ) -> Result<Self> {
         Self::load_with_source_facilities(
             root,
-            previous_graph,
-            Some(source_catalog),
+            None,
+            Some(source_build),
             true,
             Some(config.clone()),
         )
@@ -205,7 +200,7 @@ impl Vault {
     fn load_with_source_facilities(
         root: &Path,
         previous_graph: Option<&SourceGraphBuild>,
-        source_catalog: Option<SourceCatalog>,
+        source_build: Option<SourceBuild>,
         load_sources: bool,
         config: Option<Config>,
     ) -> Result<Self> {
@@ -249,20 +244,16 @@ impl Vault {
         let effective_decisions = effective_accepted_decision_ids(&notes);
         let patterns = registered_policy_patterns(&notes, &effective_decisions);
 
-        let source_catalog = if load_sources {
-            match source_catalog {
-                Some(source_catalog) => source_catalog,
-                None => SourceCatalog::discover(root, &config)?,
+        let source_build = if load_sources {
+            match source_build {
+                Some(source_build) => source_build,
+                None => SourceBuild::build_incremental(root, &config, previous_graph)?,
             }
+            .publish(root)?
         } else {
-            SourceCatalog::disabled()
+            SourceBuild::disabled()
         };
-        let source_graph = if source_catalog.is_enabled() {
-            SourceGraphBuild::build_incremental(root, source_catalog.paths(), previous_graph)?
-                .publish(root)?
-        } else {
-            SourceGraphBuild::disabled()
-        };
+        let (source_catalog, source_graph) = source_build.into_parts();
 
         let mut vault = Self {
             config,
@@ -499,6 +490,10 @@ impl Vault {
 
     pub(crate) fn source_graph_build(&self) -> &SourceGraphBuild {
         &self.source_graph
+    }
+
+    pub(crate) fn source_build(&self) -> SourceBuild {
+        SourceBuild::from_parts(self.source_catalog.clone(), self.source_graph.clone())
     }
 
     pub(crate) fn source_entries(&self) -> &[IndexedSource] {
@@ -1399,7 +1394,7 @@ source = false
     }
 
     #[test]
-    fn vault_builds_its_graph_from_the_injected_source_catalog() {
+    fn vault_uses_the_injected_single_read_source_build() {
         let root = unique_temp_dir("criv-injected-source-index");
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(
@@ -1413,9 +1408,9 @@ roots = ["src"]
         std::fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
 
         let config = Config::load(&root).unwrap();
-        let catalog = SourceCatalog::discover(&root, &config).unwrap();
-        let expected = catalog.paths().to_vec();
-        let vault = Vault::load_incremental_with_source_catalog(&root, None, catalog).unwrap();
+        let source_build = SourceBuild::build_incremental(&root, &config, None).unwrap();
+        let expected = source_build.catalog().paths().to_vec();
+        let vault = Vault::load_incremental_with_source_build(&root, source_build).unwrap();
 
         assert_eq!(vault.source_files(), expected);
         assert!(vault.source_graph().files.contains_key("src/lib.rs"));

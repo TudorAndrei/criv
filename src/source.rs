@@ -4,7 +4,7 @@ mod catalog;
 mod graph;
 mod paths;
 
-pub(crate) use catalog::{IndexedSource, SourceCatalog};
+pub(crate) use catalog::{IndexedSource, SourceBuild, SourceCatalog};
 pub(crate) use graph::{
     Language, SourceFile, SourceGraph, SourceGraphBuild, SymbolKind, load_cached,
 };

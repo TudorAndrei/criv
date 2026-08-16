@@ -66,6 +66,7 @@ struct Args {
 #[serde(rename_all = "snake_case")]
 enum Profile {
     Source,
+    SourceCandidates,
     Vault,
     Markdown,
 }
@@ -74,6 +75,7 @@ impl Profile {
     fn id(self) -> &'static str {
         match self {
             Self::Source => "source",
+            Self::SourceCandidates => "source_candidates",
             Self::Vault => "vault",
             Self::Markdown => "markdown",
         }
@@ -84,7 +86,12 @@ impl Profile {
     }
 }
 
-const ALL_PROFILES: [Profile; 3] = [Profile::Source, Profile::Vault, Profile::Markdown];
+const ALL_PROFILES: [Profile; 4] = [
+    Profile::Source,
+    Profile::SourceCandidates,
+    Profile::Vault,
+    Profile::Markdown,
+];
 
 #[derive(Debug, Serialize)]
 struct RunIdentity {
@@ -424,6 +431,7 @@ impl Profile {
     fn from_id(value: &str) -> Result<Self, String> {
         match value {
             "source" => Ok(Self::Source),
+            "source_candidates" => Ok(Self::SourceCandidates),
             "vault" => Ok(Self::Vault),
             "markdown" => Ok(Self::Markdown),
             _ => Err(format!("unknown discovery profile {value}")),

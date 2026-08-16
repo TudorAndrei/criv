@@ -20,6 +20,10 @@ content so entry count stays separate from content-reading pressure.
 These trees are synthetic scaling evidence. They do not represent an observed
 user project and must not be reported as a large-project workload.
 
+Run each Source tree with both the `source-candidates` probe and the `source`
+probe. The first probe measures traversal. The second probe measures the
+complete Source build.
+
 ## Focused edge cases
 
 `criv-discovery-edge-fixtures` generates one small Git repository for each

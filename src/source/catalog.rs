@@ -8,7 +8,9 @@ use std::sync::{Mutex, MutexGuard};
 
 use crate::Result;
 use crate::config::Config;
-use crate::discovery::discover_source;
+use crate::discovery::discover_source_candidates;
+
+use super::graph::SourceGraphBuild;
 
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
@@ -59,7 +61,6 @@ pub(crate) struct IndexedSource {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SourceCatalog {
-    enabled: bool,
     entries: Arc<[IndexedSource]>,
     paths: Arc<[String]>,
 }
@@ -67,7 +68,6 @@ pub(crate) struct SourceCatalog {
 impl SourceCatalog {
     pub(crate) fn disabled() -> Self {
         Self {
-            enabled: false,
             entries: Arc::from([]),
             paths: Arc::from([]),
         }
@@ -80,23 +80,14 @@ impl SourceCatalog {
             .map(|path| IndexedSource { path })
             .collect::<Vec<_>>();
         Self {
-            enabled: true,
             entries: entries.into(),
             paths: paths.into(),
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn discover(root: &Path, config: &Config) -> Result<Self> {
-        if !config.source_index {
-            return Ok(Self::disabled());
-        }
-        #[cfg(test)]
-        record_scan();
-        Ok(Self::enabled(discover_source(root, config)?))
-    }
-
-    pub(crate) fn is_enabled(&self) -> bool {
-        self.enabled
+        Ok(SourceBuild::build_incremental(root, config, None)?.catalog)
     }
 
     pub(crate) fn entries(&self) -> &[IndexedSource] {
@@ -135,6 +126,55 @@ impl SourceCatalog {
             [only] => Some((only.clone(), false)),
             [first, ..] => Some((first.clone(), true)),
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SourceBuild {
+    catalog: SourceCatalog,
+    graph: SourceGraphBuild,
+}
+
+impl SourceBuild {
+    pub(crate) fn build_incremental(
+        root: &Path,
+        config: &Config,
+        previous: Option<&SourceGraphBuild>,
+    ) -> Result<Self> {
+        if !config.source_index {
+            return Ok(Self::disabled());
+        }
+        #[cfg(test)]
+        record_scan();
+        let candidates = discover_source_candidates(root, config)?;
+        let graph = SourceGraphBuild::build_incremental(root, &candidates, previous)?;
+        let catalog = SourceCatalog::enabled(graph.paths());
+        Ok(Self { catalog, graph })
+    }
+
+    pub(crate) fn disabled() -> Self {
+        Self {
+            catalog: SourceCatalog::disabled(),
+            graph: SourceGraphBuild::disabled(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn catalog(&self) -> &SourceCatalog {
+        &self.catalog
+    }
+
+    pub(crate) fn into_parts(self) -> (SourceCatalog, SourceGraphBuild) {
+        (self.catalog, self.graph)
+    }
+
+    pub(crate) fn from_parts(catalog: SourceCatalog, graph: SourceGraphBuild) -> Self {
+        Self { catalog, graph }
+    }
+
+    pub(crate) fn publish(mut self, root: &Path) -> Result<Self> {
+        self.graph = self.graph.publish(root)?;
+        Ok(self)
     }
 }
 
@@ -189,5 +229,21 @@ mod tests {
         fs::write(temp.path().join("src/new.rs"), "pub fn new() {}\n").unwrap();
         let second = SourceCatalog::discover(temp.path(), &config).unwrap();
         assert_ne!(first.paths(), second.paths());
+    }
+
+    #[test]
+    fn source_build_reads_each_candidate_once_and_shares_the_selected_set() {
+        let (temp, config) = fixture();
+        fs::write(temp.path().join("src/binary.rs"), b"\0binary").unwrap();
+        super::super::graph::reset_work_counts();
+
+        let build = SourceBuild::build_incremental(temp.path(), &config, None).unwrap();
+
+        assert_eq!(super::super::graph::work_counts().source_reads, 3);
+        assert_eq!(
+            build.catalog().paths(),
+            &["src/lib.rs".to_string(), "src/nested/lib.rs".to_string()]
+        );
+        assert_eq!(build.catalog().paths(), build.graph.paths());
     }
 }

@@ -39,6 +39,12 @@ fn source() {
 
 #[test]
 #[ignore = "run through criv-discovery-baseline"]
+fn source_candidates() {
+    emit(run_source_candidates(&probe_root().unwrap()).unwrap());
+}
+
+#[test]
+#[ignore = "run through criv-discovery-baseline"]
 fn vault() {
     emit(run_vault(&probe_root().unwrap()).unwrap());
 }
@@ -52,6 +58,15 @@ fn markdown() {
 fn run_source(root: &Path) -> Result<ProbeOutput> {
     let paths = crate::discovery_probe_source_files(root)?;
     output(root, "source", vec![("source", paths)])
+}
+
+fn run_source_candidates(root: &Path) -> Result<ProbeOutput> {
+    let paths = crate::discovery_probe_source_candidates(root)?;
+    output(
+        root,
+        "source_candidates",
+        vec![("source_candidates", paths)],
+    )
 }
 
 fn run_vault(root: &Path) -> Result<ProbeOutput> {

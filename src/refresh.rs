@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::check;
 use crate::config::Config;
 use crate::policy_scan::PolicyScanPlan;
-use crate::source::{self, SourceCatalog, SourceGraphBuild};
+use crate::source::{self, SourceBuild, SourceGraphBuild};
 use crate::state::{self, State};
 use crate::vault::Vault;
 use crate::{CrivError, Result};
@@ -25,7 +25,7 @@ pub(crate) struct RefreshResult {
 pub(crate) struct RefreshSession {
     config: Config,
     seed_graph: Option<SourceGraphBuild>,
-    source_catalog: Option<SourceCatalog>,
+    source_build: Option<SourceBuild>,
     previous: Option<RefreshResult>,
 }
 
@@ -35,7 +35,7 @@ impl RefreshSession {
         Ok(Self {
             config: config.clone(),
             seed_graph: source::load_cached(root),
-            source_catalog: None,
+            source_build: None,
             previous: None,
         })
     }
@@ -44,7 +44,7 @@ impl RefreshSession {
         Ok(Self {
             config: config.clone(),
             seed_graph: source::load_cached(root),
-            source_catalog: None,
+            source_build: None,
             previous: None,
         })
     }
@@ -68,30 +68,29 @@ impl RefreshSession {
         let diagnostic_previous_state = matches!(cause, RefreshCause::SourceChanged)
             .then_some(previous_state)
             .flatten();
-        let source_catalog = match (cause, self.source_catalog.as_ref()) {
-            (RefreshCause::DocsChanged, Some(catalog)) => catalog.clone(),
-            _ => SourceCatalog::discover(root, &self.config)?,
+        let source_build = match (cause, self.source_build.as_ref()) {
+            (RefreshCause::DocsChanged, Some(source_build)) => source_build.clone(),
+            _ => SourceBuild::build_incremental(root, &self.config, previous_graph)?,
         };
         let next = match execute(
             root,
             &self.config,
-            previous_graph,
             previous_state,
             diagnostic_previous_state,
-            source_catalog.clone(),
+            source_build,
             precommit_check,
         ) {
             Ok(next) => next,
             Err(error) => {
                 if cause == RefreshCause::SourceChanged {
-                    self.source_catalog = None;
+                    self.source_build = None;
                 }
                 return Err(error);
             }
         };
 
         self.seed_graph = None;
-        self.source_catalog = Some(source_catalog);
+        self.source_build = Some(next.vault.source_build());
         self.previous = Some(next);
         Ok(self
             .previous
@@ -102,18 +101,12 @@ impl RefreshSession {
 fn execute(
     root: &Path,
     config: &Config,
-    previous_graph: Option<&SourceGraphBuild>,
     previous_state: Option<&State>,
     diagnostic_previous_state: Option<&State>,
-    source_catalog: SourceCatalog,
+    source_build: SourceBuild,
     precommit_check: impl FnOnce() -> Result<()>,
 ) -> Result<RefreshResult> {
-    let vault = Vault::load_incremental_with_config_and_source_catalog(
-        root,
-        config,
-        previous_graph,
-        source_catalog,
-    )?;
+    let vault = Vault::load_incremental_with_config_and_source_build(root, config, source_build)?;
     let blockers = check::publication_blocking_diagnostics(&vault);
     if !blockers.is_empty() {
         return Err(CrivError::new(format!(

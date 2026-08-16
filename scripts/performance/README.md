@@ -75,9 +75,10 @@ File-discovery evidence has seven separate tools:
   workload digest.
 - `criv-discovery-snapshot` creates one strict APFS copy-on-write snapshot. It
   never falls back to a full copy and refuses to run below its free-space gate.
-- `criv-discovery-baseline` runs the release-profile, test-only Source, Vault,
-  and Markdown selector probes. It records raw samples, elapsed and CPU time,
-  peak resident memory, selected counts and bytes, and stable path digests.
+- `criv-discovery-baseline` runs release-profile, test-only probes for Source
+  candidates, the complete Source build, Vault selection, and Markdown
+  selection. It records raw samples, elapsed and CPU time, peak resident
+  memory, selected counts and bytes, and stable path digests.
 - `criv-discovery-fixtures` generates the deterministic scaling trees.
 - `criv-discovery-edge-fixtures` generates focused correctness repositories
   for parity, profile rules, selected links, invalid patterns, missing roots,
@@ -138,8 +139,9 @@ not representative user-project evidence.
 ## File-discovery acceptance
 
 `criv-discovery-gate` validates one prepared `gate-input.json`. It compares the
-matched baseline and candidate command runs, the three profile scaling runs,
-four target artifacts, and clean-build evidence. It writes the short-lived
+matched baseline and candidate command runs, Source candidate traversal,
+complete Source builds, Vault and Markdown scaling, four target artifacts, and
+clean-build evidence. It writes the short-lived
 `criv.discovery-release-gate.v1` receipt only when every correctness,
 stability, time, memory, artifact, and toolchain gate passes.
 
