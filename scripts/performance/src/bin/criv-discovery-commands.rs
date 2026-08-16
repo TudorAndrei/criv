@@ -162,6 +162,11 @@ struct StateIdentity {
     vault_c4_path_digest: String,
 }
 
+struct StateObservation {
+    identity: StateIdentity,
+    source_paths: BTreeSet<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct ConvergenceStep {
     operation: &'static str,
@@ -1105,16 +1110,18 @@ impl LiveWatch {
             while let Ok(line) = self.lines.try_recv() {
                 self.observed_lines.push(line);
             }
-            if let Ok(identity) = read_state_identity(root) {
-                let paths = read_source_paths(root)?;
-                let marker = format!("state updated: snapshot {},", identity.latest_snapshot);
-                if predicate(&paths)
+            if let Ok(observation) = read_state_observation(root) {
+                let marker = format!(
+                    "state updated: snapshot {},",
+                    observation.identity.latest_snapshot
+                );
+                if predicate(&observation.source_paths)
                     && self
                         .observed_lines
                         .iter()
                         .any(|line| line.starts_with(&marker))
                 {
-                    return Ok(identity);
+                    return Ok(observation.identity);
                 }
             }
             thread::sleep(Duration::from_millis(50));
@@ -1165,8 +1172,37 @@ impl Drop for LiveWatch {
 }
 
 fn read_state_identity(root: &Path) -> Result<StateIdentity, String> {
-    let state_path = root.join(".criv/state.json");
-    let state_bytes = fs::read(&state_path).map_err(display_error)?;
+    read_state_observation(root).map(|observation| observation.identity)
+}
+
+fn read_state_observation(root: &Path) -> Result<StateObservation, String> {
+    let criv_dir = root.join(".criv");
+    for _ in 0..8 {
+        let latest_snapshot = fs::read_to_string(criv_dir.join("latest"))
+            .map_err(display_error)?
+            .trim()
+            .to_string();
+        let snapshot_path = criv_dir.join(format!("snapshots/{latest_snapshot}.json"));
+        let snapshot_bytes = fs::read(&snapshot_path).map_err(display_error)?;
+        let state_bytes = fs::read(criv_dir.join("state.json")).map_err(display_error)?;
+        let confirmed_latest = fs::read_to_string(criv_dir.join("latest"))
+            .map_err(display_error)?
+            .trim()
+            .to_string();
+        if confirmed_latest != latest_snapshot || state_bytes != snapshot_bytes {
+            std::thread::yield_now();
+            continue;
+        }
+        return state_observation(root, latest_snapshot, snapshot_bytes);
+    }
+    Err("State publication changed while it was read".into())
+}
+
+fn state_observation(
+    root: &Path,
+    latest_snapshot: String,
+    state_bytes: Vec<u8>,
+) -> Result<StateObservation, String> {
     let state: serde_json::Value = serde_json::from_slice(&state_bytes).map_err(display_error)?;
     let source_paths = state["source-index"]
         .as_array()
@@ -1187,17 +1223,12 @@ fn read_state_identity(root: &Path) -> Result<StateIdentity, String> {
         }
     }
     let source_paths = sorted_unique(source_paths);
+    let source_path_set = source_paths.iter().cloned().collect();
     let vault_markdown = sorted_unique(vault_markdown);
     let vault_c4 = sorted_unique(vault_c4);
-    let latest_snapshot = fs::read_to_string(root.join(".criv/latest"))
-        .map_err(display_error)?
-        .trim()
-        .to_string();
-    Ok(StateIdentity {
+    let identity = StateIdentity {
         state_digest: bytes_digest(&state_bytes),
-        snapshot_digest: optional_file_digest(
-            &root.join(format!(".criv/snapshots/{latest_snapshot}.json")),
-        ),
+        snapshot_digest: Some(bytes_digest(&state_bytes)),
         source_graph_digest: optional_file_digest(&root.join(".criv/source-graph.json")),
         source_paths: source_paths.len(),
         source_path_digest: path_digest("source", &source_paths),
@@ -1206,19 +1237,11 @@ fn read_state_identity(root: &Path) -> Result<StateIdentity, String> {
         vault_c4_paths: vault_c4.len(),
         vault_c4_path_digest: path_digest("vault-c4", &vault_c4),
         latest_snapshot,
+    };
+    Ok(StateObservation {
+        identity,
+        source_paths: source_path_set,
     })
-}
-
-fn read_source_paths(root: &Path) -> Result<BTreeSet<String>, String> {
-    let state: serde_json::Value =
-        serde_json::from_slice(&fs::read(root.join(".criv/state.json")).map_err(display_error)?)
-            .map_err(display_error)?;
-    Ok(state["source-index"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| entry["path"].as_str().map(str::to_string))
-        .collect())
 }
 
 fn published_state_unchanged(before: &StateIdentity, after: &StateIdentity) -> bool {
@@ -1764,8 +1787,10 @@ mod tests {
         )
         .unwrap();
 
-        let identity = read_state_identity(root.path()).unwrap();
+        let observation = read_state_observation(root.path()).unwrap();
+        let identity = observation.identity;
         assert_eq!(identity.source_paths, 1);
+        assert!(observation.source_paths.contains("src/lib.rs"));
         assert_eq!(identity.vault_markdown_paths, 2);
         assert_eq!(identity.vault_c4_paths, 1);
         assert_ne!(
