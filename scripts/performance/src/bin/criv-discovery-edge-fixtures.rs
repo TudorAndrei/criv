@@ -6,6 +6,8 @@ use std::process::Command;
 use clap::{Parser, ValueEnum};
 use serde::Serialize;
 
+const FIXTURE_COMMIT_DATE: &str = "2000-01-01T00:00:00Z";
+
 #[derive(Debug, Parser)]
 #[command(
     name = "criv-discovery-edge-fixtures",
@@ -358,6 +360,8 @@ fn initialize_git(root: &Path) -> Result<(), String> {
     ] {
         let output = Command::new("git")
             .args(args)
+            .env("GIT_AUTHOR_DATE", FIXTURE_COMMIT_DATE)
+            .env("GIT_COMMITTER_DATE", FIXTURE_COMMIT_DATE)
             .current_dir(root)
             .output()
             .map_err(display_error)?;

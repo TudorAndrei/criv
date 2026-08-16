@@ -86,6 +86,14 @@ fn run(args: Args) -> Result<(), String> {
         }
     };
     let allocated_bytes = free_before.saturating_sub(free_after);
+    if free_after < minimum_free {
+        cleanup_created_destination(&destination);
+        return Err(format!(
+            "snapshot left {:.2} GiB free, below the required {} GiB; the disposable snapshot was removed",
+            free_after as f64 / GIB as f64,
+            args.minimum_free_gib
+        ));
+    }
     if allocated_bytes > maximum_allocation {
         cleanup_created_destination(&destination);
         return Err(format!(

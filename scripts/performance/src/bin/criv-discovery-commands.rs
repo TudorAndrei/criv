@@ -66,6 +66,9 @@ struct Args {
     /// Required free space before each snapshot.
     #[arg(long, default_value_t = 30)]
     minimum_free_gib: u64,
+    /// Maximum volume allocation observed while the strict snapshot is made.
+    #[arg(long, default_value_t = 20)]
+    maximum_snapshot_allocation_gib: u64,
 }
 
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, ValueEnum)]
@@ -143,6 +146,9 @@ struct RunIdentity {
     processor: String,
     rustc_verbose: String,
     machine_digest: String,
+    snapshot_mode: &'static str,
+    minimum_free_gib: u64,
+    maximum_snapshot_allocation_gib: u64,
     samples: usize,
     timeout_seconds: u64,
     cases: Vec<&'static str>,
@@ -369,6 +375,9 @@ fn run(mut args: Args) -> Result<(), String> {
         processor,
         rustc_verbose,
         machine_digest,
+        snapshot_mode: "one_strict_snapshot_reset_between_samples",
+        minimum_free_gib: args.minimum_free_gib,
+        maximum_snapshot_allocation_gib: args.maximum_snapshot_allocation_gib,
         samples: args.samples,
         timeout_seconds: args.timeout_seconds,
         cases: cases.iter().map(|case| case.id()).collect(),
@@ -378,29 +387,29 @@ fn run(mut args: Args) -> Result<(), String> {
     fs::create_dir(result_dir.join("outputs")).map_err(display_error)?;
     let sample_run_root = sample_root.join(format!("criv-discovery-{run_id}"));
     fs::create_dir(&sample_run_root).map_err(display_error)?;
+    let (snapshot, snapshot_receipt) = create_snapshot(
+        &snapshot_executable,
+        &workload_root,
+        &sample_run_root.join("workload"),
+        args.minimum_free_gib,
+        args.maximum_snapshot_allocation_gib,
+    )?;
+    let snapshot_receipt_digest = bytes_digest(&snapshot_receipt);
     write_json(result_dir.join("run.json"), &run_identity)?;
     let mut raw =
         BufWriter::new(File::create(result_dir.join("samples.jsonl")).map_err(display_error)?);
     let mut rows = Vec::new();
     let mut warmup_failures = Vec::new();
     for case in cases {
-        if let Err(error) = run_warmup(
-            &args,
-            &binary,
-            &snapshot_executable,
-            &workload_root,
-            &sample_run_root,
-            case,
-        ) {
+        if let Err(error) = run_warmup(&args, &binary, &snapshot.path, case) {
             eprintln!("criv-discovery-commands: {error}");
             warmup_failures.push(error);
         }
         let first = run_attempt(
             &args,
             &binary,
-            &snapshot_executable,
-            &workload_root,
-            &sample_run_root,
+            &snapshot.path,
+            &snapshot_receipt_digest,
             &result_dir,
             &run_identity,
             case,
@@ -413,9 +422,8 @@ fn run(mut args: Args) -> Result<(), String> {
             let second = run_attempt(
                 &args,
                 &binary,
-                &snapshot_executable,
-                &workload_root,
-                &sample_run_root,
+                &snapshot.path,
+                &snapshot_receipt_digest,
                 &result_dir,
                 &run_identity,
                 case,
@@ -426,6 +434,7 @@ fn run(mut args: Args) -> Result<(), String> {
         }
     }
     raw.flush().map_err(display_error)?;
+    drop(snapshot);
     fs::remove_dir(&sample_run_root).map_err(display_error)?;
 
     let mut summaries = Vec::new();
@@ -488,6 +497,9 @@ fn validate_args(args: &Args) -> Result<(), String> {
     }
     if args.timeout_seconds == 0 {
         return Err("timeout-seconds must be positive".into());
+    }
+    if args.minimum_free_gib == 0 || args.maximum_snapshot_allocation_gib == 0 {
+        return Err("snapshot space limits must be positive".into());
     }
     if args.binary_label.trim().is_empty() {
         return Err("binary-label must not be empty".into());
@@ -566,23 +578,10 @@ fn read_inventory(path: &Path) -> Result<WorkloadInventoryHeader, String> {
     Ok(inventory)
 }
 
-fn run_warmup(
-    args: &Args,
-    binary: &Path,
-    snapshot_executable: &Path,
-    workload_root: &Path,
-    sample_run_root: &Path,
-    case: Case,
-) -> Result<(), String> {
-    let destination = sample_run_root.join(format!("{}-warmup", case.id()));
-    let (snapshot, _) = create_snapshot(
-        snapshot_executable,
-        workload_root,
-        &destination,
-        args.minimum_free_gib,
-    )?;
-    prepare_case(args, binary, &snapshot.path, case)?;
-    let outcome = execute_case(args, binary, &snapshot.path, case)?;
+fn run_warmup(args: &Args, binary: &Path, snapshot_root: &Path, case: Case) -> Result<(), String> {
+    restore_snapshot(args, snapshot_root)?;
+    prepare_case(args, binary, snapshot_root, case)?;
+    let outcome = execute_case(args, binary, snapshot_root, case)?;
     if outcome.successful {
         Ok(())
     } else {
@@ -600,9 +599,8 @@ fn run_warmup(
 fn run_attempt(
     args: &Args,
     binary: &Path,
-    snapshot_executable: &Path,
-    workload_root: &Path,
-    sample_run_root: &Path,
+    snapshot_root: &Path,
+    snapshot_receipt_digest: &str,
     result_dir: &Path,
     run: &RunIdentity,
     case: Case,
@@ -611,20 +609,10 @@ fn run_attempt(
 ) -> Result<Vec<SampleRow>, String> {
     let mut rows = Vec::with_capacity(args.samples);
     for sample in 1..=args.samples {
-        let destination = sample_run_root.join(format!(
-            "{}-attempt-{attempt}-sample-{sample:03}",
-            case.id()
-        ));
-        let (snapshot, snapshot_receipt) = create_snapshot(
-            snapshot_executable,
-            workload_root,
-            &destination,
-            args.minimum_free_gib,
-        )?;
-        let snapshot_receipt_digest = bytes_digest(&snapshot_receipt);
-        let setup = prepare_case(args, binary, &snapshot.path, case);
+        let setup = restore_snapshot(args, snapshot_root)
+            .and_then(|()| prepare_case(args, binary, snapshot_root, case));
         let outcome = match setup {
-            Ok(()) => execute_case(args, binary, &snapshot.path, case)?,
+            Ok(()) => execute_case(args, binary, snapshot_root, case)?,
             Err(error) => failed_outcome(error),
         };
         let prefix = format!("{}-attempt-{attempt}-sample-{sample:03}", case.id());
@@ -656,7 +644,7 @@ fn run_attempt(
             stderr_digest: bytes_digest(&outcome.stderr),
             stdout_path: stdout_path.display().to_string(),
             stderr_path: stderr_path.display().to_string(),
-            snapshot_receipt_digest,
+            snapshot_receipt_digest: snapshot_receipt_digest.into(),
             staged_patch_digest: outcome.staged_patch_digest,
             state_before: outcome.state_before,
             state_after: outcome.state_after,
@@ -677,6 +665,7 @@ fn create_snapshot(
     source: &Path,
     destination: &Path,
     minimum_free_gib: u64,
+    maximum_allocation_gib: u64,
 ) -> Result<(DisposableSnapshot, Vec<u8>), String> {
     let output = Command::new(executable)
         .args(["--source"])
@@ -684,6 +673,10 @@ fn create_snapshot(
         .arg("--destination")
         .arg(destination)
         .args(["--minimum-free-gib", &minimum_free_gib.to_string()])
+        .args([
+            "--maximum-allocation-gib",
+            &maximum_allocation_gib.to_string(),
+        ])
         .output()
         .map_err(display_error)?;
     if !output.status.success() {
@@ -698,6 +691,34 @@ fn create_snapshot(
         },
         output.stdout,
     ))
+}
+
+fn restore_snapshot(args: &Args, root: &Path) -> Result<(), String> {
+    let reset = Command::new("git")
+        .args(["reset", "--hard", "HEAD"])
+        .current_dir(root)
+        .output()
+        .map_err(display_error)?;
+    if !reset.status.success() {
+        return Err(format!(
+            "failed to restore disposable snapshot: {}",
+            String::from_utf8_lossy(&reset.stderr).trim()
+        ));
+    }
+    remove_local_state(root)?;
+    if let Some(directory) = &args.live_mutation_directory {
+        for name in [
+            "criv_discovery_watch_probe.rs",
+            "criv_discovery_watch_probe_renamed.rs",
+        ] {
+            match fs::remove_file(root.join(directory).join(name)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(display_error(error)),
+            }
+        }
+    }
+    Ok(())
 }
 
 fn prepare_case(args: &Args, binary: &Path, root: &Path, case: Case) -> Result<(), String> {
@@ -1763,6 +1784,82 @@ mod tests {
         assert!(validate_relative_path(Path::new("src/file.rs")).is_ok());
         assert!(validate_relative_path(Path::new("../file.rs")).is_err());
         assert!(validate_relative_path(Path::new("src/../file.rs")).is_err());
+    }
+
+    #[test]
+    fn snapshot_restore_resets_tracked_and_generated_sample_state() {
+        let root = tempfile::TempDir::new().unwrap();
+        fs::create_dir(root.path().join("src")).unwrap();
+        fs::write(root.path().join("src/file.rs"), "original\n").unwrap();
+        for command in [
+            &["init", "--quiet"][..],
+            &["config", "user.email", "performance@criv.invalid"][..],
+            &["config", "user.name", "criv performance"][..],
+            &["add", "--all"][..],
+            &["commit", "--quiet", "-m", "fixture"][..],
+        ] {
+            assert!(
+                Command::new("git")
+                    .args(command)
+                    .current_dir(root.path())
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+        fs::write(root.path().join("src/file.rs"), "changed\n").unwrap();
+        assert!(
+            Command::new("git")
+                .args(["add", "--all"])
+                .current_dir(root.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::create_dir(root.path().join(".criv")).unwrap();
+        fs::write(root.path().join(".criv/state.json"), "state\n").unwrap();
+        fs::write(
+            root.path().join("src/criv_discovery_watch_probe.rs"),
+            "probe\n",
+        )
+        .unwrap();
+
+        let args = Args {
+            binary: "criv".into(),
+            binary_label: "test".into(),
+            snapshot_executable: "snapshot".into(),
+            workload_root: root.path().into(),
+            workload_inventory: "inventory.json".into(),
+            sample_root: root.path().into(),
+            results_root: root.path().into(),
+            source_mutation_path: None,
+            markdown_mutation_path: None,
+            live_mutation_directory: Some("src".into()),
+            cases: vec![],
+            samples: 5,
+            allow_low_samples: false,
+            timeout_seconds: 120,
+            minimum_free_gib: 30,
+            maximum_snapshot_allocation_gib: 20,
+        };
+        restore_snapshot(&args, root.path()).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(root.path().join("src/file.rs")).unwrap(),
+            "original\n"
+        );
+        assert!(!root.path().join(".criv").exists());
+        assert!(
+            !root
+                .path()
+                .join("src/criv_discovery_watch_probe.rs")
+                .exists()
+        );
+        assert!(
+            command_bytes(root.path(), "git", &["diff", "--cached"])
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

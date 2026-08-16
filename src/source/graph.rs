@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
+use std::thread;
 
 #[cfg(test)]
 use std::{cell::Cell, thread_local};
@@ -14,6 +15,8 @@ use crate::{CrivError, Result};
 
 // Bump when parsed source graph semantics or serialized graph types change.
 const GRAPH_CACHE_SCHEMA: &str = "criv.source-graph/2";
+const MAX_SOURCE_WORKERS: usize = 16;
+const MIN_FILES_PER_SOURCE_WORKER: usize = 1_024;
 
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
@@ -386,35 +389,21 @@ impl SourceGraph {
         previous: Option<&Self>,
     ) -> Result<Self> {
         let mut graph = Self::default();
-        for source_file in source_files {
+        for processed in process_source_files(root, source_files, previous)? {
             #[cfg(test)]
             record_work(|counts| counts.source_reads += 1);
-            let bytes = read_source_bytes(root, source_file).map_err(|error| {
-                CrivError::new(format!(
-                    "failed to read selected file `{source_file}`: {error}"
-                ))
-            })?;
-            if !content_inspector::inspect(&bytes).is_text() {
+            let Some(processed) = processed else {
                 continue;
-            }
-            let fingerprint = blake3::hash(&bytes).to_hex().to_string();
-            let contents = String::from_utf8_lossy(&bytes);
-            let reused = previous
-                .filter(|previous| {
-                    previous.file_fingerprints.get(source_file) == Some(&fingerprint)
-                })
-                .and_then(|previous| previous.files.get(source_file).cloned());
-            let parsed = if let Some(parsed) = reused {
+            };
+            if processed.reused {
                 #[cfg(test)]
                 record_work(|counts| counts.reused_files += 1);
-                parsed
             } else {
                 #[cfg(test)]
                 record_work(|counts| counts.parsed_files += 1);
-                graph.changed_files.push(source_file.clone());
-                parse_source_file(source_file, &contents)
-            };
-            for symbol in &parsed.symbols {
+                graph.changed_files.push(processed.path.clone());
+            }
+            for symbol in &processed.parsed.symbols {
                 graph
                     .symbol_index
                     .entry(symbol.name.clone())
@@ -428,8 +417,8 @@ impl SourceGraph {
             }
             graph
                 .file_fingerprints
-                .insert(source_file.clone(), fingerprint);
-            graph.files.insert(source_file.clone(), parsed);
+                .insert(processed.path.clone(), processed.fingerprint);
+            graph.files.insert(processed.path, processed.parsed);
         }
         if let Some(previous) = previous {
             for previous_file in previous.file_fingerprints.keys() {
@@ -571,6 +560,91 @@ impl SourceGraph {
             .get(&id.path)
             .and_then(|file| file.symbols.iter().find(|symbol| &symbol.id == id))
     }
+}
+
+#[derive(Debug)]
+struct ProcessedSource {
+    path: String,
+    fingerprint: String,
+    parsed: SourceFile,
+    reused: bool,
+}
+
+fn process_source_files(
+    root: &Path,
+    source_files: &[String],
+    previous: Option<&SourceGraph>,
+) -> Result<Vec<Option<ProcessedSource>>> {
+    if source_files.is_empty() {
+        return Ok(Vec::new());
+    }
+    let useful_workers = source_files.len().div_ceil(MIN_FILES_PER_SOURCE_WORKER);
+    let workers = thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .min(MAX_SOURCE_WORKERS)
+        .min(useful_workers);
+    if workers == 1 {
+        return source_files
+            .iter()
+            .map(|source_file| process_source_file(root, source_file, previous))
+            .collect();
+    }
+
+    let chunk_size = source_files.len().div_ceil(workers);
+    thread::scope(|scope| {
+        let handles = source_files
+            .chunks(chunk_size)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .map(|source_file| process_source_file(root, source_file, previous))
+                        .collect::<Result<Vec<_>>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut processed = Vec::with_capacity(source_files.len());
+        for handle in handles {
+            processed.extend(
+                handle
+                    .join()
+                    .map_err(|_| CrivError::new("Source worker failed"))??,
+            );
+        }
+        Ok(processed)
+    })
+}
+
+fn process_source_file(
+    root: &Path,
+    source_file: &str,
+    previous: Option<&SourceGraph>,
+) -> Result<Option<ProcessedSource>> {
+    let bytes = read_source_bytes(root, source_file).map_err(|error| {
+        CrivError::new(format!(
+            "failed to read selected file `{source_file}`: {error}"
+        ))
+    })?;
+    if !content_inspector::inspect(&bytes).is_text() {
+        return Ok(None);
+    }
+    let fingerprint = blake3::hash(&bytes).to_hex().to_string();
+    let reused = previous
+        .filter(|previous| previous.file_fingerprints.get(source_file) == Some(&fingerprint))
+        .and_then(|previous| previous.files.get(source_file).cloned());
+    let (parsed, reused) = if let Some(parsed) = reused {
+        (parsed, true)
+    } else {
+        let contents = String::from_utf8_lossy(&bytes);
+        (parse_source_file(source_file, &contents), false)
+    };
+    Ok(Some(ProcessedSource {
+        path: source_file.to_string(),
+        fingerprint,
+        parsed,
+        reused,
+    }))
 }
 
 fn parse_source_file(path: &str, contents: &str) -> SourceFile {

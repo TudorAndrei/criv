@@ -7,6 +7,7 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 
 const MANIFEST_SCHEMA: &str = "criv.discovery-workload.v1";
+const FIXTURE_COMMIT_DATE: &str = "2000-01-01T00:00:00Z";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -271,6 +272,8 @@ fn initialize_git(root: &Path) -> Result<(), String> {
     ] {
         let output = Command::new("git")
             .args(args)
+            .env("GIT_AUTHOR_DATE", FIXTURE_COMMIT_DATE)
+            .env("GIT_COMMITTER_DATE", FIXTURE_COMMIT_DATE)
             .current_dir(root)
             .output()
             .map_err(display_error)?;
@@ -357,6 +360,28 @@ mod tests {
                 .len(),
             65
         );
+    }
+
+    #[test]
+    fn generated_git_commit_is_repeatable() {
+        let left = tempfile::TempDir::new().unwrap();
+        let right = tempfile::TempDir::new().unwrap();
+        fs::write(left.path().join("input.txt"), "same\n").unwrap();
+        fs::write(right.path().join("input.txt"), "same\n").unwrap();
+
+        initialize_git(left.path()).unwrap();
+        initialize_git(right.path()).unwrap();
+
+        let revision = |root: &Path| {
+            let output = Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(root)
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            output.stdout
+        };
+        assert_eq!(revision(left.path()), revision(right.path()));
     }
 
     #[test]

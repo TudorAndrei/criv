@@ -33,9 +33,11 @@ The large representative file-discovery workload is the observed
 `flowcopilot/ouro` checkout. Evidence identifies its exact revision and full
 worktree inventory, including ignored generated files. The local inventory is
 content-addressed and is not committed because it contains repository paths.
-Strict APFS copy-on-write snapshots isolate samples on the controlled macOS
-host. Synthetic 9,000, 90,000, and 225,000-file trees test scaling and edge
-cases only. They are not representative user-project evidence.
+A strict APFS copy-on-write snapshot isolates each command run on the
+controlled macOS host. The runner resets tracked files, the Git index, its
+known live-test files, and generated criv State before each sample. Synthetic
+9,000, 90,000, and 225,000-file trees test scaling and edge cases only. They
+are not representative user-project evidence.
 
 Docker is an optional execution environment, not a workload. An explicitly
 invoked [Testcontainers for Rust](https://rust.testcontainers.org/) lane builds

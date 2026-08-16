@@ -74,7 +74,8 @@ File-discovery evidence has seven separate tools:
   byte counts. These summary fields do not change the content-addressed
   workload digest.
 - `criv-discovery-snapshot` creates one strict APFS copy-on-write snapshot. It
-  never falls back to a full copy and refuses to run below its free-space gate.
+  never falls back to a full copy. It checks the free-space reserve before and
+  after the clone.
 - `criv-discovery-baseline` runs release-profile, test-only probes for Source
   candidates, the complete Source build, Vault selection, and Markdown
   selection. It records raw samples, elapsed and CPU time, peak resident
@@ -85,10 +86,11 @@ File-discovery evidence has seven separate tools:
   and non-UTF-8 path identity.
 - `criv-discovery-adapter` exports an immutable criv revision and applies only
   its fixed test-only probe adapter.
-- `criv-discovery-commands` measures official release commands on strict
-  workload snapshots. It includes cold and warm one-shot publication, live
-  readiness and convergence, full check, and changed Source and Markdown
-  checks.
+- `criv-discovery-commands` measures official release commands on one strict
+  workload snapshot per run. It resets the disposable Git worktree and
+  generated State before each sample. It includes cold and warm one-shot
+  publication, live readiness and convergence, full check, and changed Source
+  and Markdown checks.
 
 Build the probe and run a smoke measurement with:
 
