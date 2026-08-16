@@ -32,8 +32,8 @@ const validState = {
   patterns: {},
   "registered-patterns": ["ADR-0001/no-block-on"],
   "source-index": [
-    { path: "src/lib.rs", frecency: 5 },
-    { path: "src/main.rs", frecency: 2 },
+    { path: "src/lib.rs" },
+    { path: "src/main.rs" },
   ],
 };
 const validStateRaw = JSON.stringify(validState);
@@ -355,7 +355,7 @@ async function testObsidianC4NavigationUsesValidatedLookup() {
   };
   const state = {
     ...validState,
-    "source-index": [{ path: "src/validated.rs", frecency: 1 }],
+    "source-index": [{ path: "src/validated.rs" }],
     lookup: {
       "src/validated.rs": {
         kind: "resolved",

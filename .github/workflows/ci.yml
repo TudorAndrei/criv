@@ -427,6 +427,7 @@ jobs:
         run: |
           bash tests/performance_harness.sh
           bash tests/performance_git_note.sh
+          bash tests/performance_release_gate_note.sh
           node --test scripts/performance/measure-state-wasm.test.mjs
 
   check:
@@ -435,6 +436,7 @@ jobs:
     needs:
       - changes
       - core
+      - discovery-contracts
       - editor-contracts
       - wasm
       - obsidian
@@ -450,6 +452,7 @@ jobs:
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
           CORE_RESULT: ${{ needs.core.result }}
+          DISCOVERY_CONTRACTS_RESULT: ${{ needs.discovery-contracts.result }}
           EDITOR_CONTRACTS_RESULT: ${{ needs.editor-contracts.result }}
           WASM_RESULT: ${{ needs.wasm.result }}
           OBSIDIAN_RESULT: ${{ needs.obsidian.result }}
@@ -461,6 +464,7 @@ jobs:
         run: |
           test "$CHANGES_RESULT" = success
           test "$CORE_RESULT" = success
+          test "$DISCOVERY_CONTRACTS_RESULT" = success
           test "$EDITOR_CONTRACTS_RESULT" = success
           test "$WASM_RESULT" = success
           test "$OBSIDIAN_RESULT" = success
@@ -469,6 +473,51 @@ jobs:
           test "$VSCODE_RESULT" = success
           test "$WINDOWS_RESULT" = success
           test "$MACOS_WATCH_LOCK_RESULT" = success
+
+  discovery-contracts:
+    name: Discovery contracts (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            runner: ubuntu-24.04
+          - name: macOS ARM64
+            runner: macos-15
+          - name: Windows x86_64
+            runner: windows-2025
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Cache Cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/git/db
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+          key: cargo-inputs-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            cargo-inputs-${{ runner.os }}-
+
+      - name: Install Rust compiler cache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.16.0
+
+      - name: Install Rust
+        run: rustup toolchain install 1.97.1 --profile minimal --no-self-update
+
+      - name: Run shared discovery contract corpus
+        run: "cargo +1.97.1 test --locked --lib discovery::tests::"
 
   windows:
     name: Windows build and tests

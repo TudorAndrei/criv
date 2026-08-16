@@ -63,10 +63,15 @@ model {
   }
 
   extend criv.cli.sourceIntelligence {
-    rustSourceIndex = module 'criv::source::index' {
+    rustSourceCatalog = module 'criv::source::catalog' {
       technology 'Rust'
-      description 'Indexes repository source paths for one-shot and live workflows.'
-      link ../../src/source/index.rs 'source'
+      description 'Owns the stable Source path catalog and target lookup.'
+      link ../../src/source/catalog.rs 'source'
+    }
+    rustDiscovery = module 'criv::discovery' {
+      technology 'Rust and ignore'
+      description 'Selects Source, Vault, and Markdown files with profile-specific rules.'
+      link ../../src/discovery/mod.rs 'source'
     }
     rustSourcePaths = module 'criv::source::paths' {
       technology 'Rust'
@@ -172,11 +177,11 @@ model {
 
   // Refresh pipeline.
   criv.cli.refreshCoordinator.rustWatch -> criv.cli.refreshCoordinator.rustRefresh 'Schedules refresh sessions'
-  criv.cli.refreshCoordinator.rustWatch -> criv.cli.sourceIntelligence.rustSourceIndex 'Updates the live source index'
+  criv.cli.refreshCoordinator.rustWatch -> criv.cli.sourceIntelligence.rustSourceCatalog 'Updates the live Source catalog'
   criv.cli.refreshCoordinator.rustWatch -> criv.cli.vaultModel.rustConfig 'Reads the watch configuration'
   criv.cli.refreshCoordinator.rustRefresh -> criv.cli.vaultModel.rustVault 'Loads the repository model'
   criv.cli.refreshCoordinator.rustRefresh -> criv.cli.vaultModel.rustConfig 'Reads the refresh configuration'
-  criv.cli.refreshCoordinator.rustRefresh -> criv.cli.sourceIntelligence.rustSourceIndex 'Updates the live source index'
+  criv.cli.refreshCoordinator.rustRefresh -> criv.cli.sourceIntelligence.rustSourceCatalog 'Updates the live Source catalog'
   criv.cli.refreshCoordinator.rustRefresh -> criv.cli.sourceIntelligence.rustSourceGraph 'Rebuilds changed source relations'
   criv.cli.refreshCoordinator.rustRefresh -> criv.cli.governanceEngine.rustCheck 'Validates the loaded vault'
   criv.cli.refreshCoordinator.rustRefresh -> criv.cli.statePublisher.rustState 'Publishes the validated state'
@@ -185,12 +190,13 @@ model {
   criv.cli.vaultModel.rustVault -> criv.cli.vaultModel.rustC4 'Creates C4 artifacts'
   criv.cli.vaultModel.rustVault -> criv.cli.vaultModel.rustConfig 'Reads the vault configuration'
   criv.cli.vaultModel.rustVault -> criv.cli.architectureService.rustLikeC4 'Compiles C4 sources'
-  criv.cli.vaultModel.rustVault -> criv.cli.sourceIntelligence.rustSourceIndex 'Indexes configured sources'
+  criv.cli.vaultModel.rustVault -> criv.cli.sourceIntelligence.rustSourceCatalog 'Loads configured sources'
   criv.cli.vaultModel.rustVault -> criv.cli.sourceIntelligence.rustSourceGraph 'Builds module and import relations'
 
   // Source analysis.
-  criv.cli.sourceIntelligence.rustSourceIndex -> criv.cli.sourceIntelligence.rustSourcePaths 'Selects and reads source paths'
-  criv.cli.sourceIntelligence.rustSourceIndex -> criv.cli.vaultModel.rustConfig 'Reads the configured source roots'
+  criv.cli.sourceIntelligence.rustSourceCatalog -> criv.cli.sourceIntelligence.rustDiscovery 'Selects Source paths'
+  criv.cli.sourceIntelligence.rustDiscovery -> criv.cli.vaultModel.rustConfig 'Reads file-selection rules'
+  criv.cli.sourceIntelligence.rustSourceCatalog -> criv.cli.sourceIntelligence.rustSourcePaths 'Owns selected source paths'
   criv.cli.sourceIntelligence.rustSourceGraph -> criv.cli.sourceIntelligence.rustSourcePaths 'Reads indexed source content'
 
   // Validation and enforcement.
@@ -229,7 +235,7 @@ model {
 
   // Queries.
   criv.cli.knowledgeQueries.rustQuery -> criv.cli.vaultModel.rustVault 'Resolves graph questions'
-  criv.cli.knowledgeQueries.rustQuery -> criv.cli.sourceIntelligence.rustSourceIndex 'Reads indexed sources'
+  criv.cli.knowledgeQueries.rustQuery -> criv.cli.sourceIntelligence.rustSourceCatalog 'Reads selected sources'
   criv.cli.knowledgeQueries.rustQuery -> criv.cli.sourceIntelligence.rustSourceGraph 'Reads module and import relations'
   criv.cli.knowledgeQueries.rustQuery -> criv.cli.repositoryHistory.rustGit 'Reads commit history'
   criv.cli.knowledgeQueries.rustQuery -> criv.cli.statePublisher.rustStatePublication 'Reads published snapshots'
@@ -246,7 +252,8 @@ views {
 
     include *
     include criv.cli.vaultModel.rustVault
-    include criv.cli.sourceIntelligence.rustSourceIndex
+    include criv.cli.sourceIntelligence.rustSourceCatalog
+    include criv.cli.sourceIntelligence.rustDiscovery
     include criv.cli.sourceIntelligence.rustSourceGraph
     include criv.cli.governanceEngine.rustCheck
     include criv.cli.architectureService.rustLikeC4
@@ -270,7 +277,8 @@ views {
 
     include *
     include criv.cli.architectureService.rustLikeC4
-    include criv.cli.sourceIntelligence.rustSourceIndex
+    include criv.cli.sourceIntelligence.rustSourceCatalog
+    include criv.cli.sourceIntelligence.rustDiscovery
     include criv.cli.sourceIntelligence.rustSourceGraph
   }
 

@@ -29,10 +29,13 @@ extension distribution, symbols, link categories, and exact changed fraction.
 Generated workload content is sanitized and deterministic; it reproduces the
 shape, not proprietary text or source.
 
-A large tier is deliberately absent. No observed large criv vault was available
-for approval on 2026-08-03, and extrapolating either current shape would create
-the invented average prohibited by the evidence policy. Adding a large tier
-requires a separately reviewed observed manifest.
+The large representative file-discovery workload is the observed
+`flowcopilot/ouro` checkout. Evidence identifies its exact revision and full
+worktree inventory, including ignored generated files. The local inventory is
+content-addressed and is not committed because it contains repository paths.
+Strict APFS copy-on-write snapshots isolate samples on the controlled macOS
+host. Synthetic 9,000, 90,000, and 225,000-file trees test scaling and edge
+cases only. They are not representative user-project evidence.
 
 Docker is an optional execution environment, not a workload. An explicitly
 invoked [Testcontainers for Rust](https://rust.testcontainers.org/) lane builds
@@ -137,3 +140,25 @@ aggregate or local hooks and does not require Docker.
 
 The governing decision is
 [[0072-keep-performance-observation-outside-core|ADR-0072]].
+
+## File-discovery release gates
+
+File-discovery acceptance has two evidence layers. A release-profile,
+test-only selector probe measures Source, Vault, and Markdown selection. The
+normal release binary measures cold and warm publication, changed checks, and
+live readiness and convergence. Both layers record path identities and
+per-child peak resident memory. The production CLI has no measurement API.
+
+The gate verifier checks five stable samples, matched machine and workload
+identity, output parity, the accepted time and memory limits, four target
+artifacts, binary size, and three clean builds. A result with more than ten
+percent relative median absolute deviation gets one complete repeat. A second
+unstable attempt is not acceptance evidence.
+
+The controlled workflow writes the accepted receipt to
+`refs/notes/criv-release-gates`. The receipt is valid for seven days and names
+the exact commit, toolchain, evidence digests, workflow artifact, and four
+measured binaries. The release workflow packages these measured binaries. It
+does not rebuild them. See
+[[0112-direct-ignore-file-discovery|ADR-0112]] and [[releasing]] for the
+release sequence.

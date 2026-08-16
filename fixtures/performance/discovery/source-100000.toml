@@ -1,0 +1,16 @@
+schema = "criv.discovery-workload.v1"
+id = "source-100000"
+profile = "source"
+seed = 124002
+generated_entries = 100000
+generated_directories = 10000
+maximum_depth = 4
+fanout = 32
+minimum_file_bytes = 64
+
+[expected]
+source_files = 90000
+vault_markdown_files = 0
+vault_c4_files = 0
+markdown_files = 0
+errors = []

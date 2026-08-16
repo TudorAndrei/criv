@@ -13,7 +13,7 @@ test("publishes the canonical Wasm projection without host State parsing", () =>
       source_count: 1,
       pattern_count: 1,
     },
-    sources: [{ path: "docs/architecture/systems.c4", frecency: 3 }],
+    sources: [{ path: "docs/architecture/systems.c4" }],
     nodes: [
       {
         id: "code:docs/architecture/systems.c4",

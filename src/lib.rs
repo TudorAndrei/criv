@@ -2,6 +2,7 @@ mod adr;
 mod c4;
 mod check;
 mod config;
+mod discovery;
 mod enforce;
 mod generated_skills;
 mod git;
@@ -19,6 +20,25 @@ mod structural;
 mod util;
 mod vault;
 mod watch;
+
+#[cfg(test)]
+#[path = "../scripts/performance/discovery_probe.rs"]
+mod discovery_probe;
+
+#[cfg(test)]
+fn discovery_probe_source_files(root: &std::path::Path) -> Result<Vec<String>> {
+    let config = config::Config::load(root)?;
+    Ok(source::SourceCatalog::discover(root, &config)?
+        .paths()
+        .to_vec())
+}
+
+#[cfg(test)]
+fn discovery_probe_vault_files(root: &std::path::Path) -> Result<(Vec<String>, Vec<String>)> {
+    let config = config::Config::load(root)?;
+    let selected = discovery::discover_vault(root, &config.docs_dir)?;
+    Ok((selected.markdown, selected.c4))
+}
 
 use std::io::Write;
 

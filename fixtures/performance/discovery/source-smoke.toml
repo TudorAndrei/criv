@@ -1,0 +1,16 @@
+schema = "criv.discovery-workload.v1"
+id = "source-smoke"
+profile = "source"
+seed = 124000
+generated_entries = 20
+generated_directories = 4
+maximum_depth = 3
+fanout = 4
+minimum_file_bytes = 64
+
+[expected]
+source_files = 16
+vault_markdown_files = 0
+vault_c4_files = 0
+markdown_files = 0
+errors = []

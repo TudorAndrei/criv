@@ -1,0 +1,62 @@
+diff --git a/src/check.rs b/src/check.rs
+index a96afc0..7243097 100644
+--- a/src/check.rs
++++ b/src/check.rs
+@@ -344,0 +345,6 @@ fn markdown_files(root: &Path, config: &RumdlConfig) -> Vec<String> {
++#[cfg(test)]
++pub(crate) fn discovery_probe_markdown_files(root: &Path) -> Result<Vec<String>> {
++    let config = load_rumdl_config(root)?;
++    Ok(markdown_files(root, &config))
++}
++
+diff --git a/src/lib.rs b/src/lib.rs
+index 0d63350..b6746ef 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -22,0 +23,46 @@ mod watch;
++#[cfg(test)]
++#[path = "../scripts/performance/discovery_probe.rs"]
++mod discovery_probe;
++
++#[cfg(test)]
++fn discovery_probe_source_files(root: &std::path::Path) -> Result<Vec<String>> {
++    let config = config::Config::load(root)?;
++    let mut lifecycle = source::SourceIndexLifecycle::for_command(root, &config)?;
++    Ok(lifecycle.observe()?.into_catalog().paths().to_vec())
++}
++
++#[cfg(test)]
++fn discovery_probe_vault_files(
++    root: &std::path::Path,
++) -> Result<(Vec<String>, Vec<String>)> {
++    let config = config::Config::load(root)?;
++    let docs = config.docs_path(root);
++    let markdown = util::walk_vault_files(root, &docs, Some("md"))?
++        .into_iter()
++        .map(|path| discovery_probe_relative(root, &path))
++        .collect::<Result<Vec<_>>>()?;
++    let c4 = util::walk_vault_files(root, &docs, Some("c4"))?
++        .into_iter()
++        .map(|path| discovery_probe_relative(root, &path))
++        .collect::<Result<Vec<_>>>()?;
++    Ok((markdown, c4))
++}
++
++#[cfg(test)]
++fn discovery_probe_relative(root: &std::path::Path, path: &std::path::Path) -> Result<String> {
++    let relative = path.strip_prefix(root).map_err(|_| {
++        CrivError::new(format!(
++            "discovery probe path {} is outside {}",
++            path.display(),
++            root.display()
++        ))
++    })?;
++    let relative = relative.to_str().ok_or_else(|| {
++        CrivError::new(format!(
++            "discovery probe path {} is not valid UTF-8",
++            path.display()
++        ))
++    })?;
++    Ok(relative.replace(std::path::MAIN_SEPARATOR, "/"))
++}
++

@@ -26,17 +26,17 @@
     "registered-patterns": [],
     "patterns": {},
     "source-index": [
-      { "path": "src/lib.rs", "frecency": 0 },
-      { "path": "crates/demo/lib.rs", "frecency": 0 },
-      { "path": "src/unique.rs", "frecency": 0 },
-      { "path": "lib.rs", "frecency": 0 },
-      { "path": "src/dup.rs", "frecency": 0 },
-      { "path": "a/common.rs", "frecency": 0 },
-      { "path": "b/common.rs", "frecency": 0 },
-      { "path": "c/common.rs", "frecency": 0 },
-      { "path": "d/common.rs", "frecency": 0 },
-      { "path": "e/common.rs", "frecency": 0 },
-      { "path": "f/common.rs", "frecency": 0 }
+      { "path": "src/lib.rs" },
+      { "path": "crates/demo/lib.rs" },
+      { "path": "src/unique.rs" },
+      { "path": "lib.rs" },
+      { "path": "src/dup.rs" },
+      { "path": "a/common.rs" },
+      { "path": "b/common.rs" },
+      { "path": "c/common.rs" },
+      { "path": "d/common.rs" },
+      { "path": "e/common.rs" },
+      { "path": "f/common.rs" }
     ]
   },
   "cases": [

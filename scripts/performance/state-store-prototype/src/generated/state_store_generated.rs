@@ -558,10 +558,10 @@ pub mod criv {
         // struct SourceRow, aligned to 4
         #[repr(transparent)]
         #[derive(Clone, Copy, PartialEq)]
-        pub struct SourceRow(pub [u8; 12]);
+        pub struct SourceRow(pub [u8; 8]);
         impl Default for SourceRow {
             fn default() -> Self {
-                Self([0; 12])
+                Self([0; 8])
             }
         }
         impl ::core::fmt::Debug for SourceRow {
@@ -569,7 +569,6 @@ pub mod criv {
                 f.debug_struct("SourceRow")
                     .field("path", &self.path())
                     .field("mime", &self.mime())
-                    .field("frecency", &self.frecency())
                     .finish()
             }
         }
@@ -619,11 +618,10 @@ pub mod criv {
 
         impl<'a> SourceRow {
             #[allow(clippy::too_many_arguments)]
-            pub fn new(path: u32, mime: u32, frecency: u32) -> Self {
-                let mut s = Self([0; 12]);
+            pub fn new(path: u32, mime: u32) -> Self {
+                let mut s = Self([0; 8]);
                 s.set_path(path);
                 s.set_mime(mime);
-                s.set_frecency(frecency);
                 s
             }
 
@@ -684,37 +682,6 @@ pub mod criv {
                     ::core::ptr::copy_nonoverlapping(
                         &x_le as *const _ as *const u8,
                         self.0[4..].as_mut_ptr(),
-                        ::core::mem::size_of::<<u32 as ::flatbuffers::EndianScalar>::Scalar>(),
-                    );
-                }
-            }
-
-            pub fn frecency(&self) -> u32 {
-                let mut mem = ::core::mem::MaybeUninit::<
-                    <u32 as ::flatbuffers::EndianScalar>::Scalar,
-                >::uninit();
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid value in this slot
-                ::flatbuffers::EndianScalar::from_little_endian(unsafe {
-                    ::core::ptr::copy_nonoverlapping(
-                        self.0[8..].as_ptr(),
-                        mem.as_mut_ptr() as *mut u8,
-                        ::core::mem::size_of::<<u32 as ::flatbuffers::EndianScalar>::Scalar>(),
-                    );
-                    mem.assume_init()
-                })
-            }
-
-            pub fn set_frecency(&mut self, x: u32) {
-                let x_le = ::flatbuffers::EndianScalar::to_little_endian(x);
-                // Safety:
-                // Created from a valid Table for this object
-                // Which contains a valid value in this slot
-                unsafe {
-                    ::core::ptr::copy_nonoverlapping(
-                        &x_le as *const _ as *const u8,
-                        self.0[8..].as_mut_ptr(),
                         ::core::mem::size_of::<<u32 as ::flatbuffers::EndianScalar>::Scalar>(),
                     );
                 }

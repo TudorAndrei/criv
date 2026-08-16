@@ -108,8 +108,6 @@ pub struct SourceIndexEntry {
     pub path: String,
     #[serde(default)]
     pub mime: Option<String>,
-    #[serde(default)]
-    pub frecency: u32,
 }
 
 #[cfg(test)]
@@ -147,7 +145,6 @@ mod tests {
             vec![SourceIndexEntry {
                 path: "src/lib.rs".into(),
                 mime: Some("text/rust".into()),
-                frecency: 4,
             }],
         );
 
@@ -163,6 +160,19 @@ mod tests {
         assert_eq!(
             decoded.patterns["ADR-0001/entrypoint"][0].file,
             "src/lib.rs"
+        );
+    }
+
+    #[test]
+    fn source_rows_accept_legacy_extra_fields() {
+        let entry: SourceIndexEntry =
+            serde_json::from_str(r#"{"path":"src/lib.rs","mime":"text/rust","frecency":9}"#)
+                .unwrap();
+        assert_eq!(entry.path, "src/lib.rs");
+        assert_eq!(entry.mime.as_deref(), Some("text/rust"));
+        assert_eq!(
+            serde_json::to_value(entry).unwrap(),
+            serde_json::json!({"path": "src/lib.rs", "mime": "text/rust"})
         );
     }
 }

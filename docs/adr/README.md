@@ -121,3 +121,7 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0108-bounded-hosted-rust-compilation|ADR-0108]] - Bounded hosted Rust compilation
 - [[0109-drop-removed-architecture-configuration-compatibility|ADR-0109]] - Drop removed architecture configuration compatibility
 - [[0110-enforce-runtime-paths-without-architecture-compatibility|ADR-0110]] - Enforce runtime paths without architecture compatibility
+- [[0111-file-discovery-compatibility-contract|ADR-0111]] - File discovery compatibility contract
+- [[0112-direct-ignore-file-discovery|ADR-0112]] - Direct ignore file discovery
+- [[0113-enforce-runtime-paths-after-file-discovery-replacement|ADR-0113]] - Enforce runtime paths after file discovery replacement
+- [[0114-reconcile-file-discovery-source-scopes|ADR-0114]] - Reconcile file discovery source scopes

@@ -1,0 +1,114 @@
+name: Discovery release gates
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Full candidate commit ID
+        required: true
+        type: string
+      bundle_path:
+        description: Absolute path to the prepared evidence bundle on the controlled runner
+        required: true
+        type: string
+
+concurrency:
+  group: discovery-release-gates-${{ inputs.commit }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  accept:
+    name: Validate and publish release receipt
+    runs-on:
+      - self-hosted
+      - macOS
+      - ARM64
+      - criv-release-gates
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate candidate and prepare gate input
+        env:
+          BUNDLE_PATH: ${{ inputs.bundle_path }}
+          EXPECTED_COMMIT: ${{ inputs.commit }}
+          RUN_ID: ${{ github.run_id }}
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test -f "$BUNDLE_PATH/gate-input.json"
+          test "$(jq -r .commit "$BUNDLE_PATH/gate-input.json")" = "$EXPECTED_COMMIT"
+          evidence_name="discovery-release-evidence-$EXPECTED_COMMIT"
+          binary_name="discovery-release-binaries-$EXPECTED_COMMIT"
+          jq \
+            --argjson run_id "$RUN_ID" \
+            --arg evidence_name "$evidence_name" \
+            --arg binary_name "$binary_name" \
+            '.artifact_run_id = $run_id |
+             .evidence_artifact_name = $evidence_name |
+             .artifacts.targets |= map(.artifact_name = $binary_name)' \
+            "$BUNDLE_PATH/gate-input.json" > gate-input.json
+
+      - name: Build gate verifier
+        run: cargo build --locked --release -p criv-perf-harness --bin criv-discovery-gate
+
+      - name: Validate all gates
+        run: |
+          target/release/criv-discovery-gate \
+            --input gate-input.json \
+            --output release-gate.json
+
+      - name: Stage measured binaries
+        shell: bash
+        run: |
+          mkdir -p release-gate-binaries
+          while IFS=$'\t' read -r target path file_name; do
+            mkdir -p "release-gate-binaries/$target"
+            cp "$path" "release-gate-binaries/$target/$file_name"
+          done < <(jq -r '.artifacts[] | [.target, .path, .file_name] | @tsv' release-gate.json)
+
+      - name: Upload measured binaries
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: discovery-release-binaries-${{ inputs.commit }}
+          path: release-gate-binaries
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload raw evidence and receipt
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: discovery-release-evidence-${{ inputs.commit }}
+          path: |
+            ${{ inputs.bundle_path }}
+            gate-input.json
+            release-gate.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish release-gate note
+        env:
+          EXPECTED_COMMIT: ${{ inputs.commit }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh auth setup-git
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          scripts/performance/publish-release-gate-note.sh \
+            release-gate.json \
+            "$EXPECTED_COMMIT" \
+            origin

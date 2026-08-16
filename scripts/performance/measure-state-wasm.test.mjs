@@ -41,7 +41,7 @@ test("reports the packaged Wasm storage operations as JSON", () => {
     graph: { nodes: [{ id: "node", path: "src/lib.rs" }], edges: [] },
     "registered-patterns": [],
     patterns: {},
-    "source-index": [{ path: "src/lib.rs", frecency: 1 }],
+    "source-index": [{ path: "src/lib.rs" }],
   });
   writeFileSync(state, raw);
   const report = join(root, "report.json");

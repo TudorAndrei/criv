@@ -147,3 +147,16 @@ cargo tree -i git2@0.20.4
 cargo tree -i bincode@1.3.3
 cargo tree --all-features --target all -e features -i paste@1.0.15
 ```
+
+## File discovery resolution, 2026-08-16
+
+[[0112-direct-ignore-file-discovery|ADR-0112]] removes `fff-search` and its
+transitive `git2 v0.20.4`, `heed`, and `bincode v1.3.3` path. Source, Vault,
+and Markdown selection now use the existing pure-Rust `ignore`, `globset`, and
+`content_inspector` dependencies. Direct `git2 v0.21.0` remains the embedded
+repository boundary.
+
+The dated audit and build measurements above remain historical evidence. Their
+instruction to keep `fff-search` was superseded only after the separate file-
+discovery contract, implementation decision, compatibility corpus, and release
+gates were accepted.

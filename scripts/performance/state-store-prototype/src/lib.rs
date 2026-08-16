@@ -285,8 +285,6 @@ struct PatternMatch {
 struct SourceIndexEntry {
     path: String,
     mime: Option<String>,
-    #[serde(default)]
-    frecency: u32,
 }
 
 impl MachineState {
@@ -1331,7 +1329,6 @@ struct RkyvEdgeRow {
 struct RkyvSourceRow {
     path: u32,
     mime: u32,
-    frecency: u32,
 }
 
 #[derive(Debug, rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)]
@@ -1454,13 +1451,11 @@ fn rkyv_partition_from_column(partition: &StoredPartition) -> Result<RkyvPartiti
             let count = reader.u32()? as usize;
             let paths = read_u32s(&mut reader, count)?;
             let mimes = read_u32s(&mut reader, count)?;
-            let frecencies = read_u32s(&mut reader, count)?;
             RkyvPartitionData::Sources(
                 (0..count)
                     .map(|index| RkyvSourceRow {
                         path: paths[index],
                         mime: mimes[index],
-                        frecency: frecencies[index],
                     })
                     .collect(),
             )
@@ -1562,9 +1557,6 @@ fn column_partition_from_rkyv(data: RkyvPartitionData) -> Result<(u8, Vec<u8>), 
             }
             for row in &rows {
                 writer.u32(row.mime);
-            }
-            for row in &rows {
-                writer.u32(row.frecency);
             }
             PARTITION_SOURCES
         }
@@ -1756,9 +1748,6 @@ fn encode_column_store(state: &MachineState) -> Result<Vec<u8>, String> {
                     .map_or(NONE_INDEX, |value| strings.indexes[value]),
             );
         }
-        for source in sources {
-            writer.u32(source.frecency);
-        }
         partitions.push(new_partition(
             PARTITION_SOURCES,
             block as u32,
@@ -1949,10 +1938,9 @@ fn flatbuffer_from_column_partition(partition: &StoredPartition) -> Result<Vec<u
             let count = reader.u32()? as usize;
             let paths = read_u32s(&mut reader, count)?;
             let mimes = read_u32s(&mut reader, count)?;
-            let frecencies = read_u32s(&mut reader, count)?;
             reader.finish()?;
             let rows = (0..count)
-                .map(|index| fb::SourceRow::new(paths[index], mimes[index], frecencies[index]))
+                .map(|index| fb::SourceRow::new(paths[index], mimes[index]))
                 .collect::<Vec<_>>();
             let rows = builder.create_vector(&rows);
             let data =
@@ -2121,9 +2109,6 @@ fn column_partition_from_flatbuffer(partition: &StoredPartition) -> Result<Vec<u
             for row in rows {
                 writer.u32(row.mime());
             }
-            for row in rows {
-                writer.u32(row.frecency());
-            }
         }
         PARTITION_PATTERNS => {
             let groups = root.data_as_patterns().and_then(|data| data.groups());
@@ -2248,13 +2233,11 @@ fn decode_column_store(bytes: &[u8]) -> Result<MachineState, String> {
         let count = reader.u32()? as usize;
         let paths = read_u32s(&mut reader, count)?;
         let mimes = read_u32s(&mut reader, count)?;
-        let frecencies = read_u32s(&mut reader, count)?;
         reader.finish()?;
         for index in 0..count {
             source_index.push(SourceIndexEntry {
                 path: string(paths[index])?,
                 mime: optional_string(mimes[index])?,
-                frecency: frecencies[index],
             });
         }
     }

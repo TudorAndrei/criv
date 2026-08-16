@@ -279,6 +279,28 @@ fn changed_check_validates_added_and_modified_notes_without_global_diagnostics()
         .stdout(predicate::str::contains("missing-global").not());
 }
 
+#[cfg(unix)]
+#[test]
+fn changed_check_does_not_walk_unselected_markdown_directories() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let outside = TempDir::new().unwrap();
+    init_git_vault(root);
+    fs::write(
+        root.join("docs/guide.md"),
+        "---\nid: guide\nkind: doc\ntitle: Guide\n---\n\nClean.\n",
+    )
+    .unwrap();
+    git(root, &["add", "docs/guide.md"]);
+    std::os::unix::fs::symlink(outside.path(), root.join("unselected-link")).unwrap();
+
+    criv(root)
+        .args(["check", "--changed", "--format", "json"])
+        .assert()
+        .success()
+        .stdout("[]\n");
+}
+
 #[test]
 fn changed_check_promotes_renames_and_deletions_to_full_validation() {
     for operation in ["rename", "delete"] {
@@ -1488,8 +1510,9 @@ fn check_fix_honors_the_rumdl_exclude_list() {
     );
 }
 
+#[cfg(unix)]
 #[test]
-fn check_fix_refuses_to_write_outside_the_repository_root() {
+fn check_fix_rejects_a_selected_link_outside_the_repository_root() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     let outside = TempDir::new().unwrap();
@@ -1499,10 +1522,15 @@ fn check_fix_refuses_to_write_outside_the_repository_root() {
     let contents = "# Secret\n\nTrailing spaces here.   \n";
     fs::write(&target, contents).unwrap();
 
-    #[cfg(unix)]
     std::os::unix::fs::symlink(&target, root.join("ESCAPE.md")).unwrap();
 
-    criv(root).args(["check", "--fix"]).assert().success();
+    criv(root)
+        .args(["check", "--fix"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "refusing to discover file link `ESCAPE.md`",
+        ));
 
     assert_eq!(
         fs::read_to_string(&target).unwrap(),

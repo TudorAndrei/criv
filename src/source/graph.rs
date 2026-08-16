@@ -1646,7 +1646,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn incremental_build_rejects_source_file_symlink_escape() {
+    fn incremental_build_rejects_a_linked_source_file() {
         use std::os::unix::fs::symlink;
 
         let temp = TempDir::new().unwrap();
@@ -1658,9 +1658,9 @@ mod tests {
         symlink(outside.join("secret.rs"), root.join("src/secret.rs")).unwrap();
 
         let error = SourceGraph::build_incremental(&root, &["src/secret.rs".into()], None)
-            .expect_err("source graph should reject source file symlink escape");
+            .expect_err("source graph should reject a linked source file");
 
-        assert!(error.to_string().contains("outside the criv vault root"));
+        assert!(error.to_string().contains("linked source path"));
     }
 
     #[test]

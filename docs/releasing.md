@@ -41,7 +41,7 @@ Preview the next automatically selected version:
 mise run release-plan
 ```
 
-For a tag-only release:
+Prepare a release commit with:
 
 ```sh
 mise run release-auto
@@ -50,8 +50,27 @@ mise run release-auto
 `release-auto` is implemented by `scripts/release-auto.sh`. It requires a
 clean `main` branch, asks Cocogitto for the next version with
 `cog bump --dry-run --auto`, updates workspace Cargo versions, runs the
-pre-release checks above, commits the version bump, creates `vX.Y.Z` and
-`criv-wasm-vX.Y.Z`, and pushes the commit and tags.
+pre-release checks above, commits the version bump, and pushes the commit. It
+does not create a tag.
+
+Run the controlled `Discovery release gates` workflow for the exact release
+commit. Its prepared evidence bundle must contain `gate-input.json`, raw Ouro
+and scaling results, four measured release binaries, matched baseline records,
+and clean-build evidence. The workflow verifies the hard gates, uploads the
+evidence and measured binaries, and writes a seven-day receipt to
+`refs/notes/criv-release-gates`.
+
+After the receipt passes, create and push the two release tags with:
+
+```sh
+mise run release-publish
+```
+
+`release-publish` requires clean `main`, the prepared release commit at
+`HEAD`, and a current passing receipt for that exact commit. The tag workflow
+downloads and verifies the four binaries named in the receipt. It packages
+those measured bytes with the editor viewer. It does not build replacement CLI
+binaries.
 
 Conventional commits drive the automatic bump: `fix` produces a patch release,
 `feat` produces a minor release, and `!` or `BREAKING CHANGE:` produces a major
@@ -73,8 +92,14 @@ cargo publish --dry-run
 ```
 
 Then run the matching `cargo release` command without `--no-publish`. Crates.io
-publishing remains manual for now; `release-auto` only cuts the tag-triggered
-binary release.
+publishing remains manual for now. The prepared release commit and the
+controlled tag publication do not publish to crates.io.
+
+The file-discovery release removes Source frecency data from Rust and editor
+types and from new State output. The schema name stays `criv.state.v1`. New
+readers accept an older document that contains the extra `frecency` field and
+ignore that field. Release notes must identify this Rust source API change and
+the intentional file-selection corrections from ADR-0111.
 
 Current tag names use:
 

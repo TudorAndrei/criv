@@ -40,19 +40,13 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
 fi
 
 tag="v$version"
-wasm_tag="criv-wasm-v$version"
 
 if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
   echo "tag already exists: $tag" >&2
   exit 1
 fi
 
-if git rev-parse -q --verify "refs/tags/$wasm_tag" >/dev/null; then
-  echo "tag already exists: $wasm_tag" >&2
-  exit 1
-fi
-
-echo "cutting release $tag"
+echo "preparing release $tag"
 
 cargo release version "$version" --workspace --execute --no-confirm
 
@@ -65,8 +59,9 @@ cargo run --locked --quiet -- query diff latest latest
 
 git add :/Cargo.toml :/Cargo.lock ':(glob)**/Cargo.toml'
 git commit -m "chore(release): $tag"
-git tag "$tag"
-git tag "$wasm_tag"
-
 git push origin main
-git push origin "$tag" "$wasm_tag"
+
+commit="$(git rev-parse HEAD)"
+echo "prepared $tag at $commit"
+echo "run the controlled discovery release-gate workflow for this commit"
+echo "after its receipt is published, run: mise run release-publish"

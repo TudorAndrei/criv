@@ -34,7 +34,6 @@ export interface CrivStateSummary {
 export interface CrivSourceEntry {
   path: string;
   mime?: string;
-  frecency: number;
 }
 
 export interface CrivGraphNode {

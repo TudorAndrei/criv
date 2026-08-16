@@ -44,6 +44,15 @@ criv query governs ADR-0007            # what an ADR controls
 rg -n -i "<topic>" docs/               # search note text
 ```
 
+## Remove inactive worktrees
+
+Run `git worktree list` before and after work that uses a separate worktree.
+Remove a clean worktree with `wt remove` as soon as its work is complete or the
+worktree is no longer active. Do not keep a research worktree only as a branch
+backup. Use `wt remove --no-delete-branch <branch>` when an unmerged branch must
+remain available. Never remove a dirty worktree without first preserving its
+changes.
+
 ## ADR conventions specific to this repo
 
 - Accepted ADRs are **immutable** under ADR-0012. Never edit, delete, or rename

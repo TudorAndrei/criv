@@ -15,7 +15,6 @@ export interface PatternMatch {
 
 export interface SourceIndexEntry {
   path: string;
-  frecency: number;
   mime?: string;
 }
 

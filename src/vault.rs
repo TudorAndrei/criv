@@ -9,12 +9,11 @@ use serde::Deserialize;
 use crate::Result;
 use crate::c4;
 use crate::config::Config;
-use crate::source::{
-    IndexedSource, SourceCatalog, SourceGraph, SourceGraphBuild, SourceIndexLifecycle,
-};
+use crate::discovery::discover_vault;
+use crate::source::{IndexedSource, SourceCatalog, SourceGraph, SourceGraphBuild};
 use crate::util::{
     GlobMatcher, find_wiki_links_with_lines, is_adr_id, kebab,
-    markdown_headings as parse_markdown_headings, read_to_string, strip_prefix, walk_vault_files,
+    markdown_headings as parse_markdown_headings, read_to_string, strip_prefix,
 };
 
 #[cfg(test)]
@@ -212,12 +211,17 @@ impl Vault {
     ) -> Result<Self> {
         let config = config.map_or_else(|| Config::load(root), Ok)?;
         let docs_path = config.docs_path(root);
-        let notes = walk_vault_files(root, &docs_path, Some("md"))?
+        let discovered = discover_vault(root, &config.docs_dir)?;
+        let notes = discovered
+            .markdown
             .into_iter()
+            .map(|path| root.join(path))
             .map(|path| parse_note(root, &docs_path, &path))
             .collect::<Result<Vec<_>>>()?;
-        let c4_artifacts = walk_vault_files(root, &docs_path, Some("c4"))?
+        let c4_artifacts = discovered
+            .c4
             .into_iter()
+            .map(|path| root.join(path))
             .map(|path| c4::parse_file(root, &docs_path, &path))
             .collect::<Result<Vec<_>>>()?;
         let likec4_sources = c4_artifacts
@@ -248,9 +252,7 @@ impl Vault {
         let source_catalog = if load_sources {
             match source_catalog {
                 Some(source_catalog) => source_catalog,
-                None => SourceIndexLifecycle::for_command(root, &config)?
-                    .observe()?
-                    .into_catalog(),
+                None => SourceCatalog::discover(root, &config)?,
             }
         } else {
             SourceCatalog::disabled()
@@ -1397,7 +1399,7 @@ source = false
     }
 
     #[test]
-    fn vault_builds_its_graph_from_the_injected_source_index() {
+    fn vault_builds_its_graph_from_the_injected_source_catalog() {
         let root = unique_temp_dir("criv-injected-source-index");
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(
@@ -1411,8 +1413,7 @@ roots = ["src"]
         std::fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
 
         let config = Config::load(&root).unwrap();
-        let mut lifecycle = SourceIndexLifecycle::for_command(&root, &config).unwrap();
-        let catalog = lifecycle.observe().unwrap().into_catalog();
+        let catalog = SourceCatalog::discover(&root, &config).unwrap();
         let expected = catalog.paths().to_vec();
         let vault = Vault::load_incremental_with_source_catalog(&root, None, catalog).unwrap();
 
@@ -1443,7 +1444,11 @@ roots = ["src"]
         .unwrap();
         std::fs::write(root.join("src/a.rs"), "pub fn a() {}\n").unwrap();
         std::fs::write(root.join("src/z.rs"), "pub fn run() {}\n").unwrap();
-        std::fs::write(root.join("assets/blob.bin"), [0, 0, 0, 0]).unwrap();
+        std::fs::write(
+            root.join("assets/blob.bin"),
+            "text with a binary extension\n",
+        )
+        .unwrap();
 
         let vault = Vault::load(&root).unwrap();
         assert_eq!(

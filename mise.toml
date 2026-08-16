@@ -29,8 +29,12 @@ description = "Show the next SemVer version from conventional commits"
 run = "cog bump --dry-run --auto"
 
 [tasks.release-auto]
-description = "Cut a tag-only release from conventional commits"
+description = "Prepare and push a release commit for controlled acceptance"
 run = "bash scripts/release-auto.sh"
+
+[tasks.release-publish]
+description = "Tag a prepared release after its accepted gate receipt"
+run = "bash scripts/release-publish.sh"
 
 [tasks.perf]
 description = "Measure criv performance with canonical generated workloads"

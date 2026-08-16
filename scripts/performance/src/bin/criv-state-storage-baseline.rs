@@ -306,7 +306,7 @@ mod tests {
   },
   "registered-patterns": ["p"],
   "patterns": {"p":[]},
-  "source-index": [{"path":"src/a.rs","mime":"text/rust","frecency":1}]
+  "source-index": [{"path":"src/a.rs","mime":"text/rust"}]
 }"#;
 
     #[test]

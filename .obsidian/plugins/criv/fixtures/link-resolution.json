@@ -34,8 +34,7 @@
     "source-index": [
       {
         "path": "src/lib.rs",
-        "mime": "text/x-rust",
-        "frecency": 0
+        "mime": "text/x-rust"
       }
     ]
   },

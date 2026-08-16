@@ -217,7 +217,6 @@ struct PreparedState {
 struct EditorSourceEntry {
     path: String,
     mime: Option<String>,
-    frecency: u32,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -306,7 +305,6 @@ struct SourceSelectorSuggestion {
 
 struct PreparedSelector {
     entry: SelectorEntry,
-    frecency: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -421,7 +419,6 @@ mod tests {
         assert_eq!(state.registered_patterns, ["ADR-0001/entrypoint"]);
         assert_eq!(state.registered_patterns.len(), 1);
         assert_eq!(state.source_index.len(), 1);
-        assert_eq!(state.source_index[0].frecency, 0);
     }
 
     #[test]
@@ -450,17 +447,14 @@ mod tests {
             SourceIndexEntry {
                 path: "src/lib.rs".into(),
                 mime: None,
-                frecency: 0,
             },
             SourceIndexEntry {
                 path: "src/lib.rs".into(),
                 mime: None,
-                frecency: 0,
             },
             SourceIndexEntry {
                 path: "src/main.rs".into(),
                 mime: None,
-                frecency: 0,
             },
         ];
 
@@ -475,27 +469,22 @@ mod tests {
             SourceIndexEntry {
                 path: "src/lib.rs".into(),
                 mime: None,
-                frecency: 1,
             },
             SourceIndexEntry {
                 path: "../secret".into(),
                 mime: None,
-                frecency: 2,
             },
             SourceIndexEntry {
                 path: "/etc/passwd".into(),
                 mime: None,
-                frecency: 3,
             },
             SourceIndexEntry {
                 path: "C:\\secret".into(),
                 mime: None,
-                frecency: 4,
             },
             SourceIndexEntry {
                 path: "src\\windows\\path.rs".into(),
                 mime: None,
-                frecency: 5,
             },
         ]);
 
@@ -557,13 +546,13 @@ mod tests {
     }
 
     #[test]
-    fn selector_suggestions_use_frecency_as_tiebreaker() {
+    fn selector_suggestions_use_lexical_order_as_tiebreaker() {
         let state = selector_state();
 
         let suggestions = source_selector_suggestions(&state, "src/tie", 10);
         let targets = suggestion_targets(&suggestions);
 
-        assert_eq!(targets, vec!["src/tie-high.rs", "src/tie-low.rs"]);
+        assert_eq!(targets, vec!["src/tie-a.rs", "src/tie-b.rs"]);
     }
 
     #[test]
@@ -579,7 +568,7 @@ mod tests {
     }
 
     #[test]
-    fn selector_suggestions_empty_query_orders_by_frecency_and_target() {
+    fn selector_suggestions_empty_query_uses_lexical_order() {
         let state = selector_state();
 
         let suggestions = source_selector_suggestions(&state, "", 4);
@@ -588,10 +577,10 @@ mod tests {
         assert_eq!(
             targets,
             vec![
-                "src/tie-high.rs",
                 "crates/criv-wasm/src/lib.rs",
+                "docs/adr.md",
+                "lib.rs",
                 "src/lib.rs",
-                "src/main.rs"
             ]
         );
     }
@@ -703,9 +692,9 @@ mod tests {
               },
               "registered-patterns": [],
               "source-index": [
-                { "path": "src/lib.rs", "frecency": 4, "mime": "text/rust" },
-                { "path": "src/lib.rs", "frecency": 1 },
-                { "path": "src/run.rs", "frecency": 3 }
+                { "path": "src/lib.rs", "mime": "text/rust" },
+                { "path": "src/lib.rs" },
+                { "path": "src/run.rs" }
               ]
             }"#,
         )
@@ -735,14 +724,14 @@ mod tests {
               },
               "registered-patterns": [],
               "source-index": [
-                { "path": "src/tie-low.rs", "frecency": 1 },
-                { "path": "src/tie-high.rs", "frecency": 50 },
-                { "path": "crates/criv-wasm/src/lib.rs", "frecency": 40 },
-                { "path": "src/lib.rs", "frecency": 5 },
-                { "path": "lib.rs", "frecency": 0 },
-                { "path": "src/slow_lib.rs", "frecency": 0 },
-                { "path": "src/main.rs", "frecency": 2 },
-                { "path": "docs/adr.md", "frecency": 0 }
+                { "path": "src/tie-b.rs" },
+                { "path": "src/tie-a.rs" },
+                { "path": "crates/criv-wasm/src/lib.rs" },
+                { "path": "src/lib.rs" },
+                { "path": "lib.rs" },
+                { "path": "src/slow_lib.rs" },
+                { "path": "src/main.rs" },
+                { "path": "docs/adr.md" }
               ]
             }"#,
         )

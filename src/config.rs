@@ -92,7 +92,7 @@ impl RawConfig {
                 .roots
                 .unwrap_or(defaults.source_roots)
                 .into_iter()
-                .map(|root| vault_path("source.roots", &root))
+                .map(|root| source_path(&root))
                 .collect::<Result<Vec<_>>>()?,
             source_exclude: self.source.exclude.unwrap_or(defaults.source_exclude),
             source_index: self.index.source.unwrap_or(defaults.source_index),
@@ -106,6 +106,45 @@ impl RawConfig {
                 .collect::<Result<Vec<_>>>()?,
         })
     }
+}
+
+fn source_path(value: &str) -> Result<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(CrivError::new("source.roots must not be empty"));
+    }
+    let path = Path::new(value);
+    if path.is_absolute() {
+        return Err(CrivError::new(
+            "source.roots must be relative to the criv vault root",
+        ));
+    }
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => parts.push(part.to_str().ok_or_else(|| {
+                CrivError::new("source.roots must use valid UTF-8 path components")
+            })?),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if parts.pop().is_none() {
+                    return Err(CrivError::new(
+                        "source.roots must not escape the criv vault root",
+                    ));
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(CrivError::new(
+                    "source.roots must be relative to the criv vault root",
+                ));
+            }
+        }
+    }
+    Ok(if parts.is_empty() {
+        ".".into()
+    } else {
+        parts.join("/")
+    })
 }
 
 fn vault_path(field: &str, value: &str) -> Result<String> {
@@ -414,6 +453,6 @@ roots = ["src", "../outside"]
 
         let error = raw.into_config().unwrap_err();
         assert!(error.to_string().contains("source.roots"));
-        assert!(error.to_string().contains("parent-directory"));
+        assert!(error.to_string().contains("escape"));
     }
 }

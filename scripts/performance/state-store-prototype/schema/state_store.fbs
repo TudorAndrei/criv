@@ -38,7 +38,6 @@ table EdgeBlock {
 struct SourceRow {
   path:uint;
   mime:uint;
-  frecency:uint;
 }
 
 table SourceBlock {

@@ -45,6 +45,7 @@ exclude = [
   "extensions/vscode-criv/dist/**",
   "extensions/vscode-criv/dist-test/**",
   "extensions/vscode-criv/pkg/**",
+  "extensions/vscode-criv/.vscode-test/**",
   "extensions/vscode-criv/*.vsix",
   "site/architecture/**",
   "site/docs/**",

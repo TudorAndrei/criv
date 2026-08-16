@@ -12,7 +12,7 @@ const CURRENT: &str = r#"{
   },
   "registered-patterns": [],
   "patterns": {},
-  "source-index": [{"path":"src/lib.rs","mime":"text/rust","frecency":1}]
+  "source-index": [{"path":"src/lib.rs","mime":"text/rust"}]
 }"#;
 
 const CHANGED: &str = r#"{
@@ -28,7 +28,7 @@ const CHANGED: &str = r#"{
   },
   "registered-patterns": [],
   "patterns": {},
-  "source-index": [{"path":"src/lib.rs","mime":"text/rust","frecency":1}]
+  "source-index": [{"path":"src/lib.rs","mime":"text/rust"}]
 }"#;
 
 #[test]

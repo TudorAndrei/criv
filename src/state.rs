@@ -523,7 +523,6 @@ impl StatePartitions {
                     .first_raw()
                     .map(str::to_string),
                 path: entry.path.clone(),
-                frecency: entry.frecency,
             };
             let fingerprint = source_index_input_fingerprint(&state_entry);
             let partition = previous
@@ -700,10 +699,7 @@ fn c4_artifact_input_fingerprint(artifact: &C4Artifact) -> String {
 }
 
 fn source_index_input_fingerprint(entry: &SourceIndexEntry) -> String {
-    stable_hash(&format!(
-        "{}\0{}\0{:?}",
-        entry.path, entry.frecency, entry.mime
-    ))
+    stable_hash(&format!("{}\0{:?}", entry.path, entry.mime))
 }
 
 fn fingerprint_str(hasher: &mut blake3::Hasher, value: &str) {
@@ -1875,7 +1871,7 @@ policy:
         );
         assert_eq!(
             State::build(&root, &vault).unwrap().hash().unwrap(),
-            "9a8cfd3085e339b5237ae7bf5c3fde4bf042fbc71fd496ab2897146204b39db0"
+            "e726e1970e996838a7c68bf68cee6dc2bdd98ad6657e196f2bf44640dcb040c1"
         );
 
         let _ = std::fs::remove_dir_all(root);

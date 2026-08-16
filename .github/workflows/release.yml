@@ -6,12 +6,67 @@ on:
       - "v*"
 
 permissions:
+  actions: read
   contents: read
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  gate:
+    name: Verify measured release gate
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch and validate release-gate receipt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          git fetch origin refs/notes/criv-release-gates:refs/notes/criv-release-gates
+          commit="$(git rev-parse HEAD)"
+          git notes --ref=criv-release-gates show "$commit" > release-gate.json
+          now="$(date +%s)"
+          jq -e --arg commit "$commit" --argjson now "$now" '
+            .schema == "criv.discovery-release-gate.v1" and
+            .passed == true and
+            .commit == $commit and
+            .valid_until_unix >= $now and
+            (.artifact_run_id | type == "number" and . > 0) and
+            (.artifacts | length == 4)
+          ' release-gate.json >/dev/null
+
+          mkdir -p measured
+          run_id="$(jq -r .artifact_run_id release-gate.json)"
+          while IFS=$'\t' read -r target artifact_name file_name sha256; do
+            download="download/$target"
+            gh run download "$run_id" --name "$artifact_name" --dir "$download"
+            file="$(find "$download" -type f -path "*/$target/$file_name" -print -quit)"
+            test -n "$file"
+            printf '%s  %s\n' "$sha256" "$file" | sha256sum --check --strict
+            binary_name=criv
+            if [[ "$target" == "x86_64-pc-windows-msvc" ]]; then
+              binary_name=criv.exe
+            fi
+            mkdir -p "measured/$target"
+            cp "$file" "measured/$target/$binary_name"
+          done < <(jq -r '.artifacts[] | [.target, .artifact_name, .file_name, .sha256] | @tsv' release-gate.json)
+
+      - name: Upload verified measured binaries
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: measured-criv-binaries
+          path: measured
+          if-no-files-found: error
+          retention-days: 7
+
   viewer:
     name: Package editor viewer
     runs-on: ubuntu-24.04
@@ -43,8 +98,10 @@ jobs:
           retention-days: 7
 
   build:
-    name: Build ${{ matrix.target }}
-    needs: viewer
+    name: Package measured ${{ matrix.target }}
+    needs:
+      - gate
+      - viewer
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -79,14 +136,21 @@ jobs:
           name: editor-viewer
           path: viewer-package
 
-      - name: Install Rust
-        run: |
-          rustup toolchain install 1.97.1 --profile minimal
-          rustup default 1.97.1
-          rustup target add "${{ matrix.target }}" --toolchain 1.97.1
+      - name: Download measured binary
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: measured-criv-binaries
+          path: measured
 
-      - name: Build
-        run: cargo build --locked --release --target "${{ matrix.target }}" --bin criv
+      - name: Select measured binary
+        shell: bash
+        run: |
+          mkdir -p "target/${{ matrix.target }}/release"
+          cp "measured/${{ matrix.target }}/${{ matrix.binary_name }}" \
+            "target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
+          if [[ "${{ runner.os }}" != "Windows" ]]; then
+            chmod +x "target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
+          fi
 
       - name: Smoke test version
         if: runner.os != 'Windows'

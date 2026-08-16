@@ -12,8 +12,8 @@ use notify_debouncer_mini::{
 };
 
 use crate::config::Config;
+use crate::discovery::source_event_relevant;
 use crate::refresh::{RefreshCause, RefreshSession};
-use crate::source::SourceChange;
 use crate::util::open_regular_file_in;
 use crate::{CrivError, Result};
 
@@ -176,7 +176,7 @@ impl WatchSet {
             insert_existing_or_ancestor(&mut targets, root, &config.docs_path(root));
             for source_root in &config.source_roots {
                 let path = root.join(source_root);
-                if matches!(path_kind(&path), PathKind::Missing | PathKind::Unsafe) {
+                if matches!(path_kind(root, &path), PathKind::Missing | PathKind::Unsafe) {
                     insert_watch_target(
                         &mut targets,
                         nearest_existing_directory(root, &path),
@@ -202,7 +202,7 @@ fn insert_existing_or_ancestor(
     root: &Path,
     requested: &Path,
 ) {
-    match path_kind(requested) {
+    match path_kind(root, requested) {
         PathKind::Directory => {
             insert_watch_target(targets, requested.to_path_buf(), WatchDepth::Recursive);
         }
@@ -237,7 +237,7 @@ fn insert_watch_target(
 fn nearest_existing_directory(root: &Path, requested: &Path) -> PathBuf {
     let mut candidate = requested.to_path_buf();
     loop {
-        if candidate.starts_with(root) && path_kind(&candidate) == PathKind::Directory {
+        if candidate.starts_with(root) && path_kind(root, &candidate) == PathKind::Directory {
             return candidate;
         }
         if candidate == root || !candidate.pop() {
@@ -254,15 +254,17 @@ enum WatchSignal {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum WatchDecision {
-    Rebuild { docs_changed: bool },
+    Rebuild { cause: RefreshCause },
     Continue,
 }
 
 fn watch_decision(docs_changed: bool, source_changed: bool) -> WatchDecision {
     match (docs_changed, source_changed) {
-        (true, _) => WatchDecision::Rebuild { docs_changed: true },
-        (false, true) => WatchDecision::Rebuild {
-            docs_changed: false,
+        (_, true) => WatchDecision::Rebuild {
+            cause: RefreshCause::SourceChanged,
+        },
+        (true, false) => WatchDecision::Rebuild {
+            cause: RefreshCause::DocsChanged,
         },
         (false, false) => WatchDecision::Continue,
     }
@@ -340,7 +342,7 @@ impl ActiveWatchGeneration {
         factory: &dyn WatcherFactory,
     ) -> std::result::Result<Self, CandidateFailure> {
         let docs_path = config.docs_path(root);
-        require_real_docs_root(&docs_path).map_err(CandidateFailure::candidate)?;
+        require_real_docs_root(root, &docs_path).map_err(CandidateFailure::candidate)?;
         let topology = WatchTopology::observe(root, &config);
         let watcher = WatchBinding::start(factory, WatchSet::active(root, &config))
             .map_err(CandidateFailure::watcher)?;
@@ -403,29 +405,9 @@ impl LiveWatchSession {
             return Ok(());
         }
 
-        let source_changed = match self.active.refresh.observe_source_change() {
-            Ok(SourceChange::Changed) => true,
-            Ok(SourceChange::Unchanged | SourceChange::Disabled) => false,
-            Err(err) => {
-                eprintln!("criv watch: source index error: {err}");
-                self.recovery = None;
-                self.suspend(&format!("source index error: {err}"));
-                return Ok(());
-            }
-        };
-        if self.must_reconfigure(&signal) {
-            self.reconfigure();
-            return Ok(());
-        }
         let docs_changed = self.docs_changed(&signal);
-        if let WatchDecision::Rebuild { docs_changed } =
-            watch_decision(docs_changed, source_changed)
-        {
-            let cause = if docs_changed {
-                RefreshCause::DocsChanged
-            } else {
-                RefreshCause::SourceChanged
-            };
+        let source_changed = self.source_changed(&signal);
+        if let WatchDecision::Rebuild { cause } = watch_decision(docs_changed, source_changed) {
             let expected_config_source = self.active.config_source.clone();
             let root = self.root.clone();
             let result = self
@@ -479,6 +461,12 @@ impl LiveWatchSession {
 
     fn docs_changed(&self, signal: &WatchSignal) -> bool {
         matches!(signal, WatchSignal::Paths(paths) if paths.iter().any(|path| path.starts_with(&self.active.docs_path)))
+    }
+
+    fn source_changed(&self, signal: &WatchSignal) -> bool {
+        matches!(signal, WatchSignal::Paths(paths) if paths.iter().any(|path| {
+            source_event_relevant(&self.root, &self.active.config, path)
+        }))
     }
 
     fn must_reconfigure(&self, signal: &WatchSignal) -> bool {
@@ -563,17 +551,44 @@ impl WatchTopology {
         let mut paths = config
             .source_roots
             .iter()
-            .map(|path| (path.clone(), path_kind(&root.join(path))))
+            .map(|path| (path.clone(), path_kind(root, &root.join(path))))
             .collect::<Vec<_>>();
-        paths.push((config.docs_dir.clone(), path_kind(&config.docs_path(root))));
+        paths.push((
+            config.docs_dir.clone(),
+            path_kind(root, &config.docs_path(root)),
+        ));
         paths.sort();
         Self { paths }
     }
 }
 
-fn path_kind(path: &Path) -> PathKind {
+fn path_kind(root: &Path, path: &Path) -> PathKind {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return PathKind::Unsafe;
+    };
+    let mut current = root.to_path_buf();
+    let components = relative.components().collect::<Vec<_>>();
+    if components.is_empty() {
+        return exact_path_kind(root);
+    }
+    for (index, component) in components.iter().enumerate() {
+        current.push(component.as_os_str());
+        let kind = exact_path_kind(&current);
+        if index + 1 == components.len() {
+            return kind;
+        }
+        match kind {
+            PathKind::Directory => {}
+            PathKind::Missing => return PathKind::Missing,
+            PathKind::File | PathKind::Unsafe => return PathKind::Unsafe,
+        }
+    }
+    PathKind::Unsafe
+}
+
+fn exact_path_kind(path: &Path) -> PathKind {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => PathKind::Unsafe,
+        Ok(metadata) if metadata.file_type().is_symlink() || is_junction(path) => PathKind::Unsafe,
         Ok(metadata) if metadata.is_file() => PathKind::File,
         Ok(metadata) if metadata.is_dir() => PathKind::Directory,
         Ok(_) => PathKind::Unsafe,
@@ -582,19 +597,28 @@ fn path_kind(path: &Path) -> PathKind {
     }
 }
 
-fn require_real_docs_root(path: &Path) -> Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if !metadata.file_type().is_symlink() && metadata.is_dir() => Ok(()),
-        Ok(_) => Err(CrivError::new(format!(
+fn require_real_docs_root(root: &Path, path: &Path) -> Result<()> {
+    match path_kind(root, path) {
+        PathKind::Directory => Ok(()),
+        PathKind::File | PathKind::Unsafe => Err(CrivError::new(format!(
             "configured docs root {} must be a real directory",
             path.display()
         ))),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Err(CrivError::new(format!(
+        PathKind::Missing => Err(CrivError::new(format!(
             "configured docs root {} does not exist",
             path.display()
         ))),
-        Err(err) => Err(err.into()),
     }
+}
+
+#[cfg(windows)]
+fn is_junction(path: &Path) -> bool {
+    junction::exists(path).unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn is_junction(_path: &Path) -> bool {
+    false
 }
 
 /// A single `criv watch --once` rebuild, warmed by the on-disk source graph
@@ -884,19 +908,43 @@ mod tests {
     fn watch_decisions_distinguish_docs_and_source_changes() {
         assert_eq!(
             watch_decision(true, false),
-            WatchDecision::Rebuild { docs_changed: true }
+            WatchDecision::Rebuild {
+                cause: RefreshCause::DocsChanged
+            }
         );
         assert_eq!(
             watch_decision(false, true),
             WatchDecision::Rebuild {
-                docs_changed: false
+                cause: RefreshCause::SourceChanged
             }
         );
         assert_eq!(
             watch_decision(true, true),
-            WatchDecision::Rebuild { docs_changed: true }
+            WatchDecision::Rebuild {
+                cause: RefreshCause::SourceChanged
+            }
         );
         assert_eq!(watch_decision(false, false), WatchDecision::Continue);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn watch_topology_rejects_a_linked_ancestor() {
+        use std::os::unix::fs::symlink;
+
+        let repository = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        fs::create_dir(outside.path().join("docs")).unwrap();
+        symlink(outside.path(), repository.path().join("linked")).unwrap();
+
+        assert_eq!(
+            path_kind(repository.path(), &repository.path().join("linked/docs")),
+            PathKind::Unsafe
+        );
+        assert!(
+            require_real_docs_root(repository.path(), &repository.path().join("linked/docs"))
+                .is_err()
+        );
     }
 
     #[test]

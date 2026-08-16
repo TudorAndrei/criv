@@ -140,9 +140,9 @@ assert.equal(
 const rankedState = {
   ...state,
   "source-index": [
-    { path: "src/slow.rs", frecency: 0 },
-    { path: "crates/criv-wasm/src/lib.rs", frecency: 40 },
-    { path: "src/lib.rs", frecency: 5 },
+    { path: "src/slow.rs" },
+    { path: "crates/criv-wasm/src/lib.rs" },
+    { path: "src/lib.rs" },
   ],
 };
 
@@ -155,12 +155,12 @@ rankedRevision.free();
 const unsafeSourceState = {
   ...state,
   "source-index": [
-    { path: "src/lib.rs", frecency: 1 },
-    { path: "../.ssh/id_rsa", frecency: 100 },
-    { path: "/etc/passwd", frecency: 100 },
-    { path: "C:\\Users\\name\\.ssh\\id_rsa", frecency: 100 },
-    { path: "\\\\server\\share\\secret.rs", frecency: 100 },
-    { path: "src\\windows\\path.rs", frecency: 2 },
+    { path: "src/lib.rs" },
+    { path: "../.ssh/id_rsa" },
+    { path: "/etc/passwd" },
+    { path: "C:\\Users\\name\\.ssh\\id_rsa" },
+    { path: "\\\\server\\share\\secret.rs" },
+    { path: "src\\windows\\path.rs" },
   ],
 };
 

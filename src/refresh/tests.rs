@@ -1,6 +1,5 @@
 use std::fs;
 use std::path::Path;
-use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tempfile::TempDir;
@@ -68,12 +67,12 @@ fn warm_one_shot_reuses_the_cached_source_graph() {
 }
 
 #[test]
-fn live_refresh_reuses_exactly_one_source_index_adapter() {
+fn live_refresh_reuses_source_catalog_for_docs_refresh() {
     let _live_test = source::lock_live_test();
     let fixture = incremental_fixture("one-live-adapter");
     source::reset_index_work_counts();
     let mut session = live_session(fixture.path());
-    assert_eq!(source::index_work_counts().fff_starts, 1);
+    assert_eq!(source::index_work_counts().discovery_scans, 0);
 
     session
         .refresh(fixture.path(), RefreshCause::Initial)
@@ -82,7 +81,7 @@ fn live_refresh_reuses_exactly_one_source_index_adapter() {
         .refresh(fixture.path(), RefreshCause::DocsChanged)
         .unwrap();
 
-    assert_eq!(source::index_work_counts().fff_starts, 1);
+    assert_eq!(source::index_work_counts().discovery_scans, 1);
 }
 
 #[test]
@@ -99,7 +98,7 @@ fn one_shot_refresh_uses_one_full_source_observation() {
 }
 
 #[test]
-fn live_refresh_reuses_the_observation_that_reported_a_source_change() {
+fn live_refresh_rescans_source_after_a_content_event() {
     let _live_test = source::lock_live_test();
     let fixture = incremental_fixture("one-live-source-catalog");
     let root = fixture.path();
@@ -111,19 +110,12 @@ fn live_refresh_reuses_the_observation_that_reported_a_source_change() {
 
     reset_refresh_work();
     session.refresh(root, RefreshCause::DocsChanged).unwrap();
-    assert_source_catalog_work(refresh_work(), 1);
+    assert_source_catalog_work(refresh_work(), 0);
 
     fs::write(root.join("src/lib.rs"), "pub fn changed() {}\n").unwrap();
     reset_refresh_work();
-    wait_for_source_change(&mut session, "source catalog change");
-    let observations = refresh_work().source_index.observations;
-    assert!(observations >= 1);
     session.refresh(root, RefreshCause::SourceChanged).unwrap();
-    assert_eq!(
-        refresh_work().source_index.observations,
-        observations,
-        "refresh should consume the observation that reported the change"
-    );
+    assert_source_catalog_work(refresh_work(), 1);
 }
 
 #[test]
@@ -177,7 +169,6 @@ fn live_refresh_reuses_one_policy_plan_for_no_op_and_changed_sources() {
         "pub fn changed() {\n    println!(\"changed\");\n}\n",
     )
     .unwrap();
-    wait_for_source_change(&mut session, "shared policy plan source change");
     reset_refresh_work();
     session.refresh(root, RefreshCause::SourceChanged).unwrap();
     assert_policy_refresh_work(refresh_work(), 1);
@@ -340,7 +331,6 @@ policy:
     let previous_hash = session.previous.as_ref().unwrap().state().hash().unwrap();
 
     fs::remove_file(root.join("src/retired.rs")).unwrap();
-    wait_for_source_change(&mut session, "governed source deletion");
     let error = session
         .refresh(root, RefreshCause::SourceChanged)
         .unwrap_err();
@@ -419,22 +409,6 @@ fn live_session(root: &Path) -> RefreshSession {
     RefreshSession::live(root, &config).unwrap()
 }
 
-fn wait_for_source_change(session: &mut RefreshSession, label: &str) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        match session.observe_source_change().unwrap() {
-            source::SourceChange::Changed => return,
-            source::SourceChange::Unchanged => {}
-            source::SourceChange::Disabled => panic!("{label} used a disabled source index"),
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out observing {label} in the live source catalog"
-        );
-        std::thread::sleep(Duration::from_millis(25));
-    }
-}
-
 fn reset_refresh_work() {
     policy_scan::reset_work_counts();
     source::reset_index_work_counts();
@@ -471,8 +445,7 @@ fn assert_source_catalog_work(work: RefreshWork, materializations: usize) {
     assert_eq!(
         work.source_index,
         source::IndexWorkCounts {
-            fff_starts: 0,
-            observations: materializations,
+            discovery_scans: materializations,
         }
     );
 }

@@ -25,7 +25,6 @@ pub(super) fn unique_source_entries(source_index: &[SourceIndexEntry]) -> Vec<Ed
             seen.insert(path.clone()).then_some(EditorSourceEntry {
                 path,
                 mime: entry.mime.clone(),
-                frecency: entry.frecency,
             })
         })
         .collect()
@@ -42,7 +41,6 @@ pub(super) fn take_unique_source_entries(
             seen.insert(path.clone()).then_some(EditorSourceEntry {
                 path,
                 mime: entry.mime,
-                frecency: entry.frecency,
             })
         })
         .collect()
@@ -204,10 +202,7 @@ impl PreparedState {
             if !seen.insert(source.path.as_str()) {
                 continue;
             }
-            selectors.push(PreparedSelector::new(
-                SelectorEntry::Source(index),
-                source.frecency,
-            ));
+            selectors.push(PreparedSelector::new(SelectorEntry::Source(index)));
         }
         for (index, node) in nodes.iter().enumerate() {
             let Some(target) = node.source_target.as_deref() else {
@@ -216,19 +211,14 @@ impl PreparedState {
             if !target.contains('#') || !seen.insert(target) {
                 continue;
             }
-            selectors.push(PreparedSelector::new(SelectorEntry::Node(index), 0));
+            selectors.push(PreparedSelector::new(SelectorEntry::Node(index)));
         }
         drop(seen);
         let mut empty_selector_order = (0..selectors.len()).collect::<Vec<_>>();
         empty_selector_order.sort_by(|left, right| {
-            selectors[*right]
-                .frecency
-                .cmp(&selectors[*left].frecency)
-                .then_with(|| {
-                    selectors[*left]
-                        .target(&sources, &nodes)
-                        .cmp(selectors[*right].target(&sources, &nodes))
-                })
+            selectors[*left]
+                .target(&sources, &nodes)
+                .cmp(selectors[*right].target(&sources, &nodes))
         });
 
         Self {
@@ -329,17 +319,14 @@ impl PreparedState {
                     &lower_target[basename_start..],
                     &clean_query,
                 )
-                .map(|score| (selector, score + i64::from(selector.frecency)))
+                .map(|score| (selector, score))
             })
             .collect::<Vec<_>>();
         scored.sort_by(|(left, left_score), (right, right_score)| {
-            right_score
-                .cmp(left_score)
-                .then_with(|| right.frecency.cmp(&left.frecency))
-                .then_with(|| {
-                    left.target(&self.sources, &self.nodes)
-                        .cmp(right.target(&self.sources, &self.nodes))
-                })
+            right_score.cmp(left_score).then_with(|| {
+                left.target(&self.sources, &self.nodes)
+                    .cmp(right.target(&self.sources, &self.nodes))
+            })
         });
         scored
             .into_iter()
@@ -350,8 +337,8 @@ impl PreparedState {
 }
 
 impl PreparedSelector {
-    fn new(entry: SelectorEntry, frecency: u32) -> Self {
-        Self { entry, frecency }
+    fn new(entry: SelectorEntry) -> Self {
+        Self { entry }
     }
 
     fn target<'a>(

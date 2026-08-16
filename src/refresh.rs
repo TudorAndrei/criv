@@ -3,9 +3,7 @@ use std::path::Path;
 use crate::check;
 use crate::config::Config;
 use crate::policy_scan::PolicyScanPlan;
-use crate::source::{
-    self, SourceCatalog, SourceChange, SourceGraphBuild, SourceIndexLifecycle, SourceObservation,
-};
+use crate::source::{self, SourceCatalog, SourceGraphBuild};
 use crate::state::{self, State};
 use crate::vault::Vault;
 use crate::{CrivError, Result};
@@ -27,8 +25,7 @@ pub(crate) struct RefreshResult {
 pub(crate) struct RefreshSession {
     config: Config,
     seed_graph: Option<SourceGraphBuild>,
-    source_index: SourceIndexLifecycle,
-    pending_observation: Option<SourceObservation>,
+    source_catalog: Option<SourceCatalog>,
     previous: Option<RefreshResult>,
 }
 
@@ -38,8 +35,7 @@ impl RefreshSession {
         Ok(Self {
             config: config.clone(),
             seed_graph: source::load_cached(root),
-            source_index: SourceIndexLifecycle::for_command(root, &config)?,
-            pending_observation: None,
+            source_catalog: None,
             previous: None,
         })
     }
@@ -48,8 +44,7 @@ impl RefreshSession {
         Ok(Self {
             config: config.clone(),
             seed_graph: source::load_cached(root),
-            source_index: SourceIndexLifecycle::for_watch(root, config)?,
-            pending_observation: None,
+            source_catalog: None,
             previous: None,
         })
     }
@@ -73,37 +68,37 @@ impl RefreshSession {
         let diagnostic_previous_state = matches!(cause, RefreshCause::SourceChanged)
             .then_some(previous_state)
             .flatten();
-        let observation = match self.pending_observation.take() {
-            Some(observation) => observation,
-            None => self.source_index.observe()?,
+        let source_catalog = match (cause, self.source_catalog.as_ref()) {
+            (RefreshCause::DocsChanged, Some(catalog)) => catalog.clone(),
+            _ => SourceCatalog::discover(root, &self.config)?,
         };
-        let next = execute(
+        let next = match execute(
             root,
             &self.config,
             previous_graph,
             previous_state,
             diagnostic_previous_state,
-            observation.into_catalog(),
+            source_catalog.clone(),
             precommit_check,
-        )?;
+        ) {
+            Ok(next) => next,
+            Err(error) => {
+                if cause == RefreshCause::SourceChanged {
+                    self.source_catalog = None;
+                }
+                return Err(error);
+            }
+        };
 
         self.seed_graph = None;
+        self.source_catalog = Some(source_catalog);
         self.previous = Some(next);
         Ok(self
             .previous
             .as_ref()
             .expect("refresh result was just stored"))
     }
-
-    pub(crate) fn observe_source_change(&mut self) -> Result<SourceChange> {
-        self.pending_observation = None;
-        let observation = self.source_index.observe()?;
-        let change = observation.change();
-        self.pending_observation = Some(observation);
-        Ok(change)
-    }
 }
-
 fn execute(
     root: &Path,
     config: &Config,

@@ -70,13 +70,11 @@
     "source-index": [
       {
         "path": "docs/architecture/systems.c4",
-        "mime": "text/plain",
-        "frecency": 3
+        "mime": "text/plain"
       },
       {
         "path": "README.md",
-        "mime": "text/markdown",
-        "frecency": 1
+        "mime": "text/markdown"
       }
     ]
   },

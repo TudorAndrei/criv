@@ -3,19 +3,19 @@ use std::fs;
 use std::path::Path;
 
 use clap::{Args as ClapArgs, ValueEnum};
-use ignore::WalkBuilder;
 use rumdl_lib::config::Config as RumdlConfig;
 use rumdl_lib::fix_coordinator::FixCoordinator;
 use rumdl_lib::rule::{LintWarning, Rule};
 use rumdl_lib::rules::{all_rules, filter_rules};
 use serde::Serialize;
 
+use crate::discovery::{MarkdownPolicy, discover_markdown, select_markdown};
 #[cfg(test)]
 use crate::git::ChangedEntry;
 use crate::git::{ChangeStatus, ChangedSet};
 use crate::policy_scan::{PolicyDiagnostic, PolicyDiagnosticKind, PolicyScanPlan};
 use crate::state::{self, State};
-use crate::util::{GlobMatcher, is_adr_id, kebab, write_atomic_in};
+use crate::util::{is_adr_id, kebab, write_atomic_in};
 use crate::vault::{
     Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault, is_typed_source_target,
     source_target_body,
@@ -236,14 +236,19 @@ fn validate_markdown_format(
 ) -> Result<Vec<Diagnostic>> {
     let config = load_rumdl_config(root)?;
     let vault_config = crate::config::Config::load(root)?;
-    let files = markdown_files(root, &config);
+    let policy = MarkdownPolicy {
+        include: &config.global.include,
+        exclude: &config.global.exclude,
+        respect_gitignore: config.global.respect_gitignore,
+    };
+    let files = match changed_paths {
+        Some(paths) => select_markdown(root, policy, paths)?,
+        None => discover_markdown(root, policy)?,
+    };
     let base_rules = base_rules(&config);
     let mut diagnostics = Vec::new();
 
     for rel_path in files {
-        if changed_paths.is_some_and(|paths| !paths.contains(&rel_path)) {
-            continue;
-        }
         let path = root.join(&rel_path);
         let mut contents = crate::util::read_to_string(&path)?;
         if fix {
@@ -312,34 +317,17 @@ fn load_rumdl_config(root: &Path) -> Result<RumdlConfig> {
     Ok(config)
 }
 
-fn markdown_files(root: &Path, config: &RumdlConfig) -> Vec<String> {
-    let includes = (!config.global.include.is_empty())
-        .then(|| GlobMatcher::from_valid_patterns(&config.global.include));
-    let excludes = GlobMatcher::from_valid_patterns(&config.global.exclude);
-    let mut files = WalkBuilder::new(root)
-        .git_ignore(config.global.respect_gitignore)
-        .git_global(config.global.respect_gitignore)
-        .git_exclude(config.global.respect_gitignore)
-        .build()
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| {
-            entry
-                .file_type()
-                .is_some_and(|file_type| file_type.is_file())
-        })
-        .filter_map(|entry| {
-            let path = entry.into_path();
-            is_markdown_file(&path).then(|| relative_path(root, &path))
-        })
-        .filter(|path| {
-            includes
-                .as_ref()
-                .is_none_or(|matcher| matcher.is_match(path))
-        })
-        .filter(|path| !excludes.is_match(path))
-        .collect::<Vec<_>>();
-    files.sort();
-    files
+#[cfg(test)]
+pub(crate) fn discovery_probe_markdown_files(root: &Path) -> Result<Vec<String>> {
+    let config = load_rumdl_config(root)?;
+    discover_markdown(
+        root,
+        MarkdownPolicy {
+            include: &config.global.include,
+            exclude: &config.global.exclude,
+            respect_gitignore: config.global.respect_gitignore,
+        },
+    )
 }
 
 fn apply_markdown_fixes(
@@ -420,19 +408,6 @@ fn markdown_diagnostic(path: &str, warning: LintWarning) -> Diagnostic {
         Some(warning.line),
         format!("{rule}: {}", warning.message),
     )
-}
-
-fn is_markdown_file(path: &Path) -> bool {
-    mime_guess::from_path(path)
-        .first()
-        .is_some_and(|mime| mime.essence_str() == "text/markdown")
-}
-
-fn relative_path(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/")
 }
 
 #[cfg(test)]
