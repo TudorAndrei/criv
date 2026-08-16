@@ -11,7 +11,8 @@ use crate::config::Config;
 use crate::util::GlobMatcher;
 use crate::{CrivError, Result};
 
-const NON_SOURCE_WALK_THREADS: usize = 4;
+const VAULT_WALK_THREADS: usize = 8;
+const MARKDOWN_WALK_THREADS: usize = 4;
 const COLLECT_FLUSH_ENTRIES: usize = 1_024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -213,7 +214,7 @@ pub(crate) fn discover_vault(root: &Path, docs_dir: &str) -> Result<VaultPaths> 
     builder
         .standard_filters(false)
         .follow_links(false)
-        .threads(NON_SOURCE_WALK_THREADS);
+        .threads(VAULT_WALK_THREADS);
     let selections = finish(walk(root, &mut builder, profile)?)?;
     let mut markdown = Vec::new();
     let mut c4 = Vec::new();
@@ -346,7 +347,7 @@ fn markdown_builder(root: &Path, policy: MarkdownPolicy<'_>) -> WalkBuilder {
         .git_exclude(policy.respect_gitignore)
         .require_git(true)
         .follow_links(false)
-        .threads(NON_SOURCE_WALK_THREADS)
+        .threads(MARKDOWN_WALK_THREADS)
         .current_dir(root);
     builder
 }
