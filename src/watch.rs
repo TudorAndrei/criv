@@ -85,13 +85,19 @@ impl NotifyWatcherAdapter {
         })
         .map_err(|err| CrivError::new(format!("failed to start watcher: {err}")))?;
         for target in &set.targets {
+            let watch_path = target.path.canonicalize().map_err(|err| {
+                CrivError::new(format!(
+                    "failed to resolve watch target {}: {err}",
+                    target.path.display()
+                ))
+            })?;
             let mode = match target.depth {
                 WatchDepth::NonRecursive => RecursiveMode::NonRecursive,
                 WatchDepth::Recursive => RecursiveMode::Recursive,
             };
             debouncer
                 .watcher()
-                .watch(&target.path, mode)
+                .watch(&watch_path, mode)
                 .map_err(|err| {
                     CrivError::new(format!("failed to watch {}: {err}", target.path.display()))
                 })?;
@@ -727,6 +733,54 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    fn watcher_reports_path(mut watcher: NotifyWatcherAdapter, expected: &Path) -> bool {
+        let expected = expected.canonicalize().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if let WatcherPoll::Paths(paths) = watcher.poll(Duration::from_millis(250))
+                && paths.iter().any(|path| path == &expected)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn notify_watcher_reports_a_recursive_child_change() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("src");
+        fs::create_dir(&source).unwrap();
+        let set = WatchSet {
+            targets: vec![WatchTarget::recursive(source.clone())],
+        };
+        let watcher = NotifyWatcherAdapter::start(&set).unwrap();
+        let changed = source.join("changed.rs");
+
+        fs::write(&changed, "pub fn changed() {}\n").unwrap();
+
+        assert!(watcher_reports_path(watcher, &changed));
+    }
+
+    #[test]
+    fn notify_watcher_reports_a_change_with_overlapping_targets() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("src");
+        fs::create_dir(&source).unwrap();
+        let set = WatchSet {
+            targets: vec![
+                WatchTarget::non_recursive(temp.path().to_path_buf()),
+                WatchTarget::recursive(source.clone()),
+            ],
+        };
+        let watcher = NotifyWatcherAdapter::start(&set).unwrap();
+        let changed = source.join("changed.rs");
+
+        fs::write(&changed, "pub fn changed() {}\n").unwrap();
+
+        assert!(watcher_reports_path(watcher, &changed));
+    }
 
     #[test]
     fn active_watch_set_covers_config_docs_and_source_topology() {
