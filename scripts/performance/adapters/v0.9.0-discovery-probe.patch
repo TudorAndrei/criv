@@ -2,18 +2,17 @@ diff --git a/src/check.rs b/src/check.rs
 index a96afc0..7243097 100644
 --- a/src/check.rs
 +++ b/src/check.rs
-@@ -344,0 +345,6 @@ fn markdown_files(root: &Path, config: &RumdlConfig) -> Vec<String> {
+@@ -344,0 +345,5 @@ fn markdown_files(root: &Path, config: &RumdlConfig) -> Vec<String> {
 +#[cfg(test)]
 +pub(crate) fn discovery_probe_markdown_files(root: &Path) -> Result<Vec<String>> {
 +    let config = load_rumdl_config(root)?;
 +    Ok(markdown_files(root, &config))
 +}
-+
 diff --git a/src/lib.rs b/src/lib.rs
 index 0d63350..b6746ef 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -22,0 +23,55 @@ mod watch;
+@@ -22,0 +23,54 @@ mod watch;
 +#[cfg(test)]
 +#[path = "../scripts/performance/discovery_probe.rs"]
 +mod discovery_probe;
@@ -68,4 +67,3 @@ index 0d63350..b6746ef 100644
 +    })?;
 +    Ok(relative.replace(std::path::MAIN_SEPARATOR, "/"))
 +}
-+
