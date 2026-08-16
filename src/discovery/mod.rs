@@ -11,7 +11,8 @@ use crate::config::Config;
 use crate::util::GlobMatcher;
 use crate::{CrivError, Result};
 
-const NON_SOURCE_WALK_THREADS: usize = 5;
+const NON_SOURCE_WALK_THREADS: usize = 4;
+const COLLECT_FLUSH_ENTRIES: usize = 1_024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct VaultPaths {
@@ -432,11 +433,23 @@ impl ParallelVisitor for Collector {
             return ignore::WalkState::Continue;
         }
         self.collect_entry(&entry);
+        if self.local.selections.len() >= COLLECT_FLUSH_ENTRIES {
+            self.flush();
+        }
         ignore::WalkState::Continue
     }
 }
 
 impl Collector {
+    fn flush(&mut self) {
+        let mut shared = self
+            .shared
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        shared.selections.append(&mut self.local.selections);
+        shared.errors.append(&mut self.local.errors);
+    }
+
     fn collect_entry(&mut self, entry: &DirEntry) {
         let path = entry.path();
         let file_type = match entry.file_type() {
@@ -508,12 +521,7 @@ impl Collector {
 
 impl Drop for Collector {
     fn drop(&mut self) {
-        let mut shared = self
-            .shared
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        shared.selections.append(&mut self.local.selections);
-        shared.errors.append(&mut self.local.errors);
+        self.flush();
     }
 }
 
