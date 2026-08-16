@@ -9,11 +9,11 @@ use serde::Deserialize;
 use crate::Result;
 use crate::c4;
 use crate::config::Config;
-use crate::discovery::discover_vault;
+use crate::discovery::{discover_vault, read_selected_text};
 use crate::source::{IndexedSource, SourceBuild, SourceCatalog, SourceGraph, SourceGraphBuild};
 use crate::util::{
     GlobMatcher, find_wiki_links_with_lines, is_adr_id, kebab,
-    markdown_headings as parse_markdown_headings, read_to_string, strip_prefix,
+    markdown_headings as parse_markdown_headings, strip_prefix,
 };
 
 #[cfg(test)]
@@ -642,7 +642,7 @@ fn effective_accepted_decision_ids(notes: &[Note]) -> BTreeSet<String> {
 }
 
 fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
-    let contents = read_to_string(path)?;
+    let contents = read_selected_text(root, path)?;
     let rel_path = strip_prefix(path, root);
     let (frontmatter, body, frontmatter_lines) = split_frontmatter(&contents);
     let doc_rel_path = strip_prefix(path, docs_path);

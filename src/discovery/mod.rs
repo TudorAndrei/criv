@@ -11,6 +11,8 @@ use crate::config::Config;
 use crate::util::GlobMatcher;
 use crate::{CrivError, Result};
 
+const NON_SOURCE_WALK_THREADS: usize = 5;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct VaultPaths {
     pub(crate) markdown: Vec<String>,
@@ -207,7 +209,10 @@ pub(crate) fn discover_vault(root: &Path, docs_dir: &str) -> Result<VaultPaths> 
     }
 
     let mut builder = WalkBuilder::new(root.join(&docs_relative));
-    builder.standard_filters(false).follow_links(false);
+    builder
+        .standard_filters(false)
+        .follow_links(false)
+        .threads(NON_SOURCE_WALK_THREADS);
     let selections = finish(walk(root, &mut builder, profile)?)?;
     let mut markdown = Vec::new();
     let mut c4 = Vec::new();
@@ -234,6 +239,15 @@ pub(crate) fn discover_markdown(root: &Path, policy: MarkdownPolicy<'_>) -> Resu
     let mut builder = markdown_builder(root, policy);
     finish(walk(root, &mut builder, profile)?)
         .map(|selections| selections.into_iter().map(|item| item.path).collect())
+}
+
+pub(crate) fn read_selected_text(root: &Path, path: &Path) -> Result<String> {
+    let relative = relative_utf8(root, path)?;
+    fs::read_to_string(path).map_err(|error| {
+        CrivError::new(format!(
+            "failed to read selected file `{relative}`: {error}"
+        ))
+    })
 }
 
 pub(crate) fn select_markdown(
@@ -331,6 +345,7 @@ fn markdown_builder(root: &Path, policy: MarkdownPolicy<'_>) -> WalkBuilder {
         .git_exclude(policy.respect_gitignore)
         .require_git(true)
         .follow_links(false)
+        .threads(NON_SOURCE_WALK_THREADS)
         .current_dir(root);
     builder
 }
@@ -416,21 +431,25 @@ impl ParallelVisitor for Collector {
         if entry.depth() == 0 && entry.path() == self.root.as_path() {
             return ignore::WalkState::Continue;
         }
-        self.collect_entry(entry.path(), entry.path_is_symlink());
+        self.collect_entry(&entry);
         ignore::WalkState::Continue
     }
 }
 
 impl Collector {
-    fn collect_entry(&mut self, path: &Path, reported_symlink: bool) {
-        let metadata = match fs::symlink_metadata(path) {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                self.local.errors.push(path_error(&self.root, path, error));
-                return;
-            }
+    fn collect_entry(&mut self, entry: &DirEntry) {
+        let path = entry.path();
+        let file_type = match entry.file_type() {
+            Some(file_type) => file_type,
+            None => match fs::symlink_metadata(path) {
+                Ok(metadata) => metadata.file_type(),
+                Err(error) => {
+                    self.local.errors.push(path_error(&self.root, path, error));
+                    return;
+                }
+            },
         };
-        let is_link = reported_symlink || metadata.file_type().is_symlink() || is_junction(path);
+        let is_link = entry.path_is_symlink() || file_type.is_symlink() || is_junction(path);
         let target_is_directory =
             is_link && fs::metadata(path).is_ok_and(|target_metadata| target_metadata.is_dir());
         if target_is_directory {
@@ -450,7 +469,7 @@ impl Collector {
             ));
             return;
         }
-        if metadata.is_dir() {
+        if file_type.is_dir() {
             if let Err(error) = relative_utf8(&self.root, path) {
                 self.local.errors.push(error.to_string());
             }
@@ -477,25 +496,13 @@ impl Collector {
                 .push(format!("refusing to discover file link `{relative}`"));
             return;
         }
-        if !metadata.is_file() {
+        if !file_type.is_file() {
             return;
         }
-        let accessible = match kind {
-            SelectionKind::Source => Ok(true),
-            SelectionKind::VaultMarkdown | SelectionKind::VaultC4 | SelectionKind::Markdown => {
-                fs::File::open(path).map(|_| true).map_err(CrivError::from)
-            }
-        };
-        match accessible {
-            Ok(true) => self.local.selections.push(Selection {
-                kind,
-                path: relative,
-            }),
-            Ok(false) => {}
-            Err(error) => self.local.errors.push(format!(
-                "failed to read selected file `{relative}`: {error}"
-            )),
-        }
+        self.local.selections.push(Selection {
+            kind,
+            path: relative,
+        });
     }
 }
 
@@ -1234,6 +1241,20 @@ mod tests {
         let error = result.unwrap_err().to_string();
         assert!(error.contains("failed to read selected file `src/selected.rs`"));
         assert!(!error.contains("src/pruned"));
+    }
+
+    #[test]
+    fn selected_text_read_errors_report_the_repository_path() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        write(&root.join("docs/invalid.md"), &[0xFF]);
+
+        assert!(
+            read_selected_text(root, &root.join("docs/invalid.md"))
+                .unwrap_err()
+                .to_string()
+                .contains("failed to read selected file `docs/invalid.md`")
+        );
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]

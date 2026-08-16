@@ -1,7 +1,8 @@
 use std::path::Path;
 
 use crate::Result;
-use crate::util::{read_to_string, strip_prefix};
+use crate::discovery::read_selected_text;
+use crate::util::strip_prefix;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum C4ArtifactFormat {
@@ -24,7 +25,7 @@ pub(crate) struct C4ArtifactDiagnostic {
 }
 
 pub(crate) fn parse_file(root: &Path, docs_path: &Path, path: &Path) -> Result<C4Artifact> {
-    let contents = read_to_string(path)?;
+    let contents = read_selected_text(root, path)?;
     Ok(parse_contents(root, docs_path, path, &contents))
 }
 

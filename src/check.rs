@@ -9,7 +9,7 @@ use rumdl_lib::rule::{LintWarning, Rule};
 use rumdl_lib::rules::{all_rules, filter_rules};
 use serde::Serialize;
 
-use crate::discovery::{MarkdownPolicy, discover_markdown, select_markdown};
+use crate::discovery::{MarkdownPolicy, discover_markdown, read_selected_text, select_markdown};
 #[cfg(test)]
 use crate::git::ChangedEntry;
 use crate::git::{ChangeStatus, ChangedSet};
@@ -250,7 +250,7 @@ fn validate_markdown_format(
 
     for rel_path in files {
         let path = root.join(&rel_path);
-        let mut contents = crate::util::read_to_string(&path)?;
+        let mut contents = read_selected_text(root, &path)?;
         if fix {
             apply_markdown_fixes(
                 MarkdownFixScope {
