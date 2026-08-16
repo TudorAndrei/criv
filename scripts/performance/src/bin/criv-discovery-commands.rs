@@ -792,6 +792,9 @@ fn execute_case(
         .zip(state_after.as_ref())
         .map(|(before, after)| before.source_graph_digest == after.source_graph_digest);
     let command_succeeded = match case {
+        Case::CheckFull => {
+            full_check_completed(output.status.code(), &output.stdout, &output.stderr)
+        }
         Case::CheckChangedMarkdown => changed_markdown_reported_expected_diagnostic(
             &output,
             args.markdown_mutation_path.as_ref().unwrap(),
@@ -1240,6 +1243,22 @@ fn changed_markdown_reported_expected_diagnostic(
         &output.stderr,
         expected_path,
     )
+}
+
+fn full_check_completed(exit_status: Option<i32>, stdout: &[u8], stderr: &[u8]) -> bool {
+    let Ok(diagnostics) = serde_json::from_slice::<Vec<serde_json::Value>>(stdout) else {
+        return false;
+    };
+    match exit_status {
+        Some(0) => stderr.is_empty(),
+        Some(1) => {
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic["severity"] == "error")
+                && String::from_utf8_lossy(stderr).contains("criv: check failed")
+        }
+        _ => false,
+    }
 }
 
 fn expected_markdown_diagnostic(
@@ -1768,6 +1787,16 @@ mod tests {
             stdout,
             b"criv: check failed\n",
             Path::new("content/other.md")
+        ));
+    }
+
+    #[test]
+    fn full_check_accepts_clean_and_diagnostic_results() {
+        assert!(full_check_completed(Some(0), b"[]\n", b""));
+        assert!(full_check_completed(
+            Some(1),
+            br#"[{"severity":"error","code":"markdown-format"}]"#,
+            b"criv: check failed\n"
         ));
     }
 
