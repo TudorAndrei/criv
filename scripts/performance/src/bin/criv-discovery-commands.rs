@@ -1392,14 +1392,7 @@ fn ensure_stable_outputs(rows: &[SampleRow]) -> Result<(), String> {
         let identities = rows
             .iter()
             .filter(|row| row.case == case.id() && row.successful)
-            .map(|row| {
-                (
-                    row.exit_status,
-                    row.stdout_digest.as_str(),
-                    row.stderr_digest.as_str(),
-                    row.state_after.as_ref(),
-                )
-            })
+            .map(stable_output_identity)
             .collect::<BTreeSet<_>>();
         if identities.len() > 1 {
             return Err(format!(
@@ -1409,6 +1402,35 @@ fn ensure_stable_outputs(rows: &[SampleRow]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn stable_output_identity(row: &SampleRow) -> String {
+    let identity = if row.case.starts_with("watch_") {
+        let paths = row.state_after.as_ref().map(|state| {
+            serde_json::json!({
+                "source_paths": state.source_paths,
+                "source_path_digest": state.source_path_digest,
+                "vault_markdown_paths": state.vault_markdown_paths,
+                "vault_markdown_path_digest": state.vault_markdown_path_digest,
+                "vault_c4_paths": state.vault_c4_paths,
+                "vault_c4_path_digest": state.vault_c4_path_digest,
+            })
+        });
+        serde_json::json!({
+            "exit_status": row.exit_status,
+            "stderr_digest": row.stderr_digest,
+            "paths": paths,
+        })
+    } else {
+        serde_json::json!({
+            "exit_status": row.exit_status,
+            "stdout_digest": row.stdout_digest,
+            "stderr_digest": row.stderr_digest,
+            "state_unchanged": row.state_unchanged,
+            "source_graph_unchanged": row.source_graph_unchanged,
+        })
+    };
+    identity.to_string()
 }
 
 fn metric(mut values: Vec<f64>) -> Option<MetricSummary> {
@@ -1801,44 +1823,85 @@ mod tests {
     }
 
     #[test]
+    fn watch_output_stability_uses_selected_path_identity() {
+        let mut first = test_row(Case::WatchOnceCold, 1.0);
+        first.state_after = Some(test_state_identity("state-a", "source"));
+        let mut second = test_row(Case::WatchOnceCold, 1.0);
+        second.stdout_digest = "different-snapshot-line".into();
+        second.state_after = Some(test_state_identity("state-b", "source"));
+
+        assert!(ensure_stable_outputs(&[first, second]).is_ok());
+
+        let mut changed = test_row(Case::WatchOnceCold, 1.0);
+        changed.state_after = Some(test_state_identity("state-c", "changed-source"));
+        assert!(
+            ensure_stable_outputs(&[test_row_with_state("state-a", "source"), changed,]).is_err()
+        );
+    }
+
+    #[test]
     fn unstable_attempt_uses_relative_mad() {
         let rows = [0.8, 0.9, 1.0, 1.2, 1.4]
             .into_iter()
-            .enumerate()
-            .map(|(index, real_seconds)| SampleRow {
-                schema: SAMPLE_SCHEMA,
-                run_id: "run".into(),
-                workload_id: "workload".into(),
-                workload_digest: "a".repeat(64),
-                binary_label: "binary".into(),
-                binary_digest: "b".repeat(64),
-                case: Case::CheckFull.id().into(),
-                cache_state: "cold".into(),
-                attempt: 1,
-                sample: index + 1,
-                successful: true,
-                error: None,
-                exit_status: Some(0),
-                real_seconds: Some(real_seconds),
-                publication_ready_seconds: None,
-                user_seconds: None,
-                system_seconds: None,
-                peak_rss_bytes: Some(1),
-                ready_rss_bytes: None,
-                stdout_digest: "stdout".into(),
-                stderr_digest: "stderr".into(),
-                stdout_path: String::new(),
-                stderr_path: String::new(),
-                snapshot_receipt_digest: "snapshot".into(),
-                staged_patch_digest: None,
-                state_before: None,
-                state_after: None,
-                state_unchanged: None,
-                source_graph_unchanged: None,
-                convergence_steps: vec![],
-                live_matches_one_shot: None,
-            })
+            .map(|real_seconds| test_row(Case::CheckFull, real_seconds))
             .collect::<Vec<_>>();
         assert!(summarize_attempt(Case::CheckFull, 1, &rows).unstable);
+    }
+
+    fn test_row(case: Case, real_seconds: f64) -> SampleRow {
+        SampleRow {
+            schema: SAMPLE_SCHEMA,
+            run_id: "run".into(),
+            workload_id: "workload".into(),
+            workload_digest: "a".repeat(64),
+            binary_label: "binary".into(),
+            binary_digest: "b".repeat(64),
+            case: case.id().into(),
+            cache_state: "cold".into(),
+            attempt: 1,
+            sample: 1,
+            successful: true,
+            error: None,
+            exit_status: Some(0),
+            real_seconds: Some(real_seconds),
+            publication_ready_seconds: None,
+            user_seconds: None,
+            system_seconds: None,
+            peak_rss_bytes: Some(1),
+            ready_rss_bytes: None,
+            stdout_digest: "stdout".into(),
+            stderr_digest: "stderr".into(),
+            stdout_path: String::new(),
+            stderr_path: String::new(),
+            snapshot_receipt_digest: "snapshot".into(),
+            staged_patch_digest: None,
+            state_before: None,
+            state_after: None,
+            state_unchanged: None,
+            source_graph_unchanged: None,
+            convergence_steps: vec![],
+            live_matches_one_shot: None,
+        }
+    }
+
+    fn test_row_with_state(state_digest: &str, source_digest: &str) -> SampleRow {
+        let mut row = test_row(Case::WatchOnceCold, 1.0);
+        row.state_after = Some(test_state_identity(state_digest, source_digest));
+        row
+    }
+
+    fn test_state_identity(state_digest: &str, source_digest: &str) -> StateIdentity {
+        StateIdentity {
+            state_digest: state_digest.into(),
+            latest_snapshot: state_digest.into(),
+            snapshot_digest: Some(state_digest.into()),
+            source_graph_digest: Some("source-graph".into()),
+            source_paths: 1,
+            source_path_digest: source_digest.into(),
+            vault_markdown_paths: 1,
+            vault_markdown_path_digest: "markdown".into(),
+            vault_c4_paths: 1,
+            vault_c4_path_digest: "c4".into(),
+        }
     }
 }
