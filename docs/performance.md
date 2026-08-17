@@ -148,10 +148,11 @@ The governing decision is
 File-discovery acceptance has two evidence layers. Release-profile test probes
 measure Source candidate traversal, the complete Source build, Vault
 selection, and Markdown selection. The Source build includes binary
-classification, content hashing, and parsing. The normal release binary
-measures cold and warm publication, changed checks, and live readiness and
-convergence. Both layers record path identities and per-child peak resident
-memory. The production CLI has no measurement API.
+classification, content hashing, and parsing. The command tool can measure cold
+and warm publication, changed checks, and live readiness and convergence. The
+hosted release gate uses its live readiness and convergence case. Both layers
+record path identities and per-child peak resident memory. The production CLI
+has no measurement API.
 
 The gate verifier checks five stable samples, matched machine and workload
 identity, output parity, the accepted time and memory limits, four target
@@ -159,11 +160,16 @@ artifacts, binary size, and three clean builds. A result with more than ten
 percent relative median absolute deviation gets one complete repeat. A second
 unstable attempt is not acceptance evidence.
 
-The controlled local acceptance command writes the accepted receipt to
+The hosted release workflow writes the accepted receipt to
 `refs/notes/criv-release-gates`. The receipt is valid for seven days and names
 the exact commit, toolchain, evidence digests, and four measured binaries. The
-local release command packages and uploads these measured binaries. It does
-not rebuild them. The release workflow verifies and attests the published
-assets. See
-[[0115-single-read-source-build|ADR-0115]] and [[releasing]] for the
+100,000-entry Source workload runs on all four release hosts. The 250,000-entry
+Source, Vault, and Markdown workloads and the five-sample live-watch gate run
+on macOS ARM64. Matched ratios replace absolute limits from a private computer.
+
+The workflow packages the measured binaries and does not rebuild them. It
+keeps raw evidence as Actions artifacts for 90 days, verifies the archives on
+their native hosts, attests the draft assets, and then publishes the release.
+Ouro is optional product evidence and is not a release gate. See
+[[0117-hosted-automatic-release-acceptance|ADR-0117]] and [[releasing]] for the
 release sequence.

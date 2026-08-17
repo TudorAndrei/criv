@@ -53,7 +53,7 @@ jobs:
                   ;;
               esac
               case "$path" in
-                Cargo.toml|Cargo.lock|crates/criv-state-wire/*|scripts/measure-performance.sh|scripts/performance/*|tests/performance_*|tests/fixtures/performance/*|fixtures/performance/*|.github/workflows/ci.yml|.github/workflows/discovery-*.yml|.github/workflows/performance-notes.yml)
+                Cargo.toml|Cargo.lock|crates/criv-state-wire/*|scripts/measure-performance.sh|scripts/package-release-assets.sh|scripts/release-auto.sh|scripts/performance/*|tests/hosted_release_scripts.sh|tests/performance_*|tests/fixtures/performance/*|fixtures/performance/*|.github/workflows/ci.yml|.github/workflows/discovery-*.yml|.github/workflows/performance-notes.yml|.github/workflows/release.yml)
                   performance=true
                   ;;
               esac
@@ -428,6 +428,7 @@ jobs:
           bash tests/performance_harness.sh
           bash tests/performance_git_note.sh
           bash tests/performance_release_gate_note.sh
+          bash tests/hosted_release_scripts.sh
           node --test scripts/performance/measure-state-wasm.test.mjs
 
   check:

@@ -9,8 +9,39 @@ require_command() {
   fi
 }
 
-require_command cog
+write_output() {
+  local name="$1"
+  local value="$2"
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    printf '%s=%s\n' "$name" "$value" >>"$GITHUB_OUTPUT"
+  fi
+}
+
+release_output() {
+  local commit="$1"
+  local tag="$2"
+  write_output release true
+  write_output commit "$commit"
+  write_output tag "$tag"
+  write_output version "${tag#v}"
+  echo "prepared $tag at $commit"
+}
+
+no_release() {
+  write_output release false
+  write_output commit ""
+  write_output tag ""
+  write_output version ""
+  echo "no conventional commits require a release"
+}
+
+remote_tag_commit() {
+  local tag="$1"
+  git ls-remote --refs origin "refs/tags/$tag" | awk 'NR == 1 { print $1 }'
+}
+
 require_command cargo
+require_command cog
 require_command git
 
 if ! cargo release --version >/dev/null 2>&1; then
@@ -19,50 +50,79 @@ if ! cargo release --version >/dev/null 2>&1; then
   exit 127
 fi
 
-branch="$(git rev-parse --abbrev-ref HEAD)"
+branch="$(git branch --show-current)"
 if [[ "$branch" != "main" ]]; then
-  echo "release must be cut from main; current branch is $branch" >&2
+  echo "release must be prepared from main; current branch is ${branch:-detached HEAD}" >&2
   exit 1
 fi
-
 if [[ -n "$(git status --porcelain)" ]]; then
   echo "release requires a clean working tree" >&2
   git status --short >&2
   exit 1
 fi
 
-version="$(cog bump --dry-run --auto)"
-version="${version#v}"
+expected_head="${1:-}"
+head_commit="$(git rev-parse HEAD)"
+if [[ -n "$expected_head" && "$head_commit" != "$expected_head" ]]; then
+  echo "main moved from the successful CI commit $expected_head to $head_commit; this release run is stale"
+  no_release
+  exit 0
+fi
 
+git fetch --force --tags origin
+latest_tag="$(git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true)"
+range="HEAD"
+if [[ -n "$latest_tag" ]]; then
+  range="$latest_tag..HEAD"
+fi
+
+prepared_line="$(git log "$range" --format='%H%x09%s' | awk -F '\t' '$2 ~ /^chore\(release\): v[0-9]+\.[0-9]+\.[0-9]+/ { print; exit }')"
+if [[ -n "$prepared_line" ]]; then
+  prepared_commit="${prepared_line%%$'\t'*}"
+  prepared_subject="${prepared_line#*$'\t'}"
+  prepared_tag="${prepared_subject#chore(release): }"
+  prepared_wasm_tag="criv-wasm-${prepared_tag}"
+  root_tag_commit="$(remote_tag_commit "$prepared_tag")"
+  wasm_tag_commit="$(remote_tag_commit "$prepared_wasm_tag")"
+  for tagged_commit in "$root_tag_commit" "$wasm_tag_commit"; do
+    if [[ -n "$tagged_commit" && "$tagged_commit" != "$prepared_commit" ]]; then
+      echo "prepared release tag points to another commit" >&2
+      exit 1
+    fi
+  done
+  release_output "$prepared_commit" "$prepared_tag"
+  exit 0
+fi
+
+bump_output=""
+if ! bump_output="$(cog bump --dry-run --auto 2>&1)"; then
+  if grep -qiE 'no commits|no conventional|no bump|nothing to bump' <<<"$bump_output"; then
+    no_release
+    exit 0
+  fi
+  printf '%s\n' "$bump_output" >&2
+  exit 1
+fi
+version="$(printf '%s\n' "$bump_output" | tail -n 1)"
+version="${version#v}"
 if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
-  echo "cog did not return a SemVer version: $version" >&2
+  echo "Cocogitto returned an invalid SemVer version: $version" >&2
   exit 1
 fi
 
 tag="v$version"
-
-if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-  echo "tag already exists: $tag" >&2
-  exit 1
-fi
-
-echo "preparing release $tag"
+wasm_tag="criv-wasm-v$version"
+for candidate in "$tag" "$wasm_tag"; do
+  if git rev-parse -q --verify "refs/tags/$candidate" >/dev/null ||
+    [[ -n "$(remote_tag_commit "$candidate")" ]]; then
+    echo "tag already exists: $candidate" >&2
+    exit 1
+  fi
+done
 
 cargo release version "$version" --workspace --execute --no-confirm
-
-cargo test --locked --workspace
-cargo fmt --check
-cargo run --locked --quiet -- check
-cargo run --locked --quiet -- enforce --stage ci
-cargo run --locked --quiet -- watch --once
-cargo run --locked --quiet -- query diff latest latest
-
 git add :/Cargo.toml :/Cargo.lock ':(glob)**/Cargo.toml'
-git commit -m "chore(release): $tag"
-git push origin main
+git commit --no-verify -m "chore(release): $tag"
+git push origin HEAD:main
 
-commit="$(git rev-parse HEAD)"
-echo "prepared $tag at $commit"
-echo "assemble the local and remote evidence bundle for this exact commit"
-echo "run: mise run release-accept -- /absolute/path/to/evidence-bundle"
-echo "after its receipt is published, run: mise run release-publish"
+release_output "$(git rev-parse HEAD)" "$tag"

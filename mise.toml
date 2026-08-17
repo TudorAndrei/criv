@@ -29,16 +29,8 @@ description = "Show the next SemVer version from conventional commits"
 run = "cog bump --dry-run --auto"
 
 [tasks.release-auto]
-description = "Prepare and push a release commit for controlled acceptance"
+description = "Prepare a Cocogitto release commit for the hosted release workflow"
 run = "bash scripts/release-auto.sh"
-
-[tasks.release-accept]
-description = "Validate a release evidence bundle on the controlled local Mac"
-run = "bash scripts/performance/accept-release-gates.sh"
-
-[tasks.release-publish]
-description = "Publish accepted local assets and release tags"
-run = "bash scripts/release-publish.sh"
 
 [tasks.perf]
 description = "Measure criv performance with canonical generated workloads"

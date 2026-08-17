@@ -118,15 +118,13 @@ mise run vscode-build
 mise run vscode-package
 mise run release-plan
 mise run release-auto
-mise run release-accept -- /absolute/path/to/evidence-bundle
-mise run release-publish
 ```
 
-`release-auto` prepares and pushes the version commit. Controlled local
-file-discovery acceptance then measures that exact commit and publishes its
-receipt. `release-publish`
-creates the release tags and uploads the accepted assets only after the commit
-has a current passing receipt.
+The hosted release workflow calls `release-auto` after CI passes. The command
+uses Cocogitto to prepare and push the version commit. Hosted jobs measure,
+accept, package, verify, attest, and publish that exact commit. Normal local
+development needs only `release-plan`; `release-auto` remains the workflow
+helper and a diagnostic entry point.
 See [[releasing]] for the full sequence.
 
 Pre-commit and pre-push are the automatic local validation boundary. Agents and

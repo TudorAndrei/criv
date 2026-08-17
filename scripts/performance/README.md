@@ -140,25 +140,19 @@ not representative user-project evidence.
 
 ## File-discovery acceptance
 
-`criv-discovery-gate` validates one prepared `gate-input.json`. It compares the
-matched baseline and candidate command runs, Source candidate traversal,
-complete Source builds, Vault and Markdown scaling, four target artifacts, and
-clean-build evidence. It writes the short-lived
+`criv-discovery-gate` validates one hosted `gate-input.json`. It compares the
+matched Source candidate traversal, complete Source builds, Vault and Markdown
+scaling, live-watch convergence, four target artifacts, and clean-build
+evidence. It writes the short-lived
 `criv.discovery-release-gate.v1` receipt only when every correctness,
 stability, time, memory, artifact, and toolchain gate passes.
 
-`accept-release-gates.sh` runs on the controlled local macOS ARM computer. It
-validates the complete evidence bundle, keeps the accepted binaries under the
-ignored `.criv/release-gates/<commit>/` directory, and uses
-`publish-release-gate-note.sh` to publish the receipt to
-`refs/notes/criv-release-gates`. The local computer is not a GitHub Actions
-runner.
-
-The manual `Discovery remote evidence` workflow measures the matched 90,000-file
-Source rows on Linux x86_64, Linux ARM64, and Windows x86_64. It also records
-three clean builds and uploads the measured v0.9.0 and candidate binaries for
-each target. These artifacts are inputs to the controlled Mac run. They do not
-publish a release receipt.
+The `Automatic release` workflow measures the matched 90,000-file Source rows
+on all four release hosts. Hosted macOS also measures the 225,000-file Source,
+Vault, and Markdown rows and five live-watch samples. Three clean builds supply
+the exact release binary for each target. `assemble-hosted-release-gates.sh`
+creates the gate input, and `publish-release-gate-note.sh` publishes the passing
+receipt to `refs/notes/criv-release-gates`.
 
 Run the local receipt smoke test with:
 
@@ -166,7 +160,7 @@ Run the local receipt smoke test with:
 tests/performance_release_gate_note.sh
 ```
 
-The local release command accepts only a current receipt for the exact tagged
-commit. It verifies every measured binary by SHA-256 before it packages and
-uploads that same binary. The release workflow then verifies each published
-binary on its native host and attests the published assets.
+`package-release-assets.sh` accepts only the measured paths and SHA-256 values
+from the current receipt. Native hosted jobs verify each candidate archive
+before the workflow publishes and attests the release. Raw evidence and
+measured binaries remain available as Actions artifacts for 90 days.

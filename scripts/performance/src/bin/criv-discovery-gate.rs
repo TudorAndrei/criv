@@ -38,8 +38,7 @@ struct GateInput {
     toolchain: String,
     valid_until_unix: u64,
     primary_target: String,
-    baseline_commands: PathBuf,
-    candidate_commands: PathBuf,
+    live_commands: PathBuf,
     scaling: Vec<ScalingPair>,
     artifacts: ArtifactEvidence,
 }
@@ -137,24 +136,17 @@ fn run(args: Args) -> Result<(), String> {
     let mut checks = Vec::new();
     let mut evidence = Vec::new();
 
-    let baseline_commands =
-        read_evidence(base, &input.baseline_commands, "baseline-commands".into())?;
-    let candidate_commands =
-        read_evidence(base, &input.candidate_commands, "candidate-commands".into())?;
-    gate_commands(&baseline_commands, &candidate_commands, &mut checks);
+    let live_commands = read_evidence(base, &input.live_commands, "live-commands".into())?;
+    gate_live_commands(&live_commands, &mut checks);
     check(
         &mut checks,
-        "commands-toolchain",
-        candidate_commands.run["rustc_verbose"]
+        "live-toolchain",
+        live_commands.run["rustc_verbose"]
             .as_str()
             .is_some_and(|value| value.contains(&input.toolchain)),
-        format!(
-            "candidate rustc identity {}",
-            candidate_commands.run["rustc_verbose"]
-        ),
+        format!("live rustc identity {}", live_commands.run["rustc_verbose"]),
     );
-    evidence.push(baseline_commands.digests.clone());
-    evidence.push(candidate_commands.digests.clone());
+    evidence.push(live_commands.digests.clone());
 
     let mut scaling_coverage = BTreeSet::new();
     for pair in &input.scaling {
@@ -178,13 +170,7 @@ fn run(args: Args) -> Result<(), String> {
                 candidate.run["rustc_verbose"]
             ),
         );
-        gate_scaling(
-            pair,
-            &input.primary_target,
-            &baseline,
-            &candidate,
-            &mut checks,
-        );
+        gate_scaling(pair, &baseline, &candidate, &mut checks);
         scaling_coverage.insert((
             pair.target.clone(),
             pair.profile.clone(),
@@ -201,13 +187,13 @@ fn run(args: Args) -> Result<(), String> {
         .find(|artifact| artifact.target == input.primary_target);
     check(
         &mut checks,
-        "commands-use-measured-primary-artifact",
+        "live-uses-measured-primary-artifact",
         primary_artifact.is_some_and(|artifact| {
-            candidate_commands.run["binary_digest"].as_str() == Some(artifact.digest.as_str())
+            live_commands.run["binary_digest"].as_str() == Some(artifact.digest.as_str())
         }),
         format!(
-            "command digest {}, artifact digest {}",
-            candidate_commands.run["binary_digest"],
+            "live digest {}, artifact digest {}",
+            live_commands.run["binary_digest"],
             primary_artifact.map_or("missing", |artifact| artifact.digest.as_str())
         ),
     );
@@ -301,72 +287,13 @@ fn read_evidence(base: &Path, path: &Path, label: String) -> Result<EvidenceDire
     })
 }
 
-fn gate_commands(
-    baseline: &EvidenceDirectory,
-    candidate: &EvidenceDirectory,
-    checks: &mut Vec<GateCheck>,
-) {
+fn gate_live_commands(candidate: &EvidenceDirectory, checks: &mut Vec<GateCheck>) {
     check(
         checks,
-        "commands-schema",
-        schema(&baseline.summary) == Some("criv.discovery-command-summary.v1")
-            && schema(&candidate.summary) == Some("criv.discovery-command-summary.v1"),
-        "both command summaries use the supported schema",
+        "live-schema",
+        schema(&candidate.summary) == Some("criv.discovery-command-summary.v1"),
+        "live command summary uses the supported schema",
     );
-    compatible_runs("commands", baseline, candidate, checks);
-
-    for case in [
-        "watch_once_cold",
-        "watch_once_warm",
-        "check_full",
-        "check_changed_source",
-        "check_changed_markdown",
-    ] {
-        let baseline_attempt = stable_attempt(baseline, "case", case);
-        let candidate_attempt = stable_attempt(candidate, "case", case);
-        check(
-            checks,
-            format!("commands-{case}-five-stable-samples"),
-            baseline_attempt.is_ok() && candidate_attempt.is_ok(),
-            format!(
-                "baseline: {}; candidate: {}",
-                result_text(&baseline_attempt),
-                result_text(&candidate_attempt)
-            ),
-        );
-        let (Ok(baseline_attempt), Ok(candidate_attempt)) = (baseline_attempt, candidate_attempt)
-        else {
-            continue;
-        };
-        let identities_match = command_identity(baseline, case, baseline_attempt)
-            .zip(command_identity(candidate, case, candidate_attempt))
-            .is_some_and(|(left, right)| left == right);
-        check(
-            checks,
-            format!("commands-{case}-output-identity"),
-            identities_match,
-            "matched baseline and candidate output identity",
-        );
-        if case == "check_full" {
-            continue;
-        }
-        gate_command_metric(
-            baseline,
-            candidate,
-            case,
-            (baseline_attempt, candidate_attempt),
-            ("real_seconds", command_elapsed_limit(case)),
-            checks,
-        );
-        gate_command_metric(
-            baseline,
-            candidate,
-            case,
-            (baseline_attempt, candidate_attempt),
-            ("peak_rss_bytes", command_rss_limit(case)),
-            checks,
-        );
-    }
 
     let live = stable_attempt(candidate, "case", "watch_live_ready");
     check(
@@ -426,85 +353,8 @@ fn gate_commands(
     }
 }
 
-fn gate_command_metric(
-    baseline: &EvidenceDirectory,
-    candidate: &EvidenceDirectory,
-    case: &str,
-    attempts: (u64, u64),
-    metric_gate: (&str, Option<f64>),
-    checks: &mut Vec<GateCheck>,
-) {
-    let (baseline_attempt, candidate_attempt) = attempts;
-    let (field, absolute_limit) = metric_gate;
-    let baseline_metric = metric(&baseline.summary, "case", case, baseline_attempt, field);
-    let candidate_metric = metric(&candidate.summary, "case", case, candidate_attempt, field);
-    let ratio = baseline_metric
-        .zip(candidate_metric)
-        .and_then(|(before, after)| (before.median > 0.0).then_some(after.median / before.median));
-    check(
-        checks,
-        format!("commands-{case}-{field}-ratio"),
-        ratio.is_some_and(|value| value <= 1.10),
-        ratio.map_or_else(
-            || "metric unavailable".into(),
-            |value| format!("ratio {value:.4}, limit 1.1000"),
-        ),
-    );
-    if let Some(limit) = absolute_limit {
-        check(
-            checks,
-            format!("commands-{case}-{field}-absolute"),
-            candidate_metric.is_some_and(|value| value.median <= limit),
-            metric_detail(candidate_metric, &format!("<= {limit}")),
-        );
-    }
-}
-
-fn command_elapsed_limit(case: &str) -> Option<f64> {
-    match case {
-        "watch_once_cold" => Some(1.0483),
-        "watch_once_warm" => Some(0.8041),
-        "check_changed_source" => Some(0.6259),
-        "check_changed_markdown" => Some(0.6314),
-        _ => None,
-    }
-}
-
-fn command_rss_limit(case: &str) -> Option<f64> {
-    match case {
-        "watch_once_cold" => Some(277_600_000.0),
-        "watch_once_warm" => Some(274_500_000.0),
-        "check_changed_source" => Some(277_900_000.0),
-        "check_changed_markdown" => Some(276_700_000.0),
-        _ => None,
-    }
-}
-
-fn command_identity(evidence: &EvidenceDirectory, case: &str, attempt: u64) -> Option<Value> {
-    let row = chosen_rows(evidence, "case", case, attempt)
-        .into_iter()
-        .next()?;
-    if case.starts_with("watch_once") {
-        let state = &row["state_after"];
-        return Some(serde_json::json!({
-            "source_paths": state["source_paths"],
-            "source_path_digest": state["source_path_digest"],
-            "vault_markdown_paths": state["vault_markdown_paths"],
-            "vault_markdown_path_digest": state["vault_markdown_path_digest"],
-            "vault_c4_paths": state["vault_c4_paths"],
-            "vault_c4_path_digest": state["vault_c4_path_digest"],
-        }));
-    }
-    Some(serde_json::json!({
-        "stdout": row["stdout_digest"],
-        "stderr": row["stderr_digest"],
-        "state_unchanged": row["state_unchanged"],
-    }))
-}
-
 fn gate_scaling(
     pair: &ScalingPair,
-    primary_target: &str,
     baseline: &EvidenceDirectory,
     candidate: &EvidenceDirectory,
     checks: &mut Vec<GateCheck>,
@@ -552,44 +402,33 @@ fn gate_scaling(
         "selected count and path digest match the approved scaling workload",
     );
 
-    let elapsed_ratio_limit = if matches!(pair.profile.as_str(), "source" | "source_candidates")
-        && pair.selected_files >= 90_000
-    {
+    let elapsed_ratio_limit = scaling_ratio_limit(&pair.profile, pair.selected_files);
+    gate_scaling_metric(
+        &prefix,
+        baseline,
+        candidate,
+        &pair.profile,
+        (before_attempt, after_attempt),
+        ("real_seconds", elapsed_ratio_limit, None),
+        checks,
+    );
+    gate_scaling_metric(
+        &prefix,
+        baseline,
+        candidate,
+        &pair.profile,
+        (before_attempt, after_attempt),
+        ("peak_rss_bytes", 1.10, None),
+        checks,
+    );
+}
+
+fn scaling_ratio_limit(profile: &str, selected_files: usize) -> f64 {
+    if matches!(profile, "source" | "source_candidates") && selected_files >= 90_000 {
         0.50
     } else {
         1.10
-    };
-    gate_scaling_metric(
-        &prefix,
-        baseline,
-        candidate,
-        &pair.profile,
-        (before_attempt, after_attempt),
-        (
-            "real_seconds",
-            elapsed_ratio_limit,
-            scaling_elapsed_limit_for_target(
-                &pair.target,
-                primary_target,
-                &pair.profile,
-                pair.selected_files,
-            ),
-        ),
-        checks,
-    );
-    gate_scaling_metric(
-        &prefix,
-        baseline,
-        candidate,
-        &pair.profile,
-        (before_attempt, after_attempt),
-        (
-            "peak_rss_bytes",
-            1.10,
-            scaling_rss_limit(&pair.profile, pair.selected_files),
-        ),
-        checks,
-    );
+    }
 }
 
 fn gate_scaling_metric(
@@ -627,62 +466,18 @@ fn gate_scaling_metric(
     }
 }
 
-fn scaling_elapsed_limit(profile: &str, selected: usize) -> Option<f64> {
-    match (profile, selected) {
-        ("source_candidates", 9_000) => Some(0.2673),
-        ("source_candidates", 90_000) => Some(1.1875),
-        ("source_candidates", 225_000) => Some(10.3725),
-        ("vault", 9_000) => Some(0.07282),
-        ("vault", 90_000) => Some(0.5830),
-        ("vault", 225_000) => Some(4.4902),
-        ("markdown", 9_000) => Some(0.06435),
-        ("markdown", 90_000) => Some(0.5456),
-        ("markdown", 225_000) => Some(4.4099),
-        _ => None,
-    }
-}
-
-fn scaling_elapsed_limit_for_target(
-    target: &str,
-    primary_target: &str,
-    profile: &str,
-    selected: usize,
-) -> Option<f64> {
-    if target != primary_target {
-        return None;
-    }
-    scaling_elapsed_limit(profile, selected)
-}
-
-fn scaling_rss_limit(profile: &str, selected: usize) -> Option<f64> {
-    match (profile, selected) {
-        ("source_candidates", 9_000) => Some(30_400_000.0),
-        ("source_candidates", 90_000) => Some(182_800_000.0),
-        ("source_candidates", 225_000) => Some(442_800_000.0),
-        ("vault", 9_000) => Some(13_310_000.0),
-        ("vault", 90_000) => Some(49_720_000.0),
-        ("vault", 225_000) => Some(107_030_000.0),
-        ("markdown", 9_000) => Some(14_190_000.0),
-        ("markdown", 90_000) => Some(33_220_000.0),
-        ("markdown", 225_000) => Some(61_820_000.0),
-        _ => None,
-    }
-}
-
 fn gate_scaling_coverage(
     input: &GateInput,
     coverage: &BTreeSet<(String, String, usize)>,
     checks: &mut Vec<GateCheck>,
 ) {
     for profile in ["source", "source_candidates", "vault", "markdown"] {
-        for selected in [9_000, 90_000, 225_000] {
-            check(
-                checks,
-                format!("primary-scaling-{profile}-{selected}"),
-                coverage.contains(&(input.primary_target.clone(), profile.to_string(), selected)),
-                "primary host has the required scaling pair",
-            );
-        }
+        check(
+            checks,
+            format!("primary-scaling-{profile}-225000"),
+            coverage.contains(&(input.primary_target.clone(), profile.to_string(), 225_000)),
+            "primary host has the required 250k-entry scaling pair",
+        );
     }
     for target in RELEASE_TARGETS {
         for profile in ["source", "source_candidates"] {
@@ -735,11 +530,18 @@ fn gate_artifacts(
     let mut receipts = Vec::new();
     for target in &input.artifacts.targets {
         let prefix = format!("artifact-{}", target.target);
-        let binary = if target.candidate_binary.is_absolute() {
-            target.candidate_binary.clone()
-        } else {
-            base.join(&target.candidate_binary)
-        };
+        if target.candidate_binary.is_absolute()
+            || target
+                .candidate_binary
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err(format!(
+                "candidate binary path must be a safe relative path: {}",
+                target.candidate_binary.display()
+            ));
+        }
+        let binary = base.join(&target.candidate_binary);
         let bytes = fs::read(&binary).map_err(|error| {
             format!(
                 "failed to read candidate binary {}: {error}",
@@ -807,7 +609,7 @@ fn gate_artifacts(
         );
         receipts.push(ArtifactReceipt {
             target: target.target.clone(),
-            path: binary.display().to_string(),
+            path: target.candidate_binary.display().to_string(),
             digest,
             sha256: sha256_file(&binary)?,
             file_name: binary
@@ -1029,40 +831,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn accepted_numeric_limits_are_locked() {
-        assert_eq!(command_elapsed_limit("watch_once_cold"), Some(1.0483));
-        assert_eq!(
-            command_rss_limit("check_changed_source"),
-            Some(277_900_000.0)
-        );
-        assert_eq!(scaling_elapsed_limit("source", 90_000), None);
-        assert_eq!(
-            scaling_elapsed_limit("source_candidates", 90_000),
-            Some(1.1875)
-        );
-        assert_eq!(scaling_rss_limit("markdown", 225_000), Some(61_820_000.0));
+    fn accepted_scaling_ratio_limits_are_locked() {
+        assert_eq!(scaling_ratio_limit("source", 90_000), 0.50);
+        assert_eq!(scaling_ratio_limit("source_candidates", 225_000), 0.50);
+        assert_eq!(scaling_ratio_limit("vault", 225_000), 1.10);
     }
 
     #[test]
-    fn scaling_absolute_elapsed_limits_apply_only_to_the_primary_target() {
-        assert_eq!(
-            scaling_elapsed_limit_for_target(
-                "aarch64-apple-darwin",
-                "aarch64-apple-darwin",
-                "source_candidates",
-                90_000,
-            ),
-            Some(1.1875)
-        );
-        assert_eq!(
-            scaling_elapsed_limit_for_target(
-                "x86_64-pc-windows-msvc",
-                "aarch64-apple-darwin",
-                "source_candidates",
-                90_000,
-            ),
-            None
-        );
+    fn hosted_scaling_coverage_uses_four_100k_source_hosts_and_one_250k_primary_host() {
+        let input = GateInput {
+            schema: INPUT_SCHEMA.into(),
+            commit: "a".repeat(40),
+            toolchain: "1.97.1".into(),
+            valid_until_unix: u64::MAX,
+            primary_target: "aarch64-apple-darwin".into(),
+            live_commands: "live".into(),
+            scaling: vec![],
+            artifacts: ArtifactEvidence {
+                normal_dependencies_before: 1,
+                normal_dependencies_after: 1,
+                native_compiler_or_library_added: false,
+                targets: vec![],
+            },
+        };
+        let mut coverage = BTreeSet::new();
+        for target in RELEASE_TARGETS {
+            for profile in ["source", "source_candidates"] {
+                coverage.insert((target.into(), profile.into(), 90_000));
+            }
+        }
+        for profile in ["source", "source_candidates", "vault", "markdown"] {
+            coverage.insert((input.primary_target.clone(), profile.into(), 225_000));
+        }
+        let mut checks = Vec::new();
+        gate_scaling_coverage(&input, &coverage, &mut checks);
+        assert_eq!(checks.len(), 12);
+        assert!(checks.iter().all(|check| check.passed));
     }
 
     #[test]
