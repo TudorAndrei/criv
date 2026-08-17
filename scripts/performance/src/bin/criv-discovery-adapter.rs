@@ -119,10 +119,12 @@ fn prepare_export(
     let ceiling = output
         .parent()
         .ok_or_else(|| "adapter output has no parent".to_string())?;
+    let git_patch = external_command_path(patch);
+    let git_ceiling = external_command_path(ceiling);
     let check = Command::new("git")
         .args(["apply", "--check"])
-        .arg(patch)
-        .env("GIT_CEILING_DIRECTORIES", ceiling)
+        .arg(&git_patch)
+        .env("GIT_CEILING_DIRECTORIES", &git_ceiling)
         .current_dir(output)
         .status()
         .map_err(display_error)?;
@@ -131,8 +133,8 @@ fn prepare_export(
     }
     let apply = Command::new("git")
         .arg("apply")
-        .arg(patch)
-        .env("GIT_CEILING_DIRECTORIES", ceiling)
+        .arg(&git_patch)
+        .env("GIT_CEILING_DIRECTORIES", &git_ceiling)
         .current_dir(output)
         .status()
         .map_err(display_error)?;
@@ -148,6 +150,20 @@ fn prepare_export(
         );
     }
     Ok(())
+}
+
+fn external_command_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let value = path.to_string_lossy();
+        if let Some(value) = value.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{value}"));
+        }
+        if let Some(value) = value.strip_prefix(r"\\?\") {
+            return PathBuf::from(value);
+        }
+    }
+    path.to_path_buf()
 }
 
 fn resolve_new_output(path: &Path) -> Result<PathBuf, String> {
@@ -235,6 +251,19 @@ mod tests {
         assert_eq!(
             resolve_input(root.path(), Path::new("input")).unwrap(),
             fs::canonicalize(root.path().join("input")).unwrap()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn external_git_paths_do_not_use_windows_verbatim_prefixes() {
+        assert_eq!(
+            external_command_path(Path::new(r"\\?\C:\repo\adapter.patch")),
+            PathBuf::from(r"C:\repo\adapter.patch")
+        );
+        assert_eq!(
+            external_command_path(Path::new(r"\\?\UNC\server\share\adapter.patch")),
+            PathBuf::from(r"\\server\share\adapter.patch")
         );
     }
 }
