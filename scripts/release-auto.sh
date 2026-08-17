@@ -63,5 +63,6 @@ git push origin main
 
 commit="$(git rev-parse HEAD)"
 echo "prepared $tag at $commit"
-echo "run the controlled discovery release-gate workflow for this commit"
+echo "assemble the local and remote evidence bundle for this exact commit"
+echo "run: mise run release-accept -- /absolute/path/to/evidence-bundle"
 echo "after its receipt is published, run: mise run release-publish"

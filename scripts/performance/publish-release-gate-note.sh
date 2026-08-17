@@ -16,7 +16,6 @@ jq -e --arg commit "$commit" '
   .schema == "criv.discovery-release-gate.v1" and
   .passed == true and
   .commit == $commit and
-  (.artifact_run_id | type == "number" and . > 0) and
   (.artifacts | length == 4)
 ' "$receipt" >/dev/null
 git cat-file -e "$commit^{commit}"

@@ -159,10 +159,11 @@ artifacts, binary size, and three clean builds. A result with more than ten
 percent relative median absolute deviation gets one complete repeat. A second
 unstable attempt is not acceptance evidence.
 
-The controlled workflow writes the accepted receipt to
+The controlled local acceptance command writes the accepted receipt to
 `refs/notes/criv-release-gates`. The receipt is valid for seven days and names
-the exact commit, toolchain, evidence digests, workflow artifact, and four
-measured binaries. The release workflow packages these measured binaries. It
-does not rebuild them. See
+the exact commit, toolchain, evidence digests, and four measured binaries. The
+local release command packages and uploads these measured binaries. It does
+not rebuild them. The release workflow verifies and attests the published
+assets. See
 [[0115-single-read-source-build|ADR-0115]] and [[releasing]] for the
 release sequence.

@@ -118,12 +118,15 @@ mise run vscode-build
 mise run vscode-package
 mise run release-plan
 mise run release-auto
+mise run release-accept -- /absolute/path/to/evidence-bundle
 mise run release-publish
 ```
 
-`release-auto` prepares and pushes the version commit. Controlled
-file-discovery acceptance then measures that exact commit. `release-publish`
-creates the release tags only after the commit has a current passing receipt.
+`release-auto` prepares and pushes the version commit. Controlled local
+file-discovery acceptance then measures that exact commit and publishes its
+receipt. `release-publish`
+creates the release tags and uploads the accepted assets only after the commit
+has a current passing receipt.
 See [[releasing]] for the full sequence.
 
 Pre-commit and pre-push are the automatic local validation boundary. Agents and

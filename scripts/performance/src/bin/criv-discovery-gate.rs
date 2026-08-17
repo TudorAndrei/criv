@@ -38,8 +38,6 @@ struct GateInput {
     toolchain: String,
     valid_until_unix: u64,
     primary_target: String,
-    artifact_run_id: u64,
-    evidence_artifact_name: String,
     baseline_commands: PathBuf,
     candidate_commands: PathBuf,
     scaling: Vec<ScalingPair>,
@@ -68,7 +66,6 @@ struct ArtifactTarget {
     target: String,
     commit: String,
     candidate_binary: PathBuf,
-    artifact_name: String,
     baseline_binary_digest: String,
     baseline_binary_bytes: u64,
     baseline_build_seconds: Vec<f64>,
@@ -96,7 +93,6 @@ struct EvidenceDigest {
 #[derive(Debug, Serialize)]
 struct ArtifactReceipt {
     target: String,
-    artifact_name: String,
     path: String,
     digest: String,
     sha256: String,
@@ -111,8 +107,6 @@ struct GateReceipt {
     toolchain: String,
     generated_at_unix: u64,
     valid_until_unix: u64,
-    artifact_run_id: u64,
-    evidence_artifact_name: String,
     input_digest: String,
     passed: bool,
     evidence: Vec<EvidenceDigest>,
@@ -240,8 +234,6 @@ fn run(args: Args) -> Result<(), String> {
         toolchain: input.toolchain,
         generated_at_unix,
         valid_until_unix: input.valid_until_unix,
-        artifact_run_id: input.artifact_run_id,
-        evidence_artifact_name: input.evidence_artifact_name,
         input_digest: digest_bytes(&input_bytes),
         passed,
         evidence,
@@ -268,12 +260,6 @@ fn validate_input(input: &GateInput) -> Result<(), String> {
     }
     if input.toolchain.trim().is_empty() {
         return Err("toolchain must not be empty".into());
-    }
-    if input.artifact_run_id == 0 {
-        return Err("artifact-run-id must be positive".into());
-    }
-    if input.evidence_artifact_name.trim().is_empty() {
-        return Err("evidence-artifact-name must not be empty".into());
     }
     if !RELEASE_TARGETS.contains(&input.primary_target.as_str()) {
         return Err(format!(
@@ -821,7 +807,6 @@ fn gate_artifacts(
         );
         receipts.push(ArtifactReceipt {
             target: target.target.clone(),
-            artifact_name: target.artifact_name.clone(),
             path: binary.display().to_string(),
             digest,
             sha256: sha256_file(&binary)?,

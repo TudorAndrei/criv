@@ -21,7 +21,6 @@ jq -n --arg commit "$commit" '{
   schema: "criv.discovery-release-gate.v1",
   commit: $commit,
   passed: true,
-  artifact_run_id: 1,
   artifacts: [
     {target:"aarch64-apple-darwin"},
     {target:"aarch64-unknown-linux-gnu"},

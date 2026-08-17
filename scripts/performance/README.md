@@ -147,10 +147,12 @@ clean-build evidence. It writes the short-lived
 `criv.discovery-release-gate.v1` receipt only when every correctness,
 stability, time, memory, artifact, and toolchain gate passes.
 
-The controlled `Discovery release gates` workflow runs on the named macOS ARM
-runner. It uploads the complete evidence bundle and the four measured binaries,
-then `publish-release-gate-note.sh` publishes the receipt to
-`refs/notes/criv-release-gates`.
+`accept-release-gates.sh` runs on the controlled local macOS ARM computer. It
+validates the complete evidence bundle, keeps the accepted binaries under the
+ignored `.criv/release-gates/<commit>/` directory, and uses
+`publish-release-gate-note.sh` to publish the receipt to
+`refs/notes/criv-release-gates`. The local computer is not a GitHub Actions
+runner.
 
 The manual `Discovery remote evidence` workflow measures the matched 90,000-file
 Source rows on Linux x86_64, Linux ARM64, and Windows x86_64. It also records
@@ -164,5 +166,7 @@ Run the local receipt smoke test with:
 tests/performance_release_gate_note.sh
 ```
 
-The tag workflow accepts only a current receipt for the exact tagged commit. It
-verifies every measured binary by SHA-256 before it packages that same binary.
+The local release command accepts only a current receipt for the exact tagged
+commit. It verifies every measured binary by SHA-256 before it packages and
+uploads that same binary. The release workflow then verifies each published
+binary on its native host and attests the published assets.

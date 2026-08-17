@@ -32,8 +32,12 @@ run = "cog bump --dry-run --auto"
 description = "Prepare and push a release commit for controlled acceptance"
 run = "bash scripts/release-auto.sh"
 
+[tasks.release-accept]
+description = "Validate a release evidence bundle on the controlled local Mac"
+run = "bash scripts/performance/accept-release-gates.sh"
+
 [tasks.release-publish]
-description = "Tag a prepared release after its accepted gate receipt"
+description = "Publish accepted local assets and release tags"
 run = "bash scripts/release-publish.sh"
 
 [tasks.perf]

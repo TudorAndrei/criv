@@ -58,12 +58,18 @@ commit. It produces the Linux x86_64, Linux ARM64, and Windows x86_64 Source
 scaling evidence, clean-build evidence, and measured binaries.
 
 Add those artifacts to the local macOS and Ouro evidence. Then run the
-controlled `Discovery release gates` workflow for the same commit. Its prepared
-evidence bundle must contain `gate-input.json`, raw Ouro and scaling results,
-four measured release binaries, matched baseline records, and clean-build
-evidence. The workflow verifies the hard gates, uploads the evidence and
-measured binaries, and writes a seven-day receipt to
-`refs/notes/criv-release-gates`.
+controlled acceptance command on the local Mac for the same commit:
+
+```sh
+mise run release-accept -- /absolute/path/to/evidence-bundle
+```
+
+The prepared bundle must contain `gate-input.json`, raw Ouro and scaling
+results, four measured release binaries, matched baseline records, and
+clean-build evidence. The command verifies the hard gates, copies the four
+accepted binaries to `.criv/release-gates/<commit>/`, and writes a seven-day
+receipt to `refs/notes/criv-release-gates`. The Mac is not a GitHub Actions
+runner. Keep the raw local evidence outside source control.
 
 After the receipt passes, create and push the two release tags with:
 
@@ -72,10 +78,12 @@ mise run release-publish
 ```
 
 `release-publish` requires clean `main`, the prepared release commit at
-`HEAD`, and a current passing receipt for that exact commit. The tag workflow
-downloads and verifies the four binaries named in the receipt. It packages
-those measured bytes with the editor viewer. It does not build replacement CLI
-binaries.
+`HEAD`, a current passing receipt for that exact commit, and the matching local
+accepted asset directory. It packages the four measured binaries with the
+editor viewer, creates the two tags, uploads a draft GitHub release, and then
+publishes the release. It does not build replacement CLI binaries. The GitHub
+release workflow runs after publication. It verifies each binary on its native
+host and adds build-provenance attestations.
 
 Conventional commits drive the automatic bump: `fix` produces a patch release,
 `feat` produces a minor release, and `!` or `BREAKING CHANGE:` produces a major
