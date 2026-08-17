@@ -1807,6 +1807,7 @@ mod tests {
                     .success()
             );
         }
+        let original = fs::read(root.path().join("src/file.rs")).unwrap();
         fs::write(root.path().join("src/file.rs"), "changed\n").unwrap();
         assert!(
             Command::new("git")
@@ -1844,10 +1845,7 @@ mod tests {
         };
         restore_snapshot(&args, root.path()).unwrap();
 
-        assert_eq!(
-            fs::read_to_string(root.path().join("src/file.rs")).unwrap(),
-            "original\n"
-        );
+        assert_eq!(fs::read(root.path().join("src/file.rs")).unwrap(), original);
         assert!(!root.path().join(".criv").exists());
         assert!(
             !root
