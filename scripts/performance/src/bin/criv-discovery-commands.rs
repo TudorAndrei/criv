@@ -1793,6 +1793,7 @@ mod tests {
         fs::write(root.path().join("src/file.rs"), "original\n").unwrap();
         for command in [
             &["init", "--quiet"][..],
+            &["config", "core.autocrlf", "false"][..],
             &["config", "user.email", "performance@criv.invalid"][..],
             &["config", "user.name", "criv performance"][..],
             &["add", "--all"][..],
