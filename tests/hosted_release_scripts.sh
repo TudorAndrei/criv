@@ -15,6 +15,15 @@ grep -F 'GH_TOKEN: ${{ github.token }}' "$prepare_step" >/dev/null
 grep -F 'git push --no-verify origin HEAD:main' \
   "$repository_root/scripts/release-auto.sh" >/dev/null
 
+quality_job="$test_root/quality-job.yml"
+sed -n \
+  '/  quality:/,/  measure:/p' \
+  "$repository_root/.github/workflows/release.yml" >"$quality_job"
+grep -F 'rustup toolchain install 1.97.1 --profile minimal --no-self-update' \
+  "$quality_job" >/dev/null
+grep -F 'rustup component add clippy rustfmt --toolchain 1.97.1' \
+  "$quality_job" >/dev/null
+
 targets=(
   aarch64-apple-darwin
   aarch64-unknown-linux-gnu

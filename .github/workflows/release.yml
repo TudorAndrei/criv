@@ -156,6 +156,11 @@ jobs:
           install: true
           cache: true
 
+      - name: Install Rust components
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --no-self-update
+          rustup component add clippy rustfmt --toolchain 1.97.1
+
       - name: Install JavaScript dependencies
         run: npm ci
 
