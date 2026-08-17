@@ -75,6 +75,7 @@ impl WatcherFactory for NotifyWatcherFactory {
 struct NotifyWatcherAdapter {
     _debouncer: RepositoryDebouncer,
     receiver: WatchEventReceiver,
+    path_mappings: Vec<(PathBuf, PathBuf)>,
 }
 
 impl NotifyWatcherAdapter {
@@ -84,6 +85,7 @@ impl NotifyWatcherAdapter {
             let _ = tx.send(event);
         })
         .map_err(|err| CrivError::new(format!("failed to start watcher: {err}")))?;
+        let mut path_mappings = Vec::new();
         for target in &set.targets {
             let watch_path = target.path.canonicalize().map_err(|err| {
                 CrivError::new(format!(
@@ -101,10 +103,20 @@ impl NotifyWatcherAdapter {
                 .map_err(|err| {
                     CrivError::new(format!("failed to watch {}: {err}", target.path.display()))
                 })?;
+            path_mappings.push((watch_path, target.path.clone()));
         }
+        path_mappings.sort_by(|left, right| {
+            right
+                .0
+                .components()
+                .count()
+                .cmp(&left.0.components().count())
+                .then_with(|| left.0.cmp(&right.0))
+        });
         Ok(Self {
             _debouncer: debouncer,
             receiver,
+            path_mappings,
         })
     }
 }
@@ -113,14 +125,28 @@ impl WatcherAdapter for NotifyWatcherAdapter {
     fn poll(&mut self, timeout: Duration) -> WatcherPoll {
         match self.receiver.recv_timeout(timeout) {
             Ok(Ok(events)) if events.is_empty() => WatcherPoll::Idle,
-            Ok(Ok(events)) => {
-                WatcherPoll::Paths(events.into_iter().map(|event| event.path).collect())
-            }
+            Ok(Ok(events)) => WatcherPoll::Paths(
+                events
+                    .into_iter()
+                    .map(|event| logical_event_path(&event.path, &self.path_mappings))
+                    .collect(),
+            ),
             Ok(Err(err)) => WatcherPoll::Error(err.to_string()),
             Err(mpsc::RecvTimeoutError::Timeout) => WatcherPoll::Idle,
             Err(mpsc::RecvTimeoutError::Disconnected) => WatcherPoll::Disconnected,
         }
     }
+}
+
+fn logical_event_path(path: &Path, mappings: &[(PathBuf, PathBuf)]) -> PathBuf {
+    mappings
+        .iter()
+        .find_map(|(watched, logical)| {
+            path.strip_prefix(watched)
+                .ok()
+                .map(|suffix| logical.join(suffix))
+        })
+        .unwrap_or_else(|| path.to_path_buf())
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -735,11 +761,10 @@ mod tests {
     use super::*;
 
     fn watcher_reports_path(mut watcher: NotifyWatcherAdapter, expected: &Path) -> bool {
-        let expected = expected.canonicalize().unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
         while Instant::now() < deadline {
             if let WatcherPoll::Paths(paths) = watcher.poll(Duration::from_millis(250))
-                && paths.iter().any(|path| path == &expected)
+                && paths.iter().any(|path| path == expected)
             {
                 return true;
             }
