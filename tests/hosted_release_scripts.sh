@@ -12,6 +12,8 @@ sed -n \
   '/      - name: Prepare automatic release/,/      - name: Export release selection/p' \
   "$repository_root/.github/workflows/release.yml" >"$prepare_step"
 grep -F 'GH_TOKEN: ${{ github.token }}' "$prepare_step" >/dev/null
+grep -F 'git push --no-verify origin HEAD:main' \
+  "$repository_root/scripts/release-auto.sh" >/dev/null
 
 targets=(
   aarch64-apple-darwin

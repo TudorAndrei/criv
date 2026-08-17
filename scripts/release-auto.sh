@@ -123,6 +123,6 @@ done
 cargo release version "$version" --workspace --execute --no-confirm
 git add :/Cargo.toml :/Cargo.lock ':(glob)**/Cargo.toml'
 git commit --no-verify -m "chore(release): $tag"
-git push origin HEAD:main
+git push --no-verify origin HEAD:main
 
 release_output "$(git rev-parse HEAD)" "$tag"
