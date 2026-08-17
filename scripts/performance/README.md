@@ -150,7 +150,15 @@ stability, time, memory, artifact, and toolchain gate passes.
 The controlled `Discovery release gates` workflow runs on the named macOS ARM
 runner. It uploads the complete evidence bundle and the four measured binaries,
 then `publish-release-gate-note.sh` publishes the receipt to
-`refs/notes/criv-release-gates`. Run the local receipt smoke test with:
+`refs/notes/criv-release-gates`.
+
+The manual `Discovery remote evidence` workflow measures the matched 90,000-file
+Source rows on Linux x86_64, Linux ARM64, and Windows x86_64. It also records
+three clean builds and uploads the measured v0.9.0 and candidate binaries for
+each target. These artifacts are inputs to the controlled Mac run. They do not
+publish a release receipt.
+
+Run the local receipt smoke test with:
 
 ```sh
 tests/performance_release_gate_note.sh

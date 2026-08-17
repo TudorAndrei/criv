@@ -53,11 +53,16 @@ clean `main` branch, asks Cocogitto for the next version with
 pre-release checks above, commits the version bump, and pushes the commit. It
 does not create a tag.
 
-Run the controlled `Discovery release gates` workflow for the exact release
-commit. Its prepared evidence bundle must contain `gate-input.json`, raw Ouro
-and scaling results, four measured release binaries, matched baseline records,
-and clean-build evidence. The workflow verifies the hard gates, uploads the
-evidence and measured binaries, and writes a seven-day receipt to
+Run the manual `Discovery remote evidence` workflow for the exact release
+commit. It produces the Linux x86_64, Linux ARM64, and Windows x86_64 Source
+scaling evidence, clean-build evidence, and measured binaries.
+
+Add those artifacts to the local macOS and Ouro evidence. Then run the
+controlled `Discovery release gates` workflow for the same commit. Its prepared
+evidence bundle must contain `gate-input.json`, raw Ouro and scaling results,
+four measured release binaries, matched baseline records, and clean-build
+evidence. The workflow verifies the hard gates, uploads the evidence and
+measured binaries, and writes a seven-day receipt to
 `refs/notes/criv-release-gates`.
 
 After the receipt passes, create and push the two release tags with:

@@ -1,0 +1,253 @@
+name: Discovery remote evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Full candidate commit ID
+        required: true
+        type: string
+
+concurrency:
+  group: discovery-remote-evidence-${{ inputs.commit }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+  RUSTUP_TOOLCHAIN: 1.97.1
+
+jobs:
+  measure:
+    name: Measure ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            executable_suffix: ""
+          - name: Linux ARM64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            executable_suffix: ""
+          - name: Windows x86_64
+            runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            executable_suffix: .exe
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify candidate and install Rust
+        env:
+          EXPECTED_COMMIT: ${{ inputs.commit }}
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          rustup toolchain install 1.97.1 --profile minimal --no-self-update
+
+      - name: Cache Cargo registry inputs
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/git/db
+            ~/.cargo/registry/cache
+            ~/.cargo/registry/index
+          key: discovery-remote-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            discovery-remote-${{ matrix.target }}-
+
+      - name: Build evidence tools
+        env:
+          CARGO_TARGET_DIR: target/discovery-remote/tool-target
+        shell: bash
+        run: |
+          cargo build --locked --release -p criv-perf-harness \
+            --bin criv-discovery-adapter \
+            --bin criv-discovery-baseline \
+            --bin criv-discovery-fixtures \
+            --bin criv-discovery-inventory
+          mkdir -p target/discovery-remote/tools
+          for tool in adapter baseline fixtures inventory; do
+            cp "target/discovery-remote/tool-target/release/criv-discovery-$tool${{ matrix.executable_suffix }}" \
+              "target/discovery-remote/tools/criv-discovery-$tool${{ matrix.executable_suffix }}"
+          done
+          rm -rf target/discovery-remote/tool-target
+
+      - name: Prepare matched workload and v0.9.0 adapter
+        shell: bash
+        run: |
+          mkdir -p target/discovery-remote/evidence
+          target/discovery-remote/tools/criv-discovery-fixtures${{ matrix.executable_suffix }} \
+            --manifest fixtures/performance/discovery/source-100000.toml \
+            --output target/discovery-remote/workload
+          target/discovery-remote/tools/criv-discovery-inventory${{ matrix.executable_suffix }} \
+            --root target/discovery-remote/workload \
+            --workload-id source-100000 \
+            --output target/discovery-remote/evidence/workload-inventory.json \
+            --summary-output target/discovery-remote/evidence/workload-summary.json
+          target/discovery-remote/tools/criv-discovery-adapter${{ matrix.executable_suffix }} \
+            --repository-root . \
+            --revision v0.9.0 \
+            --output target/discovery-remote/adapter
+
+      - name: Measure v0.9.0 and candidate Source work
+        env:
+          EXPECTED_COMMIT: ${{ inputs.commit }}
+        shell: bash
+        run: |
+          target/discovery-remote/tools/criv-discovery-baseline${{ matrix.executable_suffix }} \
+            --repository-root target/discovery-remote/adapter \
+            --workload-root target/discovery-remote/workload \
+            --workload-inventory target/discovery-remote/evidence/workload-inventory.json \
+            --adapter-receipt target/discovery-remote/adapter/discovery-adapter.json \
+            --probe-label v0.9.0-adapter \
+            --profile source \
+            --profile source-candidates \
+            --samples 5 \
+            --results-root target/discovery-remote/evidence/baseline
+          target/discovery-remote/tools/criv-discovery-baseline${{ matrix.executable_suffix }} \
+            --repository-root . \
+            --workload-root target/discovery-remote/workload \
+            --workload-inventory target/discovery-remote/evidence/workload-inventory.json \
+            --probe-label "candidate-$EXPECTED_COMMIT" \
+            --profile source \
+            --profile source-candidates \
+            --samples 5 \
+            --results-root target/discovery-remote/evidence/candidate
+
+      - name: Measure clean builds and stage binaries
+        env:
+          ADAPTER_ROOT: ${{ github.workspace }}/target/discovery-remote/adapter
+          CANDIDATE_ROOT: ${{ github.workspace }}
+          EXPECTED_COMMIT: ${{ inputs.commit }}
+          EXECUTABLE_SUFFIX: ${{ matrix.executable_suffix }}
+          RELEASE_TARGET: ${{ matrix.target }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $output = Join-Path $env:GITHUB_WORKSPACE "target/discovery-remote/evidence/artifacts"
+          New-Item -ItemType Directory -Force -Path $output | Out-Null
+
+          $candidateProbeTarget = Join-Path $env:CANDIDATE_ROOT "target/release"
+          $baselineProbeTarget = Join-Path $env:ADAPTER_ROOT "target"
+          if (Test-Path $candidateProbeTarget) {
+            Remove-Item -Recurse -Force $candidateProbeTarget
+          }
+          if (Test-Path $baselineProbeTarget) {
+            Remove-Item -Recurse -Force $baselineProbeTarget
+          }
+
+          if (Test-Path Env:RUSTC_WRAPPER) {
+            Remove-Item Env:RUSTC_WRAPPER
+          }
+          $cargoHome = if ($env:CARGO_HOME) {
+            $env:CARGO_HOME
+          } else {
+            Join-Path ([Environment]::GetFolderPath("UserProfile")) ".cargo"
+          }
+          $registryInputsPresent = Test-Path (Join-Path $cargoHome "registry")
+
+          function Measure-OneCleanBuild {
+            param(
+              [string]$SourceRoot,
+              [string]$Label,
+              [int]$Sample
+            )
+            $targetDirectory = Join-Path $env:RUNNER_TEMP "criv-$Label-build-$Sample"
+            if (Test-Path $targetDirectory) {
+              Remove-Item -Recurse -Force $targetDirectory
+            }
+            $env:CARGO_TARGET_DIR = $targetDirectory
+            Push-Location $SourceRoot
+            try {
+              $timer = [System.Diagnostics.Stopwatch]::StartNew()
+              $buildLog = Join-Path $output "$Label-build-$Sample.log"
+              cargo build --locked --release --target $env:RELEASE_TARGET --package criv --bin criv *>&1 |
+                Tee-Object -FilePath $buildLog |
+                Out-Host
+              $timer.Stop()
+              if ($LASTEXITCODE -ne 0) {
+                throw "$Label clean build $Sample failed"
+              }
+            } finally {
+              Pop-Location
+            }
+            if ($Sample -eq 3) {
+              $binary = Join-Path $targetDirectory "$($env:RELEASE_TARGET)/release/criv$($env:EXECUTABLE_SUFFIX)"
+              Copy-Item $binary (Join-Path $output "$Label-criv$($env:EXECUTABLE_SUFFIX)")
+            }
+            Remove-Item -Recurse -Force $targetDirectory
+            return $timer.Elapsed.TotalSeconds
+          }
+
+          $baselineTimes = @()
+          $candidateTimes = @()
+          for ($sample = 1; $sample -le 3; $sample++) {
+            $labels = if ($sample % 2 -eq 0) { @("candidate", "baseline") } else { @("baseline", "candidate") }
+            foreach ($label in $labels) {
+              if ($label -eq "baseline") {
+                $baselineTimes += Measure-OneCleanBuild -SourceRoot $env:ADAPTER_ROOT -Label $label -Sample $sample
+              } else {
+                $candidateTimes += Measure-OneCleanBuild -SourceRoot $env:CANDIDATE_ROOT -Label $label -Sample $sample
+              }
+            }
+          }
+          $baselineBinary = Join-Path $output "baseline-criv$($env:EXECUTABLE_SUFFIX)"
+          $candidateBinary = Join-Path $output "candidate-criv$($env:EXECUTABLE_SUFFIX)"
+          $manifest = [ordered]@{
+            schema = "criv.discovery-remote-artifact.v1"
+            commit = $env:EXPECTED_COMMIT
+            target = $env:RELEASE_TARGET
+            baseline_revision = "v0.9.0"
+            baseline_binary = [System.IO.Path]::GetFileName($baselineBinary)
+            baseline_binary_bytes = (Get-Item $baselineBinary).Length
+            baseline_binary_sha256 = (Get-FileHash -Algorithm SHA256 $baselineBinary).Hash.ToLowerInvariant()
+            baseline_build_seconds = $baselineTimes
+            candidate_binary = [System.IO.Path]::GetFileName($candidateBinary)
+            candidate_binary_bytes = (Get-Item $candidateBinary).Length
+            candidate_binary_sha256 = (Get-FileHash -Algorithm SHA256 $candidateBinary).Hash.ToLowerInvariant()
+            candidate_build_seconds = $candidateTimes
+            clean_builds = $true
+            compiler_cache_disabled = -not [bool]$env:RUSTC_WRAPPER
+            registry_inputs_present = $registryInputsPresent
+          }
+          $manifest | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $output "artifact.json")
+
+      - name: Record remote evidence identity
+        env:
+          EXPECTED_COMMIT: ${{ inputs.commit }}
+          RELEASE_TARGET: ${{ matrix.target }}
+        shell: pwsh
+        run: |
+          $identity = [ordered]@{
+            schema = "criv.discovery-remote-evidence.v1"
+            commit = $env:EXPECTED_COMMIT
+            target = $env:RELEASE_TARGET
+            run_id = "${{ github.run_id }}"
+            run_attempt = "${{ github.run_attempt }}"
+            repository = "${{ github.repository }}"
+          }
+          $identity | ConvertTo-Json | Set-Content -Encoding utf8 target/discovery-remote/evidence/remote.json
+          Copy-Item target/discovery-remote/workload/discovery-fixture.json target/discovery-remote/evidence/discovery-fixture.json
+          Copy-Item target/discovery-remote/adapter/discovery-adapter.json target/discovery-remote/evidence/discovery-adapter.json
+
+      - name: Upload raw evidence and measured binaries
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: discovery-remote-${{ matrix.target }}-${{ inputs.commit }}
+          path: target/discovery-remote/evidence
+          if-no-files-found: error
+          retention-days: 14
