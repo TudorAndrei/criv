@@ -459,11 +459,14 @@ jobs:
           rm -rf "$root"
 
       - name: Record hosted evidence identity
+        if: always()
         env:
           EXPECTED_COMMIT: ${{ needs.prepare.outputs.commit }}
           RELEASE_TARGET: ${{ matrix.target }}
         shell: pwsh
         run: |
+          $evidence = "target/release-evidence/evidence"
+          New-Item -ItemType Directory -Force $evidence | Out-Null
           $identity = [ordered]@{
             schema = "criv.discovery-remote-evidence.v2"
             commit = $env:EXPECTED_COMMIT
@@ -472,10 +475,14 @@ jobs:
             run_attempt = "${{ github.run_attempt }}"
             repository = "${{ github.repository }}"
           }
-          $identity | ConvertTo-Json | Set-Content -Encoding utf8 target/release-evidence/evidence/remote.json
-          Copy-Item target/release-evidence/adapter/discovery-adapter.json target/release-evidence/evidence/discovery-adapter.json
+          $identity | ConvertTo-Json | Set-Content -Encoding utf8 "$evidence/remote.json"
+          $adapter = "target/release-evidence/adapter/discovery-adapter.json"
+          if (Test-Path $adapter) {
+            Copy-Item $adapter "$evidence/discovery-adapter.json"
+          }
 
       - name: Upload raw evidence and measured binary
+        if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: release-evidence-${{ matrix.target }}-${{ needs.prepare.outputs.commit }}

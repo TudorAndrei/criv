@@ -24,6 +24,18 @@ grep -F 'rustup toolchain install 1.97.1 --profile minimal --no-self-update' \
 grep -F 'rustup component add clippy rustfmt --toolchain 1.97.1' \
   "$quality_job" >/dev/null
 
+record_evidence_step="$test_root/record-evidence-step.yml"
+sed -n \
+  '/      - name: Record hosted evidence identity/,/        shell: pwsh/p' \
+  "$repository_root/.github/workflows/release.yml" >"$record_evidence_step"
+grep -F '        if: always()' "$record_evidence_step" >/dev/null
+
+upload_evidence_step="$test_root/upload-evidence-step.yml"
+sed -n \
+  '/      - name: Upload raw evidence and measured binary/,/        uses:/p' \
+  "$repository_root/.github/workflows/release.yml" >"$upload_evidence_step"
+grep -F '        if: always()' "$upload_evidence_step" >/dev/null
+
 targets=(
   aarch64-apple-darwin
   aarch64-unknown-linux-gnu
