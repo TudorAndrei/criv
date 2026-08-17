@@ -161,6 +161,11 @@ fn live_refresh_reuses_one_policy_plan_for_no_op_and_changed_sources() {
     let _live_test = source::lock_live_test();
     let fixture = incremental_fixture("shared-live-policy-plan");
     let root = fixture.path();
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn initial_change() {\n    println!(\"initial\");\n}\n",
+    )
+    .unwrap();
     let mut session = live_session(root);
 
     reset_refresh_work();

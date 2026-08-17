@@ -69,7 +69,7 @@ impl RefreshSession {
             .then_some(previous_state)
             .flatten();
         let source_build = match (cause, self.source_build.as_ref()) {
-            (RefreshCause::DocsChanged, Some(source_build)) => source_build.clone(),
+            (RefreshCause::DocsChanged, Some(source_build)) => source_build.reused(),
             _ => SourceBuild::build_incremental(root, &self.config, previous_graph)?,
         };
         let next = match execute(

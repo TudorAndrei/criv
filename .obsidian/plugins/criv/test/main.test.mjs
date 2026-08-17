@@ -31,10 +31,7 @@ const validState = {
   },
   patterns: {},
   "registered-patterns": ["ADR-0001/no-block-on"],
-  "source-index": [
-    { path: "src/lib.rs" },
-    { path: "src/main.rs" },
-  ],
+  "source-index": [{ path: "src/lib.rs" }, { path: "src/main.rs" }],
 };
 const validStateRaw = JSON.stringify(validState);
 

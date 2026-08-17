@@ -159,6 +159,13 @@ impl SourceBuild {
         }
     }
 
+    pub(crate) fn reused(&self) -> Self {
+        Self {
+            catalog: self.catalog.clone(),
+            graph: self.graph.reused(),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn catalog(&self) -> &SourceCatalog {
         &self.catalog

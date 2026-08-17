@@ -249,6 +249,12 @@ impl SourceGraphBuild {
         }
     }
 
+    pub(crate) fn reused(&self) -> Self {
+        let mut reused = self.clone();
+        reused.graph.changed_files.clear();
+        reused
+    }
+
     pub(crate) fn graph(&self) -> &SourceGraph {
         &self.graph
     }
