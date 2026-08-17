@@ -89,10 +89,12 @@ jobs:
           actual_version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "criv") | .version')"
           test "$actual_version" = "$version"
           test "$(git log -1 --format=%s)" = "chore(release): $RELEASE_TAG"
-          echo "release=true" >>"$GITHUB_OUTPUT"
-          echo "commit=$EXPECTED_COMMIT" >>"$GITHUB_OUTPUT"
-          echo "tag=$RELEASE_TAG" >>"$GITHUB_OUTPUT"
-          echo "version=$version" >>"$GITHUB_OUTPUT"
+          {
+            echo "release=true"
+            echo "commit=$EXPECTED_COMMIT"
+            echo "tag=$RELEASE_TAG"
+            echo "version=$version"
+          } >>"$GITHUB_OUTPUT"
 
       - name: Prepare automatic release
         id: automatic
@@ -116,15 +118,19 @@ jobs:
         shell: bash
         run: |
           if [ "$EVENT_NAME" = workflow_dispatch ]; then
-            echo "release=$MANUAL_RELEASE" >>"$GITHUB_OUTPUT"
-            echo "commit=$MANUAL_COMMIT" >>"$GITHUB_OUTPUT"
-            echo "tag=$MANUAL_TAG" >>"$GITHUB_OUTPUT"
-            echo "version=$MANUAL_VERSION" >>"$GITHUB_OUTPUT"
+            {
+              echo "release=$MANUAL_RELEASE"
+              echo "commit=$MANUAL_COMMIT"
+              echo "tag=$MANUAL_TAG"
+              echo "version=$MANUAL_VERSION"
+            } >>"$GITHUB_OUTPUT"
           else
-            echo "release=$AUTO_RELEASE" >>"$GITHUB_OUTPUT"
-            echo "commit=$AUTO_COMMIT" >>"$GITHUB_OUTPUT"
-            echo "tag=$AUTO_TAG" >>"$GITHUB_OUTPUT"
-            echo "version=$AUTO_VERSION" >>"$GITHUB_OUTPUT"
+            {
+              echo "release=$AUTO_RELEASE"
+              echo "commit=$AUTO_COMMIT"
+              echo "tag=$AUTO_TAG"
+              echo "version=$AUTO_VERSION"
+            } >>"$GITHUB_OUTPUT"
           fi
 
   quality:
