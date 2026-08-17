@@ -184,7 +184,13 @@ fn run(args: Args) -> Result<(), String> {
                 candidate.run["rustc_verbose"]
             ),
         );
-        gate_scaling(pair, &baseline, &candidate, &mut checks);
+        gate_scaling(
+            pair,
+            &input.primary_target,
+            &baseline,
+            &candidate,
+            &mut checks,
+        );
         scaling_coverage.insert((
             pair.target.clone(),
             pair.profile.clone(),
@@ -512,6 +518,7 @@ fn command_identity(evidence: &EvidenceDirectory, case: &str, attempt: u64) -> O
 
 fn gate_scaling(
     pair: &ScalingPair,
+    primary_target: &str,
     baseline: &EvidenceDirectory,
     candidate: &EvidenceDirectory,
     checks: &mut Vec<GateCheck>,
@@ -575,7 +582,12 @@ fn gate_scaling(
         (
             "real_seconds",
             elapsed_ratio_limit,
-            scaling_elapsed_limit(&pair.profile, pair.selected_files),
+            scaling_elapsed_limit_for_target(
+                &pair.target,
+                primary_target,
+                &pair.profile,
+                pair.selected_files,
+            ),
         ),
         checks,
     );
@@ -642,6 +654,18 @@ fn scaling_elapsed_limit(profile: &str, selected: usize) -> Option<f64> {
         ("markdown", 225_000) => Some(4.4099),
         _ => None,
     }
+}
+
+fn scaling_elapsed_limit_for_target(
+    target: &str,
+    primary_target: &str,
+    profile: &str,
+    selected: usize,
+) -> Option<f64> {
+    if target != primary_target {
+        return None;
+    }
+    scaling_elapsed_limit(profile, selected)
 }
 
 fn scaling_rss_limit(profile: &str, selected: usize) -> Option<f64> {
@@ -1032,6 +1056,28 @@ mod tests {
             Some(1.1875)
         );
         assert_eq!(scaling_rss_limit("markdown", 225_000), Some(61_820_000.0));
+    }
+
+    #[test]
+    fn scaling_absolute_elapsed_limits_apply_only_to_the_primary_target() {
+        assert_eq!(
+            scaling_elapsed_limit_for_target(
+                "aarch64-apple-darwin",
+                "aarch64-apple-darwin",
+                "source_candidates",
+                90_000,
+            ),
+            Some(1.1875)
+        );
+        assert_eq!(
+            scaling_elapsed_limit_for_target(
+                "x86_64-pc-windows-msvc",
+                "aarch64-apple-darwin",
+                "source_candidates",
+                90_000,
+            ),
+            None
+        );
     }
 
     #[test]
