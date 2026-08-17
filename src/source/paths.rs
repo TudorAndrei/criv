@@ -1,6 +1,9 @@
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
+
 use crate::{CrivError, Result};
 
 fn checked_source_path(root: &Path, source_path: &str) -> Result<PathBuf> {
@@ -11,7 +14,7 @@ fn checked_source_path(root: &Path, source_path: &str) -> Result<PathBuf> {
             current.push(part);
         }
         let metadata = fs::symlink_metadata(&current)?;
-        if metadata.file_type().is_symlink() || is_junction(&current) {
+        if metadata.file_type().is_symlink() || is_junction(&current, &metadata) {
             return Err(CrivError::new(format!(
                 "refusing to read linked source path `{source_path}`"
             )));
@@ -60,12 +63,15 @@ fn validate_relative_source_path(field: &str, value: &str) -> Result<()> {
 }
 
 #[cfg(windows)]
-fn is_junction(path: &Path) -> bool {
-    junction::exists(path).unwrap_or(false)
+fn is_junction(path: &Path, metadata: &fs::Metadata) -> bool {
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        && junction::exists(path).unwrap_or(false)
 }
 
 #[cfg(not(windows))]
-fn is_junction(_path: &Path) -> bool {
+fn is_junction(_path: &Path, _metadata: &fs::Metadata) -> bool {
     false
 }
 
@@ -85,5 +91,33 @@ mod tests {
         };
         assert!(checked_source_path(temp.path(), absolute).is_err());
         assert!(checked_source_path(temp.path(), "../secret").is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ordinary_source_paths_do_not_have_reparse_attributes() {
+        use std::os::windows::fs::MetadataExt;
+
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source.rs");
+        fs::write(&source, "pub fn source() {}\n").unwrap();
+
+        let metadata = fs::symlink_metadata(&source).unwrap();
+        assert_eq!(metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT, 0);
+        assert!(!is_junction(&source, &metadata));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rejects_a_junction_in_a_selected_source_path() {
+        let repository = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        fs::write(outside.path().join("source.rs"), "pub fn source() {}\n").unwrap();
+        junction::create(outside.path(), repository.path().join("src")).unwrap();
+
+        let error = checked_source_path(repository.path(), "src/source.rs").unwrap_err();
+        assert!(error.to_string().contains("linked source path"));
     }
 }
