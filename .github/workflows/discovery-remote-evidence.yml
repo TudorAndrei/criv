@@ -80,10 +80,14 @@ jobs:
             --bin criv-discovery-fixtures \
             --bin criv-discovery-inventory
           mkdir -p target/discovery-remote/tools
-          for tool in adapter baseline fixtures inventory; do
-            cp "target/discovery-remote/tool-target/release/criv-discovery-$tool${{ matrix.executable_suffix }}" \
-              "target/discovery-remote/tools/criv-discovery-$tool${{ matrix.executable_suffix }}"
-          done
+          cp "target/discovery-remote/tool-target/release/criv-discovery-adapter${{ matrix.executable_suffix }}" \
+            "target/discovery-remote/tools/criv-discovery-adapter${{ matrix.executable_suffix }}"
+          cp "target/discovery-remote/tool-target/release/criv-discovery-baseline${{ matrix.executable_suffix }}" \
+            "target/discovery-remote/tools/criv-discovery-baseline${{ matrix.executable_suffix }}"
+          cp "target/discovery-remote/tool-target/release/criv-discovery-fixtures${{ matrix.executable_suffix }}" \
+            "target/discovery-remote/tools/criv-discovery-fixtures${{ matrix.executable_suffix }}"
+          cp "target/discovery-remote/tool-target/release/criv-discovery-inventory${{ matrix.executable_suffix }}" \
+            "target/discovery-remote/tools/criv-discovery-inventory${{ matrix.executable_suffix }}"
           rm -rf target/discovery-remote/tool-target
 
       - name: Prepare matched workload and v0.9.0 adapter
