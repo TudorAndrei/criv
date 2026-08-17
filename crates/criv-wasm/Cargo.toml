@@ -1,6 +1,6 @@
 [package]
 name = "criv-wasm"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 rust-version = "1.97.1"
 license = "MIT"
@@ -15,7 +15,7 @@ crate-type = ["cdylib", "rlib"]
 wasm-opt = false
 
 [dependencies]
-criv-state-wire = { version = "0.9.0", path = "../criv-state-wire" }
+criv-state-wire = { version = "0.10.0", path = "../criv-state-wire" }
 js-sys = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde-wasm-bindgen = "0.6"
