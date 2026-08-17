@@ -6,6 +6,13 @@ test_root="$(mktemp -d)"
 trap 'rm -rf "$test_root"' EXIT
 bundle="$test_root/bundle"
 commit="0123456789abcdef0123456789abcdef01234567"
+
+prepare_step="$test_root/prepare-step.yml"
+sed -n \
+  '/      - name: Prepare automatic release/,/      - name: Export release selection/p' \
+  "$repository_root/.github/workflows/release.yml" >"$prepare_step"
+grep -F 'GH_TOKEN: ${{ github.token }}' "$prepare_step" >/dev/null
+
 targets=(
   aarch64-apple-darwin
   aarch64-unknown-linux-gnu

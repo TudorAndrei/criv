@@ -101,6 +101,7 @@ jobs:
         if: github.event_name != 'workflow_dispatch'
         env:
           EXPECTED_CI_COMMIT: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ github.token }}
         run: scripts/release-auto.sh "$EXPECTED_CI_COMMIT"
 
       - name: Export release selection
