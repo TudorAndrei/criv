@@ -92,6 +92,9 @@ export function languageForPath(path: string): string {
       return "python";
     case "go":
       return "go";
+    case "ex":
+    case "exs":
+      return "elixir";
     default:
       return extension ?? "text";
   }
@@ -118,7 +121,7 @@ function renderHighlightedCode(container: HTMLElement, preview: SourcePreview): 
   });
   const lines = preview.text.split("\n");
   lines.forEach((line, lineIndex) => {
-    for (const token of highlightLine(line, preview.language)) {
+    for (const token of highlightSourceLine(line, preview.language)) {
       if (token.className) {
         code.createSpan({ cls: token.className, text: token.text });
       } else {
@@ -131,12 +134,9 @@ function renderHighlightedCode(container: HTMLElement, preview: SourcePreview): 
   });
 }
 
-function highlightLine(line: string, language: string): HighlightToken[] {
+export function highlightSourceLine(line: string, language: string): HighlightToken[] {
   const tokens: HighlightToken[] = [];
-  const tokenPattern =
-    language === "python"
-      ? /#.*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b/g
-      : /\/\/.*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b/g;
+  const tokenPattern = tokenPatternFor(language);
   let cursor = 0;
   for (const match of line.matchAll(tokenPattern)) {
     const index = match.index ?? cursor;
@@ -153,12 +153,33 @@ function highlightLine(line: string, language: string): HighlightToken[] {
   return tokens;
 }
 
+function tokenPatternFor(language: string): RegExp {
+  if (language === "elixir") {
+    return /#.*|~[A-Za-z](?:\/(?:\\.|[^/\\])*\/[A-Za-z]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|:[A-Za-z_][A-Za-z0-9_!?@]*|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_!?]*\b/g;
+  }
+  if (language === "python") {
+    return /#.*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b/g;
+  }
+  return /\/\/.*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b/g;
+}
+
 function highlightClass(token: string, language: string): string | undefined {
-  if (token.startsWith("//") || (language === "python" && token.startsWith("#"))) {
+  if (
+    token.startsWith("//") ||
+    ((language === "python" || language === "elixir") && token.startsWith("#"))
+  ) {
     return "criv-token-comment";
   }
-  if (token.startsWith('"') || token.startsWith("'") || token.startsWith("`")) {
+  if (
+    token.startsWith('"') ||
+    token.startsWith("'") ||
+    token.startsWith("`") ||
+    (language === "elixir" && token.startsWith("~"))
+  ) {
     return "criv-token-string";
+  }
+  if (language === "elixir" && token.startsWith(":")) {
+    return "criv-token-literal";
   }
   if (/^\d/.test(token)) {
     return "criv-token-number";
@@ -262,12 +283,58 @@ function keywordSet(language: string): Set<string> {
         "type",
         "var",
       ]);
+    case "elixir":
+      return new Set([
+        "after",
+        "alias",
+        "and",
+        "case",
+        "catch",
+        "cond",
+        "def",
+        "defcallback",
+        "defdelegate",
+        "defexception",
+        "defguard",
+        "defguardp",
+        "defimpl",
+        "defmacro",
+        "defmacrop",
+        "defmodule",
+        "defoverridable",
+        "defp",
+        "defprotocol",
+        "defstruct",
+        "do",
+        "else",
+        "end",
+        "fn",
+        "for",
+        "if",
+        "import",
+        "in",
+        "not",
+        "or",
+        "quote",
+        "receive",
+        "require",
+        "rescue",
+        "try",
+        "unless",
+        "unquote",
+        "use",
+        "when",
+        "with",
+      ]);
     default:
       return new Set();
   }
 }
 
 function literalSet(language: string): Set<string> {
+  if (language === "elixir") {
+    return new Set(["false", "nil", "true"]);
+  }
   if (language === "python") {
     return new Set(["False", "None", "True"]);
   }
