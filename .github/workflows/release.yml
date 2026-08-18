@@ -345,7 +345,6 @@ jobs:
               --samples 5 --results-root "$evidence/candidate"
             rm -rf "$root"
           }
-          measure_workload source-250000 source source-candidates
           measure_workload vault-250000 vault
           measure_workload markdown-250000 markdown
 

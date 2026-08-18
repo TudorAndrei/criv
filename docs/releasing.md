@@ -24,10 +24,10 @@ Preview the next automatically selected version:
 mise run release-plan
 ```
 
-The release workflow measures matched baseline and candidate workloads on all
-four native hosts. Hosted macOS also runs the 250,000-entry and live-watch
-gates. Ouro is an optional `mise run perf` workload and does not block
-publication.
+The release workflow measures matched 100,000-entry Source workloads on all
+four native hosts. Hosted macOS also runs the 250,000-entry Vault and Markdown
+workloads and the live-watch gate. Ouro is an optional `mise run perf` workload
+and does not block publication.
 
 Each clean-build lane supplies the exact binary that enters the release. The
 workflow publishes a seven-day receipt to `refs/notes/criv-release-gates`,

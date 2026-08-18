@@ -128,3 +128,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0115-single-read-source-build|ADR-0115]] - Build Source catalog and graph from one read
 - [[0116-run-release-acceptance-on-the-controlled-local-computer|ADR-0116]] - Run release acceptance on the controlled local computer
 - [[0117-hosted-automatic-release-acceptance|ADR-0117]] - Hosted automatic release acceptance
+- [[0118-bound-hosted-source-release-scaling|ADR-0118]] - Bound hosted Source release scaling

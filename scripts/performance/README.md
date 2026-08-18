@@ -148,9 +148,9 @@ evidence. It writes the short-lived
 stability, time, memory, artifact, and toolchain gate passes.
 
 The `Automatic release` workflow measures the matched 90,000-file Source rows
-on all four release hosts. Hosted macOS also measures the 225,000-file Source,
-Vault, and Markdown rows and five live-watch samples. Three clean builds supply
-the exact release binary for each target. `assemble-hosted-release-gates.sh`
+on all four release hosts. Hosted macOS also measures the 225,000-file Vault
+and Markdown rows and five live-watch samples. Three clean builds supply the
+exact release binary for each target. `assemble-hosted-release-gates.sh`
 creates the gate input, and `publish-release-gate-note.sh` publishes the passing
 receipt to `refs/notes/criv-release-gates`.
 

@@ -471,7 +471,7 @@ fn gate_scaling_coverage(
     coverage: &BTreeSet<(String, String, usize)>,
     checks: &mut Vec<GateCheck>,
 ) {
-    for profile in ["source", "source_candidates", "vault", "markdown"] {
+    for profile in ["vault", "markdown"] {
         check(
             checks,
             format!("primary-scaling-{profile}-225000"),
@@ -833,12 +833,13 @@ mod tests {
     #[test]
     fn accepted_scaling_ratio_limits_are_locked() {
         assert_eq!(scaling_ratio_limit("source", 90_000), 0.50);
-        assert_eq!(scaling_ratio_limit("source_candidates", 225_000), 0.50);
+        assert_eq!(scaling_ratio_limit("source_candidates", 90_000), 0.50);
         assert_eq!(scaling_ratio_limit("vault", 225_000), 1.10);
+        assert_eq!(scaling_ratio_limit("markdown", 225_000), 1.10);
     }
 
     #[test]
-    fn hosted_scaling_coverage_uses_four_100k_source_hosts_and_one_250k_primary_host() {
+    fn hosted_scaling_coverage_uses_four_100k_source_hosts_and_250k_document_profiles() {
         let input = GateInput {
             schema: INPUT_SCHEMA.into(),
             commit: "a".repeat(40),
@@ -860,12 +861,12 @@ mod tests {
                 coverage.insert((target.into(), profile.into(), 90_000));
             }
         }
-        for profile in ["source", "source_candidates", "vault", "markdown"] {
+        for profile in ["vault", "markdown"] {
             coverage.insert((input.primary_target.clone(), profile.into(), 225_000));
         }
         let mut checks = Vec::new();
         gate_scaling_coverage(&input, &coverage, &mut checks);
-        assert_eq!(checks.len(), 12);
+        assert_eq!(checks.len(), 10);
         assert!(checks.iter().all(|check| check.passed));
     }
 

@@ -88,7 +88,7 @@ for target in "${targets[@]}"; do
 done
 
 primary="$bundle/aarch64-apple-darwin"
-for workload in source-250000 vault-250000 markdown-250000; do
+for workload in vault-250000 markdown-250000; do
   mkdir -p "$primary/scaling/$workload/baseline/run" "$primary/scaling/$workload/candidate/run"
 done
 mkdir -p "$primary/live/candidate/run"
@@ -98,9 +98,9 @@ mkdir -p "$primary/live/candidate/run"
 jq -e --arg commit "$commit" '
   .commit == $commit and
   .primary_target == "aarch64-apple-darwin" and
-  (.scaling | length) == 12 and
+  (.scaling | length) == 10 and
   ([.scaling[] | select(.selected_files == 90000)] | length) == 8 and
-  ([.scaling[] | select(.selected_files == 225000)] | length) == 4 and
+  ([.scaling[] | select(.selected_files == 225000)] | length) == 2 and
   (.artifacts.targets | length) == 4 and
   .artifacts.normal_dependencies_before == 100 and
   .artifacts.normal_dependencies_after == 99

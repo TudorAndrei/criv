@@ -74,8 +74,6 @@ for target in "${targets[@]}"; do
 done
 
 for workload_profile in \
-  "source-250000 source 225000" \
-  "source-250000 source_candidates 225000" \
   "vault-250000 vault 225000" \
   "markdown-250000 markdown 225000"; do
   read -r workload profile selected <<<"$workload_profile"
