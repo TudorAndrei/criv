@@ -13,6 +13,8 @@ use super::paths::read_source_bytes;
 use crate::util::write_atomic_in;
 use crate::{CrivError, Result};
 
+mod elixir;
+
 // Bump when parsed source graph semantics or serialized graph types change.
 const GRAPH_CACHE_SCHEMA: &str = "criv.source-graph/3";
 const MAX_SOURCE_WORKERS: usize = 16;
@@ -162,7 +164,7 @@ pub(crate) struct Call {
     pub(crate) line: usize,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub(crate) enum SymbolKind {
     Function,
     Method,
@@ -231,6 +233,7 @@ pub(crate) enum Language {
     JavaScript,
     Python,
     Go,
+    Elixir,
     #[default]
     Unknown,
 }
@@ -243,6 +246,7 @@ impl Language {
             Self::JavaScript => "javascript",
             Self::Python => "python",
             Self::Go => "go",
+            Self::Elixir => "elixir",
             Self::Unknown => "unknown",
         }
     }
@@ -258,6 +262,14 @@ pub(crate) struct InterfaceSignature {
     output: Option<String>,
     fields: Vec<FieldSignature>,
     variants: Vec<VariantSignature>,
+    #[serde(default)]
+    arity: Option<usize>,
+    #[serde(default)]
+    guards: Vec<String>,
+    #[serde(default)]
+    defaults: Vec<String>,
+    #[serde(default)]
+    specifications: Vec<String>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
@@ -449,6 +461,10 @@ impl InterfaceSignature {
             output,
             fields,
             variants,
+            arity: None,
+            guards: Vec::new(),
+            defaults: Vec::new(),
+            specifications: Vec::new(),
         }
     }
 
@@ -475,15 +491,32 @@ impl InterfaceSignature {
             })
             .collect::<Vec<_>>()
             .join(",");
-        format!(
-            "language={}\nkind={}\nname={}\nvisibility={}\ninputs={}\noutput={}\nfields={field_text}\nvariants={variant_text}\n",
-            self.language.as_str(),
-            self.symbol_kind.as_str(),
-            self.qualified_name,
-            self.visibility.as_deref().unwrap_or(""),
-            self.inputs.join(","),
-            self.output.as_deref().unwrap_or(""),
-        )
+        if self.language == Language::Elixir {
+            format!(
+                "language={}\nkind={}\nname={}\nvisibility={}\narity={}\ninputs={}\noutput={}\nguards={}\ndefaults={}\nspecifications={}\nfields={field_text}\nvariants={variant_text}\n",
+                self.language.as_str(),
+                self.symbol_kind.as_str(),
+                self.qualified_name,
+                self.visibility.as_deref().unwrap_or(""),
+                self.arity
+                    .map_or_else(String::new, |arity| arity.to_string()),
+                self.inputs.join(","),
+                self.output.as_deref().unwrap_or(""),
+                self.guards.join(","),
+                self.defaults.join(","),
+                self.specifications.join("\n"),
+            )
+        } else {
+            format!(
+                "language={}\nkind={}\nname={}\nvisibility={}\ninputs={}\noutput={}\nfields={field_text}\nvariants={variant_text}\n",
+                self.language.as_str(),
+                self.symbol_kind.as_str(),
+                self.qualified_name,
+                self.visibility.as_deref().unwrap_or(""),
+                self.inputs.join(","),
+                self.output.as_deref().unwrap_or(""),
+            )
+        }
     }
 }
 
@@ -776,8 +809,19 @@ fn process_source_file(
 }
 
 fn parse_source_file(path: &str, contents: &str) -> SourceFile {
-    parse_tree_sitter_file(path, contents)
-        .unwrap_or_else(|| parse_source_file_fallback(path, contents))
+    parse_tree_sitter_file(path, contents).unwrap_or_else(|| {
+        if Language::from_path(path) == Language::Elixir {
+            SourceFile {
+                path: path.into(),
+                language: Language::Elixir,
+                imports: Vec::new(),
+                modules: Vec::new(),
+                symbols: Vec::new(),
+            }
+        } else {
+            parse_source_file_fallback(path, contents)
+        }
+    })
 }
 
 fn symbol_resolution(mut matches: Vec<SymbolId>) -> SymbolResolution {
@@ -862,6 +906,9 @@ fn parse_tree_sitter_file(path: &str, contents: &str) -> Option<SourceFile> {
     let mut parser = Parser::new();
     parser.set_language(&tree_sitter_language).ok()?;
     let tree = parser.parse(contents, None)?;
+    if language == Language::Elixir {
+        return Some(elixir::parse_file(path, contents, tree.root_node()));
+    }
     if tree.root_node().has_error() {
         return None;
     }
@@ -892,6 +939,7 @@ fn tree_sitter_language(language: Language) -> Option<tree_sitter::Language> {
         Language::JavaScript => Some(tree_sitter_javascript::LANGUAGE.into()),
         Language::Python => Some(tree_sitter_python::LANGUAGE.into()),
         Language::Go => Some(tree_sitter_go::LANGUAGE.into()),
+        Language::Elixir => Some(tree_sitter_elixir::LANGUAGE.into()),
         Language::Unknown => None,
     }
 }
@@ -1171,7 +1219,7 @@ fn tree_sitter_exported(node: Node<'_>, contents: &str, language: Language) -> b
         Language::Python => {
             field_text(node, contents, "name").is_some_and(|name| !name.starts_with('_'))
         }
-        Language::Unknown => false,
+        Language::Elixir | Language::Unknown => false,
     }
 }
 
@@ -1186,7 +1234,7 @@ fn visibility_text(language: Language, source: &str) -> String {
             .to_string(),
         Language::Rust => "pub".into(),
         Language::TypeScript | Language::JavaScript => "export".into(),
-        Language::Python | Language::Go | Language::Unknown => "public".into(),
+        Language::Python | Language::Go | Language::Elixir | Language::Unknown => "public".into(),
     }
 }
 
@@ -1633,7 +1681,7 @@ fn parse_imports(line: &str, language: Language) -> Vec<String> {
             })
             .into_iter()
             .collect(),
-        Language::Unknown => Vec::new(),
+        Language::Elixir | Language::Unknown => Vec::new(),
     }
 }
 
@@ -1792,7 +1840,7 @@ fn parse_symbol(
                 None
             }
         }
-        Language::Unknown => None,
+        Language::Elixir | Language::Unknown => None,
     }
 }
 
@@ -1912,7 +1960,7 @@ fn is_exported_symbol(line: &str, language: Language) -> bool {
         Language::Python => {
             parse_symbol(line, language, false).is_some_and(|(name, _)| !name.starts_with('_'))
         }
-        Language::Unknown => false,
+        Language::Elixir | Language::Unknown => false,
     }
 }
 
@@ -1924,6 +1972,7 @@ impl Language {
             Some("js") | Some("jsx") | Some("mjs") | Some("cjs") => Self::JavaScript,
             Some("py") => Self::Python,
             Some("go") => Self::Go,
+            Some("ex") | Some("exs") => Self::Elixir,
             _ => Self::Unknown,
         }
     }
@@ -2075,6 +2124,79 @@ mod tests {
         assert_eq!(counts.cache_serializations, 1);
         assert_eq!(counts.cache_publications, 1);
         assert!(counts.published_bytes > 0);
+    }
+
+    #[test]
+    fn elixir_files_are_all_parsed_reused_and_reparsed_by_content() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("lib")).unwrap();
+        fs::create_dir_all(root.join("test")).unwrap();
+        fs::write(
+            root.join("lib/sample.ex"),
+            "defmodule Sample do\n  def run(), do: :ok\n  def broken(, do: :bad)\n  def after_error(), do: :ok\nend\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("test/sample_test.exs"),
+            "defmodule SampleTest do\n  def run(), do: :ok\nend\n",
+        )
+        .unwrap();
+        let paths = vec!["lib/sample.ex".into(), "test/sample_test.exs".into()];
+
+        reset_work_counts();
+        let first = SourceGraphBuild::build_incremental(root, &paths, None).unwrap();
+        assert_eq!(work_counts().source_reads, 2);
+        assert_eq!(work_counts().parsed_files, 2);
+        assert_eq!(
+            first.graph().files["lib/sample.ex"].language,
+            Language::Elixir
+        );
+        assert_eq!(
+            first.graph().files["test/sample_test.exs"].language,
+            Language::Elixir
+        );
+        assert!(
+            first
+                .graph()
+                .resolve_symbol("lib/sample.ex#Sample.after_error/0")
+                .is_some()
+        );
+        assert!(
+            first
+                .graph()
+                .resolve_symbol("lib/sample.ex#broken")
+                .is_none()
+        );
+        assert!(
+            first
+                .graph()
+                .resolve_symbol("test/sample_test.exs#SampleTest.run/0")
+                .is_some()
+        );
+
+        reset_work_counts();
+        let second = SourceGraphBuild::build_incremental(root, &paths, Some(&first)).unwrap();
+        assert_eq!(work_counts().source_reads, 2);
+        assert_eq!(work_counts().reused_files, 2);
+        assert_eq!(work_counts().parsed_files, 0);
+
+        fs::write(
+            root.join("test/sample_test.exs"),
+            "defmodule SampleTest do\n  def changed(), do: :ok\nend\n",
+        )
+        .unwrap();
+        reset_work_counts();
+        let third = SourceGraphBuild::build_incremental(root, &paths, Some(&second)).unwrap();
+        assert_eq!(work_counts().source_reads, 2);
+        assert_eq!(work_counts().reused_files, 1);
+        assert_eq!(work_counts().parsed_files, 1);
+        assert!(
+            third
+                .graph()
+                .resolve_symbol("test/sample_test.exs#changed/0")
+                .is_some()
+        );
     }
 
     #[test]

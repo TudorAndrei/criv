@@ -857,6 +857,36 @@ mod tests {
     }
 
     #[test]
+    fn source_discovers_elixir_directory_explicit_root_and_events() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        write(&root.join("lib/sample.ex"), b"defmodule Sample do\nend\n");
+        write(
+            &root.join("scripts/check.exs"),
+            b"defmodule Check do\nend\n",
+        );
+        let config = Config {
+            source_roots: vec!["lib".into(), "scripts/check.exs".into()],
+            ..Config::default()
+        };
+
+        assert_eq!(
+            discover_source(root, &config).unwrap(),
+            vec!["lib/sample.ex".to_string(), "scripts/check.exs".to_string()]
+        );
+        assert!(source_event_relevant(
+            root,
+            &config,
+            &root.join("lib/sample.ex")
+        ));
+        assert!(source_event_relevant(
+            root,
+            &config,
+            &root.join("scripts/check.exs")
+        ));
+    }
+
+    #[test]
     fn source_normalizes_overlapping_roots_and_ignores_missing_and_pruned_roots() {
         let temp = TempDir::new().unwrap();
         let root = temp.path();

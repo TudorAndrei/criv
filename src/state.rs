@@ -1597,6 +1597,7 @@ fn language_name(language: Language) -> &'static str {
         Language::JavaScript => "javascript",
         Language::Python => "python",
         Language::Go => "go",
+        Language::Elixir => "elixir",
         Language::Unknown => "unknown",
     }
 }

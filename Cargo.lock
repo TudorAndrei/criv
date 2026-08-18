@@ -399,6 +399,7 @@ dependencies = [
  "thiserror",
  "toml",
  "tree-sitter",
+ "tree-sitter-elixir",
  "tree-sitter-go",
  "tree-sitter-javascript",
  "tree-sitter-python",
