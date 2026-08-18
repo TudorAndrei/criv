@@ -197,6 +197,9 @@ each time they run. They are also the only persistent named patterns: a policy
 named `no-println` in `ADR-0005` is addressed as `ADR-0005/no-println` for links
 and state.
 
+Elixir policies use `language: elixir` or its `language: ex` alias. Both names
+scan `.ex` and `.exs` files with the Elixir parser.
+
 Use a filtered check to inspect policy diagnostics for one decision:
 
 ```sh

@@ -513,6 +513,120 @@ all:
         assert!(batch.get(&0).unwrap().is_empty());
     }
 
+    #[test]
+    fn elixir_language_names_extensions_patterns_and_rules_have_parity() {
+        assert_eq!(parse_language("elixir").unwrap(), SupportLang::Elixir);
+        assert_eq!(parse_language("ex").unwrap(), SupportLang::Elixir);
+        assert_eq!(
+            SupportLang::from_path("lib/sample.ex"),
+            Some(SupportLang::Elixir)
+        );
+        assert_eq!(
+            SupportLang::from_path("test/sample_test.exs"),
+            Some(SupportLang::Elixir)
+        );
+
+        let source = r#"
+defmodule Sample do
+  def run(value) when is_integer(value) do
+    IO.inspect(value)
+  end
+end
+"#;
+        let pattern = Pattern::try_new(
+            r#"
+def $FUNC($$$ARGS) when $GUARDS do
+  $$$BODY
+end
+"#,
+            SupportLang::Elixir,
+        )
+        .unwrap();
+        let matches = scan_source("lib/sample.ex", SupportLang::Elixir, source, &pattern);
+        assert_eq!(matches.len(), 1);
+        assert_eq!(
+            matches[0].captures.get("FUNC").map(String::as_str),
+            Some("run")
+        );
+
+        let CompiledMatcher::Rule(rule) = compile(
+            PatternSource::Rule("pattern: IO.inspect($VALUE)"),
+            SupportLang::Elixir,
+        )
+        .unwrap() else {
+            panic!("expected an Elixir rule matcher");
+        };
+        let rule_matches = scan_source("test/sample_test.exs", SupportLang::Elixir, source, &rule);
+        assert_eq!(rule_matches.len(), 1);
+    }
+
+    #[test]
+    fn elixir_partial_files_and_invalid_patterns_return_results_without_panics() {
+        let pattern = Pattern::try_new("IO.inspect($VALUE)", SupportLang::Elixir).unwrap();
+        let matches = scan_source(
+            "lib/partial.ex",
+            SupportLang::Elixir,
+            "defmodule Partial do\n  IO.inspect(:before)\n  def broken(\n  IO.inspect(:after)\nend\n",
+            &pattern,
+        );
+        assert!(!matches.is_empty());
+
+        let invalid = policy("elixir", "def (");
+        assert!(matches!(
+            compile_policy(&invalid),
+            Err(PolicyCompileError::InvalidPattern(_))
+        ));
+    }
+
+    #[test]
+    fn elixir_batch_scans_both_extensions_once_and_respects_scope() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("lib")).unwrap();
+        fs::create_dir_all(root.join("test")).unwrap();
+        fs::write(
+            root.join("criv.toml"),
+            "[source]\nroots = [\"lib\", \"test\"]\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("lib/sample.ex"),
+            "defmodule Sample do\n  def run(value), do: IO.inspect(value)\nend\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("test/sample_test.exs"),
+            "defmodule SampleTest do\n  def run(value), do: IO.inspect(value)\nend\n",
+        )
+        .unwrap();
+        let vault = Vault::load(root).unwrap();
+        let compiled = compile_policy(&policy("ex", "IO.inspect($VALUE)")).unwrap();
+        let paths = BTreeSet::from([
+            "lib/sample.ex".to_string(),
+            "test/sample_test.exs".to_string(),
+        ]);
+        reset_work_counts();
+        let rows = find_policies_batch(
+            root,
+            &vault,
+            &[PolicyScanRequest {
+                key: 0,
+                policy: &compiled,
+                paths: &paths,
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(
+            rows[&0]
+                .iter()
+                .map(|row| row.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["lib/sample.ex", "test/sample_test.exs"]
+        );
+        assert_eq!(work_counts().ast_parses, 2);
+    }
+
     fn policy(language: &str, pattern: &str) -> PolicyPattern {
         PolicyPattern {
             id: Some("test".to_string()),

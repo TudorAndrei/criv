@@ -2124,6 +2124,80 @@ policy:
 }
 
 #[test]
+fn elixir_check_and_ci_enforcement_scan_ex_and_exs_with_both_language_names() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    init(root);
+    fs::create_dir_all(root.join("lib")).unwrap();
+    fs::create_dir_all(root.join("test")).unwrap();
+    fs::create_dir_all(root.join("docs/adr")).unwrap();
+    write_criv_config(root, vec!["lib", "test"], Vec::new(), true);
+    fs::write(
+        root.join("lib/sample.ex"),
+        "defmodule Sample do\n  def run(value), do: IO.inspect(value)\nend\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("test/sample_test.exs"),
+        "defmodule SampleTest do\n  def run(value), do: IO.inspect(value)\nend\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("docs/adr/0992-elixir-policy-parity.md"),
+        r#"---
+id: ADR-0992
+kind: decision
+title: Elixir policy parity
+status: accepted
+date: 2026-08-18
+governs:
+  - lib/**
+  - test/**
+policy:
+  patterns:
+    - id: inspect-pattern
+      language: elixir
+      pattern: "IO.inspect($VALUE)"
+    - id: inspect-rule
+      language: ex
+      rule: "pattern: IO.inspect($VALUE)"
+---
+
+# Elixir policy parity
+"#,
+    )
+    .unwrap();
+
+    let check = criv(root)
+        .args(["check", "--filter", "policy-violation"])
+        .output()
+        .unwrap();
+    let enforce = criv(root)
+        .args(["enforce", "--stage", "ci"])
+        .output()
+        .unwrap();
+    assert!(!check.status.success());
+    assert!(!enforce.status.success());
+    let check_stdout = String::from_utf8(check.stdout).unwrap();
+    let enforce_stdout = String::from_utf8(enforce.stdout).unwrap();
+
+    for path in ["lib/sample.ex:2", "test/sample_test.exs:2"] {
+        for policy in ["ADR-0992/inspect-pattern", "ADR-0992/inspect-rule"] {
+            let expected = format!("{path}: ADR-0992 policy `{policy}`");
+            assert!(
+                check_stdout.contains(&expected),
+                "missing from check: {expected}"
+            );
+            assert!(
+                enforce_stdout.contains(&expected),
+                "missing from enforce: {expected}"
+            );
+        }
+    }
+}
+
+#[test]
 fn non_accepted_inline_policies_do_not_block_or_register_state() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

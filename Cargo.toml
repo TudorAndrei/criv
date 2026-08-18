@@ -28,6 +28,7 @@ panic = "abort"
 ast-grep-config = "0.44.0"
 ast-grep-core = "0.44.0"
 ast-grep-language = { version = "0.44.0", default-features = false, features = [
+  "tree-sitter-elixir",
   "tree-sitter-go",
   "tree-sitter-javascript",
   "tree-sitter-python",
