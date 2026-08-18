@@ -129,3 +129,5 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0116-run-release-acceptance-on-the-controlled-local-computer|ADR-0116]] - Run release acceptance on the controlled local computer
 - [[0117-hosted-automatic-release-acceptance|ADR-0117]] - Hosted automatic release acceptance
 - [[0118-bound-hosted-source-release-scaling|ADR-0118]] - Bound hosted Source release scaling
+- [[0119-first-class-elixir-language-support|ADR-0119]] - First class Elixir language support
+- [[0120-reset-release-baseline-for-default-elixir-support|ADR-0120]] - Reset the release baseline for default Elixir support
