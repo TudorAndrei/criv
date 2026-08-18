@@ -1587,11 +1587,7 @@ fn c4_artifact_node_id(path: &str) -> String {
 }
 
 fn symbol_kind(kind: SymbolKind) -> &'static str {
-    match kind {
-        SymbolKind::Function => "function",
-        SymbolKind::Method => "method",
-        SymbolKind::Class => "class",
-    }
+    kind.as_str()
 }
 
 fn language_name(language: Language) -> &'static str {

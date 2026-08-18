@@ -14,7 +14,7 @@ use crate::util::write_atomic_in;
 use crate::{CrivError, Result};
 
 // Bump when parsed source graph semantics or serialized graph types change.
-const GRAPH_CACHE_SCHEMA: &str = "criv.source-graph/2";
+const GRAPH_CACHE_SCHEMA: &str = "criv.source-graph/3";
 const MAX_SOURCE_WORKERS: usize = 16;
 const MIN_FILES_PER_SOURCE_WORKER: usize = 1_024;
 
@@ -99,9 +99,15 @@ pub(crate) struct Symbol {
     pub(crate) name: String,
     pub(crate) kind: SymbolKind,
     pub(crate) parent: Option<String>,
+    #[serde(default)]
+    owner: Option<SymbolOwner>,
+    #[serde(default)]
+    arity: Option<usize>,
     exported: bool,
     interface_signature: Option<InterfaceSignature>,
     pub(crate) range: SymbolRange,
+    #[serde(default)]
+    clause_ranges: Vec<SymbolRange>,
     pub(crate) calls: Vec<Call>,
 }
 
@@ -109,6 +115,32 @@ pub(crate) struct Symbol {
 pub(crate) struct SymbolRange {
     pub(crate) start_line: usize,
     pub(crate) end_line: usize,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
+pub(crate) enum SymbolOwner {
+    Module { name: String },
+    Implementation { protocol: String, for_type: String },
+}
+
+impl SymbolOwner {
+    fn selector(&self) -> String {
+        match self {
+            Self::Module { name } => format!("module:{}", selector_value(name)),
+            Self::Implementation { protocol, for_type } => format!(
+                "impl:{}/for:{}",
+                selector_value(protocol),
+                selector_value(for_type)
+            ),
+        }
+    }
+
+    fn qualified_callable_alias(&self, name: &str, arity: usize) -> Option<String> {
+        match self {
+            Self::Module { name: module } => Some(format!("{module}.{name}/{arity}")),
+            Self::Implementation { .. } => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
@@ -135,16 +167,61 @@ pub(crate) enum SymbolKind {
     Function,
     Method,
     Class,
+    Module,
+    Protocol,
+    Implementation,
+    Struct,
+    Exception,
+    Behaviour,
+    Macro,
+    Guard,
+    Callback,
+    MacroCallback,
 }
 
 impl SymbolKind {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Function => "function",
             Self::Method => "method",
             Self::Class => "class",
+            Self::Module => "module",
+            Self::Protocol => "protocol",
+            Self::Implementation => "implementation",
+            Self::Struct => "struct",
+            Self::Exception => "exception",
+            Self::Behaviour => "behaviour",
+            Self::Macro => "macro",
+            Self::Guard => "guard",
+            Self::Callback => "callback",
+            Self::MacroCallback => "macro-callback",
         }
     }
+
+    fn elixir_selector_prefix(self) -> Option<&'static str> {
+        match self {
+            Self::Function => Some("fn"),
+            Self::Macro => Some("macro"),
+            Self::Guard => Some("guard"),
+            Self::Callback => Some("callback"),
+            Self::MacroCallback => Some("macro-callback"),
+            Self::Method
+            | Self::Class
+            | Self::Module
+            | Self::Protocol
+            | Self::Implementation
+            | Self::Struct
+            | Self::Exception
+            | Self::Behaviour => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) enum SymbolResolution {
+    Resolved(SymbolId),
+    Ambiguous(Vec<SymbolId>),
+    Missing,
 }
 
 #[derive(Debug, Default, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -333,12 +410,34 @@ impl InterfaceSignature {
             .unwrap_or_else(|| name.to_string());
         let visibility = exported.then(|| visibility_text(language, source));
         let (inputs, output) = match symbol_kind {
-            SymbolKind::Function | SymbolKind::Method => function_signature(language, source),
-            SymbolKind::Class => (Vec::new(), None),
+            SymbolKind::Function
+            | SymbolKind::Method
+            | SymbolKind::Macro
+            | SymbolKind::Guard
+            | SymbolKind::Callback
+            | SymbolKind::MacroCallback => function_signature(language, source),
+            SymbolKind::Class
+            | SymbolKind::Module
+            | SymbolKind::Protocol
+            | SymbolKind::Implementation
+            | SymbolKind::Struct
+            | SymbolKind::Exception
+            | SymbolKind::Behaviour => (Vec::new(), None),
         };
         let (fields, variants) = match symbol_kind {
-            SymbolKind::Class => aggregate_signature(language, source),
-            SymbolKind::Function | SymbolKind::Method => (Vec::new(), Vec::new()),
+            SymbolKind::Class | SymbolKind::Struct | SymbolKind::Exception => {
+                aggregate_signature(language, source)
+            }
+            SymbolKind::Function
+            | SymbolKind::Method
+            | SymbolKind::Module
+            | SymbolKind::Protocol
+            | SymbolKind::Implementation
+            | SymbolKind::Behaviour
+            | SymbolKind::Macro
+            | SymbolKind::Guard
+            | SymbolKind::Callback
+            | SymbolKind::MacroCallback => (Vec::new(), Vec::new()),
         };
 
         Self {
@@ -410,16 +509,24 @@ impl SourceGraph {
                 graph.changed_files.push(processed.path.clone());
             }
             for symbol in &processed.parsed.symbols {
-                graph
-                    .symbol_index
-                    .entry(symbol.name.clone())
-                    .or_default()
-                    .push(symbol.id.clone());
-                graph
-                    .symbol_index
-                    .entry(symbol.id.selector.clone())
-                    .or_default()
-                    .push(symbol.id.clone());
+                if let Some(owner) = &symbol.owner {
+                    debug_assert_eq!(
+                        elixir_symbol_selector(symbol.kind, owner, &symbol.name, symbol.arity)
+                            .as_deref(),
+                        Some(symbol.id.selector.as_str()),
+                        "structured Source owner and selector must agree"
+                    );
+                }
+                for key in symbol_aliases(symbol)
+                    .into_iter()
+                    .chain(std::iter::once(symbol.id.selector.clone()))
+                {
+                    graph
+                        .symbol_index
+                        .entry(key)
+                        .or_default()
+                        .push(symbol.id.clone());
+                }
             }
             graph
                 .file_fingerprints
@@ -438,23 +545,38 @@ impl SourceGraph {
         Ok(graph)
     }
 
-    pub(crate) fn resolve_symbol(&self, query: &str) -> Option<SymbolId> {
+    fn resolve_symbol_result(&self, query: &str) -> SymbolResolution {
         let (path, selector) = query.split_once('#').unwrap_or(("", query));
         if !path.is_empty() {
-            return self
-                .files
-                .get(path)
-                .and_then(|file| {
-                    file.symbols
-                        .iter()
-                        .find(|symbol| symbol.id.selector == selector || symbol.name == selector)
-                })
-                .map(|symbol| symbol.id.clone());
+            let Some(file) = self.files.get(path) else {
+                return SymbolResolution::Missing;
+            };
+            let exact = file
+                .symbols
+                .iter()
+                .filter(|symbol| symbol.id.selector == selector)
+                .map(|symbol| symbol.id.clone())
+                .collect::<Vec<_>>();
+            if !exact.is_empty() {
+                return symbol_resolution(exact);
+            }
+            let aliases = file
+                .symbols
+                .iter()
+                .filter(|symbol| symbol_aliases(symbol).iter().any(|alias| alias == selector))
+                .map(|symbol| symbol.id.clone())
+                .collect::<Vec<_>>();
+            return symbol_resolution(aliases);
         }
 
-        self.symbol_index
-            .get(selector)
-            .and_then(|matches| matches.first().cloned())
+        symbol_resolution(self.symbol_index.get(selector).cloned().unwrap_or_default())
+    }
+
+    pub(crate) fn resolve_symbol(&self, query: &str) -> Option<SymbolId> {
+        match self.resolve_symbol_result(query) {
+            SymbolResolution::Resolved(id) => Some(id),
+            SymbolResolution::Ambiguous(_) | SymbolResolution::Missing => None,
+        }
     }
 
     pub(crate) fn callees(&self, query: &str) -> Vec<String> {
@@ -658,13 +780,80 @@ fn parse_source_file(path: &str, contents: &str) -> SourceFile {
         .unwrap_or_else(|| parse_source_file_fallback(path, contents))
 }
 
+fn symbol_resolution(mut matches: Vec<SymbolId>) -> SymbolResolution {
+    matches.sort();
+    matches.dedup();
+    match matches.len() {
+        0 => SymbolResolution::Missing,
+        1 => SymbolResolution::Resolved(matches.pop().expect("one symbol match")),
+        _ => SymbolResolution::Ambiguous(matches),
+    }
+}
+
+fn symbol_aliases(symbol: &Symbol) -> Vec<String> {
+    let mut aliases = vec![symbol.name.clone()];
+    if let Some(arity) = symbol.arity {
+        aliases.push(format!("{}/{arity}", symbol.name));
+        if let Some(qualified) = symbol
+            .owner
+            .as_ref()
+            .and_then(|owner| owner.qualified_callable_alias(&symbol.name, arity))
+        {
+            aliases.push(qualified);
+        }
+    }
+    aliases.sort();
+    aliases.dedup();
+    aliases
+}
+
+fn selector_value(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            use std::fmt::Write as _;
+            write!(&mut encoded, "%{byte:02X}").expect("writing to String cannot fail");
+        }
+    }
+    encoded
+}
+
 fn symbol_selector(kind: SymbolKind, parent: Option<&str>, name: &str) -> String {
     match (kind, parent) {
         (SymbolKind::Function, _) => format!("fn:{name}"),
         (SymbolKind::Method, Some(parent)) => format!("type:{parent}/member:{name}"),
         (SymbolKind::Method, None) => format!("member:{name}"),
         (SymbolKind::Class, _) => format!("type:{name}"),
+        _ => format!("{}:{name}", kind.as_str()),
     }
+}
+
+fn elixir_symbol_selector(
+    kind: SymbolKind,
+    owner: &SymbolOwner,
+    name: &str,
+    arity: Option<usize>,
+) -> Option<String> {
+    let owner_selector = owner.selector();
+    if matches!(
+        kind,
+        SymbolKind::Module
+            | SymbolKind::Protocol
+            | SymbolKind::Implementation
+            | SymbolKind::Struct
+            | SymbolKind::Exception
+            | SymbolKind::Behaviour
+    ) {
+        return Some(owner_selector);
+    }
+    Some(format!(
+        "{owner_selector}/{}:{}/{}",
+        kind.elixir_selector_prefix()?,
+        selector_value(name),
+        arity?
+    ))
 }
 
 fn parse_tree_sitter_file(path: &str, contents: &str) -> Option<SourceFile> {
@@ -884,6 +1073,10 @@ fn tree_sitter_symbol(
         &source,
     ));
 
+    let range = SymbolRange {
+        start_line: node.start_position().row + 1,
+        end_line: node.end_position().row + 1,
+    };
     Some(Symbol {
         id: SymbolId {
             path: path.into(),
@@ -893,12 +1086,12 @@ fn tree_sitter_symbol(
         name,
         kind,
         parent: parent.map(str::to_string),
+        owner: None,
+        arity: None,
         exported: tree_sitter_exported(node, contents, language),
         interface_signature,
-        range: SymbolRange {
-            start_line: node.start_position().row + 1,
-            end_line: node.end_position().row + 1,
-        },
+        range,
+        clause_ranges: vec![range],
         calls: tree_sitter_calls(node, contents, language),
     })
 }
@@ -1301,11 +1494,17 @@ fn parse_source_file_fallback(path: &str, contents: &str) -> SourceFile {
                 name,
                 kind,
                 parent,
+                owner: None,
+                arity: None,
                 exported: is_exported_symbol(trimmed, language),
                 range: SymbolRange {
                     start_line: line_no,
                     end_line: total_lines,
                 },
+                clause_ranges: vec![SymbolRange {
+                    start_line: line_no,
+                    end_line: total_lines,
+                }],
                 calls: Vec::new(),
             });
             current_symbol = Some(file.symbols.len() - 1);
@@ -1736,6 +1935,52 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    fn graph_with_file(file: SourceFile) -> SourceGraph {
+        let mut graph = SourceGraph::default();
+        for symbol in &file.symbols {
+            for key in symbol_aliases(symbol)
+                .into_iter()
+                .chain(std::iter::once(symbol.id.selector.clone()))
+            {
+                graph
+                    .symbol_index
+                    .entry(key)
+                    .or_default()
+                    .push(symbol.id.clone());
+            }
+        }
+        graph.files.insert(file.path.clone(), file);
+        graph
+    }
+
+    fn elixir_symbol(
+        path: &str,
+        owner: SymbolOwner,
+        kind: SymbolKind,
+        name: &str,
+        arity: Option<usize>,
+        ranges: Vec<SymbolRange>,
+    ) -> Symbol {
+        let selector = elixir_symbol_selector(kind, &owner, name, arity).unwrap();
+        Symbol {
+            id: SymbolId {
+                path: path.into(),
+                name: name.into(),
+                selector,
+            },
+            name: name.into(),
+            kind,
+            parent: None,
+            owner: Some(owner),
+            arity,
+            exported: true,
+            interface_signature: None,
+            range: ranges[0],
+            clause_ranges: ranges,
+            calls: Vec::new(),
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn incremental_build_rejects_a_linked_source_file() {
@@ -1978,10 +2223,165 @@ mod tests {
 
         fs::write(
             &cache_path,
-            r#"{"schema":"criv.source-graph/0","graph":{}}"#,
+            r#"{"schema":"criv.source-graph/2","graph":{}}"#,
         )
         .unwrap();
         assert!(load_cached(temp.path()).is_none());
+    }
+
+    #[test]
+    fn elixir_selectors_encode_owner_kind_name_and_arity() {
+        let module = SymbolOwner::Module {
+            name: "My App.Δ".into(),
+        };
+        assert_eq!(
+            elixir_symbol_selector(SymbolKind::Module, &module, "My App.Δ", None).unwrap(),
+            "module:My%20App.%CE%94"
+        );
+        assert_eq!(
+            elixir_symbol_selector(SymbolKind::Function, &module, "+", Some(2)).unwrap(),
+            "module:My%20App.%CE%94/fn:%2B/2"
+        );
+        assert_eq!(
+            elixir_symbol_selector(SymbolKind::MacroCallback, &module, "build!", Some(1)).unwrap(),
+            "module:My%20App.%CE%94/macro-callback:build%21/1"
+        );
+
+        let implementation = SymbolOwner::Implementation {
+            protocol: "Enumerable".into(),
+            for_type: "My App".into(),
+        };
+        assert_eq!(
+            elixir_symbol_selector(
+                SymbolKind::Implementation,
+                &implementation,
+                "Enumerable for My App",
+                None
+            )
+            .unwrap(),
+            "impl:Enumerable/for:My%20App"
+        );
+    }
+
+    #[test]
+    fn elixir_aliases_are_unique_or_ambiguous_and_exact_lookup_wins() {
+        let owner = SymbolOwner::Module {
+            name: "My.App".into(),
+        };
+        let mut file = SourceFile {
+            path: "lib/my_app.ex".into(),
+            language: Language::Unknown,
+            imports: Vec::new(),
+            modules: Vec::new(),
+            symbols: vec![
+                elixir_symbol(
+                    "lib/my_app.ex",
+                    owner.clone(),
+                    SymbolKind::Function,
+                    "run",
+                    Some(1),
+                    vec![SymbolRange {
+                        start_line: 2,
+                        end_line: 3,
+                    }],
+                ),
+                elixir_symbol(
+                    "lib/my_app.ex",
+                    owner,
+                    SymbolKind::Function,
+                    "run",
+                    Some(2),
+                    vec![
+                        SymbolRange {
+                            start_line: 5,
+                            end_line: 6,
+                        },
+                        SymbolRange {
+                            start_line: 8,
+                            end_line: 9,
+                        },
+                    ],
+                ),
+            ],
+        };
+        file.symbols.push(Symbol {
+            id: SymbolId {
+                path: file.path.clone(),
+                name: "module:My.App/fn:run/1".into(),
+                selector: "fn:literal".into(),
+            },
+            name: "module:My.App/fn:run/1".into(),
+            kind: SymbolKind::Function,
+            parent: None,
+            owner: None,
+            arity: None,
+            exported: false,
+            interface_signature: None,
+            range: SymbolRange {
+                start_line: 11,
+                end_line: 11,
+            },
+            clause_ranges: vec![SymbolRange {
+                start_line: 11,
+                end_line: 11,
+            }],
+            calls: Vec::new(),
+        });
+        let graph = graph_with_file(file);
+
+        assert!(matches!(
+            graph.resolve_symbol_result("lib/my_app.ex#run"),
+            SymbolResolution::Ambiguous(matches) if matches.len() == 2
+        ));
+        assert_eq!(
+            graph
+                .resolve_symbol("lib/my_app.ex#run/1")
+                .unwrap()
+                .display(),
+            "lib/my_app.ex#module:My.App/fn:run/1"
+        );
+        assert_eq!(
+            graph
+                .resolve_symbol("lib/my_app.ex#My.App.run/2")
+                .unwrap()
+                .display(),
+            "lib/my_app.ex#module:My.App/fn:run/2"
+        );
+        assert_eq!(
+            graph
+                .resolve_symbol("lib/my_app.ex#module:My.App/fn:run/1")
+                .unwrap()
+                .display(),
+            "lib/my_app.ex#module:My.App/fn:run/1"
+        );
+        assert_eq!(
+            graph.files["lib/my_app.ex"].symbols[1].clause_ranges.len(),
+            2
+        );
+    }
+
+    #[test]
+    fn current_language_selector_text_is_unchanged() {
+        let cases = [
+            ("src/lib.rs", "fn run() {}", "src/lib.rs#fn:run"),
+            ("src/app.ts", "function run() {}", "src/app.ts#fn:run"),
+            ("src/app.js", "function run() {}", "src/app.js#fn:run"),
+            ("src/app.py", "def run():\n    pass", "src/app.py#fn:run"),
+            (
+                "src/app.go",
+                "package app\nfunc run() {}",
+                "src/app.go#fn:run",
+            ),
+        ];
+        for (path, source, expected) in cases {
+            let file = parse_source_file(path, source);
+            assert!(
+                file.symbols
+                    .iter()
+                    .any(|symbol| symbol.id.display() == expected),
+                "missing golden selector {expected}"
+            );
+        }
     }
 
     #[test]

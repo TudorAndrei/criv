@@ -222,7 +222,7 @@ fn invalid_graph_cache_schema_converges_with_a_cache_free_build() {
     let cache = fs::read_to_string(&cache_path).unwrap();
     fs::write(
         &cache_path,
-        cache.replacen("criv.source-graph/2", "criv.source-graph/invalid", 1),
+        cache.replacen("criv.source-graph/3", "criv.source-graph/invalid", 1),
     )
     .unwrap();
 

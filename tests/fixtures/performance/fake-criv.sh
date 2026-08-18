@@ -22,7 +22,7 @@ if [[ "${1:-}" == "watch" ]]; then
   printf '{"schema":"criv.state.v1","graph":{"root":"","nodes":[],"edges":[]},"registered-patterns":[],"patterns":{},"source-index":[]}\n' >.criv/state.json
   cp .criv/state.json ".criv/snapshots/$snapshot.json"
   printf '%s\n' "$snapshot" >.criv/latest
-  printf '{"schema":"criv.source-graph/2"}\n' >.criv/source-graph.json
+  printf '{"schema":"criv.source-graph/3"}\n' >.criv/source-graph.json
 fi
 
 if [[ "${1:-}" == "query" && "${2:-}" == "diff" && ! -f .criv/latest ]]; then

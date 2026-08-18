@@ -576,7 +576,7 @@ fn source_graph_cache_is_written_and_refreshed() {
 
     let after = fs::read_to_string(&cache_path).unwrap();
     let after: serde_json::Value = serde_json::from_str(&after).unwrap();
-    assert_eq!(after["schema"], "criv.source-graph/2");
+    assert_eq!(after["schema"], "criv.source-graph/3");
     assert_ne!(
         after["graph"]["file_fingerprints"]["src/lib.rs"]
             .as_str()
