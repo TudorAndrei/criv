@@ -149,6 +149,16 @@ impl Case {
                 | Self::QueryNodesCodeWithoutDocs
         )
     }
+
+    fn publishes_state(self) -> bool {
+        matches!(
+            self,
+            Self::WatchOnceCold
+                | Self::WatchOnceWarm
+                | Self::WatchOnceChanged
+                | Self::WatchOnceSemanticChanged
+        )
+    }
 }
 
 const ALL_CASES: [Case; 11] = [
@@ -186,6 +196,7 @@ struct ManifestIdentity {
     observed_revision: String,
     source_files: usize,
     source_bytes: usize,
+    relationships: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -229,6 +240,9 @@ struct SampleRow {
     selected_elixir_bytes: u64,
     parsed_elixir_files: usize,
     parsed_elixir_bytes: u64,
+    expected_relationships: usize,
+    parsed_relationships: usize,
+    published_relationships: Option<usize>,
     elixir_path_digest: Option<String>,
     stdout_digest: String,
     stderr_digest: String,
@@ -261,6 +275,9 @@ struct CaseSummary {
     selected_elixir_bytes: u64,
     parsed_elixir_files: usize,
     parsed_elixir_bytes: u64,
+    expected_relationships: usize,
+    parsed_relationships: usize,
+    published_relationships: Option<usize>,
     elixir_path_digest: Option<String>,
     real_seconds: Option<MetricSummary>,
     user_seconds: Option<MetricSummary>,
@@ -283,6 +300,7 @@ struct ElixirCoverage {
     selected_bytes: u64,
     parsed_files: usize,
     parsed_bytes: u64,
+    relationships: usize,
     path_digest: Option<String>,
 }
 
@@ -316,6 +334,7 @@ fn run(mut args: Args) -> Result<(), String> {
             repository_root.join("fixtures/performance/criv-medium.toml"),
             repository_root.join("fixtures/performance/elixir-mixed.toml"),
             repository_root.join("fixtures/performance/elixir-parse-heavy.toml"),
+            repository_root.join("fixtures/performance/elixir-relationships.toml"),
         ];
     }
     let manifests = args
@@ -381,6 +400,7 @@ fn run(mut args: Args) -> Result<(), String> {
                 observed_revision: loaded.manifest.observed_revision.clone(),
                 source_files: loaded.manifest.source_files,
                 source_bytes: loaded.manifest.source_bytes,
+                relationships: loaded.manifest.relationships,
             })
             .collect(),
         cases: cases.iter().map(|case| case.id().to_string()).collect(),
@@ -585,9 +605,17 @@ fn measure_sample(
     )?;
     let real_seconds = start.elapsed().as_secs_f64();
     let coverage = if case.selects_source() {
-        elixir_coverage(root, generated)?
+        elixir_coverage(root, generated, loaded.manifest.relationships)?
     } else {
         ElixirCoverage::default()
+    };
+    let published_relationships = if case.publishes_state() {
+        Some(state_relationship_count(
+            root,
+            loaded.manifest.relationships,
+        )?)
+    } else {
+        None
     };
     let (selected_source_files, selected_source_bytes) = if case.selects_source() {
         (loaded.manifest.source_files, loaded.manifest.source_bytes)
@@ -622,6 +650,9 @@ fn measure_sample(
         selected_elixir_bytes: coverage.selected_bytes,
         parsed_elixir_files: coverage.parsed_files,
         parsed_elixir_bytes: coverage.parsed_bytes,
+        expected_relationships: loaded.manifest.relationships,
+        parsed_relationships: coverage.relationships,
+        published_relationships,
         elixir_path_digest: coverage.path_digest,
         stdout_digest: bytes_digest(&output.stdout),
         stderr_digest: bytes_digest(&output.stderr),
@@ -662,7 +693,11 @@ fn run_criv(
     run_child(command).map_err(|error| format!("failed to execute {}: {error}", binary.display()))
 }
 
-fn elixir_coverage(root: &Path, generated: &GeneratedWorkload) -> Result<ElixirCoverage, String> {
+fn elixir_coverage(
+    root: &Path,
+    generated: &GeneratedWorkload,
+    expected_relationships: usize,
+) -> Result<ElixirCoverage, String> {
     let mut selected = generated
         .source_paths
         .iter()
@@ -715,6 +750,30 @@ fn elixir_coverage(root: &Path, generated: &GeneratedWorkload) -> Result<ElixirC
             missing.join(", ")
         ));
     }
+    let relationships = selected
+        .iter()
+        .map(|(path, _)| {
+            files[path]
+                .get("symbols")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| format!("Elixir source graph file {path} has no symbol array"))
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .map(|symbol| {
+            symbol
+                .get("relationships")
+                .and_then(serde_json::Value::as_array)
+                .map(Vec::len)
+                .unwrap_or(0)
+        })
+        .sum::<usize>();
+    if relationships != expected_relationships {
+        return Err(format!(
+            "Elixir source graph has {relationships} relationships, expected {expected_relationships}"
+        ));
+    }
     let selected_bytes = selected.iter().map(|(_, bytes)| bytes).sum();
     let mut hasher = blake3::Hasher::new();
     for (path, bytes) in &selected {
@@ -728,8 +787,32 @@ fn elixir_coverage(root: &Path, generated: &GeneratedWorkload) -> Result<ElixirC
         selected_bytes,
         parsed_files: parsed.len(),
         parsed_bytes: parsed.iter().map(|(_, bytes)| bytes).sum(),
+        relationships,
         path_digest: Some(hasher.finalize().to_hex().to_string()),
     })
+}
+
+fn state_relationship_count(root: &Path, expected: usize) -> Result<usize, String> {
+    let state_path = root.join(".criv/state.json");
+    let state: serde_json::Value = serde_json::from_slice(
+        &fs::read(&state_path)
+            .map_err(|error| format!("failed to read {}: {error}", state_path.display()))?,
+    )
+    .map_err(|error| format!("failed to parse {}: {error}", state_path.display()))?;
+    let relationships = state
+        .get("graph")
+        .and_then(|graph| graph.get("edges"))
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| format!("{} has no graph edge array", state_path.display()))?
+        .iter()
+        .filter(|edge| edge.get("kind").and_then(serde_json::Value::as_str) == Some("calls"))
+        .count();
+    if relationships != expected {
+        return Err(format!(
+            "published State has {relationships} call relationships, expected {expected}"
+        ));
+    }
+    Ok(relationships)
 }
 
 fn summarize(rows: &[SampleRow]) -> Vec<CaseSummary> {
@@ -766,6 +849,9 @@ fn summarize(rows: &[SampleRow]) -> Vec<CaseSummary> {
                 selected_elixir_bytes: rows[0].selected_elixir_bytes,
                 parsed_elixir_files: rows[0].parsed_elixir_files,
                 parsed_elixir_bytes: rows[0].parsed_elixir_bytes,
+                expected_relationships: rows[0].expected_relationships,
+                parsed_relationships: rows[0].parsed_relationships,
+                published_relationships: rows[0].published_relationships,
                 elixir_path_digest: rows[0].elixir_path_digest.clone(),
                 real_seconds: metric(successful.iter().map(|row| row.real_seconds).collect()),
                 user_seconds: metric(

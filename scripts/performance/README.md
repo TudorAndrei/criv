@@ -9,12 +9,14 @@ Canonical workload inputs live in `fixtures/performance/`. Generated vaults and
 measurement results are temporary or user-selected output and are never
 committed.
 
-The canonical list includes `elixir-mixed.toml` and
-`elixir-parse-heavy.toml`. The generator creates valid `.ex` and `.exs`
-modules, and the harness rejects a sample if one selected Elixir file is not in
-the Elixir source graph. Raw rows record source counts, bytes, Elixir coverage,
-peak resident memory, and output identity. This is observation evidence. It is
-not a language-throughput gate.
+The canonical list includes `elixir-mixed.toml`, `elixir-parse-heavy.toml`, and
+`elixir-relationships.toml`. The generator creates valid `.ex` and `.exs`
+modules. The relationship workload has one static remote call for each of its
+8,192 callables. The harness rejects a sample if one selected Elixir file is
+not in the Elixir source graph or if parsed and published relationship counts
+do not match the manifest. Raw rows record source counts, bytes, Elixir
+coverage, exact relationship counts, peak resident memory, and output
+identity. This is observation evidence. It is not a language-throughput gate.
 
 `render-git-note.sh` validates a completed release-profile result directory and
 reduces it to the deterministic JSON summary stored by the push workflow.

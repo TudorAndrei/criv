@@ -16,12 +16,13 @@ cargo run --locked --quiet --manifest-path "$repository_root/Cargo.toml" \
   --allow-low-samples \
   --manifest "$repository_root/fixtures/performance/elixir-mixed.toml" \
   --manifest "$repository_root/fixtures/performance/elixir-parse-heavy.toml" \
+  --manifest "$repository_root/fixtures/performance/elixir-relationships.toml" \
   --case watch-once-cold \
   --results-root "$test_root/results" >/dev/null
 
 result_dir="$(find "$test_root/results" -mindepth 1 -maxdepth 1 -type d -print -quit)"
 test -n "$result_dir"
-test "$(wc -l <"$result_dir/samples.jsonl" | tr -d ' ')" = "2"
+test "$(wc -l <"$result_dir/samples.jsonl" | tr -d ' ')" = "3"
 
 jq -e '
   if .workload == "elixir-mixed" then
@@ -32,9 +33,17 @@ jq -e '
     .selected_source_files == 128
     and .selected_source_bytes == 4194304
     and .selected_elixir_files == 128
+    and .expected_relationships == 0
+  elif .workload == "elixir-relationships" then
+    .selected_source_files == 128
+    and .selected_source_bytes == 4194304
+    and .selected_elixir_files == 128
+    and .expected_relationships == 8192
   else false end
   and .selected_elixir_files == .parsed_elixir_files
   and .selected_elixir_bytes == .parsed_elixir_bytes
+  and .expected_relationships == .parsed_relationships
+  and .expected_relationships == .published_relationships
   and (.elixir_path_digest | length) == 64
   and .peak_rss_bytes > 0
   and .real_seconds > 0
@@ -46,12 +55,14 @@ jq -e '
 
 jq -e '
   .schema == "criv.performance-summary.v2"
-  and (.cases | length) == 2
+  and (.cases | length) == 3
   and all(.cases[];
     .successful_samples == 1
     and .failed_samples == 0
     and .selected_elixir_files == .parsed_elixir_files
     and .selected_elixir_bytes == .parsed_elixir_bytes
+    and .expected_relationships == .parsed_relationships
+    and .expected_relationships == .published_relationships
     and (.elixir_path_digest | length) == 64
     and .peak_rss_bytes.median > 0)
 ' "$result_dir/summary.json" >/dev/null

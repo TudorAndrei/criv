@@ -1,0 +1,23 @@
+schema = "criv.performance-workload.v1"
+id = "elixir-relationships"
+tier = "large"
+observed_repository = "synthetic/elixir-relationships"
+observed_revision = "issue-164"
+observed_date = "2026-08-20"
+notes = 4
+decisions = 2
+docs = 2
+source_files = 128
+source_bytes = 4194304
+symbols = 8192
+relationships = 8192
+note_links = 4
+source_references = 4
+policies = 0
+c4_artifacts = 0
+changed_source_files = 1
+changed_file_fraction = 0.0078125
+
+[extensions]
+ex = 96
+exs = 32

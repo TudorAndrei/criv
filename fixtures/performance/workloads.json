@@ -4,7 +4,8 @@
     "barrs-small.toml",
     "criv-medium.toml",
     "elixir-mixed.toml",
-    "elixir-parse-heavy.toml"
+    "elixir-parse-heavy.toml",
+    "elixir-relationships.toml"
   ],
   "deferred": [
     {
