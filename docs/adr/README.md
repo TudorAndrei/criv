@@ -136,3 +136,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0123-own-reconciliation-under-the-adr-module|ADR-0123]] - Own reconciliation under the ADR module
 - [[0124-own-c4-implementations-under-the-c4-module|ADR-0124]] - Own C4 implementations under the C4 module
 - [[0125-own-installation-implementations-under-the-install-module|ADR-0125]] - Own installation implementations under the Install module
+- [[0126-own-one-source-state-per-refresh|ADR-0126]] - Own one Source state per refresh
