@@ -15,7 +15,10 @@ use serde::{Serialize, Serializer};
 
 use crate::c4::C4Artifact;
 use crate::policy_scan::PolicyScanPlan;
-use crate::source::{Language, SourceFile, SymbolKind};
+use crate::source::{
+    DirectiveKind, Import, Language, ModuleRelationshipRole, Relationship, RelationshipKind,
+    RelationshipTarget, SourceFile, Symbol, SymbolKind,
+};
 use crate::structural;
 use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
@@ -519,9 +522,7 @@ impl StatePartitions {
 
         for entry in vault.source_entries() {
             let state_entry = SourceIndexEntry {
-                mime: mime_guess::from_path(&entry.path)
-                    .first_raw()
-                    .map(str::to_string),
+                mime: source_mime(&entry.path),
                 path: entry.path.clone(),
             };
             let fingerprint = source_index_input_fingerprint(&state_entry);
@@ -636,17 +637,33 @@ fn source_input_fingerprint(file: &SourceFile) -> String {
     for import in &file.imports {
         fingerprint_str(&mut hasher, &import.module);
         fingerprint_usize(&mut hasher, import.line);
+        fingerprint_usize(&mut hasher, import.site);
+        fingerprint_str(&mut hasher, import.kind.as_str());
+        fingerprint_str(&mut hasher, &format!("{:?}", import.owner));
+        fingerprint_str(&mut hasher, &format!("{:?}", import.scope));
+        fingerprint_option_str(&mut hasher, import.alias.as_deref());
+        fingerprint_str(&mut hasher, &format!("{:?}", import.only));
+        fingerprint_str(&mut hasher, &format!("{:?}", import.except));
+        fingerprint_bool(&mut hasher, import.absolute);
     }
     for symbol in &file.symbols {
         fingerprint_str(&mut hasher, &symbol.id.display());
         fingerprint_str(&mut hasher, &symbol.name);
         fingerprint_str(&mut hasher, symbol_kind(symbol.kind));
         fingerprint_option_str(&mut hasher, symbol.parent.as_deref());
+        fingerprint_str(&mut hasher, &format!("{:?}", symbol.owner));
+        fingerprint_option_usize(&mut hasher, symbol.arity);
         fingerprint_usize(&mut hasher, symbol.range.start_line);
         fingerprint_usize(&mut hasher, symbol.range.end_line);
         for call in &symbol.calls {
             fingerprint_str(&mut hasher, &call.target);
             fingerprint_usize(&mut hasher, call.line);
+        }
+        for relationship in &symbol.relationships {
+            fingerprint_str(&mut hasher, relationship.kind.as_str());
+            fingerprint_str(&mut hasher, &format!("{:?}", relationship.target));
+            fingerprint_usize(&mut hasher, relationship.line);
+            fingerprint_usize(&mut hasher, relationship.site);
         }
     }
     hasher.finalize().to_hex().to_string()
@@ -723,6 +740,22 @@ fn fingerprint_usize(hasher: &mut blake3::Hasher, value: usize) {
     hasher.update(&(value as u64).to_le_bytes());
 }
 
+fn fingerprint_option_usize(hasher: &mut blake3::Hasher, value: Option<usize>) {
+    match value {
+        Some(value) => {
+            hasher.update(&[1]);
+            fingerprint_usize(hasher, value);
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+}
+
+fn fingerprint_bool(hasher: &mut blake3::Hasher, value: bool) {
+    hasher.update(&[u8::from(value)]);
+}
+
 fn observe_partition_meta(meta: &PartitionMeta, expected_key: &PartitionKey) {
     debug_assert_eq!(&meta.key, expected_key);
     let _ = (
@@ -765,14 +798,14 @@ fn build_source_partition(vault: &Vault, file: &SourceFile) -> SourcePartition {
     let file_id = code_node_id(&file.path);
 
     for import in &file.imports {
-        let import_id = import_node_id(&file.path, &import.module);
+        let import_id = directive_node_id(file, import);
         add_node(
             &mut graph,
             &mut seen_nodes,
             Node {
                 id: import_id.clone(),
                 hash: String::new(),
-                kind: "import".into(),
+                kind: import.kind.as_str().into(),
                 label: import.module.clone(),
                 path: Some(format!("{}#L{}", file.path, import.line)),
             },
@@ -790,7 +823,7 @@ fn build_source_partition(vault: &Vault, file: &SourceFile) -> SourcePartition {
                 id: symbol_id.clone(),
                 hash: String::new(),
                 kind: symbol_kind(symbol.kind).into(),
-                label: symbol.name.clone(),
+                label: symbol_label(symbol),
                 path: Some(format!(
                     "{}#L{}-L{}",
                     symbol.id.path, symbol.range.start_line, symbol.range.end_line
@@ -813,6 +846,21 @@ fn build_source_partition(vault: &Vault, file: &SourceFile) -> SourcePartition {
                 &mut graph,
                 &mut seen_edges,
                 &symbol_node_id(&parent_id.display()),
+                &symbol_id,
+                "contains",
+            );
+        }
+        if let Some(owner) = &symbol.owner
+            && let Some(parent) = file.symbols.iter().find(|candidate| {
+                candidate.id != symbol.id
+                    && candidate.arity.is_none()
+                    && candidate.owner.as_ref() == Some(owner)
+            })
+        {
+            add_edge(
+                &mut graph,
+                &mut seen_edges,
+                &symbol_node_id(&parent.id.display()),
                 &symbol_id,
                 "contains",
             );
@@ -841,6 +889,17 @@ fn build_source_partition(vault: &Vault, file: &SourceFile) -> SourcePartition {
             }
             add_edge(&mut graph, &mut seen_edges, &symbol_id, &target, "calls");
         }
+        for relationship in &symbol.relationships {
+            project_relationship(
+                vault,
+                &mut graph,
+                &mut seen_nodes,
+                &mut seen_edges,
+                &mut dependencies,
+                symbol,
+                relationship,
+            );
+        }
     }
 
     SourcePartition {
@@ -857,6 +916,102 @@ fn build_source_partition(vault: &Vault, file: &SourceFile) -> SourcePartition {
             path: Some(file.path.clone()),
         },
         rows: graph_rows(graph),
+    }
+}
+
+fn project_relationship(
+    vault: &Vault,
+    graph: &mut Graph,
+    seen_nodes: &mut BTreeSet<String>,
+    seen_edges: &mut BTreeSet<String>,
+    dependencies: &mut PartitionDependencies,
+    symbol: &Symbol,
+    relationship: &Relationship,
+) {
+    let source_graph = vault.source_graph();
+    let label = match &relationship.target {
+        RelationshipTarget::Dynamic { label, .. } => label.clone(),
+        _ => source_graph.relationship_target_label(&symbol.id, relationship),
+    };
+    let resolved = source_graph.resolve_relationship(&symbol.id, relationship);
+    if let Some(target) = resolved.as_ref().and_then(|target| {
+        source_graph
+            .symbols()
+            .find(|symbol| &symbol.id == target)
+            .map(|symbol| symbol.name.clone())
+    }) {
+        dependencies.call_targets.insert(target);
+    } else if let RelationshipTarget::Callable { name, .. } = &relationship.target {
+        dependencies.call_targets.insert(name.clone());
+    } else if let RelationshipTarget::Module { module, .. } = &relationship.target {
+        dependencies.call_targets.insert(module.clone());
+    }
+    if resolved.is_none() && !matches!(relationship.target, RelationshipTarget::Dynamic { .. }) {
+        dependencies.catalog_sensitive = true;
+    }
+    let target = resolved
+        .as_ref()
+        .map(|target| symbol_node_id(&target.display()))
+        .unwrap_or_else(|| relationship_target_node_id(relationship, &label));
+    if resolved.is_none() {
+        add_node(
+            graph,
+            seen_nodes,
+            Node {
+                id: target.clone(),
+                hash: String::new(),
+                kind: relationship_target_node_kind(relationship).into(),
+                label,
+                path: Some(format!("{}#L{}", symbol.id.path, relationship.line)),
+            },
+        );
+    }
+    add_edge(
+        graph,
+        seen_edges,
+        &symbol_node_id(&symbol.id.display()),
+        &target,
+        relationship_edge_kind(relationship),
+    );
+}
+
+fn relationship_target_node_id(relationship: &Relationship, label: &str) -> String {
+    match &relationship.target {
+        RelationshipTarget::Dynamic { id, .. } => format!("dynamic-call:{id}"),
+        RelationshipTarget::Callable { .. } => external_call_node_id(label),
+        RelationshipTarget::Module { .. } => external_module_node_id(label),
+    }
+}
+
+fn relationship_target_node_kind(relationship: &Relationship) -> &'static str {
+    match &relationship.target {
+        RelationshipTarget::Dynamic { .. } => "dynamic-call",
+        RelationshipTarget::Callable { .. } => "external-call",
+        RelationshipTarget::Module { .. } => "external-module",
+    }
+}
+
+fn relationship_edge_kind(relationship: &Relationship) -> &'static str {
+    match (&relationship.kind, &relationship.target) {
+        (RelationshipKind::Call, _) => "calls",
+        (RelationshipKind::Capture, _) => "captures",
+        (RelationshipKind::Delegate, _) => "delegates",
+        (
+            RelationshipKind::ProtocolImplementation,
+            RelationshipTarget::Module {
+                role: ModuleRelationshipRole::Protocol,
+                ..
+            },
+        ) => "implements-protocol",
+        (
+            RelationshipKind::ProtocolImplementation,
+            RelationshipTarget::Module {
+                role: ModuleRelationshipRole::ForType,
+                ..
+            },
+        ) => "implements-for",
+        (RelationshipKind::BehaviourImplementation, _) => "implements-behaviour",
+        _ => relationship.kind.as_str(),
     }
 }
 
@@ -1574,6 +1729,19 @@ fn import_node_id(path: &str, module: &str) -> String {
     format!("import:{path}:{module}")
 }
 
+fn directive_node_id(file: &SourceFile, directive: &Import) -> String {
+    if file.language != Language::Elixir || directive.kind == DirectiveKind::Legacy {
+        return import_node_id(&file.path, &directive.module);
+    }
+    format!(
+        "import:{}:{}:{}:{}",
+        file.path,
+        directive.kind.as_str(),
+        directive.module,
+        directive.site
+    )
+}
+
 fn symbol_node_id(id: &str) -> String {
     format!("symbol:{id}")
 }
@@ -1582,12 +1750,35 @@ fn external_call_node_id(id: &str) -> String {
     format!("external-call:{id}")
 }
 
+fn external_module_node_id(id: &str) -> String {
+    format!("external-module:{id}")
+}
+
 fn c4_artifact_node_id(path: &str) -> String {
     format!("architecture-source:{path}")
 }
 
 fn symbol_kind(kind: SymbolKind) -> &'static str {
     kind.as_str()
+}
+
+fn symbol_label(symbol: &Symbol) -> String {
+    symbol.arity.map_or_else(
+        || symbol.name.clone(),
+        |arity| format!("{}/{arity}", symbol.name),
+    )
+}
+
+fn source_mime(path: &str) -> Option<String> {
+    if matches!(
+        Path::new(path)
+            .extension()
+            .and_then(|extension| extension.to_str()),
+        Some("ex" | "exs")
+    ) {
+        return Some("text/x-elixir".into());
+    }
+    mime_guess::from_path(path).first_raw().map(str::to_string)
 }
 
 fn language_name(language: Language) -> &'static str {
@@ -1639,6 +1830,172 @@ source = false
                 .iter()
                 .all(|node| node["kind"] != "code")
         );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn elixir_state_projects_kinds_relationships_labels_mime_and_fingerprints() {
+        let root = unique_temp_dir("criv-elixir-state");
+        std::fs::create_dir_all(root.join("lib")).unwrap();
+        std::fs::write(root.join("criv.toml"), "[source]\nroots = [\"lib\"]\n").unwrap();
+        std::fs::write(root.join("lib/mix.exs"), "value = :ok\n").unwrap();
+        let source = r#"
+defmodule Demo.Behaviour do
+  @callback run(term()) :: term()
+  @macrocallback build(term()) :: term()
+end
+
+defprotocol Demo.Protocol do
+  def work(value)
+end
+
+defmodule Demo.Target do
+  def fetch(value), do: value
+  def other(value), do: value
+end
+
+defmodule Demo.Record do
+  defstruct [:value]
+end
+
+defmodule Demo.Error do
+  defexception [:message]
+end
+
+defmodule Demo.App do
+  alias Demo.Target, as: Target
+  import Demo.Target, only: [fetch: 1]
+  require Demo.Target
+  use Demo.Target
+  @behaviour Demo.Behaviour
+  @behaviour External.Behaviour
+
+  def run(value) do
+    Target.fetch(value)
+    External.fetch(value)
+  end
+  def capture(), do: &Target.fetch/1
+  def dynamic(fun, value), do: fun.(value)
+  defdelegate delegated(value), to: Target, as: :fetch
+  defmacro build(value), do: value
+  defguard valid(value) when is_integer(value)
+end
+
+defimpl Demo.Protocol, for: Demo.App do
+  def work(value), do: value
+end
+"#;
+        std::fs::write(root.join("lib/sample.ex"), source).unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+        let file = vault.source_graph().files.get("lib/sample.ex").unwrap();
+        let first_fingerprint = source_input_fingerprint(file);
+        let first = State::build(&root, &vault).unwrap();
+        let decoded: StateDocument = serde_json::from_str(&first.to_json().unwrap()).unwrap();
+        assert_eq!(decoded.schema, STATE_SCHEMA);
+
+        for kind in [
+            "module",
+            "behaviour",
+            "protocol",
+            "implementation",
+            "struct",
+            "exception",
+            "function",
+            "macro",
+            "guard",
+            "callback",
+            "macro-callback",
+            "alias",
+            "import",
+            "require",
+            "use",
+            "dynamic-call",
+            "external-call",
+            "external-module",
+        ] {
+            assert!(
+                first.graph.nodes.iter().any(|node| node.kind == kind),
+                "missing State node kind {kind}"
+            );
+        }
+        for label in [
+            "Demo.App",
+            "Demo.Protocol for Demo.App",
+            "run/1",
+            "capture/0",
+            "delegated/1",
+        ] {
+            assert!(
+                first.graph.nodes.iter().any(|node| node.label == label),
+                "missing State label {label}"
+            );
+        }
+        for kind in [
+            "contains",
+            "imports",
+            "calls",
+            "captures",
+            "delegates",
+            "implements-protocol",
+            "implements-for",
+            "implements-behaviour",
+        ] {
+            assert!(
+                first.graph.edges.iter().any(|edge| edge.kind == kind),
+                "missing State edge kind {kind}"
+            );
+        }
+        let app = "symbol:lib/sample.ex#module:Demo.App";
+        let run = "symbol:lib/sample.ex#module:Demo.App/fn:run/1";
+        assert!(
+            first
+                .graph
+                .edges
+                .iter()
+                .any(|edge| { edge.from == app && edge.to == run && edge.kind == "contains" })
+        );
+        assert!(first.graph.nodes.iter().all(|node| !node.hash.is_empty()));
+        assert!(first.graph.edges.iter().all(|edge| !edge.hash.is_empty()));
+        for path in ["lib/sample.ex", "lib/mix.exs"] {
+            assert_eq!(
+                first
+                    .source_index
+                    .iter()
+                    .find(|entry| entry.path == path)
+                    .and_then(|entry| entry.mime.as_deref()),
+                Some("text/x-elixir")
+            );
+        }
+
+        std::fs::write(
+            root.join("lib/sample.ex"),
+            source.replace("Target.fetch(value)", "Target.other(value)"),
+        )
+        .unwrap();
+        let changed_vault = Vault::load(&root).unwrap();
+        let changed_file = changed_vault
+            .source_graph()
+            .files
+            .get("lib/sample.ex")
+            .unwrap();
+        assert_ne!(first_fingerprint, source_input_fingerprint(changed_file));
+
+        reset_work_counts();
+        let changed = State::build_incremental(
+            &root,
+            &changed_vault,
+            Some(&first),
+            &["lib/sample.ex".into()],
+        )
+        .unwrap();
+        assert_eq!(work_counts().source_partitions_rebuilt, 1);
+        assert!(changed.graph.edges.iter().any(|edge| {
+            edge.from == run
+                && edge.to == "symbol:lib/sample.ex#module:Demo.Target/fn:other/1"
+                && edge.kind == "calls"
+        }));
 
         let _ = std::fs::remove_dir_all(root);
     }

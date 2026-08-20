@@ -6,7 +6,8 @@ mod paths;
 
 pub(crate) use catalog::{IndexedSource, SourceBuild, SourceCatalog};
 pub(crate) use graph::{
-    Language, SourceFile, SourceGraph, SourceGraphBuild, SymbolKind, load_cached,
+    DirectiveKind, Import, Language, ModuleRelationshipRole, Relationship, RelationshipKind,
+    RelationshipTarget, SourceFile, SourceGraph, SourceGraphBuild, Symbol, SymbolKind, load_cached,
 };
 pub(crate) use paths::read_source_to_string;
 

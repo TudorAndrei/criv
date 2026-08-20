@@ -3,6 +3,7 @@ use std::path::Path;
 
 use clap::{Args as ClapArgs, Subcommand, ValueEnum};
 
+use crate::source::SymbolKind;
 use crate::vault::{
     NoteKind, ResolvedLink, SourceTargetResolution, Vault, source_fragment_name,
     source_fragment_path,
@@ -264,11 +265,45 @@ enum NodeKind {
     Code,
     Doc,
     Decision,
+    Function,
+    Method,
+    Class,
+    Module,
+    Protocol,
+    Implementation,
+    Struct,
+    Exception,
+    Behaviour,
+    Macro,
+    Guard,
+    Callback,
+    MacroCallback,
+}
+
+impl NodeKind {
+    fn symbol_kind(self) -> Option<SymbolKind> {
+        match self {
+            Self::Function => Some(SymbolKind::Function),
+            Self::Method => Some(SymbolKind::Method),
+            Self::Class => Some(SymbolKind::Class),
+            Self::Module => Some(SymbolKind::Module),
+            Self::Protocol => Some(SymbolKind::Protocol),
+            Self::Implementation => Some(SymbolKind::Implementation),
+            Self::Struct => Some(SymbolKind::Struct),
+            Self::Exception => Some(SymbolKind::Exception),
+            Self::Behaviour => Some(SymbolKind::Behaviour),
+            Self::Macro => Some(SymbolKind::Macro),
+            Self::Guard => Some(SymbolKind::Guard),
+            Self::Callback => Some(SymbolKind::Callback),
+            Self::MacroCallback => Some(SymbolKind::MacroCallback),
+            Self::Code | Self::Doc | Self::Decision => None,
+        }
+    }
 }
 
 #[derive(Debug, ClapArgs)]
 struct NodesOptions {
-    /// Restrict nodes to code, documentation, or decisions.
+    /// Restrict nodes to code, a source symbol kind, documentation, or decisions.
     #[arg(long, value_enum)]
     kind: Option<NodeKind>,
     /// Restrict code nodes to symbols that no note references.
@@ -589,6 +624,18 @@ fn nodes(
                 .filter(|note| note.kind == NoteKind::Decision)
                 .map(|note| note.display_id().to_string()),
         ),
+        Some(kind) => {
+            let symbol_kind = kind
+                .symbol_kind()
+                .expect("remaining node kinds are source symbol kinds");
+            rows.extend(
+                vault
+                    .source_graph()
+                    .symbols()
+                    .filter(|symbol| symbol.kind == symbol_kind)
+                    .map(|symbol| symbol.id.display()),
+            );
+        }
         _ => {
             rows.extend(vault.source_files().iter().cloned());
             rows.extend(vault.notes.iter().map(|note| note.display_id().to_string()));
@@ -786,6 +833,10 @@ mod tests {
                 query_nodes_command(Some(NodeKind::Code), false),
                 QueryCapability::Sources,
             ),
+            (
+                query_nodes_command(Some(NodeKind::Module), false),
+                QueryCapability::Sources,
+            ),
             (query_nodes_command(None, false), QueryCapability::Sources),
             (
                 QueryCommand::Diff(DiffOptions {
@@ -799,6 +850,32 @@ mod tests {
 
         for (command, expected) in cases {
             assert_eq!(command.capability(), expected, "{command:?}");
+        }
+    }
+
+    #[test]
+    fn source_node_kinds_map_to_native_symbol_kinds() {
+        let cases = [
+            (NodeKind::Function, SymbolKind::Function),
+            (NodeKind::Method, SymbolKind::Method),
+            (NodeKind::Class, SymbolKind::Class),
+            (NodeKind::Module, SymbolKind::Module),
+            (NodeKind::Protocol, SymbolKind::Protocol),
+            (NodeKind::Implementation, SymbolKind::Implementation),
+            (NodeKind::Struct, SymbolKind::Struct),
+            (NodeKind::Exception, SymbolKind::Exception),
+            (NodeKind::Behaviour, SymbolKind::Behaviour),
+            (NodeKind::Macro, SymbolKind::Macro),
+            (NodeKind::Guard, SymbolKind::Guard),
+            (NodeKind::Callback, SymbolKind::Callback),
+            (NodeKind::MacroCallback, SymbolKind::MacroCallback),
+        ];
+
+        for (node_kind, symbol_kind) in cases {
+            assert_eq!(node_kind.symbol_kind(), Some(symbol_kind));
+        }
+        for node_kind in [NodeKind::Code, NodeKind::Doc, NodeKind::Decision] {
+            assert_eq!(node_kind.symbol_kind(), None);
         }
     }
 

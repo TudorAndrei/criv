@@ -64,6 +64,12 @@ test("keeps symbolic fragments without inventing line ranges", () => {
     line: undefined,
     endLine: undefined,
   });
+  assert.deepEqual(parseSourceTarget("lib/sample.ex#module:My.App/fn:run/2"), {
+    path: "lib/sample.ex",
+    fragment: "module:My.App/fn:run/2",
+    line: undefined,
+    endLine: undefined,
+  });
 });
 
 test("parses supported source line fragments", () => {

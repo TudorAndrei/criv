@@ -94,21 +94,21 @@ pub(crate) struct Import {
     pub(crate) module: String,
     pub(crate) line: usize,
     #[serde(default)]
-    site: usize,
+    pub(crate) site: usize,
     #[serde(default)]
-    kind: DirectiveKind,
+    pub(crate) kind: DirectiveKind,
     #[serde(default)]
-    owner: Option<SymbolOwner>,
+    pub(crate) owner: Option<SymbolOwner>,
     #[serde(default)]
-    scope: Option<LexicalScope>,
+    pub(crate) scope: Option<LexicalScope>,
     #[serde(default)]
-    alias: Option<String>,
+    pub(crate) alias: Option<String>,
     #[serde(default)]
-    only: Option<DirectiveFilter>,
+    pub(crate) only: Option<DirectiveFilter>,
     #[serde(default)]
-    except: Vec<CallableFilter>,
+    pub(crate) except: Vec<CallableFilter>,
     #[serde(default)]
-    absolute: bool,
+    pub(crate) absolute: bool,
 }
 
 impl Import {
@@ -144,6 +144,17 @@ pub(crate) enum DirectiveKind {
     Legacy,
 }
 
+impl DirectiveKind {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Alias => "alias",
+            Self::Import | Self::Legacy => "import",
+            Self::Require => "require",
+            Self::Use => "use",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub(crate) enum DirectiveFilter {
     Callables(Vec<CallableFilter>),
@@ -165,9 +176,9 @@ pub(crate) struct Symbol {
     pub(crate) kind: SymbolKind,
     pub(crate) parent: Option<String>,
     #[serde(default)]
-    owner: Option<SymbolOwner>,
+    pub(crate) owner: Option<SymbolOwner>,
     #[serde(default)]
-    arity: Option<usize>,
+    pub(crate) arity: Option<usize>,
     exported: bool,
     interface_signature: Option<InterfaceSignature>,
     pub(crate) range: SymbolRange,
@@ -175,7 +186,7 @@ pub(crate) struct Symbol {
     clause_ranges: Vec<SymbolRange>,
     pub(crate) calls: Vec<Call>,
     #[serde(default)]
-    relationships: Vec<Relationship>,
+    pub(crate) relationships: Vec<Relationship>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
@@ -242,15 +253,25 @@ impl RelationshipKind {
     fn is_executable_query_edge(self) -> bool {
         matches!(self, Self::Call | Self::Delegate)
     }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Call => "calls",
+            Self::Capture => "captures",
+            Self::Delegate => "delegates",
+            Self::ProtocolImplementation => "protocol-implementation",
+            Self::BehaviourImplementation => "behaviour-implementation",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub(crate) struct Relationship {
-    kind: RelationshipKind,
-    target: RelationshipTarget,
-    line: usize,
+    pub(crate) kind: RelationshipKind,
+    pub(crate) target: RelationshipTarget,
+    pub(crate) line: usize,
     #[serde(default)]
-    site: usize,
+    pub(crate) site: usize,
 }
 
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -811,9 +832,13 @@ impl SourceGraph {
             .values()
             .flat_map(|file| &file.symbols)
             .filter(|symbol| {
-                symbol.exported
-                    || symbol.name == "main"
-                    || (symbol.parent.is_none() && !called.contains(&symbol.id))
+                if symbol.owner.is_some() {
+                    symbol.exported
+                } else {
+                    symbol.exported
+                        || symbol.name == "main"
+                        || (symbol.parent.is_none() && !called.contains(&symbol.id))
+                }
             })
             .map(|symbol| symbol.id.display())
             .collect::<Vec<_>>();
@@ -844,7 +869,7 @@ impl SourceGraph {
             .or_else(|| self.resolve_symbol(target))
     }
 
-    fn resolve_relationship(
+    pub(crate) fn resolve_relationship(
         &self,
         caller: &SymbolId,
         relationship: &Relationship,
@@ -932,7 +957,11 @@ impl SourceGraph {
         }
     }
 
-    fn relationship_target_label(&self, caller: &SymbolId, relationship: &Relationship) -> String {
+    pub(crate) fn relationship_target_label(
+        &self,
+        caller: &SymbolId,
+        relationship: &Relationship,
+    ) -> String {
         let file = self.files.get(&caller.path);
         let owner = self.symbol(caller).and_then(|symbol| symbol.owner.as_ref());
         match &relationship.target {

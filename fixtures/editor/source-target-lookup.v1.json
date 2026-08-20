@@ -19,7 +19,16 @@
         { "id": "code:e/common.rs", "hash": "", "kind": "code", "label": "e/common.rs", "path": "e/common.rs" },
         { "id": "code:f/common.rs", "hash": "", "kind": "code", "label": "f/common.rs", "path": "f/common.rs" },
         { "id": "code:missing/not-indexed.rs", "hash": "", "kind": "code", "label": "missing", "path": "missing/not-indexed.rs" },
-        { "id": "code:../unsafe.rs", "hash": "", "kind": "code", "label": "unsafe", "path": "../unsafe.rs" }
+        { "id": "code:../unsafe.rs", "hash": "", "kind": "code", "label": "unsafe", "path": "../unsafe.rs" },
+        { "id": "code:lib/sample.ex", "hash": "", "kind": "code", "label": "lib/sample.ex (elixir)", "path": "lib/sample.ex" },
+        { "id": "symbol:lib/sample.ex#module:My.App", "hash": "", "kind": "module", "label": "My.App", "path": "lib/sample.ex#L1-L20" },
+        { "id": "symbol:lib/sample.ex#module:My.App/fn:run/1", "hash": "", "kind": "function", "label": "run/1", "path": "lib/sample.ex#L3-L3" },
+        { "id": "symbol:lib/sample.ex#module:My.App/fn:run/2", "hash": "", "kind": "function", "label": "run/2", "path": "lib/sample.ex#L4-L4" },
+        { "id": "symbol:lib/sample.ex#module:My.App/fn:start/1", "hash": "", "kind": "function", "label": "start/1", "path": "lib/sample.ex#L5-L5" },
+        { "id": "symbol:lib/sample.ex#module:My.App/macro:build/1", "hash": "", "kind": "macro", "label": "build/1", "path": "lib/sample.ex#L6-L6" },
+        { "id": "symbol:lib/sample.ex#module:My.App/fn:%2B/2", "hash": "", "kind": "function", "label": "+/2", "path": "lib/sample.ex#L7-L7" },
+        { "id": "symbol:lib/sample.ex#module:Other.App", "hash": "", "kind": "module", "label": "Other.App", "path": "lib/sample.ex#L22-L30" },
+        { "id": "symbol:lib/sample.ex#module:Other.App/fn:start/1", "hash": "", "kind": "function", "label": "start/1", "path": "lib/sample.ex#L24-L24" }
       ],
       "edges": []
     },
@@ -36,7 +45,8 @@
       { "path": "c/common.rs" },
       { "path": "d/common.rs" },
       { "path": "e/common.rs" },
-      { "path": "f/common.rs" }
+      { "path": "f/common.rs" },
+      { "path": "lib/sample.ex", "mime": "text/x-elixir" }
     ]
   },
   "cases": [
@@ -52,6 +62,19 @@
     { "target": "SRC/UNIQUE.RS", "kind": "unresolved" },
     { "target": "src\\unique.rs", "kind": "unresolved" },
     { "target": "missing/not-indexed.rs", "kind": "unresolved" },
-    { "target": "../unsafe.rs", "kind": "unresolved" }
+    { "target": "../unsafe.rs", "kind": "unresolved" },
+    { "target": "lib/sample.ex#module:My.App/fn:run/1", "kind": "resolved", "canonical_target": "lib/sample.ex#module:My.App/fn:run/1" },
+    { "target": "lib/sample.ex#run", "kind": "ambiguous", "total_candidate_count": 2 },
+    { "target": "lib/sample.ex#run/1", "kind": "resolved", "canonical_target": "lib/sample.ex#module:My.App/fn:run/1" },
+    { "target": "lib/sample.ex#My.App.run/1", "kind": "resolved", "canonical_target": "lib/sample.ex#module:My.App/fn:run/1" },
+    { "target": "lib/sample.ex#run/2", "kind": "resolved", "canonical_target": "lib/sample.ex#module:My.App/fn:run/2" },
+    { "target": "lib/sample.ex#start/1", "kind": "ambiguous", "total_candidate_count": 2 },
+    { "target": "lib/sample.ex#My.App.start/1", "kind": "resolved", "canonical_target": "lib/sample.ex#module:My.App/fn:start/1" },
+    { "target": "lib/sample.ex#Other.App.start/1", "kind": "resolved", "canonical_target": "lib/sample.ex#module:Other.App/fn:start/1" },
+    { "target": "lib/sample.ex#build", "kind": "resolved", "canonical_target": "lib/sample.ex#module:My.App/macro:build/1" },
+    { "target": "lib/sample.ex#build/1", "kind": "resolved", "canonical_target": "lib/sample.ex#module:My.App/macro:build/1" },
+    { "target": "lib/sample.ex#+", "kind": "resolved", "canonical_target": "lib/sample.ex#module:My.App/fn:%2B/2" },
+    { "target": "lib/sample.ex#+/2", "kind": "resolved", "canonical_target": "lib/sample.ex#module:My.App/fn:%2B/2" },
+    { "target": "lib/sample.ex#My.App.+/2", "kind": "resolved", "canonical_target": "lib/sample.ex#module:My.App/fn:%2B/2" }
   ]
 }

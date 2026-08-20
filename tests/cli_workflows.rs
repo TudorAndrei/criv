@@ -1005,6 +1005,100 @@ end
 }
 
 #[test]
+fn elixir_query_kinds_governance_visibility_and_ambiguity_are_exact() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    init(root);
+    fs::create_dir_all(root.join("lib")).unwrap();
+    fs::create_dir_all(root.join("docs/adr")).unwrap();
+    write_criv_config(
+        root,
+        vec!["lib"],
+        vec!["**/target/**", "**/node_modules/**"],
+        true,
+    );
+    fs::write(
+        root.join("lib/sample.ex"),
+        r#"
+defmodule Repo do
+  def fetch(value), do: value
+  def fetch(value, opts), do: {value, opts}
+  defp hidden(value), do: value
+  defmacro build(value), do: value
+end
+
+defmodule Client do
+  def run(value), do: Repo.fetch(value)
+  def run(value, opts), do: Repo.fetch(value, opts)
+end
+"#,
+    )
+    .unwrap();
+    fs::write(
+        root.join("docs/adr/0998-elixir.md"),
+        r#"---
+id: ADR-0998
+kind: decision
+title: Elixir source
+status: accepted
+governs:
+  - lib/**/*.ex
+---
+
+# Elixir source
+"#,
+    )
+    .unwrap();
+
+    for (kind, expected) in [
+        ("module", "lib/sample.ex#module:Client"),
+        ("function", "lib/sample.ex#module:Repo/fn:fetch/2"),
+        ("macro", "lib/sample.ex#module:Repo/macro:build/1"),
+    ] {
+        criv(root)
+            .args(["query", "nodes", "--kind", kind])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(expected));
+    }
+
+    let attack_surface = criv(root)
+        .args(["query", "attack-surface", "--format", "json"])
+        .assert()
+        .success();
+    let attack_surface: Vec<String> =
+        serde_json::from_slice(&attack_surface.get_output().stdout).unwrap();
+    assert!(attack_surface.contains(&"lib/sample.ex#module:Repo/fn:fetch/1".to_string()));
+    assert!(attack_surface.contains(&"lib/sample.ex#module:Repo/macro:build/1".to_string()));
+    assert!(!attack_surface.iter().any(|row| row.contains("hidden")));
+
+    criv(root)
+        .args(["query", "governing", "lib/sample.ex#module:Client/fn:run/1"])
+        .assert()
+        .success()
+        .stdout(predicate::eq("ADR-0998\n"));
+
+    let ambiguous = criv(root)
+        .args([
+            "query",
+            "callees",
+            "lib/sample.ex#Client.run",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success();
+    let ambiguous: Vec<String> = serde_json::from_slice(&ambiguous.get_output().stdout).unwrap();
+    assert!(ambiguous.is_empty());
+
+    criv(root)
+        .args(["query", "callees", "lib/sample.ex#Client.run/2"])
+        .assert()
+        .success()
+        .stdout(predicate::eq("lib/sample.ex#module:Repo/fn:fetch/2\n"));
+}
+
+#[test]
 fn reverse_queries_keep_exact_public_rows() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

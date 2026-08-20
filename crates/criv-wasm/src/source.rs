@@ -419,6 +419,14 @@ fn legacy_node_targets(node: &EditorGraphNode) -> Vec<String> {
             if !node.label.is_empty() {
                 targets.push(format!("{path}#{}", node.label));
             }
+            if let Some(module) = elixir_callable_owner(fragment)
+                && let Some((name, _)) = callable_label_parts(&node.label)
+            {
+                targets.push(format!("{path}#{name}"));
+                if let Some(module) = module {
+                    targets.push(format!("{path}#{module}.{}", node.label));
+                }
+            }
         } else if let Some(basename) = source_target.rsplit('/').next() {
             targets.push(basename.to_string());
         }
@@ -430,6 +438,63 @@ fn legacy_node_targets(node: &EditorGraphNode) -> Vec<String> {
     targets.sort();
     targets.dedup();
     targets
+}
+
+fn elixir_callable_owner(fragment: &str) -> Option<Option<String>> {
+    const CALLABLE_MARKERS: [&str; 5] = [
+        "/fn:",
+        "/macro:",
+        "/guard:",
+        "/callback:",
+        "/macro-callback:",
+    ];
+    let marker_index = CALLABLE_MARKERS
+        .iter()
+        .filter_map(|marker| fragment.rfind(marker))
+        .max()?;
+    let callable = &fragment[marker_index + 1..];
+    let (_, identity) = callable.split_once(':')?;
+    let (name, arity) = identity.rsplit_once('/')?;
+    if name.is_empty() || arity.parse::<usize>().is_err() {
+        return None;
+    }
+    let owner = &fragment[..marker_index];
+    if let Some(module) = owner.strip_prefix("module:") {
+        return Some(Some(decode_selector_value(module)?));
+    }
+    owner.starts_with("impl:").then_some(None)
+}
+
+fn callable_label_parts(label: &str) -> Option<(&str, usize)> {
+    let (name, arity) = label.rsplit_once('/')?;
+    (!name.is_empty()).then_some((name, arity.parse().ok()?))
+}
+
+fn decode_selector_value(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'%' {
+            decoded.push(bytes[index]);
+            index += 1;
+            continue;
+        }
+        let high = hex_value(*bytes.get(index + 1)?)?;
+        let low = hex_value(*bytes.get(index + 2)?)?;
+        decoded.push((high << 4) | low);
+        index += 3;
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn hex_value(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn fuzzy_subsequence_score(value: &str, query: &str) -> Option<i64> {

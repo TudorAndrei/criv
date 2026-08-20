@@ -184,3 +184,86 @@ test("reports ambiguous targets with untrusted stable candidates", () => {
   assert.equal(reference?.resolutionKind, "ambiguous");
   assert.equal(sourceReferenceDiagnosticCode(reference!), "ambiguous-source-target");
 });
+
+test("navigates exact Elixir selectors and reports legacy arity ambiguity", () => {
+  const runOne: CrivGraphNode = {
+    id: "symbol:lib/sample.ex#module:My.App/fn:run/1",
+    kind: "function",
+    label: "run/1",
+    path: "lib/sample.ex#L3-L3",
+    source_target: "lib/sample.ex#module:My.App/fn:run/1",
+    line_range: "L3-L3",
+  };
+  const runTwo: CrivGraphNode = {
+    id: "symbol:lib/sample.ex#module:My.App/fn:run/2",
+    kind: "function",
+    label: "run/2",
+    path: "lib/sample.ex#L4-L4",
+    source_target: "lib/sample.ex#module:My.App/fn:run/2",
+    line_range: "L4-L4",
+  };
+  const elixirLookup = (target: string) => {
+    if (
+      target === runOne.source_target ||
+      target === "lib/sample.ex#run/1" ||
+      target === "lib/sample.ex#My.App.run/1"
+    ) {
+      return {
+        kind: "resolved" as const,
+        canonical_target: runOne.source_target!,
+        node: runOne,
+      };
+    }
+    if (target === runTwo.source_target || target === "lib/sample.ex#run/2") {
+      return {
+        kind: "resolved" as const,
+        canonical_target: runTwo.source_target!,
+        node: runTwo,
+      };
+    }
+    if (target === "lib/sample.ex#run") {
+      return {
+        kind: "ambiguous" as const,
+        candidates: [
+          {
+            canonical_target: runOne.source_target!,
+            node_id: runOne.id,
+            kind: runOne.kind,
+            label: runOne.label,
+          },
+          {
+            canonical_target: runTwo.source_target!,
+            node_id: runTwo.id,
+            kind: runTwo.kind,
+            label: runTwo.label,
+          },
+        ],
+        total_candidate_count: 2,
+      };
+    }
+    return { kind: "unresolved" as const };
+  };
+
+  const references = analyzeSourceReferences(
+    "Exact lib/sample.ex#module:My.App/fn:run/1\nLegacy [[source:lib/sample.ex#run/1]]\nAmbiguous [[source:lib/sample.ex#run]]",
+    elixirLookup,
+  );
+  assert.equal(references[0]?.canonicalTarget, runOne.source_target);
+  assert.equal(references[1]?.canonicalTarget, runOne.source_target);
+  assert.equal(
+    sourceReferenceDiagnostic(references[1]!),
+    `Legacy source target; use AST-aware source selector ${runOne.source_target}.`,
+  );
+  assert.equal(references[2]?.resolutionKind, "ambiguous");
+  assert.equal(sourceReferenceDiagnosticCode(references[2]!), "ambiguous-source-target");
+
+  assert.deepEqual(planSourceTargetOpen(elixirLookup, "lib/sample.ex#My.App.run/1"), {
+    kind: "resolved",
+    target: {
+      path: "lib/sample.ex",
+      fragment: "L3-L3",
+      line: 2,
+      endLine: 2,
+    },
+  });
+});
