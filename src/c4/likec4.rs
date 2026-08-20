@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-const BRIDGE_SOURCE_TEMPLATE: &str = include_str!("../assets/likec4-bridge.mjs");
+const BRIDGE_SOURCE_TEMPLATE: &str = include_str!("../../assets/likec4-bridge.mjs");
 const BRIDGE_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_BRIDGE_OUTPUT: usize = 16 * 1024 * 1024;
 
@@ -19,7 +19,7 @@ struct LikeC4Contract {
 }
 
 static LIKEC4_CONTRACT: LazyLock<LikeC4Contract> = LazyLock::new(|| {
-    serde_json::from_str(include_str!("../assets/likec4-contract.json"))
+    serde_json::from_str(include_str!("../../assets/likec4-contract.json"))
         .expect("the embedded LikeC4 contract must be valid JSON")
 });
 

@@ -8,7 +8,6 @@ mod generated_skills;
 mod git;
 mod init;
 mod install_editor;
-mod likec4;
 mod policy_scan;
 mod query;
 mod refresh;

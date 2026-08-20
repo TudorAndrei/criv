@@ -34,11 +34,6 @@ model {
       description 'Builds the in-memory repository vault from documents and source data.'
       link ../../src/vault.rs 'source'
     }
-    rustC4 = module 'criv::c4' {
-      technology 'Rust'
-      description 'Defines C4 artifact data and source handling.'
-      link ../../src/c4.rs 'source'
-    }
     rustConfig = module 'criv::config' {
       technology 'Rust'
       description 'Reads and validates the canonical criv configuration.'
@@ -55,10 +50,20 @@ model {
   }
 
   extend criv.cli.architectureService {
-    rustLikeC4 = module 'criv::likec4' {
+    rustC4 = module 'criv::c4' {
+      technology 'Rust'
+      description 'Exposes one C4 artifact and workspace loading interface.'
+      link ../../src/c4.rs 'source'
+    }
+    rustC4Artifact = module 'criv::c4::artifact' {
+      technology 'Rust'
+      description 'Classifies C4 source files and reports file-local diagnostics.'
+      link ../../src/c4/artifact.rs 'source'
+    }
+    rustLikeC4 = module 'criv::c4::likec4' {
       technology 'Rust'
       description 'Runs the LikeC4 bridge and returns models and diagnostics.'
-      link ../../src/likec4.rs 'source'
+      link ../../src/c4/likec4.rs 'source'
     }
   }
 
@@ -187,9 +192,10 @@ model {
   criv.cli.refreshCoordinator.rustRefresh -> criv.cli.statePublisher.rustState 'Publishes the validated state'
 
   // Vault loading.
-  criv.cli.vaultModel.rustVault -> criv.cli.vaultModel.rustC4 'Creates C4 artifacts'
+  criv.cli.vaultModel.rustVault -> criv.cli.architectureService.rustC4 'Loads C4 artifacts and workspaces'
   criv.cli.vaultModel.rustVault -> criv.cli.vaultModel.rustConfig 'Reads the vault configuration'
-  criv.cli.vaultModel.rustVault -> criv.cli.architectureService.rustLikeC4 'Compiles C4 sources'
+  criv.cli.architectureService.rustC4 -> criv.cli.architectureService.rustC4Artifact 'Classifies C4 artifacts'
+  criv.cli.architectureService.rustC4 -> criv.cli.architectureService.rustLikeC4 'Compiles the LikeC4 workspace'
   criv.cli.vaultModel.rustVault -> criv.cli.sourceIntelligence.rustSourceCatalog 'Loads configured sources'
   criv.cli.vaultModel.rustVault -> criv.cli.sourceIntelligence.rustSourceGraph 'Builds module and import relations'
 
@@ -201,7 +207,7 @@ model {
 
   // Validation and enforcement.
   criv.cli.governanceEngine.rustCheck -> criv.cli.vaultModel.rustVault 'Validates repository artifacts'
-  criv.cli.governanceEngine.rustCheck -> criv.cli.vaultModel.rustC4 'Validates C4 artifacts'
+  criv.cli.governanceEngine.rustCheck -> criv.cli.architectureService.rustC4 'Validates C4 artifacts'
   criv.cli.governanceEngine.rustCheck -> criv.cli.vaultModel.rustConfig 'Reads the check configuration'
   criv.cli.governanceEngine.rustCheck -> criv.cli.governanceEngine.rustPolicyScan 'Evaluates policy patterns'
   criv.cli.governanceEngine.rustCheck -> criv.cli.repositoryHistory.rustGit 'Reads changed files and history'
@@ -226,7 +232,7 @@ model {
 
   // State publication.
   criv.cli.statePublisher.rustState -> criv.cli.vaultModel.rustVault 'Builds the state envelope'
-  criv.cli.statePublisher.rustState -> criv.cli.vaultModel.rustC4 'Serializes C4 artifacts'
+  criv.cli.statePublisher.rustState -> criv.cli.architectureService.rustC4 'Serializes C4 artifacts'
   criv.cli.statePublisher.rustState -> criv.cli.sourceIntelligence.rustSourceGraph 'Serializes source relations'
   criv.cli.statePublisher.rustState -> criv.cli.sourceIntelligence.rustStructural 'Serializes structural matches'
   criv.cli.statePublisher.rustState -> criv.cli.statePublisher.rustStatePublication 'Publishes validated State'
@@ -255,7 +261,7 @@ views {
     include criv.cli.sourceIntelligence.rustDiscovery
     include criv.cli.sourceIntelligence.rustSourceGraph
     include criv.cli.governanceEngine.rustCheck
-    include criv.cli.architectureService.rustLikeC4
+    include criv.cli.architectureService.*
     include criv.cli.statePublisher.rustState
   }
 
@@ -275,7 +281,7 @@ views {
     description 'The Rust modules that build the repository vault.'
 
     include *
-    include criv.cli.architectureService.rustLikeC4
+    include criv.cli.architectureService.*
     include criv.cli.sourceIntelligence.rustSourceCatalog
     include criv.cli.sourceIntelligence.rustDiscovery
     include criv.cli.sourceIntelligence.rustSourceGraph
@@ -293,8 +299,8 @@ views {
   }
 
   view codeArchitectureExporter of criv.cli.architectureService {
-    title 'Code / CLI / Architecture service'
-    description 'The Rust modules that compile and validate agent-authored LikeC4 architecture.'
+    title 'Code / CLI / C4 service'
+    description 'The C4 interface and its sibling artifact and LikeC4 implementations.'
 
     include *
     include criv.cli.vaultModel.rustVault
@@ -307,7 +313,7 @@ views {
 
     include *
     include criv.cli.vaultModel.rustVault
-    include criv.cli.vaultModel.rustC4
+    include criv.cli.architectureService.rustC4
     include criv.cli.sourceIntelligence.rustSourceGraph
     include criv.cli.sourceIntelligence.rustStructural
   }

@@ -142,7 +142,7 @@ pub(crate) struct Vault {
     pub(crate) config: Config,
     pub(crate) notes: Vec<Note>,
     pub(crate) c4_artifacts: Vec<c4::C4Artifact>,
-    pub(crate) likec4_workspace: crate::likec4::LikeC4Workspace,
+    pub(crate) likec4_workspace: c4::LikeC4Workspace,
     note_ids: BTreeMap<String, usize>,
     filenames: BTreeMap<String, usize>,
     titles: BTreeMap<String, usize>,
@@ -224,7 +224,7 @@ impl Vault {
             .filter(|artifact| artifact.format == Some(c4::C4ArtifactFormat::LikeC4))
             .map(|artifact| artifact.path.clone())
             .collect::<Vec<_>>();
-        let likec4_workspace = crate::likec4::load(root, &docs_path, &likec4_sources);
+        let likec4_workspace = c4::load_workspace(root, &docs_path, &likec4_sources);
 
         let mut note_ids = BTreeMap::new();
         let mut filenames = BTreeMap::new();
@@ -573,7 +573,7 @@ impl Vault {
             config: Config::default(),
             notes,
             c4_artifacts: Vec::new(),
-            likec4_workspace: crate::likec4::LikeC4Workspace::default(),
+            likec4_workspace: c4::LikeC4Workspace::default(),
             note_ids,
             filenames,
             titles,

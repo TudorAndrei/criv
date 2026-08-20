@@ -134,3 +134,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0121-separate-performance-evidence-from-automatic-release|ADR-0121]] - Separate performance evidence from automatic release
 - [[0122-byte-spans-and-lsp-diagnostic-ranges|ADR-0122]] - Use byte spans and LSP diagnostic ranges
 - [[0123-own-reconciliation-under-the-adr-module|ADR-0123]] - Own reconciliation under the ADR module
+- [[0124-own-c4-implementations-under-the-c4-module|ADR-0124]] - Own C4 implementations under the C4 module

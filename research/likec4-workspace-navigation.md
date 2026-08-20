@@ -46,7 +46,7 @@ Criv already gives the complete `docs/architecture/` path to
 `LikeC4.fromWorkspace`, so a recursive file split fits the current compiler
 bridge. See
 [`assets/likec4-bridge.mjs`](../assets/likec4-bridge.mjs#L14) and
-[`src/likec4.rs`](../src/likec4.rs#L70).
+[`src/c4/likec4.rs`](../src/c4/likec4.rs#L70).
 
 ## Source folders and view folders are different
 
