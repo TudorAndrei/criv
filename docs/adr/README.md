@@ -133,3 +133,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0120-reset-release-baseline-for-default-elixir-support|ADR-0120]] - Reset the release baseline for default Elixir support
 - [[0121-separate-performance-evidence-from-automatic-release|ADR-0121]] - Separate performance evidence from automatic release
 - [[0122-byte-spans-and-lsp-diagnostic-ranges|ADR-0122]] - Use byte spans and LSP diagnostic ranges
+- [[0123-own-reconciliation-under-the-adr-module|ADR-0123]] - Own reconciliation under the ADR module

@@ -1,3 +1,6 @@
+mod reconcile_transaction;
+mod source_reconcile;
+
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -8,12 +11,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::git;
-use crate::reconcile_transaction::Snapshot;
 use crate::util::{
     file_permissions_in, remove_file_in, write_atomic_in, write_atomic_with_permissions_in,
 };
 use crate::vault::Vault;
 use crate::{CrivError, Result};
+
+use self::reconcile_transaction::Snapshot;
+
+pub(crate) use source_reconcile::{
+    allows_history_change as source_history_change_is_allowed,
+    receipt_allows_transaction as source_receipt_allows_transaction,
+    receipt_is_current as source_receipt_is_current,
+};
 
 const RECEIPT_SCHEMA: &str = "criv.adr-reconcile/3";
 const RECEIPT_PATH: &str = ".criv/adr-reconcile.json";
@@ -30,7 +40,7 @@ enum AdrCommand {
     /// Reconcile provisional ADR IDs against an integration target.
     Reconcile(ReconcileOptions),
     #[command(about = "Reconcile exact governed source renames against an integration target")]
-    ReconcileSources(crate::source_reconcile::Options),
+    ReconcileSources(source_reconcile::Options),
 }
 
 #[derive(Debug, ClapArgs)]
@@ -108,7 +118,7 @@ struct ReceiptSource {
 pub(crate) fn run(root: &Path, options: AdrOptions) -> Result<()> {
     match options.command {
         AdrCommand::Reconcile(options) => reconcile(root, options),
-        AdrCommand::ReconcileSources(options) => crate::source_reconcile::run(root, options),
+        AdrCommand::ReconcileSources(options) => source_reconcile::run(root, options),
     }
 }
 
@@ -484,7 +494,7 @@ fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<Reconcile
         .iter()
         .filter(|entry| is_adr_path(&adr_prefix, &entry.path))
         .filter(|entry| {
-            !crate::source_reconcile::allows_history_change(root, &history_changes, entry)
+            !source_reconcile::allows_history_change(root, &history_changes, entry)
         })
         .map(|entry| match entry.status {
             git::ChangeStatus::Added => {

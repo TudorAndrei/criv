@@ -8,8 +8,8 @@ use std::fs;
 use clap::Args as ClapArgs;
 use serde::{Deserialize, Serialize};
 
+use super::reconcile_transaction::Snapshot;
 use crate::git::{self, ChangeStatus, ChangedEntry, ChangedSet};
-use crate::reconcile_transaction::Snapshot;
 use crate::util::{read_to_string_in, write_atomic_in};
 use crate::vault::Vault;
 use crate::{CrivError, Result};

@@ -106,15 +106,15 @@ model {
       description 'Resolves effective decision governance for each source scope.'
       link ../../src/adr.rs 'source'
     }
-    rustSourceReconcile = module 'criv::source_reconcile' {
+    rustSourceReconcile = module 'criv::adr::source_reconcile' {
       technology 'Rust'
-      description 'Reconciles renamed and deleted source scopes against decisions.'
-      link ../../src/source_reconcile.rs 'source'
+      description 'Privately reconciles renamed and deleted source scopes for the ADR module.'
+      link ../../src/adr/source_reconcile.rs 'source'
     }
-    rustReconcileTransaction = module 'criv::reconcile_transaction' {
+    rustReconcileTransaction = module 'criv::adr::reconcile_transaction' {
       technology 'Rust'
-      description 'Captures and restores the Git index and changed reconciliation files.'
-      link ../../src/reconcile_transaction.rs 'source'
+      description 'Privately captures and restores the Git index and changed reconciliation files.'
+      link ../../src/adr/reconcile_transaction.rs 'source'
     }
   }
 
@@ -221,7 +221,6 @@ model {
   criv.cli.governanceEngine.rustEnforce -> criv.cli.governanceEngine.rustCheck 'Runs the staged checks'
   criv.cli.governanceEngine.rustEnforce -> criv.cli.governanceEngine.rustPolicyScan 'Runs the staged policy scan'
   criv.cli.governanceEngine.rustEnforce -> criv.cli.governanceEngine.rustAdr 'Reads effective governance'
-  criv.cli.governanceEngine.rustEnforce -> criv.cli.governanceEngine.rustSourceReconcile 'Fails closed on stale scopes'
   criv.cli.governanceEngine.rustEnforce -> criv.cli.repositoryHistory.rustGit 'Selects the staged change scope'
   criv.cli.governanceEngine.rustEnforce -> criv.cli.vaultModel.rustVault 'Loads the changed vault scope'
 
