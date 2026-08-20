@@ -270,14 +270,48 @@ jobs:
           done
           rm -rf target/release-evidence/tool-target
 
-      - name: Prepare v0.9.0 adapter
+      - name: Select compatible release baseline
+        env:
+          EXPECTED_COMMIT: ${{ needs.prepare.outputs.commit }}
         shell: bash
         run: |
           mkdir -p target/release-evidence/evidence
-          target/release-evidence/tools/criv-discovery-adapter${{ matrix.executable_suffix }} \
-            --repository-root . \
-            --revision v0.9.0 \
-            --output target/release-evidence/adapter
+          baseline_revision="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$EXPECTED_COMMIT^")"
+          candidate_contract="$(tr -d '\r\n' < scripts/performance/release-evidence-contract.txt)"
+          baseline_contract="$(git show "$baseline_revision:scripts/performance/release-evidence-contract.txt" 2>/dev/null | tr -d '\r\n' || true)"
+          baseline_root="target/release-evidence/baseline"
+          if [ -z "$baseline_contract" ]; then
+            baseline_contract="criv.release-evidence.pre-elixir.v1"
+          fi
+          if [ "$baseline_contract" = "$candidate_contract" ]; then
+            transition="compatible-baseline"
+            git worktree add --detach "$baseline_root" "$baseline_revision"
+          elif [ "$baseline_revision" = v0.9.0 ] && \
+            [ "$baseline_contract" = criv.release-evidence.pre-elixir.v1 ] && \
+            [ "$candidate_contract" = criv.release-evidence.elixir.v1 ]; then
+            transition="elixir-baseline-reset"
+            target/release-evidence/tools/criv-discovery-adapter${{ matrix.executable_suffix }} \
+              --repository-root . \
+              --revision "$baseline_revision" \
+              --output "$baseline_root"
+          else
+            echo "unsupported release evidence transition from $baseline_contract to $candidate_contract" >&2
+            exit 1
+          fi
+          jq -n \
+            --arg baseline_revision "$baseline_revision" \
+            --arg baseline_contract "$baseline_contract" \
+            --arg candidate_contract "$candidate_contract" \
+            --arg transition "$transition" \
+            '{schema:"criv.release-baseline-selection.v1",baseline_revision:$baseline_revision,baseline_contract:$baseline_contract,candidate_contract:$candidate_contract,transition:$transition}' \
+            > target/release-evidence/evidence/baseline-selection.json
+          {
+            echo "CRIV_BASELINE_ROOT=$baseline_root"
+            echo "CRIV_BASELINE_REVISION=$baseline_revision"
+            echo "CRIV_BASELINE_CONTRACT=$baseline_contract"
+            echo "CRIV_CANDIDATE_CONTRACT=$candidate_contract"
+            echo "CRIV_EVIDENCE_TRANSITION=$transition"
+          } >>"$GITHUB_ENV"
 
       - name: Measure 100k Source workload
         env:
@@ -294,11 +328,15 @@ jobs:
             --root "$root" --workload-id "$workload" \
             --output "$evidence/workload-inventory.json" \
             --summary-output "$evidence/workload-summary.json"
+          baseline_adapter_args=()
+          if [ -f "$CRIV_BASELINE_ROOT/discovery-adapter.json" ]; then
+            baseline_adapter_args=(--adapter-receipt "$CRIV_BASELINE_ROOT/discovery-adapter.json")
+          fi
           target/release-evidence/tools/criv-discovery-baseline${{ matrix.executable_suffix }} \
-            --repository-root target/release-evidence/adapter \
+            --repository-root "$CRIV_BASELINE_ROOT" \
             --workload-root "$root" --workload-inventory "$evidence/workload-inventory.json" \
-            --adapter-receipt target/release-evidence/adapter/discovery-adapter.json \
-            --probe-label v0.9.0-adapter --profile source --profile source-candidates \
+            "${baseline_adapter_args[@]}" \
+            --probe-label "$CRIV_BASELINE_REVISION" --profile source --profile source-candidates \
             --samples 5 --results-root "$evidence/baseline"
           target/release-evidence/tools/criv-discovery-baseline${{ matrix.executable_suffix }} \
             --repository-root . \
@@ -332,11 +370,15 @@ jobs:
               baseline_profiles+=(--profile "$profile")
               candidate_profiles+=(--profile "$profile")
             done
+            baseline_adapter_args=()
+            if [ -f "$CRIV_BASELINE_ROOT/discovery-adapter.json" ]; then
+              baseline_adapter_args=(--adapter-receipt "$CRIV_BASELINE_ROOT/discovery-adapter.json")
+            fi
             target/release-evidence/tools/criv-discovery-baseline \
-              --repository-root target/release-evidence/adapter \
+              --repository-root "$CRIV_BASELINE_ROOT" \
               --workload-root "$root" --workload-inventory "$evidence/workload-inventory.json" \
-              --adapter-receipt target/release-evidence/adapter/discovery-adapter.json \
-              --probe-label v0.9.0-adapter "${baseline_profiles[@]}" \
+              "${baseline_adapter_args[@]}" \
+              --probe-label "$CRIV_BASELINE_REVISION" "${baseline_profiles[@]}" \
               --samples 5 --results-root "$evidence/baseline"
             target/release-evidence/tools/criv-discovery-baseline \
               --repository-root . \
@@ -350,7 +392,6 @@ jobs:
 
       - name: Measure clean builds and stage exact binaries
         env:
-          ADAPTER_ROOT: ${{ github.workspace }}/target/release-evidence/adapter
           CANDIDATE_ROOT: ${{ github.workspace }}
           EXPECTED_COMMIT: ${{ needs.prepare.outputs.commit }}
           EXECUTABLE_SUFFIX: ${{ matrix.executable_suffix }}
@@ -364,13 +405,17 @@ jobs:
           $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path ([Environment]::GetFolderPath("UserProfile")) ".cargo" }
           $registryInputsPresent = Test-Path (Join-Path $cargoHome "registry")
 
-          function Normal-DependencyCount([string]$SourceRoot) {
+          function Normal-DependencyLines([string]$SourceRoot) {
             Push-Location $SourceRoot
             try {
-              $lines = cargo tree --locked --workspace --edges normal --prefix none
+              $lines = cargo tree --locked --package criv --edges normal --prefix none
               if ($LASTEXITCODE -ne 0) { throw "cargo tree failed" }
-              return @($lines | Sort-Object -Unique).Count
+              return ,@($lines | ForEach-Object { $_ -replace ' \(\*\)$', '' } | Where-Object { $_ } | Sort-Object -Unique)
             } finally { Pop-Location }
+          }
+
+          function Normal-PackageNames([string[]]$Lines) {
+            return ,@($Lines | ForEach-Object { ($_ -split ' ')[0] } | Sort-Object -Unique)
           }
 
           function Measure-OneCleanBuild([string]$SourceRoot, [string]$Label, [int]$Sample) {
@@ -392,15 +437,19 @@ jobs:
             return $timer.Elapsed.TotalSeconds
           }
 
-          $baselineDependencies = Normal-DependencyCount $env:ADAPTER_ROOT
-          $candidateDependencies = Normal-DependencyCount $env:CANDIDATE_ROOT
+          $baselineDependencyLines = @(Normal-DependencyLines $env:CRIV_BASELINE_ROOT)
+          $candidateDependencyLines = @(Normal-DependencyLines $env:CANDIDATE_ROOT)
+          $baselineDependencies = $baselineDependencyLines.Count
+          $candidateDependencies = $candidateDependencyLines.Count
+          $baselinePackageNames = @(Normal-PackageNames $baselineDependencyLines)
+          $candidatePackageNames = @(Normal-PackageNames $candidateDependencyLines)
           $baselineTimes = @()
           $candidateTimes = @()
           for ($sample = 1; $sample -le 3; $sample++) {
             $labels = if ($sample % 2 -eq 0) { @("candidate", "baseline") } else { @("baseline", "candidate") }
             foreach ($label in $labels) {
               if ($label -eq "baseline") {
-                $baselineTimes += Measure-OneCleanBuild $env:ADAPTER_ROOT $label $sample
+                $baselineTimes += Measure-OneCleanBuild $env:CRIV_BASELINE_ROOT $label $sample
               } else {
                 $candidateTimes += Measure-OneCleanBuild $env:CANDIDATE_ROOT $label $sample
               }
@@ -409,12 +458,16 @@ jobs:
           $baselineBinary = Join-Path $output "baseline-criv$($env:EXECUTABLE_SUFFIX)"
           $candidateBinary = Join-Path $output "candidate-criv$($env:EXECUTABLE_SUFFIX)"
           $manifest = [ordered]@{
-            schema = "criv.discovery-remote-artifact.v2"
+            schema = "criv.discovery-remote-artifact.v3"
             commit = $env:EXPECTED_COMMIT
             target = $env:RELEASE_TARGET
-            baseline_revision = "v0.9.0"
+            baseline_revision = $env:CRIV_BASELINE_REVISION
+            baseline_evidence_contract = $env:CRIV_BASELINE_CONTRACT
+            candidate_evidence_contract = $env:CRIV_CANDIDATE_CONTRACT
             baseline_normal_dependencies = $baselineDependencies
             candidate_normal_dependencies = $candidateDependencies
+            baseline_normal_package_names = $baselinePackageNames
+            candidate_normal_package_names = $candidatePackageNames
             baseline_binary = [System.IO.Path]::GetFileName($baselineBinary)
             baseline_binary_bytes = (Get-Item $baselineBinary).Length
             baseline_binary_digest = (Get-FileHash -Algorithm SHA256 $baselineBinary).Hash.ToLowerInvariant()
@@ -428,6 +481,67 @@ jobs:
             registry_inputs_present = $registryInputsPresent
           }
           $manifest | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $output "artifact.json")
+
+      - name: Prove complete Elixir file coverage
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $artifactRoot = Join-Path $env:GITHUB_WORKSPACE "target/release-evidence/evidence/artifacts"
+          $candidate = Join-Path $artifactRoot "candidate-criv${{ matrix.executable_suffix }}"
+          $coverageRoot = Join-Path $env:GITHUB_WORKSPACE "target/release-evidence/elixir-coverage"
+          $repository = Join-Path $coverageRoot "repo"
+          New-Item -ItemType Directory -Force -Path $repository | Out-Null
+          Push-Location $repository
+          try {
+            & $candidate init --no-skills
+            if ($LASTEXITCODE -ne 0) { throw "candidate init failed" }
+            New-Item -ItemType Directory -Force -Path lib, src | Out-Null
+            @(
+              "defmodule Coverage.Ex do",
+              "  def first(), do: :first",
+              "  def last(value), do: value",
+              "end"
+            ) | Set-Content -Encoding utf8 lib/coverage.ex
+            @(
+              "defmodule Coverage.Exs do",
+              "  def first(), do: :first",
+              "  def last(value), do: value",
+              "end"
+            ) | Set-Content -Encoding utf8 src/coverage.exs
+            & $candidate watch --once
+            if ($LASTEXITCODE -ne 0) { throw "candidate Elixir coverage build failed" }
+            $statePath = Join-Path $repository ".criv/state.json"
+            $state = Get-Content -Raw $statePath | ConvertFrom-Json
+            $selectedPaths = @("lib/coverage.ex", "src/coverage.exs")
+            $sourcePaths = @($state.'source-index' | ForEach-Object { $_.path })
+            $nodeIds = @($state.graph.nodes | ForEach-Object { $_.id })
+            $expectedSymbols = [ordered]@{
+              "lib/coverage.ex" = "symbol:lib/coverage.ex#module:Coverage.Ex/fn:last/1"
+              "src/coverage.exs" = "symbol:src/coverage.exs#module:Coverage.Exs/fn:last/1"
+            }
+            $parsedPaths = @()
+            $parsedBytes = 0
+            foreach ($path in $selectedPaths) {
+              if ($sourcePaths -contains $path -and $nodeIds -contains $expectedSymbols[$path]) {
+                $parsedPaths += $path
+                $parsedBytes += (Get-Item $path).Length
+              }
+            }
+            $selectedBytes = (Get-Item $selectedPaths | Measure-Object -Property Length -Sum).Sum
+            $coverage = [ordered]@{
+              selected_paths = $selectedPaths
+              parsed_paths = $parsedPaths
+              selected_bytes = $selectedBytes
+              parsed_bytes = $parsedBytes
+              state_sha256 = (Get-FileHash -Algorithm SHA256 $statePath).Hash.ToLowerInvariant()
+            }
+          } finally {
+            Pop-Location
+          }
+          $manifestPath = Join-Path $artifactRoot "artifact.json"
+          $manifest = Get-Content -Raw $manifestPath | ConvertFrom-Json
+          $manifest | Add-Member -NotePropertyName elixir_coverage -NotePropertyValue $coverage
+          $manifest | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 $manifestPath
 
       - name: Measure live-watch convergence
         if: matrix.primary

@@ -13,7 +13,7 @@ notes_ref="refs/notes/criv-release-gates"
 max_attempts=5
 
 jq -e --arg commit "$commit" '
-  .schema == "criv.discovery-release-gate.v1" and
+  .schema == "criv.discovery-release-gate.v2" and
   .passed == true and
   .commit == $commit and
   (.artifacts | length == 4)

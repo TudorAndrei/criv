@@ -8,8 +8,12 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-const INPUT_SCHEMA: &str = "criv.discovery-gate-input.v1";
-const RECEIPT_SCHEMA: &str = "criv.discovery-release-gate.v1";
+const INPUT_SCHEMA: &str = "criv.discovery-gate-input.v2";
+const RECEIPT_SCHEMA: &str = "criv.discovery-release-gate.v2";
+const PRE_ELIXIR_CONTRACT: &str = "criv.release-evidence.pre-elixir.v1";
+const ELIXIR_CONTRACT: &str = "criv.release-evidence.elixir.v1";
+const ELIXIR_BASELINE_RESET: &str = "elixir-baseline-reset";
+const COMPATIBLE_BASELINE: &str = "compatible-baseline";
 const RELEASE_TARGETS: [&str; 4] = [
     "aarch64-apple-darwin",
     "aarch64-unknown-linux-gnu",
@@ -36,6 +40,7 @@ struct GateInput {
     schema: String,
     commit: String,
     toolchain: String,
+    evidence_transition: String,
     valid_until_unix: u64,
     primary_target: String,
     live_commands: PathBuf,
@@ -54,8 +59,13 @@ struct ScalingPair {
 
 #[derive(Debug, Deserialize)]
 struct ArtifactEvidence {
+    baseline_revision: String,
+    baseline_contract: String,
+    candidate_contract: String,
     normal_dependencies_before: usize,
     normal_dependencies_after: usize,
+    normal_package_names_before: Vec<String>,
+    normal_package_names_after: Vec<String>,
     native_compiler_or_library_added: bool,
     targets: Vec<ArtifactTarget>,
 }
@@ -72,6 +82,16 @@ struct ArtifactTarget {
     clean_builds: bool,
     compiler_cache_disabled: bool,
     registry_inputs_present: bool,
+    elixir_coverage: ElixirCoverage,
+}
+
+#[derive(Debug, Deserialize)]
+struct ElixirCoverage {
+    selected_paths: Vec<String>,
+    parsed_paths: Vec<String>,
+    selected_bytes: u64,
+    parsed_bytes: u64,
+    state_sha256: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -96,7 +116,12 @@ struct ArtifactReceipt {
     digest: String,
     sha256: String,
     file_name: String,
+    baseline_bytes: u64,
     bytes: u64,
+    bytes_delta: i64,
+    elixir_selected_files: usize,
+    elixir_selected_bytes: u64,
+    elixir_state_sha256: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -247,6 +272,7 @@ fn validate_input(input: &GateInput) -> Result<(), String> {
     if input.toolchain.trim().is_empty() {
         return Err("toolchain must not be empty".into());
     }
+    release_transition(input)?;
     if !RELEASE_TARGETS.contains(&input.primary_target.as_str()) {
         return Err(format!(
             "primary target is not a release target: {}",
@@ -496,13 +522,59 @@ fn gate_artifacts(
     input: &GateInput,
     checks: &mut Vec<GateCheck>,
 ) -> Result<Vec<ArtifactReceipt>, String> {
+    let transition = release_transition(input)?;
+    check(
+        checks,
+        "release-evidence-transition",
+        true,
+        format!(
+            "{} from {} to {} with baseline {}",
+            input.evidence_transition,
+            input.artifacts.baseline_contract,
+            input.artifacts.candidate_contract,
+            input.artifacts.baseline_revision
+        ),
+    );
+    let before_names = input
+        .artifacts
+        .normal_package_names_before
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let after_names = input
+        .artifacts
+        .normal_package_names_after
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let added_names = after_names
+        .difference(&before_names)
+        .cloned()
+        .collect::<Vec<_>>();
+    let removed_names = before_names
+        .difference(&after_names)
+        .cloned()
+        .collect::<Vec<_>>();
+    let dependency_count_valid = dependency_count_is_valid(&input.artifacts, transition);
+    let dependency_names_valid =
+        package_change_is_valid(&input.artifacts, transition, &added_names);
     check(
         checks,
         "normal-dependency-count",
-        input.artifacts.normal_dependencies_after <= input.artifacts.normal_dependencies_before,
+        dependency_count_valid,
         format!(
             "before {}, after {}",
             input.artifacts.normal_dependencies_before, input.artifacts.normal_dependencies_after
+        ),
+    );
+    check(
+        checks,
+        "normal-dependency-package-change",
+        dependency_names_valid,
+        format!(
+            "added [{}], removed [{}]",
+            added_names.join(", "),
+            removed_names.join(", ")
         ),
     );
     check(
@@ -558,11 +630,38 @@ fn gate_artifacts(
         check(
             checks,
             format!("{prefix}-binary-size"),
-            bytes.len() as u64 <= target.baseline_binary_bytes,
+            binary_size_is_valid(transition, target.baseline_binary_bytes, bytes.len() as u64),
             format!(
-                "candidate {}, baseline {}",
+                "candidate {}, baseline {}, delta {}",
                 bytes.len(),
-                target.baseline_binary_bytes
+                target.baseline_binary_bytes,
+                (bytes.len() as i128) - (target.baseline_binary_bytes as i128)
+            ),
+        );
+        let selected_paths = target
+            .elixir_coverage
+            .selected_paths
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let parsed_paths = target
+            .elixir_coverage
+            .parsed_paths
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let coverage_valid =
+            complete_elixir_coverage(&target.elixir_coverage, &selected_paths, &parsed_paths);
+        check(
+            checks,
+            format!("{prefix}-complete-elixir-coverage"),
+            coverage_valid,
+            format!(
+                "selected {} files and {} bytes, parsed {} files and {} bytes",
+                target.elixir_coverage.selected_paths.len(),
+                target.elixir_coverage.selected_bytes,
+                target.elixir_coverage.parsed_paths.len(),
+                target.elixir_coverage.parsed_bytes
             ),
         );
         let builds_valid = target.baseline_build_seconds.len() == 3
@@ -622,11 +721,124 @@ fn gate_artifacts(
                     )
                 })?
                 .to_string(),
+            baseline_bytes: target.baseline_binary_bytes,
             bytes: bytes.len() as u64,
+            bytes_delta: i64::try_from(bytes.len() as i128 - target.baseline_binary_bytes as i128)
+                .map_err(|_| "binary-size delta does not fit in i64".to_string())?,
+            elixir_selected_files: target.elixir_coverage.selected_paths.len(),
+            elixir_selected_bytes: target.elixir_coverage.selected_bytes,
+            elixir_state_sha256: target.elixir_coverage.state_sha256.clone(),
         });
     }
     receipts.sort_by(|left, right| left.target.cmp(&right.target));
     Ok(receipts)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReleaseTransition {
+    ElixirBaselineReset,
+    CompatibleBaseline,
+}
+
+fn release_transition(input: &GateInput) -> Result<ReleaseTransition, String> {
+    match (
+        input.evidence_transition.as_str(),
+        input.artifacts.baseline_contract.as_str(),
+        input.artifacts.candidate_contract.as_str(),
+    ) {
+        (ELIXIR_BASELINE_RESET, PRE_ELIXIR_CONTRACT, ELIXIR_CONTRACT)
+            if input.artifacts.baseline_revision == "v0.9.0" =>
+        {
+            Ok(ReleaseTransition::ElixirBaselineReset)
+        }
+        (COMPATIBLE_BASELINE, ELIXIR_CONTRACT, ELIXIR_CONTRACT)
+            if valid_release_tag(&input.artifacts.baseline_revision)
+                && input.artifacts.baseline_revision != "v0.9.0" =>
+        {
+            Ok(ReleaseTransition::CompatibleBaseline)
+        }
+        (transition, baseline, candidate) => Err(format!(
+            "unsupported release evidence transition {transition} from {baseline} to {candidate}"
+        )),
+    }
+}
+
+fn dependency_count_is_valid(artifacts: &ArtifactEvidence, transition: ReleaseTransition) -> bool {
+    match transition {
+        ReleaseTransition::ElixirBaselineReset => {
+            artifacts.normal_dependencies_after
+                <= artifacts.normal_dependencies_before.saturating_add(1)
+        }
+        ReleaseTransition::CompatibleBaseline => {
+            artifacts.normal_dependencies_after <= artifacts.normal_dependencies_before
+        }
+    }
+}
+
+fn package_change_is_valid(
+    artifacts: &ArtifactEvidence,
+    transition: ReleaseTransition,
+    added_names: &[String],
+) -> bool {
+    let names_are_unique = artifacts.normal_package_names_before.len()
+        == artifacts
+            .normal_package_names_before
+            .iter()
+            .collect::<BTreeSet<_>>()
+            .len()
+        && artifacts.normal_package_names_after.len()
+            == artifacts
+                .normal_package_names_after
+                .iter()
+                .collect::<BTreeSet<_>>()
+                .len();
+    names_are_unique
+        && match transition {
+            ReleaseTransition::ElixirBaselineReset => {
+                added_names == [String::from("tree-sitter-elixir")]
+            }
+            ReleaseTransition::CompatibleBaseline => added_names.is_empty(),
+        }
+}
+
+fn binary_size_is_valid(
+    transition: ReleaseTransition,
+    baseline_bytes: u64,
+    candidate_bytes: u64,
+) -> bool {
+    matches!(transition, ReleaseTransition::ElixirBaselineReset)
+        || candidate_bytes <= baseline_bytes
+}
+
+fn complete_elixir_coverage(
+    coverage: &ElixirCoverage,
+    selected_paths: &BTreeSet<String>,
+    parsed_paths: &BTreeSet<String>,
+) -> bool {
+    !selected_paths.is_empty()
+        && selected_paths.len() == coverage.selected_paths.len()
+        && parsed_paths.len() == coverage.parsed_paths.len()
+        && selected_paths == parsed_paths
+        && selected_paths.iter().any(|path| path.ends_with(".ex"))
+        && selected_paths.iter().any(|path| path.ends_with(".exs"))
+        && coverage.selected_bytes > 0
+        && coverage.selected_bytes == coverage.parsed_bytes
+        && valid_sha256(&coverage.state_sha256)
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn valid_release_tag(value: &str) -> bool {
+    let Some(version) = value.strip_prefix('v') else {
+        return false;
+    };
+    let parts = version.split('.').collect::<Vec<_>>();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
 fn compatible_runs(
@@ -844,13 +1056,19 @@ mod tests {
             schema: INPUT_SCHEMA.into(),
             commit: "a".repeat(40),
             toolchain: "1.97.1".into(),
+            evidence_transition: COMPATIBLE_BASELINE.into(),
             valid_until_unix: u64::MAX,
             primary_target: "aarch64-apple-darwin".into(),
             live_commands: "live".into(),
             scaling: vec![],
             artifacts: ArtifactEvidence {
+                baseline_revision: "v0.10.1".into(),
+                baseline_contract: ELIXIR_CONTRACT.into(),
+                candidate_contract: ELIXIR_CONTRACT.into(),
                 normal_dependencies_before: 1,
                 normal_dependencies_after: 1,
+                normal_package_names_before: vec!["criv".into()],
+                normal_package_names_after: vec!["criv".into()],
                 native_compiler_or_library_added: false,
                 targets: vec![],
             },
@@ -874,5 +1092,108 @@ mod tests {
     fn median_uses_the_middle_of_sorted_samples() {
         assert_eq!(median(vec![3.0, 1.0, 2.0]), 2.0);
         assert_eq!(median(vec![4.0, 1.0, 3.0, 2.0]), 2.5);
+    }
+
+    #[test]
+    fn elixir_reset_allows_only_the_named_package_and_records_full_size_growth() {
+        let artifacts = ArtifactEvidence {
+            baseline_revision: "v0.9.0".into(),
+            baseline_contract: PRE_ELIXIR_CONTRACT.into(),
+            candidate_contract: ELIXIR_CONTRACT.into(),
+            normal_dependencies_before: 164,
+            normal_dependencies_after: 120,
+            normal_package_names_before: vec![
+                "criv".into(),
+                "fff-search".into(),
+                "tree-sitter".into(),
+            ],
+            normal_package_names_after: vec![
+                "criv".into(),
+                "tree-sitter".into(),
+                "tree-sitter-elixir".into(),
+            ],
+            native_compiler_or_library_added: false,
+            targets: vec![],
+        };
+        let added = vec!["tree-sitter-elixir".into()];
+        assert!(dependency_count_is_valid(
+            &artifacts,
+            ReleaseTransition::ElixirBaselineReset
+        ));
+        assert!(package_change_is_valid(
+            &artifacts,
+            ReleaseTransition::ElixirBaselineReset,
+            &added
+        ));
+        assert!(binary_size_is_valid(
+            ReleaseTransition::ElixirBaselineReset,
+            10,
+            u64::MAX
+        ));
+
+        let another_package = vec!["tree-sitter-erlang".into()];
+        assert!(!package_change_is_valid(
+            &artifacts,
+            ReleaseTransition::ElixirBaselineReset,
+            &another_package
+        ));
+    }
+
+    #[test]
+    fn compatible_release_restores_strict_dependency_and_binary_rules() {
+        assert!(binary_size_is_valid(
+            ReleaseTransition::CompatibleBaseline,
+            100,
+            100
+        ));
+        assert!(!binary_size_is_valid(
+            ReleaseTransition::CompatibleBaseline,
+            100,
+            101
+        ));
+        assert!(valid_release_tag("v0.10.1"));
+        assert!(!valid_release_tag("0.10.1"));
+        assert!(!valid_release_tag("v0.10"));
+    }
+
+    #[test]
+    fn elixir_coverage_requires_every_ex_and_exs_path_and_byte() {
+        let selected = ["lib/coverage.ex".into(), "src/coverage.exs".into()]
+            .into_iter()
+            .collect();
+        let complete = ElixirCoverage {
+            selected_paths: vec!["lib/coverage.ex".into(), "src/coverage.exs".into()],
+            parsed_paths: vec!["lib/coverage.ex".into(), "src/coverage.exs".into()],
+            selected_bytes: 200,
+            parsed_bytes: 200,
+            state_sha256: "a".repeat(64),
+        };
+        assert!(complete_elixir_coverage(&complete, &selected, &selected));
+
+        let parsed = ["lib/coverage.ex".into()].into_iter().collect();
+        assert!(!complete_elixir_coverage(&complete, &selected, &parsed));
+    }
+
+    #[test]
+    fn artifact_receipt_records_old_size_delta_and_elixir_identity() {
+        let receipt = ArtifactReceipt {
+            target: "aarch64-apple-darwin".into(),
+            path: "artifact/criv".into(),
+            digest: "a".repeat(64),
+            sha256: "b".repeat(64),
+            file_name: "criv".into(),
+            baseline_bytes: 100,
+            bytes: 140,
+            bytes_delta: 40,
+            elixir_selected_files: 2,
+            elixir_selected_bytes: 200,
+            elixir_state_sha256: "c".repeat(64),
+        };
+        let value = serde_json::to_value(receipt).unwrap();
+        assert_eq!(value["baseline_bytes"], 100);
+        assert_eq!(value["bytes"], 140);
+        assert_eq!(value["bytes_delta"], 40);
+        assert_eq!(value["elixir_selected_files"], 2);
+        assert_eq!(value["elixir_selected_bytes"], 200);
     }
 }

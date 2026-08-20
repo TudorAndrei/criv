@@ -17,7 +17,7 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
   exit 1
 fi
 jq -e --arg version "$version" '
-  .schema == "criv.discovery-release-gate.v1" and
+  .schema == "criv.discovery-release-gate.v2" and
   .passed == true and
   (.artifacts | length == 4)
 ' "$receipt" >/dev/null

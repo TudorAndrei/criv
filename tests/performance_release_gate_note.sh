@@ -18,7 +18,7 @@ git clone -q --bare "$source_repository" "$remote_repository"
 
 receipt="$test_root/receipt.json"
 jq -n --arg commit "$commit" '{
-  schema: "criv.discovery-release-gate.v1",
+  schema: "criv.discovery-release-gate.v2",
   commit: $commit,
   passed: true,
   artifacts: [

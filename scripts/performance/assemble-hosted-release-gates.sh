@@ -58,7 +58,7 @@ add_pair() {
 for target in "${targets[@]}"; do
   manifest="$bundle/$target/artifacts/artifact.json"
   jq -e --arg commit "$commit" --arg target "$target" '
-    .schema == "criv.discovery-remote-artifact.v2" and
+    .schema == "criv.discovery-remote-artifact.v3" and
     .commit == $commit and
     .target == $target
   ' "$manifest" >/dev/null
@@ -69,7 +69,7 @@ for target in "${targets[@]}"; do
     '. + {candidate_binary: ($base + .candidate_binary)} |
       {target,commit,candidate_binary,baseline_binary_digest,baseline_binary_bytes,
        baseline_build_seconds,candidate_build_seconds,clean_builds,
-       compiler_cache_disabled,registry_inputs_present}' \
+       compiler_cache_disabled,registry_inputs_present,elixir_coverage}' \
     "$manifest" >>"$target_file"
 done
 
@@ -82,16 +82,38 @@ done
 
 baseline_dependencies="$(jq -r .baseline_normal_dependencies "$bundle/$primary_target/artifacts/artifact.json")"
 candidate_dependencies="$(jq -r .candidate_normal_dependencies "$bundle/$primary_target/artifacts/artifact.json")"
+baseline_revision="$(jq -r .baseline_revision "$bundle/$primary_target/artifacts/artifact.json")"
+baseline_contract="$(jq -r .baseline_evidence_contract "$bundle/$primary_target/artifacts/artifact.json")"
+candidate_contract="$(jq -r .candidate_evidence_contract "$bundle/$primary_target/artifacts/artifact.json")"
+baseline_package_names="$(jq -c .baseline_normal_package_names "$bundle/$primary_target/artifacts/artifact.json")"
+candidate_package_names="$(jq -c .candidate_normal_package_names "$bundle/$primary_target/artifacts/artifact.json")"
 for target in "${targets[@]}"; do
   manifest="$bundle/$target/artifacts/artifact.json"
   test "$(jq -r .baseline_normal_dependencies "$manifest")" = "$baseline_dependencies"
   test "$(jq -r .candidate_normal_dependencies "$manifest")" = "$candidate_dependencies"
+  test "$(jq -r .baseline_revision "$manifest")" = "$baseline_revision"
+  test "$(jq -r .baseline_evidence_contract "$manifest")" = "$baseline_contract"
+  test "$(jq -r .candidate_evidence_contract "$manifest")" = "$candidate_contract"
+  test "$(jq -c .baseline_normal_package_names "$manifest")" = "$baseline_package_names"
+  test "$(jq -c .candidate_normal_package_names "$manifest")" = "$candidate_package_names"
 done
+
+if [[ "$baseline_contract" == "criv.release-evidence.pre-elixir.v1" &&
+  "$candidate_contract" == "criv.release-evidence.elixir.v1" ]]; then
+  evidence_transition="elixir-baseline-reset"
+elif [[ "$baseline_contract" == "criv.release-evidence.elixir.v1" &&
+  "$candidate_contract" == "criv.release-evidence.elixir.v1" ]]; then
+  evidence_transition="compatible-baseline"
+else
+  echo "unsupported release evidence transition from $baseline_contract to $candidate_contract" >&2
+  exit 1
+fi
 
 mkdir -p "$(dirname "$output")"
 valid_until="$(( $(date +%s) + 7 * 24 * 60 * 60 ))"
 jq -n \
   --arg commit "$commit" \
+  --arg evidence_transition "$evidence_transition" \
   --argjson valid_until "$valid_until" \
   --arg primary_target "$primary_target" \
   --arg live_commands "$(result_directory "$bundle/$primary_target/live/candidate")" \
@@ -99,17 +121,28 @@ jq -n \
   --argjson targets "$(jq -s . "$target_file")" \
   --argjson before "$baseline_dependencies" \
   --argjson after "$candidate_dependencies" \
+  --arg baseline_revision "$baseline_revision" \
+  --arg baseline_contract "$baseline_contract" \
+  --arg candidate_contract "$candidate_contract" \
+  --argjson before_names "$baseline_package_names" \
+  --argjson after_names "$candidate_package_names" \
   '{
-    schema:"criv.discovery-gate-input.v1",
+    schema:"criv.discovery-gate-input.v2",
     commit:$commit,
     toolchain:"1.97.1",
+    evidence_transition:$evidence_transition,
     valid_until_unix:$valid_until,
     primary_target:$primary_target,
     live_commands:$live_commands,
     scaling:$scaling,
     artifacts:{
+      baseline_revision:$baseline_revision,
+      baseline_contract:$baseline_contract,
+      candidate_contract:$candidate_contract,
       normal_dependencies_before:$before,
       normal_dependencies_after:$after,
+      normal_package_names_before:$before_names,
+      normal_package_names_after:$after_names,
       native_compiler_or_library_added:false,
       targets:$targets
     }

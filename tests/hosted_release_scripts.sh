@@ -36,6 +36,26 @@ sed -n \
   "$repository_root/.github/workflows/release.yml" >"$upload_evidence_step"
 grep -F '        if: always()' "$upload_evidence_step" >/dev/null
 
+baseline_step="$test_root/baseline-step.yml"
+sed -n \
+  '/      - name: Select compatible release baseline/,/      - name: Measure 100k Source workload/p' \
+  "$repository_root/.github/workflows/release.yml" >"$baseline_step"
+grep -F 'git describe --tags --abbrev=0 --match' "$baseline_step" >/dev/null
+grep -F '"$EXPECTED_COMMIT^"' "$baseline_step" >/dev/null
+grep -F 'git worktree add --detach "$baseline_root" "$baseline_revision"' "$baseline_step" >/dev/null
+grep -F '"$baseline_revision" = v0.9.0' "$baseline_step" >/dev/null
+test "$(tr -d '\r\n' < "$repository_root/scripts/performance/release-evidence-contract.txt")" = \
+  "criv.release-evidence.elixir.v1"
+
+coverage_step="$test_root/coverage-step.yml"
+sed -n \
+  '/      - name: Prove complete Elixir file coverage/,/      - name: Measure live-watch convergence/p' \
+  "$repository_root/.github/workflows/release.yml" >"$coverage_step"
+grep -F 'lib/coverage.ex' "$coverage_step" >/dev/null
+grep -F 'src/coverage.exs' "$coverage_step" >/dev/null
+grep -F 'module:Coverage.Ex/fn:last/1' "$coverage_step" >/dev/null
+grep -F 'module:Coverage.Exs/fn:last/1' "$coverage_step" >/dev/null
+
 targets=(
   aarch64-apple-darwin
   aarch64-unknown-linux-gnu
@@ -67,12 +87,16 @@ for target in "${targets[@]}"; do
     --arg target "$target" \
     --arg binary "candidate-criv$suffix" \
     '{
-      schema:"criv.discovery-remote-artifact.v2",
+      schema:"criv.discovery-remote-artifact.v3",
       commit:$commit,
       target:$target,
       baseline_revision:"v0.9.0",
+      baseline_evidence_contract:"criv.release-evidence.pre-elixir.v1",
+      candidate_evidence_contract:"criv.release-evidence.elixir.v1",
       baseline_normal_dependencies:100,
       candidate_normal_dependencies:99,
+      baseline_normal_package_names:["criv","fff-search","tree-sitter"],
+      candidate_normal_package_names:["criv","tree-sitter","tree-sitter-elixir"],
       baseline_binary:"baseline-criv",
       baseline_binary_bytes:1000,
       baseline_binary_digest:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -83,7 +107,14 @@ for target in "${targets[@]}"; do
       candidate_build_seconds:[9,10,11],
       clean_builds:true,
       compiler_cache_disabled:true,
-      registry_inputs_present:true
+      registry_inputs_present:true,
+      elixir_coverage:{
+        selected_paths:["lib/coverage.ex","src/coverage.exs"],
+        parsed_paths:["lib/coverage.ex","src/coverage.exs"],
+        selected_bytes:200,
+        parsed_bytes:200,
+        state_sha256:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
     }' >"$artifact_root/artifact.json"
 done
 
@@ -98,12 +129,16 @@ mkdir -p "$primary/live/candidate/run"
 jq -e --arg commit "$commit" '
   .commit == $commit and
   .primary_target == "aarch64-apple-darwin" and
+  .schema == "criv.discovery-gate-input.v2" and
+  .evidence_transition == "elixir-baseline-reset" and
   (.scaling | length) == 10 and
   ([.scaling[] | select(.selected_files == 90000)] | length) == 8 and
   ([.scaling[] | select(.selected_files == 225000)] | length) == 2 and
   (.artifacts.targets | length) == 4 and
   .artifacts.normal_dependencies_before == 100 and
-  .artifacts.normal_dependencies_after == 99
+  .artifacts.normal_dependencies_after == 99 and
+  .artifacts.normal_package_names_after == ["criv","tree-sitter","tree-sitter-elixir"] and
+  ([.artifacts.targets[].elixir_coverage.parsed_paths] | length) == 4
 ' "$bundle/gate-input.json" >/dev/null
 
 receipt="$bundle/release-gate.json"
@@ -124,7 +159,7 @@ done
 jq -n \
   --arg commit "$commit" \
   --argjson artifacts "$(jq -s . "$artifacts_json")" \
-  '{schema:"criv.discovery-release-gate.v1",commit:$commit,passed:true,artifacts:$artifacts}' \
+  '{schema:"criv.discovery-release-gate.v2",commit:$commit,passed:true,artifacts:$artifacts}' \
   >"$receipt"
 printf 'viewer\n' >"$test_root/vscode-criv.vsix"
 

@@ -144,8 +144,17 @@ not representative user-project evidence.
 matched Source candidate traversal, complete Source builds, Vault and Markdown
 scaling, live-watch convergence, four target artifacts, and clean-build
 evidence. It writes the short-lived
-`criv.discovery-release-gate.v1` receipt only when every correctness,
+`criv.discovery-release-gate.v2` receipt only when every correctness,
 stability, time, memory, artifact, and toolchain gate passes.
+
+The release evidence contract is in
+`scripts/performance/release-evidence-contract.txt`. The first release with the
+Elixir contract compares with v0.9.0. It permits `tree-sitter-elixir` as the
+only new normal package and records the complete binary-size change. A later
+release compares with the last stable release that has the same contract. The
+later comparison rejects a new normal package or binary growth. Every release
+also proves that its exact binary parses all selected `.ex` and `.exs` coverage
+files.
 
 The `Automatic release` workflow measures the matched 90,000-file Source rows
 on all four release hosts. Hosted macOS also measures the 225,000-file Vault
