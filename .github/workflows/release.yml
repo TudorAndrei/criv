@@ -188,6 +188,17 @@ jobs:
           npm --prefix extensions/vscode-criv test
           xvfb-run -a npm --prefix extensions/vscode-criv run test:integration
 
+      - name: Package VS Code companion
+        run: npm --prefix extensions/vscode-criv run package
+
+      - name: Upload exact VS Code package
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: release-vsix-${{ needs.prepare.outputs.commit }}
+          path: extensions/vscode-criv/vscode-criv.vsix
+          if-no-files-found: error
+          retention-days: 90
+
   build:
     name: Build ${{ matrix.name }}
     needs: prepare
@@ -273,18 +284,17 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - name: Checkout exact release source
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ needs.prepare.outputs.commit }}
-          path: release-source
-          persist-credentials: false
-
       - name: Download exact release binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           pattern: release-binary-*-${{ needs.prepare.outputs.commit }}
           path: downloaded-binaries
+
+      - name: Download exact VS Code package
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: release-vsix-${{ needs.prepare.outputs.commit }}
+          path: release-vsix
 
       - name: Arrange exact release binaries
         env:
@@ -303,19 +313,13 @@ jobs:
             mv "$source" "bundle/$target/criv$suffix"
           done
 
-      - name: Build VS Code package from exact release source
-        working-directory: release-source
-        run: |
-          npm ci
-          npm --prefix extensions/vscode-criv run package
-
       - name: Package exact release binaries
         env:
           COMMIT: ${{ needs.prepare.outputs.commit }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           scripts/package-release-assets.sh \
-            bundle release-source/extensions/vscode-criv/vscode-criv.vsix \
+            bundle release-vsix/vscode-criv.vsix \
             "$VERSION" "$COMMIT" dist
 
       - name: Upload release candidate assets

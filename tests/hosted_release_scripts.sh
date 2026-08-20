@@ -23,6 +23,8 @@ grep -F 'rustup toolchain install 1.97.1 --profile minimal --no-self-update' \
   "$quality_job" >/dev/null
 grep -F 'rustup component add clippy rustfmt --toolchain 1.97.1' \
   "$quality_job" >/dev/null
+grep -F 'npm --prefix extensions/vscode-criv run package' "$quality_job" >/dev/null
+grep -F 'name: release-vsix-${{ needs.prepare.outputs.commit }}' "$quality_job" >/dev/null
 
 build_job="$test_root/build-job.yml"
 sed -n '/  build:/,/  package:/p' "$workflow" >"$build_job"
@@ -44,12 +46,16 @@ sed -n '/  package:/,/  verify:/p' "$workflow" >"$package_job"
 grep -F '      - quality' "$package_job" >/dev/null
 grep -F '      - build' "$package_job" >/dev/null
 grep -F 'ref: ${{ github.sha }}' "$package_job" >/dev/null
-grep -F 'path: release-source' "$package_job" >/dev/null
 grep -F 'pattern: release-binary-*-${{ needs.prepare.outputs.commit }}' \
   "$package_job" >/dev/null
-grep -F 'release-source/extensions/vscode-criv/vscode-criv.vsix' \
-  "$package_job" >/dev/null
+grep -F 'name: release-vsix-${{ needs.prepare.outputs.commit }}' "$package_job" >/dev/null
+grep -F 'path: release-vsix' "$package_job" >/dev/null
+if grep -Eq 'npm ci|npm .* run package|path: release-source' "$package_job"; then
+  echo "package job rebuilds the exact VS Code package" >&2
+  exit 1
+fi
 grep -F 'scripts/package-release-assets.sh' "$package_job" >/dev/null
+grep -F 'release-vsix/vscode-criv.vsix' "$package_job" >/dev/null
 grep -F '"$VERSION" "$COMMIT" dist' "$package_job" >/dev/null
 
 if grep -Eq 'Measure 100k|Measure primary|Measure clean|release-evidence|criv-discovery-gate|publish-release-gate-note' \
