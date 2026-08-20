@@ -813,7 +813,7 @@ fn is_junction(_path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::source::SourceBuild;
+    use crate::source::SourceState;
     use tempfile::TempDir;
 
     fn write(path: &Path, contents: &[u8]) {
@@ -822,10 +822,7 @@ mod tests {
     }
 
     fn discover_source(root: &Path, config: &Config) -> Result<Vec<String>> {
-        Ok(SourceBuild::build_incremental(root, config, None)?
-            .catalog()
-            .paths()
-            .to_vec())
+        Ok(SourceState::refresh(root, config, None)?.paths().to_vec())
     }
 
     #[test]

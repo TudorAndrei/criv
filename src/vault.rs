@@ -12,7 +12,7 @@ use crate::c4;
 use crate::config::Config;
 use crate::diagnostic::SourceLocation;
 use crate::discovery::{discover_vault, read_selected_text};
-use crate::source::{IndexedSource, SourceBuild, SourceCatalog, SourceGraph, SourceGraphBuild};
+use crate::source::{IndexedSource, SourceGraph, SourceState};
 use crate::util::{
     GlobMatcher, find_wiki_links_with_lines, is_adr_id, kebab,
     markdown_headings as parse_markdown_headings, strip_prefix,
@@ -150,8 +150,7 @@ pub(crate) struct Vault {
     note_ids: BTreeMap<String, usize>,
     filenames: BTreeMap<String, usize>,
     titles: BTreeMap<String, usize>,
-    source_catalog: SourceCatalog,
-    source_graph: SourceGraphBuild,
+    source: SourceState,
     effective_decisions: BTreeSet<String>,
     patterns: BTreeSet<String>,
     link_resolutions: BTreeMap<String, ResolvedLink>,
@@ -174,37 +173,29 @@ pub(crate) enum SourceTargetResolution {
 
 impl Vault {
     pub(crate) fn load(root: &Path) -> Result<Self> {
-        let cached = crate::source::load_cached(root);
-        Self::load_with_source_facilities(root, cached.as_ref(), None, true, None)
+        Self::load_with_source_facilities(root, None, true, None)
     }
 
     pub(crate) fn load_docs_only(root: &Path) -> Result<Self> {
-        Self::load_with_source_facilities(root, None, None, false, None)
+        Self::load_with_source_facilities(root, None, false, None)
     }
 
     #[cfg(test)]
-    fn load_incremental_with_source_build(root: &Path, source_build: SourceBuild) -> Result<Self> {
-        Self::load_with_source_facilities(root, None, Some(source_build), true, None)
+    fn load_incremental_with_source_state(root: &Path, source: SourceState) -> Result<Self> {
+        Self::load_with_source_facilities(root, Some(source), true, None)
     }
 
-    pub(crate) fn load_incremental_with_config_and_source_build(
+    pub(crate) fn load_incremental_with_config_and_source_state(
         root: &Path,
         config: &Config,
-        source_build: SourceBuild,
+        source: SourceState,
     ) -> Result<Self> {
-        Self::load_with_source_facilities(
-            root,
-            None,
-            Some(source_build),
-            true,
-            Some(config.clone()),
-        )
+        Self::load_with_source_facilities(root, Some(source), true, Some(config.clone()))
     }
 
     fn load_with_source_facilities(
         root: &Path,
-        previous_graph: Option<&SourceGraphBuild>,
-        source_build: Option<SourceBuild>,
+        source: Option<SourceState>,
         load_sources: bool,
         config: Option<Config>,
     ) -> Result<Self> {
@@ -243,16 +234,14 @@ impl Vault {
         let effective_decisions = effective_accepted_decision_ids(&notes);
         let patterns = registered_policy_patterns(&notes, &effective_decisions);
 
-        let source_build = if load_sources {
-            match source_build {
-                Some(source_build) => source_build,
-                None => SourceBuild::build_incremental(root, &config, previous_graph)?,
+        let source = if load_sources {
+            match source {
+                Some(source) => source,
+                None => SourceState::refresh(root, &config, None)?,
             }
-            .publish(root)?
         } else {
-            SourceBuild::disabled()
+            SourceState::disabled()
         };
-        let (source_catalog, source_graph) = source_build.into_parts();
 
         let mut vault = Self {
             config,
@@ -262,8 +251,7 @@ impl Vault {
             note_ids,
             filenames,
             titles,
-            source_catalog,
-            source_graph,
+            source,
             effective_decisions,
             patterns,
             link_resolutions: BTreeMap::new(),
@@ -389,7 +377,7 @@ impl Vault {
     }
 
     pub(crate) fn resolve_source_path(&self, path: &str) -> Option<(String, bool)> {
-        self.source_catalog.resolve_partial_path(path)
+        self.source.resolve_partial_path(path)
     }
 
     pub(crate) fn resolve_source_target(&self, target: &str) -> SourceTargetResolution {
@@ -405,7 +393,7 @@ impl Vault {
         };
 
         if self
-            .source_graph
+            .source
             .graph()
             .resolve_symbol(&format!("{path}#{fragment}"))
             .is_some()
@@ -431,7 +419,7 @@ impl Vault {
         let Some(fragment) = source_fragment_name(target) else {
             return Some(path.to_string());
         };
-        self.source_graph
+        self.source
             .graph()
             .canonical_symbol_target(&format!("{path}#{fragment}"))
     }
@@ -440,7 +428,7 @@ impl Vault {
         let matcher = GlobMatcher::from_valid_patterns(patterns);
         let mut matches_by_pattern = vec![Vec::new(); patterns.len()];
         let mut indices = Vec::new();
-        for source_file in self.source_catalog.paths() {
+        for source_file in self.source.paths() {
             matcher.matching_pattern_indices_into(source_file, &mut indices);
             for index in &indices {
                 matches_by_pattern[*index].push(source_file.clone());
@@ -464,7 +452,7 @@ impl Vault {
         let matcher = GlobMatcher::from_valid_patterns(patterns);
         let mut matched = vec![false; patterns.len()];
         let mut indices = Vec::new();
-        for source_file in self.source_catalog.paths() {
+        for source_file in self.source.paths() {
             matcher.matching_pattern_indices_into(source_file, &mut indices);
             for index in &indices {
                 matched[*index] = true;
@@ -480,23 +468,19 @@ impl Vault {
     }
 
     pub(crate) fn source_files(&self) -> &[String] {
-        self.source_catalog.paths()
+        self.source.paths()
     }
 
     pub(crate) fn source_graph(&self) -> &SourceGraph {
-        self.source_graph.graph()
+        self.source.graph()
     }
 
-    pub(crate) fn source_graph_build(&self) -> &SourceGraphBuild {
-        &self.source_graph
-    }
-
-    pub(crate) fn source_build(&self) -> SourceBuild {
-        SourceBuild::from_parts(self.source_catalog.clone(), self.source_graph.clone())
+    pub(crate) fn source_state(&self) -> &SourceState {
+        &self.source
     }
 
     pub(crate) fn source_entries(&self) -> &[IndexedSource] {
-        self.source_catalog.entries()
+        self.source.entries()
     }
 
     pub(crate) fn patterns(&self) -> &BTreeSet<String> {
@@ -576,8 +560,7 @@ impl Vault {
             note_ids,
             filenames,
             titles,
-            source_catalog: SourceCatalog::disabled(),
-            source_graph: SourceGraphBuild::disabled(),
+            source: SourceState::disabled(),
             effective_decisions,
             patterns,
             link_resolutions: BTreeMap::new(),
@@ -1419,7 +1402,7 @@ source = false
     }
 
     #[test]
-    fn vault_uses_the_injected_single_read_source_build() {
+    fn vault_uses_the_injected_source_state() {
         let root = unique_temp_dir("criv-injected-source-index");
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(
@@ -1433,9 +1416,9 @@ roots = ["src"]
         std::fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
 
         let config = Config::load(&root).unwrap();
-        let source_build = SourceBuild::build_incremental(&root, &config, None).unwrap();
-        let expected = source_build.catalog().paths().to_vec();
-        let vault = Vault::load_incremental_with_source_build(&root, source_build).unwrap();
+        let source = SourceState::refresh(&root, &config, None).unwrap();
+        let expected = source.paths().to_vec();
+        let vault = Vault::load_incremental_with_source_state(&root, source).unwrap();
 
         assert_eq!(vault.source_files(), expected);
         assert!(vault.source_graph().files.contains_key("src/lib.rs"));

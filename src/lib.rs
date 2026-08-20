@@ -25,7 +25,7 @@ mod discovery_probe;
 #[cfg(test)]
 fn discovery_probe_source_files(root: &std::path::Path) -> Result<Vec<String>> {
     let config = config::Config::load(root)?;
-    Ok(source::SourceCatalog::discover(root, &config)?
+    Ok(source::SourceState::refresh(root, &config, None)?
         .paths()
         .to_vec())
 }

@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::check;
 use crate::config::Config;
 use crate::policy_scan::PolicyScanPlan;
-use crate::source::{self, SourceBuild, SourceGraphBuild};
+use crate::source::SourceState;
 use crate::state::{self, State};
 use crate::vault::Vault;
 use crate::{CrivError, Result};
@@ -24,8 +24,6 @@ pub(crate) struct RefreshResult {
 #[derive(Debug)]
 pub(crate) struct RefreshSession {
     config: Config,
-    seed_graph: Option<SourceGraphBuild>,
-    source_build: Option<SourceBuild>,
     previous: Option<RefreshResult>,
 }
 
@@ -33,18 +31,14 @@ impl RefreshSession {
     pub(crate) fn one_shot(root: &Path) -> Result<Self> {
         let config = Config::load(root)?;
         Ok(Self {
-            config: config.clone(),
-            seed_graph: source::load_cached(root),
-            source_build: None,
+            config,
             previous: None,
         })
     }
 
-    pub(crate) fn live(root: &Path, config: &Config) -> Result<Self> {
+    pub(crate) fn live(_root: &Path, config: &Config) -> Result<Self> {
         Ok(Self {
             config: config.clone(),
-            seed_graph: source::load_cached(root),
-            source_build: None,
             previous: None,
         })
     }
@@ -59,38 +53,27 @@ impl RefreshSession {
         cause: RefreshCause,
         precommit_check: impl FnOnce() -> Result<()>,
     ) -> Result<&RefreshResult> {
-        let previous_graph = self
+        let previous_source = self
             .previous
             .as_ref()
-            .map(|previous| previous.vault.source_graph_build())
-            .or(self.seed_graph.as_ref());
+            .map(|previous| previous.vault.source_state());
         let previous_state = self.previous.as_ref().map(|previous| &previous.state);
         let diagnostic_previous_state = matches!(cause, RefreshCause::SourceChanged)
             .then_some(previous_state)
             .flatten();
-        let source_build = match (cause, self.source_build.as_ref()) {
-            (RefreshCause::DocsChanged, Some(source_build)) => source_build.reused(),
-            _ => SourceBuild::build_incremental(root, &self.config, previous_graph)?,
+        let source = match (cause, previous_source) {
+            (RefreshCause::DocsChanged, Some(source)) => source.reuse_for_docs(),
+            _ => SourceState::refresh(root, &self.config, previous_source)?,
         };
-        let next = match execute(
+        let next = execute(
             root,
             &self.config,
             previous_state,
             diagnostic_previous_state,
-            source_build,
+            source,
             precommit_check,
-        ) {
-            Ok(next) => next,
-            Err(error) => {
-                if cause == RefreshCause::SourceChanged {
-                    self.source_build = None;
-                }
-                return Err(error);
-            }
-        };
+        )?;
 
-        self.seed_graph = None;
-        self.source_build = Some(next.vault.source_build());
         self.previous = Some(next);
         Ok(self
             .previous
@@ -103,10 +86,10 @@ fn execute(
     config: &Config,
     previous_state: Option<&State>,
     diagnostic_previous_state: Option<&State>,
-    source_build: SourceBuild,
+    source: SourceState,
     precommit_check: impl FnOnce() -> Result<()>,
 ) -> Result<RefreshResult> {
-    let vault = Vault::load_incremental_with_config_and_source_build(root, config, source_build)?;
+    let vault = Vault::load_incremental_with_config_and_source_state(root, config, source)?;
     let blockers = check::publication_blocking_diagnostics(&vault);
     if !blockers.is_empty() {
         return Err(CrivError::new(format!(
@@ -118,7 +101,7 @@ fn execute(
                 .join("\n")
         )));
     }
-    let changed_files = vault.source_graph().changed_files().to_vec();
+    let changed_files = vault.source_state().changed_files().to_vec();
 
     let policy_plan = PolicyScanPlan::new(&vault);
     let diagnostics = check::validate_with_previous_state_and_policy_plan(

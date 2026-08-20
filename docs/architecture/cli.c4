@@ -27,7 +27,7 @@ model {
       }
       sourceIntelligence = component 'Source intelligence' {
         technology 'Rust, ignore, tree-sitter, and ast-grep'
-        description 'Discovers and reads selected source files, then builds module, import, symbol, call, and structural-match data.'
+        description 'Owns one Source state while it discovers, reads, parses, caches, resolves, and structurally matches selected source files.'
         link ../../src/source.rs 'source'
       }
       architectureService = component 'C4 service' {
@@ -100,6 +100,10 @@ views {
     include
       criv.cli.refreshCoordinator with {
         navigateTo codeRefreshPipeline
+      }
+    include
+      criv.cli.sourceIntelligence with {
+        navigateTo codeSourceState
       }
     include
       criv.cli.governanceEngine with {

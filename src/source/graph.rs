@@ -464,13 +464,13 @@ enum CacheDisposition {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct SourceGraphBuild {
+pub(super) struct SourceGraphBuild {
     graph: SourceGraph,
     cache: CacheDisposition,
 }
 
 impl SourceGraphBuild {
-    pub(crate) fn build_incremental(
+    pub(super) fn build_incremental(
         root: &Path,
         source_files: &[String],
         previous: Option<&Self>,
@@ -517,28 +517,28 @@ impl SourceGraphBuild {
         Ok(Self { graph, cache })
     }
 
-    pub(crate) fn disabled() -> Self {
+    pub(super) fn disabled() -> Self {
         Self {
             graph: SourceGraph::default(),
             cache: CacheDisposition::Clean,
         }
     }
 
-    pub(crate) fn reused(&self) -> Self {
+    pub(super) fn reused(&self) -> Self {
         let mut reused = self.clone();
         reused.graph.changed_files.clear();
         reused
     }
 
-    pub(crate) fn graph(&self) -> &SourceGraph {
+    pub(super) fn graph(&self) -> &SourceGraph {
         &self.graph
     }
 
-    pub(crate) fn paths(&self) -> Vec<String> {
+    pub(super) fn paths(&self) -> Vec<String> {
         self.graph.files.keys().cloned().collect()
     }
 
-    pub(crate) fn publish(mut self, root: &Path) -> Result<Self> {
+    pub(super) fn publish(mut self, root: &Path) -> Result<Self> {
         if self.cache == CacheDisposition::Dirty {
             store_cached(root, &self.graph)?;
             self.cache = CacheDisposition::Clean;
@@ -547,7 +547,7 @@ impl SourceGraphBuild {
     }
 }
 
-pub(crate) fn load_cached(root: &Path) -> Option<SourceGraphBuild> {
+pub(super) fn load_cached(root: &Path) -> Option<SourceGraphBuild> {
     #[cfg(test)]
     record_work(|counts| counts.cache_loads += 1);
 

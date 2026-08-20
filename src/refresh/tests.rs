@@ -258,33 +258,46 @@ fn failed_refresh_retries_from_the_last_successful_state() {
         .refresh(incremental.path(), RefreshCause::Initial)
         .unwrap();
     let before_hash = session.previous.as_ref().unwrap().state().hash().unwrap();
+    let before_source = session
+        .previous
+        .as_ref()
+        .unwrap()
+        .vault()
+        .source_graph()
+        .clone();
     let corrupt_snapshot = incremental
         .path()
         .join(".criv/snapshots")
         .join(format!("{}.json", "a".repeat(64)));
     fs::write(&corrupt_snapshot, "{}\n").unwrap();
+    fs::write(
+        incremental.path().join("src/lib.rs"),
+        "pub fn recovered() {}\n",
+    )
+    .unwrap();
 
     assert!(
         session
-            .refresh(incremental.path(), RefreshCause::DocsChanged)
+            .refresh(incremental.path(), RefreshCause::SourceChanged)
             .is_err()
     );
     assert_eq!(
         session.previous.as_ref().unwrap().state().hash().unwrap(),
         before_hash
     );
+    assert_eq!(
+        session.previous.as_ref().unwrap().vault().source_graph(),
+        &before_source
+    );
 
     fs::remove_file(corrupt_snapshot).unwrap();
-    fs::write(
-        incremental.path().join("src/lib.rs"),
-        "pub fn recovered() {}\n",
-    )
-    .unwrap();
     fs::write(full.path().join("src/lib.rs"), "pub fn recovered() {}\n").unwrap();
     let previous = session.previous.as_ref().unwrap().state().clone();
+    reset_refresh_work();
     let recovered = session
         .refresh(incremental.path(), RefreshCause::SourceChanged)
         .unwrap();
+    assert!(refresh_work().source_graph.parsed_files > 0);
     let recovered = refresh_snapshot(incremental.path(), recovered, Some(&previous));
     let mut full_session = one_shot_session(full.path());
     let full_result = full_session
