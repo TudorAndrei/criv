@@ -104,7 +104,7 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
             let stale_skills = if options.changed {
                 Vec::new()
             } else {
-                crate::generated_skills::inventory(root).advisory_outdated_paths()
+                crate::install::skill_inventory(root).advisory_outdated_paths()
             };
             if !stale_skills.is_empty() {
                 let subject = if stale_skills.len() == 1 {

@@ -361,12 +361,13 @@ fn skill_marker(contents: &str) -> Option<String> {
     None
 }
 
-const SKILL_CRIV: &str = include_str!("../assets/skills/criv/SKILL.md");
-const SKILL_CRIV_ME: &str = include_str!("../assets/skills/criv-me/SKILL.md");
-const SKILL_WRITING_DECISIONS: &str = include_str!("../assets/skills/writing-decisions/SKILL.md");
-const SKILL_REFERENCING_CODE: &str = include_str!("../assets/skills/referencing-code/SKILL.md");
-const SKILL_CHECKING_DRIFT: &str = include_str!("../assets/skills/checking-drift/SKILL.md");
-const SKILL_C4_AUTHORING: &str = include_str!("../assets/skills/c4-authoring/SKILL.md");
+const SKILL_CRIV: &str = include_str!("../../assets/skills/criv/SKILL.md");
+const SKILL_CRIV_ME: &str = include_str!("../../assets/skills/criv-me/SKILL.md");
+const SKILL_WRITING_DECISIONS: &str =
+    include_str!("../../assets/skills/writing-decisions/SKILL.md");
+const SKILL_REFERENCING_CODE: &str = include_str!("../../assets/skills/referencing-code/SKILL.md");
+const SKILL_CHECKING_DRIFT: &str = include_str!("../../assets/skills/checking-drift/SKILL.md");
+const SKILL_C4_AUTHORING: &str = include_str!("../../assets/skills/c4-authoring/SKILL.md");
 
 const SKILLS: &[SkillTemplate] = &[
     SkillTemplate {

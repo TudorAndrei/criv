@@ -94,8 +94,8 @@ fn init_force_skills_refreshes_existing_skills_but_plain_init_preserves_them() {
     forced.force_skills = true;
     run(&root, forced).unwrap();
     assert_eq!(
-        crate::generated_skills::inventory(&root).status(".agents/skills/criv/SKILL.md"),
-        Some(crate::generated_skills::InstalledSkillStatus::Current)
+        crate::install::skill_inventory(&root).status(".agents/skills/criv/SKILL.md"),
+        Some(crate::install::InstalledSkillStatus::Current)
     );
 
     let _ = std::fs::remove_dir_all(root);

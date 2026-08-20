@@ -8,7 +8,7 @@ use std::path::Path;
 
 use clap::Args as ClapArgs;
 
-use crate::generated_skills::{self, InstallMode, SkillPublication};
+use crate::install::{self, InstallMode, SkillPublication};
 use crate::util::{append_line_if_missing_in, create_dir_in, write_new_in};
 use crate::{CrivError, Result};
 
@@ -37,11 +37,10 @@ pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
 
     if options.force_skills {
         if !options.no_skills {
-            let report = generated_skills::install(root, InstallMode::Refresh)?;
+            let report = install::install_skills(root, InstallMode::Refresh)?;
             collect_skill_publications(&report, &mut created, &mut refreshed);
             link_messages.push(
-                generated_skills::describe_claude_publication(report.claude_publication())
-                    .to_string(),
+                install::describe_claude_publication(report.claude_publication()).to_string(),
             );
         }
         print_init_result(created, refreshed, link_messages);
@@ -72,11 +71,10 @@ pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
     )?;
 
     if !options.no_skills {
-        let report = generated_skills::install(root, InstallMode::CreateOnly)?;
+        let report = install::install_skills(root, InstallMode::CreateOnly)?;
         collect_skill_publications(&report, &mut created, &mut refreshed);
-        link_messages.push(
-            generated_skills::describe_claude_publication(report.claude_publication()).to_string(),
-        );
+        link_messages
+            .push(install::describe_claude_publication(report.claude_publication()).to_string());
     }
 
     append_line_if_missing_in(root, Path::new("."), Path::new(".gitignore"), ".criv/")?;
@@ -108,7 +106,7 @@ fn print_init_result(
 }
 
 fn collect_skill_publications(
-    report: &generated_skills::InstallReport,
+    report: &install::InstallReport,
     created: &mut Vec<&'static str>,
     refreshed: &mut Vec<&'static str>,
 ) {

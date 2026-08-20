@@ -15,16 +15,26 @@ model {
     }
   }
 
-  extend criv.cli.scaffoldInstaller {
+  extend criv.cli.installation {
     rustInit = module 'criv::init' {
       technology 'Rust'
       description 'Writes the vault scaffold and canonical configuration.'
       link ../../src/init.rs 'source'
     }
-    rustGeneratedSkills = module 'criv::generated_skills' {
+    rustInstall = module 'criv::install' {
+      technology 'Rust'
+      description 'Exposes generated-skill and editor installation operations.'
+      link ../../src/install.rs 'source'
+    }
+    rustInstallSkills = module 'criv::install::skills' {
       technology 'Rust'
       description 'Installs and inspects the canonical generated skill inventory.'
-      link ../../src/generated_skills.rs 'source'
+      link ../../src/install/skills.rs 'source'
+    }
+    rustInstallEditor = module 'criv::install::editor' {
+      technology 'Rust'
+      description 'Finds a selected editor and installs the bundled local viewer.'
+      link ../../src/install/editor.rs 'source'
     }
   }
 
@@ -172,7 +182,8 @@ model {
 
   // Command routing.
   criv.cli.commandInterface.rustMain -> criv.cli.commandInterface.rustCriv 'Calls the library API'
-  criv.cli.commandInterface.rustCriv -> criv.cli.scaffoldInstaller.rustInit 'Installs the vault scaffold'
+  criv.cli.commandInterface.rustCriv -> criv.cli.installation.rustInit 'Starts vault initialization'
+  criv.cli.commandInterface.rustCriv -> criv.cli.installation.rustInstall 'Starts editor installation'
   criv.cli.commandInterface.rustCriv -> criv.cli.vaultModel.rustVault 'Runs one-shot load operations'
   criv.cli.commandInterface.rustCriv -> criv.cli.refreshCoordinator.rustWatch 'Starts watch sessions'
   criv.cli.commandInterface.rustCriv -> criv.cli.refreshCoordinator.rustRefresh 'Runs one-shot refresh sessions'
@@ -212,7 +223,7 @@ model {
   criv.cli.governanceEngine.rustCheck -> criv.cli.governanceEngine.rustPolicyScan 'Evaluates policy patterns'
   criv.cli.governanceEngine.rustCheck -> criv.cli.repositoryHistory.rustGit 'Reads changed files and history'
   criv.cli.governanceEngine.rustCheck -> criv.cli.statePublisher.rustState 'Reads the previous published state'
-  criv.cli.governanceEngine.rustCheck -> criv.cli.scaffoldInstaller.rustGeneratedSkills 'Checks the generated skill inventory'
+  criv.cli.governanceEngine.rustCheck -> criv.cli.installation.rustInstall 'Checks the generated skill inventory'
   criv.cli.governanceEngine.rustPolicyScan -> criv.cli.sourceIntelligence.rustStructural 'Matches structural patterns'
   criv.cli.governanceEngine.rustPolicyScan -> criv.cli.vaultModel.rustVault 'Reads scanned vault content'
   criv.cli.governanceEngine.rustAdr -> criv.cli.vaultModel.rustVault 'Reads decisions'
@@ -245,7 +256,9 @@ model {
   criv.cli.knowledgeQueries.rustQuery -> criv.cli.repositoryHistory.rustGit 'Reads commit history'
   criv.cli.knowledgeQueries.rustQuery -> criv.cli.statePublisher.rustStatePublication 'Reads published snapshots'
   // Vault initialization.
-  criv.cli.scaffoldInstaller.rustInit -> criv.cli.scaffoldInstaller.rustGeneratedSkills 'Installs the skill inventory'
+  criv.cli.installation.rustInit -> criv.cli.installation.rustInstall 'Installs the skill inventory'
+  criv.cli.installation.rustInstall -> criv.cli.installation.rustInstallSkills 'Installs and inspects generated skills'
+  criv.cli.installation.rustInstall -> criv.cli.installation.rustInstallEditor 'Installs the bundled editor viewer'
 }
 
 views {
@@ -265,6 +278,15 @@ views {
     include criv.cli.statePublisher.rustState
   }
 
+  view codeInstallation of criv.cli.installation {
+    title 'Code / CLI / Installation'
+    description 'The parent installation interface and its separate skill and editor implementations.'
+
+    include *
+    include criv.cli.commandInterface.rustCriv
+    include criv.cli.governanceEngine.rustCheck
+  }
+
   view codeValidation of criv.cli.governanceEngine {
     title 'Code / CLI / Validation and enforcement'
     description 'The Rust modules that validate the vault and gate each enforcement stage.'
@@ -274,6 +296,7 @@ views {
     include criv.cli.vaultModel.rustVault
     include criv.cli.vaultModel.rustConfig
     include criv.cli.sourceIntelligence.rustStructural
+    include criv.cli.installation.rustInstall
   }
 
   view codeVaultLoading of criv.cli.vaultModel {

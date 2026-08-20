@@ -59,7 +59,7 @@ model {
   }
 
   // CLI component roll-up.
-  criv.cli.commandInterface -> criv.cli.scaffoldInstaller 'Starts vault initialization'
+  criv.cli.commandInterface -> criv.cli.installation 'Starts initialization and explicit editor installation'
   criv.cli.commandInterface -> criv.cli.vaultModel 'Starts read-only vault operations'
   criv.cli.commandInterface -> criv.cli.refreshCoordinator 'Starts watch and refresh sessions'
   criv.cli.commandInterface -> criv.cli.governanceEngine 'Starts checks and staged enforcement'
@@ -79,7 +79,7 @@ model {
   criv.cli.governanceEngine -> criv.cli.sourceIntelligence 'Evaluates policies and source interfaces'
   criv.cli.governanceEngine -> criv.cli.repositoryHistory 'Resolves changes, renames, and decision history'
   criv.cli.governanceEngine -> criv.cli.statePublisher 'Compares the previous published state'
-  criv.cli.governanceEngine -> criv.cli.scaffoldInstaller 'Checks the generated skill inventory'
+  criv.cli.governanceEngine -> criv.cli.installation 'Checks the generated skill inventory'
 
   criv.cli.knowledgeQueries -> criv.cli.vaultModel 'Reads the repository knowledge graph'
   criv.cli.knowledgeQueries -> criv.cli.sourceIntelligence 'Reads Source catalog and graph data'
@@ -102,8 +102,11 @@ model {
   criv.cli.repositoryHistory -> repository 'Reads commits, diffs, and changed files' {
     technology 'libgit2'
   }
-  criv.cli.scaffoldInstaller -> repository 'Writes canonical vault and agent files' {
+  criv.cli.installation -> repository 'Writes canonical vault and agent files' {
     technology 'Confined atomic writes'
+  }
+  criv.cli.installation -> vscode 'Installs the optional local viewer' {
+    technology 'Editor CLI process'
   }
 
   // Shared renderer components.

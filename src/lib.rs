@@ -4,10 +4,9 @@ mod check;
 mod config;
 mod discovery;
 mod enforce;
-mod generated_skills;
 mod git;
 mod init;
-mod install_editor;
+mod install;
 mod policy_scan;
 mod query;
 mod refresh;
@@ -93,7 +92,7 @@ struct Cli {
 enum Command {
     Init(init::InitOptions),
     /// Install the optional local viewer into a selected editor.
-    InstallEditor(install_editor::InstallEditorOptions),
+    InstallEditor(install::InstallEditorOptions),
     Adr(adr::AdrOptions),
     Check(check::CheckOptions),
     Query(query::QueryOptions),
@@ -139,7 +138,7 @@ fn run_command(args: Vec<String>, cwd: &std::path::Path) -> Result<()> {
             Ok(())
         }
         Some(Command::Init(options)) => init::run(cwd, options),
-        Some(Command::InstallEditor(options)) => install_editor::run(options),
+        Some(Command::InstallEditor(options)) => install::install_editor(options),
         Some(Command::Adr(options)) => adr::run(cwd, options),
         Some(Command::Check(options)) => check::run(cwd, options),
         Some(Command::Query(options)) => query::run(cwd, options),

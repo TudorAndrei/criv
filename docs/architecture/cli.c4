@@ -10,10 +10,10 @@ model {
         description 'Parses commands and sends each command to one application workflow.'
         link ../../src/lib.rs 'source'
       }
-      scaffoldInstaller = component 'Scaffold installer' {
+      installation = component 'Installation' {
         technology 'Rust'
-        description 'Installs canonical vault files, configuration, editor files, and agent skills.'
-        link ../../src/init.rs 'source'
+        description 'Installs canonical vault content, generated skills, and the optional local editor viewer through separate command flows.'
+        link ../../src/install.rs 'source'
       }
       vaultModel = component 'Vault model' {
         technology 'Rust'
@@ -67,7 +67,7 @@ model {
   criv.cli.statePublisher -> criv.stateWire 'Builds the shared State document' {
     technology 'Rust crate'
   }
-  criv.cli.scaffoldInstaller -> criv.stateWire 'Creates the empty State document' {
+  criv.cli.installation -> criv.stateWire 'Creates the empty State document' {
     technology 'Rust crate'
   }
 }
@@ -81,11 +81,16 @@ views {
 
     include *
     include repository
+    include vscode
     include criv.stateStore
     include criv.stateWire
     include
       criv.cli.vaultModel with {
         navigateTo codeVaultLoading
+      }
+    include
+      criv.cli.installation with {
+        navigateTo codeInstallation
       }
     include
       criv.cli.refreshCoordinator with {
