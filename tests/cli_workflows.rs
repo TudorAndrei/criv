@@ -134,6 +134,72 @@ fn check_reports_normalized_likec4_diagnostics() {
 
 #[cfg(unix)]
 #[test]
+fn check_json_and_github_preserve_exact_likec4_ranges() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    init(root);
+    fs::create_dir_all(root.join("docs/architecture")).unwrap();
+    fs::write(
+        root.join("docs/architecture/model.c4"),
+        "specification { element system }\nmodel { broken = system }\n",
+    )
+    .unwrap();
+    let bridge_output = serde_json::json!({
+        "protocolVersion": 1,
+        "nodeVersion": "26.5.1",
+        "likec4Version": "1.59.2",
+        "revision": 0,
+        "valid": false,
+        "diagnostics": [{
+            "message": "Expected an element body",
+            "file": "/outside/docs/architecture/model.c4",
+            "line": 1,
+            "range": {
+                "start": { "line": 1, "character": 8 },
+                "end": { "line": 1, "character": 14 }
+            }
+        }],
+        "model": null
+    })
+    .to_string();
+    let fake_bin = write_fake_node(root, &bridge_output);
+
+    let json = criv(root)
+        .args(["check", "--format", "json", "--filter", "invalid-likec4"])
+        .env("PATH", fake_bin.path())
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let diagnostics: Vec<serde_json::Value> = serde_json::from_slice(&json).unwrap();
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(
+        diagnostics[0]["range"],
+        serde_json::json!({
+            "start": { "line": 1, "character": 8 },
+            "end": { "line": 1, "character": 14 }
+        })
+    );
+
+    criv(root)
+        .args([
+            "check",
+            "--format",
+            "github",
+            "--filter",
+            "invalid-likec4",
+        ])
+        .env("PATH", fake_bin.path())
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains(
+            "file=docs/architecture/model.c4,line=2,col=9,endLine=2,endColumn=14,title=criv invalid-likec4",
+        ));
+}
+
+#[cfg(unix)]
+#[test]
 fn check_rejects_a_likec4_bridge_with_the_wrong_node_version() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
@@ -1770,7 +1836,7 @@ Missing [[missing-target]]
         .assert()
         .failure()
         .stdout(
-            "::error file=docs/broken.md,line=9,title=criv broken-link::wiki-link `[[missing-target]]` does not resolve\n",
+            "::error file=docs/broken.md,line=9,col=9,endLine=9,endColumn=26,title=criv broken-link::wiki-link `[[missing-target]]` does not resolve\n",
         );
 }
 

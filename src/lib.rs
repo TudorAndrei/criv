@@ -2,6 +2,7 @@ mod adr;
 mod c4;
 mod check;
 mod config;
+mod diagnostic;
 mod discovery;
 mod enforce;
 mod git;

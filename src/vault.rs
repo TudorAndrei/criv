@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[cfg(test)]
 use std::{cell::Cell, thread_local};
@@ -9,6 +10,7 @@ use serde::Deserialize;
 use crate::Result;
 use crate::c4;
 use crate::config::Config;
+use crate::diagnostic::SourceLocation;
 use crate::discovery::{discover_vault, read_selected_text};
 use crate::source::{IndexedSource, SourceBuild, SourceCatalog, SourceGraph, SourceGraphBuild};
 use crate::util::{
@@ -94,6 +96,7 @@ pub(crate) struct WikiLink {
     pub(crate) raw: String,
     pub(crate) target: String,
     pub(crate) line: usize,
+    pub(crate) location: Option<SourceLocation>,
 }
 
 #[derive(Debug, Clone)]
@@ -123,6 +126,7 @@ pub(crate) struct Note {
     pub(crate) superseded_by: Vec<String>,
     pub(crate) wiki_links: Vec<WikiLink>,
     pub(crate) frontmatter_error: Option<String>,
+    pub(crate) frontmatter_error_location: Option<SourceLocation>,
 }
 
 impl Note {
@@ -219,12 +223,7 @@ impl Vault {
             .map(|path| root.join(path))
             .map(|path| c4::parse_file(root, &docs_path, &path))
             .collect::<Result<Vec<_>>>()?;
-        let likec4_sources = c4_artifacts
-            .iter()
-            .filter(|artifact| artifact.format == Some(c4::C4ArtifactFormat::LikeC4))
-            .map(|artifact| artifact.path.clone())
-            .collect::<Vec<_>>();
-        let likec4_workspace = c4::load_workspace(root, &docs_path, &likec4_sources);
+        let likec4_workspace = c4::load_workspace(root, &docs_path, &c4_artifacts);
 
         let mut note_ids = BTreeMap::new();
         let mut filenames = BTreeMap::new();
@@ -643,8 +642,10 @@ fn effective_accepted_decision_ids(notes: &[Note]) -> BTreeSet<String> {
 
 fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
     let contents = read_selected_text(root, path)?;
+    let source: Arc<str> = Arc::from(contents.as_str());
     let rel_path = strip_prefix(path, root);
-    let (frontmatter, body, frontmatter_lines) = split_frontmatter(&contents);
+    let (frontmatter, body, frontmatter_lines, frontmatter_start, body_start) =
+        split_frontmatter(&contents);
     let doc_rel_path = strip_prefix(path, docs_path);
     // Positions are file-relative (ADR-0045). The frontmatter offset applies to
     // the parsed-note body only; the error branch below keeps the whole file as
@@ -670,7 +671,11 @@ fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
             supersedes: Vec::new(),
             superseded_by: Vec::new(),
             wiki_links: Vec::new(),
-            frontmatter_error: Some(err),
+            frontmatter_error_location: err.offset.and_then(|offset| {
+                let offset = frontmatter_start + offset;
+                SourceLocation::new(source.clone(), offset..offset)
+            }),
+            frontmatter_error: Some(err.message),
         },
     };
     if note.frontmatter_error.is_some() {
@@ -678,10 +683,14 @@ fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
     }
     note.wiki_links = find_wiki_links_with_lines(&note.body)
         .into_iter()
-        .map(|(line, raw)| WikiLink {
+        .map(|(line, raw, span)| WikiLink {
             target: raw.split('|').next().unwrap_or(&raw).trim().to_string(),
             raw,
             line: line + line_offset,
+            location: SourceLocation::new(
+                source.clone(),
+                body_start + span.start..body_start + span.end,
+            ),
         })
         .collect();
     note.headings = parse_markdown_headings(&note.body)
@@ -700,12 +709,12 @@ fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
 /// lines the frontmatter consumed — both `---` delimiters included. Callers add
 /// that count back to body-relative positions so every line they report is
 /// file-relative (see ADR-0045).
-fn split_frontmatter(contents: &str) -> (&str, String, usize) {
+fn split_frontmatter(contents: &str) -> (&str, String, usize, usize, usize) {
     let Some((opening, frontmatter_start)) = delimiter_line(contents, 0) else {
-        return ("", contents.to_string(), 0);
+        return ("", contents.to_string(), 0, 0, 0);
     };
     if opening != "---" {
-        return ("", contents.to_string(), 0);
+        return ("", contents.to_string(), 0, 0, 0);
     }
 
     let mut cursor = frontmatter_start;
@@ -716,12 +725,14 @@ fn split_frontmatter(contents: &str) -> (&str, String, usize) {
                 &contents[frontmatter_start..cursor],
                 contents[next..].to_string(),
                 consumed,
+                frontmatter_start,
+                next,
             );
         }
         cursor = next;
     }
 
-    ("", contents.to_string(), 0)
+    ("", contents.to_string(), 0, 0, 0)
 }
 
 /// Returns the line without its LF/CRLF terminator plus the next byte offset.
@@ -739,12 +750,16 @@ fn parse_frontmatter(
     path: PathBuf,
     rel_path: String,
     body: String,
-) -> std::result::Result<Note, String> {
+) -> std::result::Result<Note, FrontmatterParseError> {
     let raw = if frontmatter.trim().is_empty() {
         RawFrontmatter::default()
     } else {
-        serde_norway::from_str::<RawFrontmatter>(frontmatter)
-            .map_err(|err| format!("failed to parse YAML frontmatter: {err}"))?
+        serde_norway::from_str::<RawFrontmatter>(frontmatter).map_err(|error| {
+            FrontmatterParseError {
+                offset: error.location().map(|location| location.index()),
+                message: format!("failed to parse YAML frontmatter: {error}"),
+            }
+        })?
     };
 
     let kind = match raw.kind.as_deref() {
@@ -817,7 +832,14 @@ fn parse_frontmatter(
         superseded_by: raw.superseded_by,
         wiki_links: Vec::new(),
         frontmatter_error: None,
+        frontmatter_error_location: None,
     })
+}
+
+#[derive(Debug)]
+struct FrontmatterParseError {
+    message: String,
+    offset: Option<usize>,
 }
 
 fn pattern_link_id(target: &str) -> Option<&str> {
@@ -963,7 +985,7 @@ mod tests {
             "---\r\nid: doc\r\n---\r\n# Body\r\n",
             "---\r\nid: doc\n---\r\n# Body\n",
         ] {
-            let (frontmatter, body, frontmatter_lines) = split_frontmatter(contents);
+            let (frontmatter, body, frontmatter_lines, _, _) = split_frontmatter(contents);
             assert!(frontmatter.contains("id: doc"));
             assert!(body.starts_with("# Body"));
             assert_eq!(frontmatter_lines, 3, "both delimiters and the field line");
@@ -977,7 +999,10 @@ mod tests {
             "---\nid: doc\n# Body\n",
             "\u{feff}---\nid: doc\n---\n# Body\n",
         ] {
-            assert_eq!(split_frontmatter(contents), ("", contents.to_string(), 0));
+            assert_eq!(
+                split_frontmatter(contents),
+                ("", contents.to_string(), 0, 0, 0)
+            );
         }
     }
 
@@ -985,7 +1010,7 @@ mod tests {
     fn supports_empty_frontmatter() {
         assert_eq!(
             split_frontmatter("---\n---\nbody\n"),
-            ("", "body\n".into(), 2)
+            ("", "body\n".into(), 2, 4, 8)
         );
     }
 
@@ -1496,6 +1521,13 @@ roots = ["src"]
             note.wiki_links[0].line,
             real_line(contents, "See [[other-note]].")
         );
+        let exact = note.wiki_links[0]
+            .location
+            .as_ref()
+            .expect("parsed wiki-link has an exact location")
+            .lsp_range();
+        assert_eq!((exact.start.line, exact.start.character), (8, 4));
+        assert_eq!((exact.end.line, exact.end.character), (8, 18));
     }
 
     #[test]
@@ -1518,6 +1550,7 @@ roots = ["src"]
         let note = parsed_note("criv-note-lines-bad-frontmatter", contents);
 
         assert!(note.frontmatter_error.is_some());
+        assert!(note.frontmatter_error_location.is_some());
         // The unparsed frontmatter stays in the body, so its closing `---` also
         // reads as a setext heading here; pick the real ATX heading by text.
         let heading = note

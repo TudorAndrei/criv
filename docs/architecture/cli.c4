@@ -40,6 +40,11 @@ model {
         description 'Validates vault facts and enforces effective ADR, policy, and change-scope rules.'
         link ../../src/check.rs 'source'
       }
+      diagnosticLocations = component 'Diagnostic locations' {
+        technology 'Rust'
+        description 'Validates UTF-8 byte spans and converts them to LSP and GitHub coordinates.'
+        link ../../src/diagnostic.rs 'source'
+      }
       refreshCoordinator = component 'Refresh coordinator' {
         technology 'Rust and notify'
         description 'Coordinates one-shot and incremental vault loading, validation, generation, and publication.'
@@ -99,6 +104,10 @@ views {
     include
       criv.cli.governanceEngine with {
         navigateTo codeValidation
+      }
+    include
+      criv.cli.diagnosticLocations with {
+        navigateTo codeDiagnosticLocations
       }
     include
       criv.cli.knowledgeQueries with {

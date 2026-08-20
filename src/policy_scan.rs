@@ -5,6 +5,7 @@ use std::path::Path;
 use std::{cell::Cell, thread_local};
 
 use crate::Result;
+use crate::diagnostic::SourceLocation;
 use crate::structural::{self, CompiledPolicy, PolicyCompileError, PolicyScanRequest};
 use crate::vault::{NoteKind, Vault};
 
@@ -35,6 +36,7 @@ pub(crate) struct PolicyViolation {
     pub(crate) adr_id: String,
     pub(crate) pattern_id: String,
     pub(crate) text: String,
+    pub(crate) location: SourceLocation,
 }
 
 pub(crate) struct PolicyScanPlan {
@@ -316,6 +318,7 @@ impl PolicyScanPlan {
                     adr_id: owner.adr_id.clone(),
                     pattern_id: policy.pattern_id.clone(),
                     text: row.text.clone(),
+                    location: row.location.clone(),
                 }));
             }
         }
@@ -433,6 +436,9 @@ mod tests {
 
         assert_eq!(structural::work_counts().policy_compilations, 2);
         assert_eq!(structural::work_counts().ast_parses, 2);
+        let exact = violations[0].location.lsp_range();
+        assert_eq!((exact.start.line, exact.start.character), (0, 0));
+        assert_eq!((exact.end.line, exact.end.character), (0, 12));
         assert_eq!(
             violations
                 .iter()

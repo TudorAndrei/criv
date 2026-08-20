@@ -747,7 +747,7 @@ pub(crate) fn is_adr_id(value: &str) -> bool {
         && value[4..].chars().all(|ch| ch.is_ascii_digit())
 }
 
-pub(crate) fn find_wiki_links_with_lines(markdown: &str) -> Vec<(usize, String)> {
+pub(crate) fn find_wiki_links_with_lines(markdown: &str) -> Vec<(usize, String, Range<usize>)> {
     let mut in_code_block = false;
     let mut code_ranges = Vec::new();
 
@@ -782,6 +782,7 @@ pub(crate) fn find_wiki_links_with_lines(markdown: &str) -> Vec<(usize, String)>
                 links.push((
                     line_number(markdown, open),
                     markdown[body_start..close].to_string(),
+                    open..close + 2,
                 ));
             }
             start = close + 2;
@@ -946,13 +947,16 @@ mod tests {
     #[test]
     fn wiki_links_include_line_numbers() {
         let links = find_wiki_links_with_lines("a [[one]]\nb [[two|Two]]");
-        assert_eq!(links, vec![(1, "one".into()), (2, "two|Two".into())]);
+        assert_eq!(
+            links,
+            vec![(1, "one".into(), 2..9), (2, "two|Two".into(), 12..23)]
+        );
     }
 
     #[test]
     fn wiki_links_ignore_code_examples() {
         let links = find_wiki_links_with_lines("`[[example]]`\n[[real]]\n```\n[[fenced]]\n```");
-        assert_eq!(links, vec![(2, "real".into())]);
+        assert_eq!(links, vec![(2, "real".into(), 14..22)]);
     }
 
     #[test]

@@ -80,6 +80,10 @@ model {
   criv.cli.governanceEngine -> criv.cli.repositoryHistory 'Resolves changes, renames, and decision history'
   criv.cli.governanceEngine -> criv.cli.statePublisher 'Compares the previous published state'
   criv.cli.governanceEngine -> criv.cli.installation 'Checks the generated skill inventory'
+  criv.cli.governanceEngine -> criv.cli.diagnosticLocations 'Converts exact locations for command output'
+  criv.cli.vaultModel -> criv.cli.diagnosticLocations 'Keeps exact parsed document locations'
+  criv.cli.architectureService -> criv.cli.diagnosticLocations 'Validates C4 producer ranges'
+  criv.cli.sourceIntelligence -> criv.cli.diagnosticLocations 'Keeps exact structural match locations'
 
   criv.cli.knowledgeQueries -> criv.cli.vaultModel 'Reads the repository knowledge graph'
   criv.cli.knowledgeQueries -> criv.cli.sourceIntelligence 'Reads Source catalog and graph data'

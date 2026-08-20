@@ -1,6 +1,8 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::Result;
+use crate::diagnostic::SourceLocation;
 use crate::discovery::read_selected_text;
 use crate::util::strip_prefix;
 
@@ -15,6 +17,7 @@ pub(crate) struct C4Artifact {
     pub(crate) rel_path: String,
     pub(crate) format: Option<C4ArtifactFormat>,
     pub(crate) diagnostics: Vec<C4ArtifactDiagnostic>,
+    pub(crate) source: Arc<str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +25,7 @@ pub(crate) struct C4ArtifactDiagnostic {
     pub(crate) code: &'static str,
     pub(crate) line: Option<usize>,
     pub(crate) message: String,
+    pub(crate) location: Option<SourceLocation>,
 }
 
 pub(crate) fn parse_file(root: &Path, docs_path: &Path, path: &Path) -> Result<C4Artifact> {
@@ -30,15 +34,18 @@ pub(crate) fn parse_file(root: &Path, docs_path: &Path, path: &Path) -> Result<C
 }
 
 fn parse_contents(root: &Path, docs_path: &Path, path: &Path, contents: &str) -> C4Artifact {
+    let source: Arc<str> = Arc::from(contents);
     let rel_path = strip_prefix(path, root);
     let mut diagnostics = Vec::new();
     let directives = generated_directives(contents);
     let format = is_likec4(contents).then_some(C4ArtifactFormat::LikeC4);
     if format.is_none() {
+        let line = first_non_empty_line(contents);
         diagnostics.push(C4ArtifactDiagnostic {
             code: "unknown-c4-format",
-            line: first_non_empty_line(contents),
+            line,
             message: ".c4 content must use LikeC4 DSL".into(),
+            location: line.and_then(|line| line_location(source.clone(), line)),
         });
     }
     for (line, value) in &directives {
@@ -50,6 +57,7 @@ fn parse_contents(root: &Path, docs_path: &Path, path: &Path, contents: &str) ->
                 code: "invalid-c4-generated",
                 line: Some(*line),
                 message: "criv:generated must be true or false".into(),
+                location: line_location(source.clone(), *line),
             });
         }
     }
@@ -63,6 +71,7 @@ fn parse_contents(root: &Path, docs_path: &Path, path: &Path, contents: &str) ->
         },
         format,
         diagnostics,
+        source,
     }
 }
 
@@ -104,6 +113,20 @@ fn first_non_empty_line(contents: &str) -> Option<usize> {
         .map(|index| index + 1)
 }
 
+fn line_location(source: Arc<str>, line: usize) -> Option<SourceLocation> {
+    let start = source
+        .split_inclusive('\n')
+        .take(line.saturating_sub(1))
+        .map(str::len)
+        .sum::<usize>();
+    let raw = source
+        .get(start..)?
+        .split_once('\n')
+        .map_or_else(|| &source[start..], |(line, _)| line);
+    let line = raw.strip_suffix('\r').unwrap_or(raw);
+    SourceLocation::new(source.clone(), start..start + line.len())
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -128,6 +151,14 @@ mod tests {
             let artifact = parse_contents(root, &docs, &path, legacy);
             assert_eq!(artifact.format, None);
             assert_eq!(artifact.diagnostics[0].code, "unknown-c4-format");
+            let exact = artifact.diagnostics[0]
+                .location
+                .as_ref()
+                .expect("the non-empty source line has an exact location")
+                .lsp_range();
+            assert_eq!((exact.start.line, exact.start.character), (0, 0));
+            assert_eq!(exact.end.line, 0);
+            assert!(exact.end.character > 0);
         }
     }
 }

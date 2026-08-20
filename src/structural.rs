@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
+use std::sync::Arc;
 
 #[cfg(test)]
 use std::{cell::Cell, thread_local};
@@ -12,6 +13,7 @@ use ast_grep_core::meta_var::MetaVariable;
 use ast_grep_core::{Doc, NodeMatch, Pattern};
 use ast_grep_language::{Language, LanguageExt, SupportLang};
 
+use crate::diagnostic::SourceLocation;
 use crate::source::read_source_to_string;
 use crate::vault::{PolicyPattern, Vault};
 use crate::{CrivError, Result};
@@ -29,6 +31,7 @@ pub(crate) struct StructuralMatch {
     pub(crate) range: String,
     pub(crate) text: String,
     pub(crate) captures: BTreeMap<String, String>,
+    pub(crate) location: SourceLocation,
 }
 
 enum CompiledMatcher {
@@ -169,10 +172,10 @@ pub(crate) fn find_policies_batch(
             continue;
         }
 
-        let contents = read_source_to_string(root, source_file)?;
+        let contents: Arc<str> = Arc::from(read_source_to_string(root, source_file)?);
         #[cfg(test)]
         record_work(|counts| counts.ast_parses += 1);
-        let ast = language.ast_grep(&contents);
+        let ast = language.ast_grep(contents.as_ref());
         let root = ast.root();
         for request in requests {
             let rows = rows_by_key.entry(request.key).or_default();
@@ -180,13 +183,13 @@ pub(crate) fn find_policies_batch(
                 CompiledMatcher::Pattern(pattern) => {
                     rows.extend(
                         root.find_all(pattern)
-                            .map(|matched| row_from_match(source_file, &matched)),
+                            .map(|matched| row_from_match(source_file, &matched, contents.clone())),
                     );
                 }
                 CompiledMatcher::Rule(rule) => {
                     rows.extend(
                         root.find_all(rule)
-                            .map(|matched| row_from_match(source_file, &matched)),
+                            .map(|matched| row_from_match(source_file, &matched, contents.clone())),
                     );
                 }
             }
@@ -271,14 +274,19 @@ fn scan_source<M: Matcher>(
     contents: &str,
     matcher: &M,
 ) -> Vec<StructuralMatch> {
-    let ast = language.ast_grep(contents);
+    let contents: Arc<str> = Arc::from(contents);
+    let ast = language.ast_grep(contents.as_ref());
     ast.root()
         .find_all(matcher)
-        .map(|matched| row_from_match(source_file, &matched))
+        .map(|matched| row_from_match(source_file, &matched, contents.clone()))
         .collect()
 }
 
-fn row_from_match<D: Doc>(source_file: &str, matched: &NodeMatch<'_, D>) -> StructuralMatch {
+fn row_from_match<D: Doc>(
+    source_file: &str,
+    matched: &NodeMatch<'_, D>,
+    source: Arc<str>,
+) -> StructuralMatch {
     let node = matched.get_node();
     let start = node.start_pos();
     let end = node.end_pos();
@@ -295,6 +303,8 @@ fn row_from_match<D: Doc>(source_file: &str, matched: &NodeMatch<'_, D>) -> Stru
         ),
         text: node.text().trim().to_string(),
         captures: capture_map(matched),
+        location: SourceLocation::new(source, node.range())
+            .expect("ast-grep node ranges use UTF-8 byte boundaries"),
     }
 }
 
@@ -363,6 +373,9 @@ mod tests {
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].line, 1);
         assert_eq!(matches[0].range, "L1:C1-L3:C2");
+        let exact = matches[0].location.lsp_range();
+        assert_eq!((exact.start.line, exact.start.character), (0, 0));
+        assert_eq!((exact.end.line, exact.end.character), (2, 1));
         assert_eq!(
             matches[0].captures.get("NAME").map(String::as_str),
             Some("main")

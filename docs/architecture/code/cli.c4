@@ -133,6 +133,14 @@ model {
     }
   }
 
+  extend criv.cli.diagnosticLocations {
+    rustDiagnostic = module 'criv::diagnostic' {
+      technology 'Rust'
+      description 'Validates UTF-8 byte spans and converts them to LSP and GitHub coordinates.'
+      link ../../src/diagnostic.rs 'source'
+    }
+  }
+
   extend criv.cli.governanceEngine {
     rustEnforce = module 'criv::enforce' {
       technology 'Rust'
@@ -205,8 +213,11 @@ model {
   // Vault loading.
   criv.cli.vaultModel.rustVault -> criv.cli.architectureService.rustC4 'Loads C4 artifacts and workspaces'
   criv.cli.vaultModel.rustVault -> criv.cli.vaultModel.rustConfig 'Reads the vault configuration'
+  criv.cli.vaultModel.rustVault -> criv.cli.diagnosticLocations.rustDiagnostic 'Keeps exact parsed document locations'
   criv.cli.architectureService.rustC4 -> criv.cli.architectureService.rustC4Artifact 'Classifies C4 artifacts'
   criv.cli.architectureService.rustC4 -> criv.cli.architectureService.rustLikeC4 'Compiles the LikeC4 workspace'
+  criv.cli.architectureService.rustC4Artifact -> criv.cli.diagnosticLocations.rustDiagnostic 'Validates artifact byte spans'
+  criv.cli.architectureService.rustLikeC4 -> criv.cli.diagnosticLocations.rustDiagnostic 'Converts LikeC4 LSP ranges'
   criv.cli.vaultModel.rustVault -> criv.cli.sourceIntelligence.rustSourceCatalog 'Loads configured sources'
   criv.cli.vaultModel.rustVault -> criv.cli.sourceIntelligence.rustSourceGraph 'Builds module and import relations'
 
@@ -215,6 +226,7 @@ model {
   criv.cli.sourceIntelligence.rustDiscovery -> criv.cli.vaultModel.rustConfig 'Reads file-selection rules'
   criv.cli.sourceIntelligence.rustSourceCatalog -> criv.cli.sourceIntelligence.rustSourcePaths 'Owns selected source paths'
   criv.cli.sourceIntelligence.rustSourceGraph -> criv.cli.sourceIntelligence.rustSourcePaths 'Reads selected source content'
+  criv.cli.sourceIntelligence.rustStructural -> criv.cli.diagnosticLocations.rustDiagnostic 'Keeps exact match byte spans'
 
   // Validation and enforcement.
   criv.cli.governanceEngine.rustCheck -> criv.cli.vaultModel.rustVault 'Validates repository artifacts'
@@ -224,8 +236,10 @@ model {
   criv.cli.governanceEngine.rustCheck -> criv.cli.repositoryHistory.rustGit 'Reads changed files and history'
   criv.cli.governanceEngine.rustCheck -> criv.cli.statePublisher.rustState 'Reads the previous published state'
   criv.cli.governanceEngine.rustCheck -> criv.cli.installation.rustInstall 'Checks the generated skill inventory'
+  criv.cli.governanceEngine.rustCheck -> criv.cli.diagnosticLocations.rustDiagnostic 'Converts exact command output locations'
   criv.cli.governanceEngine.rustPolicyScan -> criv.cli.sourceIntelligence.rustStructural 'Matches structural patterns'
   criv.cli.governanceEngine.rustPolicyScan -> criv.cli.vaultModel.rustVault 'Reads scanned vault content'
+  criv.cli.governanceEngine.rustPolicyScan -> criv.cli.diagnosticLocations.rustDiagnostic 'Carries exact violation locations'
   criv.cli.governanceEngine.rustAdr -> criv.cli.vaultModel.rustVault 'Reads decisions'
   criv.cli.governanceEngine.rustAdr -> criv.cli.vaultModel.rustConfig 'Reads the decision configuration'
   criv.cli.governanceEngine.rustAdr -> criv.cli.repositoryHistory.rustGit 'Reads decision history'
@@ -287,6 +301,19 @@ views {
     include criv.cli.governanceEngine.rustCheck
   }
 
+  view codeDiagnosticLocations of criv.cli.diagnosticLocations {
+    title 'Code / CLI / Diagnostic locations'
+    description 'The shared location conversion and its exact-range producers and output consumer.'
+
+    include *
+    include criv.cli.governanceEngine.rustCheck
+    include criv.cli.governanceEngine.rustPolicyScan
+    include criv.cli.vaultModel.rustVault
+    include criv.cli.architectureService.rustC4Artifact
+    include criv.cli.architectureService.rustLikeC4
+    include criv.cli.sourceIntelligence.rustStructural
+  }
+
   view codeValidation of criv.cli.governanceEngine {
     title 'Code / CLI / Validation and enforcement'
     description 'The Rust modules that validate the vault and gate each enforcement stage.'
@@ -308,6 +335,7 @@ views {
     include criv.cli.sourceIntelligence.rustSourceCatalog
     include criv.cli.sourceIntelligence.rustDiscovery
     include criv.cli.sourceIntelligence.rustSourceGraph
+    include criv.cli.diagnosticLocations.rustDiagnostic
   }
 
   view codeQuery of criv.cli.knowledgeQueries {
@@ -328,6 +356,7 @@ views {
     include *
     include criv.cli.vaultModel.rustVault
     include criv.cli.vaultModel.rustConfig
+    include criv.cli.diagnosticLocations.rustDiagnostic
   }
 
   view codeStatePublication of criv.cli.statePublisher {

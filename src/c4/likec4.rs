@@ -1,10 +1,13 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::sync::LazyLock;
 use std::thread;
 use std::time::Duration;
 
 use serde::Deserialize;
+
+use crate::diagnostic::{LspRange, SourceLocation};
 
 const BRIDGE_SOURCE_TEMPLATE: &str = include_str!("../../assets/likec4-bridge.mjs");
 const BRIDGE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -46,6 +49,7 @@ pub(crate) struct LikeC4Diagnostic {
     pub(crate) path: String,
     pub(crate) line: Option<usize>,
     pub(crate) message: String,
+    pub(crate) location: Option<SourceLocation>,
 }
 
 #[derive(Debug, Default)]
@@ -75,9 +79,16 @@ struct BridgeDiagnostic {
     message: String,
     file: String,
     line: Option<usize>,
+    #[serde(default)]
+    range: Option<serde_json::Value>,
 }
 
-pub(crate) fn load(root: &Path, docs_path: &Path, sources: &[PathBuf]) -> LikeC4Workspace {
+pub(super) struct LikeC4Source {
+    pub(super) path: PathBuf,
+    pub(super) source: Arc<str>,
+}
+
+pub(super) fn load(root: &Path, docs_path: &Path, sources: &[LikeC4Source]) -> LikeC4Workspace {
     if sources.is_empty() {
         return LikeC4Workspace::default();
     }
@@ -87,7 +98,7 @@ pub(crate) fn load(root: &Path, docs_path: &Path, sources: &[PathBuf]) -> LikeC4
     let workspace = relative_path(root, &workspace_path);
     let source_paths = sources
         .iter()
-        .map(|path| relative_path(root, path))
+        .map(|source| relative_path(root, &source.path))
         .collect::<Vec<_>>();
     let mut result = LikeC4Workspace {
         path: workspace.clone(),
@@ -101,6 +112,7 @@ pub(crate) fn load(root: &Path, docs_path: &Path, sources: &[PathBuf]) -> LikeC4
                 path: path.clone(),
                 line: None,
                 message: format!("LikeC4 source must be inside `{workspace}`"),
+                location: None,
             });
         }
     }
@@ -132,6 +144,7 @@ pub(crate) fn load(root: &Path, docs_path: &Path, sources: &[PathBuf]) -> LikeC4
                     "LikeC4 source requires Node.js {} and local likec4 {}: {error}",
                     LIKEC4_CONTRACT.node_version, LIKEC4_CONTRACT.likec4_version
                 ),
+                location: None,
             });
             return result;
         }
@@ -153,6 +166,7 @@ pub(crate) fn load(root: &Path, docs_path: &Path, sources: &[PathBuf]) -> LikeC4
                 path: workspace,
                 line: None,
                 message: "LikeC4 bridge exceeded the 60 second process limit".into(),
+                location: None,
             });
             return result;
         }
@@ -162,6 +176,7 @@ pub(crate) fn load(root: &Path, docs_path: &Path, sources: &[PathBuf]) -> LikeC4
                 path: workspace,
                 line: None,
                 message: format!("failed to wait for LikeC4 bridge: {error}"),
+                location: None,
             });
             return result;
         }
@@ -174,6 +189,7 @@ pub(crate) fn load(root: &Path, docs_path: &Path, sources: &[PathBuf]) -> LikeC4
                 path: workspace,
                 line: None,
                 message: format!("failed to read LikeC4 bridge stdout: {error}"),
+                location: None,
             });
             return result;
         }
@@ -187,6 +203,7 @@ pub(crate) fn load(root: &Path, docs_path: &Path, sources: &[PathBuf]) -> LikeC4
                 path: workspace,
                 line: None,
                 message: format!("failed to read LikeC4 bridge stderr: {error}"),
+                location: None,
             });
             return result;
         }
@@ -198,6 +215,7 @@ pub(crate) fn load(root: &Path, docs_path: &Path, sources: &[PathBuf]) -> LikeC4
             path: workspace,
             line: None,
             message: "LikeC4 bridge output exceeded the 16 MiB limit".into(),
+            location: None,
         });
         return result;
     }
@@ -214,6 +232,7 @@ pub(crate) fn load(root: &Path, docs_path: &Path, sources: &[PathBuf]) -> LikeC4
                     "LikeC4 bridge returned invalid JSON: {error}; stderr: {}",
                     stderr.trim()
                 ),
+                location: None,
             });
             return result;
         }
@@ -236,6 +255,7 @@ pub(crate) fn load(root: &Path, docs_path: &Path, sources: &[PathBuf]) -> LikeC4
                 LIKEC4_CONTRACT.likec4_version,
                 response.protocol_version, response.node_version, response.likec4_version
             ),
+            location: None,
         });
         return result;
     }
@@ -245,23 +265,37 @@ pub(crate) fn load(root: &Path, docs_path: &Path, sources: &[PathBuf]) -> LikeC4
             path: workspace,
             line: None,
             message: format!("LikeC4 bridge failed: {error}"),
+            location: None,
         });
         return result;
     }
 
     result
         .diagnostics
-        .extend(
-            response
-                .diagnostics
-                .into_iter()
-                .map(|diagnostic| LikeC4Diagnostic {
-                    kind: LikeC4DiagnosticKind::Model,
-                    path: normalize_diagnostic_path(root, &diagnostic.file, &source_paths),
-                    line: diagnostic.line.map(|line| line + 1),
-                    message: diagnostic.message,
-                }),
-        );
+        .extend(response.diagnostics.into_iter().map(|diagnostic| {
+            let path = normalize_diagnostic_path(root, &diagnostic.file, &source_paths);
+            let location = diagnostic
+                .range
+                .and_then(|range| serde_json::from_value::<LspRange>(range).ok())
+                .and_then(|range| {
+                    sources
+                        .iter()
+                        .find(|source| relative_path(root, &source.path) == path)
+                        .and_then(|source| {
+                            SourceLocation::from_lsp_range(source.source.clone(), range)
+                        })
+                });
+            LikeC4Diagnostic {
+                kind: LikeC4DiagnosticKind::Model,
+                path,
+                line: location
+                    .as_ref()
+                    .map(SourceLocation::line)
+                    .or_else(|| diagnostic.line.map(|line| line + 1)),
+                message: diagnostic.message,
+                location,
+            }
+        }));
     result.diagnostics.sort_by(|left, right| {
         (&left.path, left.line.unwrap_or(0), &left.message).cmp(&(
             &right.path,
@@ -305,6 +339,7 @@ fn bridge_reader_panic(
         path: workspace,
         line: None,
         message: format!("LikeC4 bridge {stream} reader failed"),
+        location: None,
     });
     result
 }
