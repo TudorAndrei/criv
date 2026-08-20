@@ -93,6 +93,69 @@ pub(crate) struct ModuleDecl {
 pub(crate) struct Import {
     pub(crate) module: String,
     pub(crate) line: usize,
+    #[serde(default)]
+    site: usize,
+    #[serde(default)]
+    kind: DirectiveKind,
+    #[serde(default)]
+    owner: Option<SymbolOwner>,
+    #[serde(default)]
+    scope: Option<LexicalScope>,
+    #[serde(default)]
+    alias: Option<String>,
+    #[serde(default)]
+    only: Option<DirectiveFilter>,
+    #[serde(default)]
+    except: Vec<CallableFilter>,
+    #[serde(default)]
+    absolute: bool,
+}
+
+impl Import {
+    fn legacy(module: String, line: usize) -> Self {
+        Self {
+            module,
+            line,
+            site: 0,
+            kind: DirectiveKind::Legacy,
+            owner: None,
+            scope: None,
+            alias: None,
+            only: None,
+            except: Vec::new(),
+            absolute: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub(crate) struct LexicalScope {
+    start_byte: usize,
+    end_byte: usize,
+}
+
+#[derive(Debug, Default, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub(crate) enum DirectiveKind {
+    Alias,
+    Import,
+    Require,
+    Use,
+    #[default]
+    Legacy,
+}
+
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub(crate) enum DirectiveFilter {
+    Callables(Vec<CallableFilter>),
+    Functions,
+    Macros,
+    Sigils,
+}
+
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub(crate) struct CallableFilter {
+    name: String,
+    arity: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +174,8 @@ pub(crate) struct Symbol {
     #[serde(default)]
     clause_ranges: Vec<SymbolRange>,
     pub(crate) calls: Vec<Call>,
+    #[serde(default)]
+    relationships: Vec<Relationship>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
@@ -162,6 +227,55 @@ impl SymbolId {
 pub(crate) struct Call {
     pub(crate) target: String,
     pub(crate) line: usize,
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub(crate) enum RelationshipKind {
+    Call,
+    Capture,
+    Delegate,
+    ProtocolImplementation,
+    BehaviourImplementation,
+}
+
+impl RelationshipKind {
+    fn is_executable_query_edge(self) -> bool {
+        matches!(self, Self::Call | Self::Delegate)
+    }
+}
+
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub(crate) struct Relationship {
+    kind: RelationshipKind,
+    target: RelationshipTarget,
+    line: usize,
+    #[serde(default)]
+    site: usize,
+}
+
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub(crate) enum ModuleRelationshipRole {
+    Protocol,
+    ForType,
+    Behaviour,
+}
+
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub(crate) enum RelationshipTarget {
+    Callable {
+        module: Option<String>,
+        name: String,
+        arity: usize,
+    },
+    Module {
+        module: String,
+        role: ModuleRelationshipRole,
+    },
+    Dynamic {
+        id: String,
+        label: String,
+        arity: usize,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -619,14 +733,28 @@ impl SourceGraph {
         let mut rows = self
             .symbol(&symbol_id)
             .map(|symbol| {
-                symbol
+                let mut rows = symbol
                     .calls
                     .iter()
                     .map(|call| {
                         self.resolve_call(&symbol.id, &call.target)
                             .map_or_else(|| call.target.clone(), |id| id.display())
                     })
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>();
+                rows.extend(
+                    symbol
+                        .relationships
+                        .iter()
+                        .filter(|relationship| relationship.kind.is_executable_query_edge())
+                        .map(|relationship| {
+                            self.resolve_relationship(&symbol.id, relationship)
+                                .map_or_else(
+                                    || self.relationship_target_label(&symbol.id, relationship),
+                                    |id| id.display(),
+                                )
+                        }),
+                );
+                rows
             })
             .unwrap_or_default();
         rows.sort();
@@ -645,6 +773,10 @@ impl SourceGraph {
                     self.resolve_call(&symbol.id, &call.target)
                         .is_some_and(|target| target == symbol_id)
                         || call.target == symbol_id.name
+                }) || symbol.relationships.iter().any(|relationship| {
+                    relationship.kind.is_executable_query_edge()
+                        && self.resolve_relationship(&symbol.id, relationship).as_ref()
+                            == Some(&symbol_id)
                 }) {
                     rows.push(symbol.id.display());
                 }
@@ -661,6 +793,13 @@ impl SourceGraph {
             for symbol in &file.symbols {
                 for call in &symbol.calls {
                     if let Some(target) = self.resolve_call(&symbol.id, &call.target) {
+                        called.insert(target);
+                    }
+                }
+                for relationship in &symbol.relationships {
+                    if relationship.kind.is_executable_query_edge()
+                        && let Some(target) = self.resolve_relationship(&symbol.id, relationship)
+                    {
                         called.insert(target);
                     }
                 }
@@ -703,6 +842,132 @@ impl SourceGraph {
             .and_then(|file| file.symbols.iter().find(|symbol| symbol.name == target))
             .map(|symbol| symbol.id.clone())
             .or_else(|| self.resolve_symbol(target))
+    }
+
+    fn resolve_relationship(
+        &self,
+        caller: &SymbolId,
+        relationship: &Relationship,
+    ) -> Option<SymbolId> {
+        let caller_symbol = self.symbol(caller)?;
+        let file = self.files.get(&caller.path)?;
+        match &relationship.target {
+            RelationshipTarget::Dynamic { .. } => None,
+            RelationshipTarget::Module { module, .. } => {
+                let module = resolve_elixir_module(
+                    file,
+                    caller_symbol.owner.as_ref(),
+                    module,
+                    relationship.line,
+                    relationship.site,
+                );
+                unique_symbol(self.symbols().filter(|symbol| {
+                    symbol.arity.is_none()
+                        && symbol.owner.as_ref().is_some_and(|owner| match owner {
+                            SymbolOwner::Module { name } => name == &module,
+                            SymbolOwner::Implementation { .. } => false,
+                        })
+                }))
+            }
+            RelationshipTarget::Callable {
+                module,
+                name,
+                arity,
+            } => {
+                if let Some(module) = module {
+                    let module = resolve_elixir_module(
+                        file,
+                        caller_symbol.owner.as_ref(),
+                        module,
+                        relationship.line,
+                        relationship.site,
+                    );
+                    return unique_symbol(
+                        self.symbols().filter(|symbol| {
+                            elixir_callable_matches(symbol, &module, name, *arity)
+                        }),
+                    );
+                }
+
+                let local = symbol_resolution(
+                    file.symbols
+                        .iter()
+                        .filter(|symbol| {
+                            symbol.owner == caller_symbol.owner
+                                && elixir_callable_identity_matches(symbol, name, *arity)
+                        })
+                        .map(|symbol| symbol.id.clone())
+                        .collect(),
+                );
+                match local {
+                    SymbolResolution::Resolved(id) => return Some(id),
+                    SymbolResolution::Ambiguous(_) => return None,
+                    SymbolResolution::Missing => {}
+                }
+
+                let mut candidates = Vec::new();
+                for module in effective_elixir_imports(
+                    file,
+                    caller_symbol.owner.as_ref(),
+                    relationship.line,
+                    relationship.site,
+                    name,
+                    *arity,
+                ) {
+                    candidates.extend(self.symbols().filter(|symbol| {
+                        elixir_callable_matches(symbol, &module, name, *arity)
+                            && import_kind_allows(
+                                file,
+                                caller_symbol.owner.as_ref(),
+                                &module,
+                                relationship.line,
+                                relationship.site,
+                                (name, *arity),
+                                symbol.kind,
+                            )
+                    }));
+                }
+                unique_symbol(candidates)
+            }
+        }
+    }
+
+    fn relationship_target_label(&self, caller: &SymbolId, relationship: &Relationship) -> String {
+        let file = self.files.get(&caller.path);
+        let owner = self.symbol(caller).and_then(|symbol| symbol.owner.as_ref());
+        match &relationship.target {
+            RelationshipTarget::Callable {
+                module,
+                name,
+                arity,
+            } => module.as_ref().map_or_else(
+                || format!("{name}/{arity}"),
+                |module| {
+                    let module = file.map_or_else(
+                        || module.clone(),
+                        |file| {
+                            resolve_elixir_module(
+                                file,
+                                owner,
+                                module,
+                                relationship.line,
+                                relationship.site,
+                            )
+                        },
+                    );
+                    format!("{module}.{name}/{arity}")
+                },
+            ),
+            RelationshipTarget::Module { module, .. } => file.map_or_else(
+                || module.clone(),
+                |file| {
+                    resolve_elixir_module(file, owner, module, relationship.line, relationship.site)
+                },
+            ),
+            RelationshipTarget::Dynamic { id, label, .. } => {
+                format!("dynamic:{id}:{label}")
+            }
+        }
     }
 
     pub(crate) fn interface_hash(&self, query: &str) -> Option<String> {
@@ -834,6 +1099,205 @@ fn symbol_resolution(mut matches: Vec<SymbolId>) -> SymbolResolution {
     }
 }
 
+fn unique_symbol<'a>(symbols: impl IntoIterator<Item = &'a Symbol>) -> Option<SymbolId> {
+    let mut matches = symbols
+        .into_iter()
+        .map(|symbol| symbol.id.clone())
+        .collect::<Vec<_>>();
+    matches.sort();
+    matches.dedup();
+    (matches.len() == 1).then(|| matches.remove(0))
+}
+
+fn elixir_callable_identity_matches(symbol: &Symbol, name: &str, arity: usize) -> bool {
+    symbol.name == name
+        && symbol.arity == Some(arity)
+        && matches!(
+            symbol.kind,
+            SymbolKind::Function | SymbolKind::Macro | SymbolKind::Guard
+        )
+}
+
+fn elixir_callable_matches(symbol: &Symbol, module: &str, name: &str, arity: usize) -> bool {
+    elixir_callable_identity_matches(symbol, name, arity)
+        && symbol.owner.as_ref().is_some_and(|owner| match owner {
+            SymbolOwner::Module { name } => name == module,
+            SymbolOwner::Implementation { .. } => false,
+        })
+}
+
+fn directive_is_active(
+    directive: &Import,
+    owner: Option<&SymbolOwner>,
+    line: usize,
+    site: usize,
+) -> bool {
+    directive.owner.as_ref() == owner
+        && (directive.line < line || (directive.line == line && directive.site <= site))
+        && directive
+            .scope
+            .is_none_or(|scope| scope.start_byte <= site && site <= scope.end_byte)
+}
+
+fn resolve_elixir_module(
+    file: &SourceFile,
+    owner: Option<&SymbolOwner>,
+    module: &str,
+    line: usize,
+    site: usize,
+) -> String {
+    resolve_elixir_module_inner(file, owner, module, line, site, 0)
+}
+
+fn resolve_elixir_module_inner(
+    file: &SourceFile,
+    owner: Option<&SymbolOwner>,
+    module: &str,
+    line: usize,
+    site: usize,
+    depth: usize,
+) -> String {
+    if depth >= 16 || module.starts_with(':') {
+        return module.to_string();
+    }
+    if let Some(absolute) = module.strip_prefix("Elixir.") {
+        return absolute.to_string();
+    }
+    let (first, suffix) = module
+        .split_once('.')
+        .map_or((module, ""), |(first, suffix)| (first, suffix));
+    let mapping = file
+        .imports
+        .iter()
+        .filter(|directive| {
+            directive_is_active(directive, owner, line, site)
+                && matches!(
+                    directive.kind,
+                    DirectiveKind::Alias | DirectiveKind::Require
+                )
+                && directive.alias.as_deref() == Some(first)
+        })
+        .max_by_key(|directive| (directive.line, directive.site));
+    let Some(mapping) = mapping else {
+        return module.to_string();
+    };
+    let mapped = if suffix.is_empty() {
+        mapping.module.clone()
+    } else {
+        format!("{}.{suffix}", mapping.module)
+    };
+    if mapping.absolute {
+        return mapped;
+    }
+    resolve_elixir_module_inner(
+        file,
+        owner,
+        &mapped,
+        mapping.line,
+        mapping.site.saturating_sub(1),
+        depth + 1,
+    )
+}
+
+fn effective_elixir_imports(
+    file: &SourceFile,
+    owner: Option<&SymbolOwner>,
+    line: usize,
+    site: usize,
+    _name: &str,
+    _arity: usize,
+) -> Vec<String> {
+    let mut modules = file
+        .imports
+        .iter()
+        .filter(|directive| {
+            directive.kind == DirectiveKind::Import
+                && directive_is_active(directive, owner, line, site)
+        })
+        .map(|directive| resolve_directive_module(file, owner, directive))
+        .collect::<Vec<_>>();
+    modules.sort();
+    modules.dedup();
+    modules
+}
+
+fn import_kind_allows(
+    file: &SourceFile,
+    owner: Option<&SymbolOwner>,
+    module: &str,
+    line: usize,
+    site: usize,
+    callable: (&str, usize),
+    kind: SymbolKind,
+) -> bool {
+    let (name, arity) = callable;
+    let mut directives = file
+        .imports
+        .iter()
+        .filter(|directive| {
+            directive.kind == DirectiveKind::Import
+                && directive_is_active(directive, owner, line, site)
+                && resolve_directive_module(file, owner, directive) == module
+        })
+        .collect::<Vec<_>>();
+    directives.sort_by_key(|directive| (directive.line, directive.site));
+    let mut selection: Option<DirectiveFilter> = None;
+    let mut exclusions = Vec::new();
+    for directive in directives {
+        if let Some(only) = &directive.only {
+            selection = Some(only.clone());
+            exclusions.clear();
+        } else if directive.except.is_empty() {
+            selection = None;
+            exclusions.clear();
+        } else if selection.is_none() && exclusions.is_empty() {
+            selection = None;
+        }
+        exclusions.extend(directive.except.clone());
+    }
+    if exclusions
+        .iter()
+        .any(|filter| filter.name == name && filter.arity == arity)
+    {
+        return false;
+    }
+    selection.is_none_or(|filter| directive_filter_allows(&filter, name, arity, kind))
+}
+
+fn resolve_directive_module(
+    file: &SourceFile,
+    owner: Option<&SymbolOwner>,
+    directive: &Import,
+) -> String {
+    if directive.absolute {
+        directive.module.clone()
+    } else {
+        resolve_elixir_module(
+            file,
+            owner,
+            &directive.module,
+            directive.line,
+            directive.site.saturating_sub(1),
+        )
+    }
+}
+
+fn directive_filter_allows(
+    filter: &DirectiveFilter,
+    name: &str,
+    arity: usize,
+    kind: SymbolKind,
+) -> bool {
+    match filter {
+        DirectiveFilter::Callables(filters) => filters
+            .iter()
+            .any(|filter| filter.name == name && filter.arity == arity),
+        DirectiveFilter::Functions => kind == SymbolKind::Function,
+        DirectiveFilter::Macros => matches!(kind, SymbolKind::Macro | SymbolKind::Guard),
+        DirectiveFilter::Sigils => kind == SymbolKind::Macro && name.starts_with("sigil_"),
+    }
+}
+
 fn symbol_aliases(symbol: &Symbol) -> Vec<String> {
     let mut aliases = vec![symbol.name.clone()];
     if let Some(arity) = symbol.arity {
@@ -954,10 +1418,8 @@ fn collect_tree_sitter_nodes(
     file: &mut SourceFile,
 ) {
     for import in tree_sitter_imports(node, contents, language) {
-        file.imports.push(Import {
-            module: import,
-            line: node.start_position().row + 1,
-        });
+        file.imports
+            .push(Import::legacy(import, node.start_position().row + 1));
     }
     let child_module_parent = if let Some(name) = tree_sitter_module(node, contents, language) {
         let name = module_parent
@@ -1141,6 +1603,7 @@ fn tree_sitter_symbol(
         range,
         clause_ranges: vec![range],
         calls: tree_sitter_calls(node, contents, language),
+        relationships: Vec::new(),
     })
 }
 
@@ -1477,10 +1940,7 @@ fn parse_source_file_fallback(path: &str, contents: &str) -> SourceFile {
         }
 
         for import in parse_imports(trimmed, language) {
-            file.imports.push(Import {
-                module: import,
-                line: line_no,
-            });
+            file.imports.push(Import::legacy(import, line_no));
         }
         if let Some(name) = fallback_module_decl(trimmed, language) {
             file.modules.push(ModuleDecl {
@@ -1554,6 +2014,7 @@ fn parse_source_file_fallback(path: &str, contents: &str) -> SourceFile {
                     end_line: total_lines,
                 }],
                 calls: Vec::new(),
+                relationships: Vec::new(),
             });
             current_symbol = Some(file.symbols.len() - 1);
             if language == Language::Python {
@@ -2027,6 +2488,7 @@ mod tests {
             range: ranges[0],
             clause_ranges: ranges,
             calls: Vec::new(),
+            relationships: Vec::new(),
         }
     }
 
@@ -2448,6 +2910,7 @@ mod tests {
                 end_line: 11,
             }],
             calls: Vec::new(),
+            relationships: Vec::new(),
         });
         let graph = graph_with_file(file);
 
@@ -2790,6 +3253,208 @@ fn target() {}
         assert_eq!(
             graph.callees("src/local.rs#caller"),
             vec!["src/local.rs#fn:target"]
+        );
+    }
+
+    #[test]
+    fn elixir_relationship_resolution_is_exact_lexical_and_kind_aware() {
+        let file = parse_source_file(
+            "lib/relationships.ex",
+            r#"
+defmodule Root.Repo do
+  def fetch(value), do: value
+  def fetch(value, opts), do: {value, opts}
+end
+
+defmodule Root.Helpers do
+  def allowed(value), do: value
+  def blocked(value), do: value
+  def clash(value), do: value
+  def local(value), do: value
+end
+
+defmodule Other.Helpers do
+  def clash(value), do: value
+end
+
+defmodule Root.Macros do
+  defmacro build(value), do: value
+end
+
+defmodule Root.FunctionClasses do
+  def function_only(value), do: value
+  defmacro macro_blocked(value), do: value
+end
+
+defmodule Root.MacroClasses do
+  def function_blocked(value), do: value
+  defmacro macro_allowed(value), do: value
+end
+
+defmodule Root.SigilClasses do
+  defmacro sigil_q(value), do: value
+  defmacro regular_macro(value), do: value
+end
+
+defmodule Root.Behaviour do
+  @callback run(term()) :: term()
+end
+
+defprotocol Root.Proto do
+  def work(value)
+end
+
+defmodule Unrelated do
+  def missing(value), do: value
+end
+
+defmodule My.App do
+  alias Root.Repo
+  require Root.Macros, as: M
+  import Root.Helpers,
+    only: [allowed: 1, blocked: 1, clash: 1, local: 1],
+    except: [blocked: 1]
+  import Other.Helpers, only: [clash: 1]
+  import Root.FunctionClasses, only: :functions
+  import Root.MacroClasses, only: :macros
+  import Root.SigilClasses, only: :sigils
+  @behaviour Root.Behaviour
+  alias Other.Helpers, as: Root
+
+  def run(value) do
+    local(value)
+    allowed(value)
+    blocked(value)
+    clash(value)
+    missing(value)
+    value |> Repo.fetch(opt())
+    M.build(value)
+    function_only(value)
+    macro_blocked(value)
+    macro_allowed(value)
+    function_blocked(value)
+    sigil_q(value)
+    regular_macro(value)
+    __MODULE__.local(value)
+    Elixir.Root.Repo.fetch(value)
+    :lists.reverse(value)
+    apply(Repo, :fetch, [value])
+    fun.(value)
+    quote do
+      hidden()
+    end
+  end
+
+  def local(value), do: value
+  defdelegate delegated(value), to: Repo, as: :fetch
+  def capture_only(), do: &Repo.fetch/1
+
+  def scoped(value) do
+    alias Elixir.Root.Repo, as: Scoped
+    Scoped.fetch(value)
+  end
+
+  def outside(value), do: Scoped.fetch(value)
+  def same_line(value), do: (if value, do: (alias Elixir.Root.Repo, as: Here; Here.fetch(value)); Here.fetch(value))
+end
+
+defimpl Root.Proto, for: My.App do
+  def work(value), do: value
+end
+"#,
+        );
+        let graph = graph_with_file(file);
+
+        let run = graph.callees("lib/relationships.ex#My.App.run/1");
+        for target in [
+            "lib/relationships.ex#module:My.App/fn:local/1",
+            "lib/relationships.ex#module:Root.Helpers/fn:allowed/1",
+            "lib/relationships.ex#module:Root.Repo/fn:fetch/1",
+            "lib/relationships.ex#module:Root.Repo/fn:fetch/2",
+            "lib/relationships.ex#module:Root.Macros/macro:build/1",
+            "lib/relationships.ex#module:Root.FunctionClasses/fn:function_only/1",
+            "lib/relationships.ex#module:Root.MacroClasses/macro:macro_allowed/1",
+            "lib/relationships.ex#module:Root.SigilClasses/macro:sigil_q/1",
+            "blocked/1",
+            "clash/1",
+            "function_blocked/1",
+            "macro_blocked/1",
+            "missing/1",
+            ":lists.reverse/1",
+            "regular_macro/1",
+        ] {
+            assert!(
+                run.iter().any(|row| row == target),
+                "missing {target}: {run:?}"
+            );
+        }
+        assert!(!run.iter().any(|row| row.contains("hidden")));
+        assert!(run.iter().any(|row| row.starts_with("dynamic:")));
+
+        assert_eq!(
+            graph.callees("lib/relationships.ex#My.App.delegated/1"),
+            vec!["lib/relationships.ex#module:Root.Repo/fn:fetch/1"]
+        );
+        let callers = graph.callers("lib/relationships.ex#Root.Repo.fetch/1");
+        assert!(callers.contains(&"lib/relationships.ex#module:My.App/fn:delegated/1".to_string()));
+        assert!(callers.contains(&"lib/relationships.ex#module:My.App/fn:run/1".to_string()));
+        assert!(
+            !callers.contains(&"lib/relationships.ex#module:My.App/fn:capture_only/0".to_string())
+        );
+
+        assert_eq!(
+            graph.callees("lib/relationships.ex#My.App.scoped/1"),
+            vec!["lib/relationships.ex#module:Root.Repo/fn:fetch/1"]
+        );
+        assert_eq!(
+            graph.callees("lib/relationships.ex#My.App.outside/1"),
+            vec!["Scoped.fetch/1"]
+        );
+        assert_eq!(
+            graph.callees("lib/relationships.ex#My.App.same_line/1"),
+            vec![
+                "Here.fetch/1",
+                "lib/relationships.ex#module:Root.Repo/fn:fetch/1",
+            ]
+        );
+
+        let app = graph
+            .resolve_symbol("lib/relationships.ex#module:My.App")
+            .unwrap();
+        let app_symbol = graph.symbol(&app).unwrap();
+        let behaviour = app_symbol
+            .relationships
+            .iter()
+            .find(|relationship| relationship.kind == RelationshipKind::BehaviourImplementation)
+            .unwrap();
+        assert_eq!(
+            graph
+                .resolve_relationship(&app, behaviour)
+                .unwrap()
+                .display(),
+            "lib/relationships.ex#module:Root.Behaviour"
+        );
+
+        let implementation = graph
+            .resolve_symbol("lib/relationships.ex#impl:Root.Proto/for:My.App")
+            .unwrap();
+        let implementation_symbol = graph.symbol(&implementation).unwrap();
+        let targets = implementation_symbol
+            .relationships
+            .iter()
+            .map(|relationship| {
+                graph
+                    .resolve_relationship(&implementation, relationship)
+                    .unwrap()
+                    .display()
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            targets,
+            BTreeSet::from([
+                "lib/relationships.ex#module:My.App".to_string(),
+                "lib/relationships.ex#module:Root.Proto".to_string(),
+            ])
         );
     }
 

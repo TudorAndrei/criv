@@ -3,8 +3,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use tree_sitter::Node;
 
 use super::{
-    FieldSignature, InterfaceSignature, Language, ModuleDecl, SourceFile, Symbol, SymbolId,
-    SymbolKind, SymbolOwner, SymbolRange, elixir_symbol_selector, node_text,
+    CallableFilter, DirectiveFilter, DirectiveKind, FieldSignature, Import, InterfaceSignature,
+    Language, LexicalScope, ModuleDecl, ModuleRelationshipRole, Relationship, RelationshipKind,
+    RelationshipTarget, SourceFile, Symbol, SymbolId, SymbolKind, SymbolOwner, SymbolRange,
+    elixir_symbol_selector, node_text,
 };
 
 #[derive(Clone)]
@@ -18,6 +20,8 @@ struct CallableClause {
     defaults: Vec<String>,
     range: SymbolRange,
     has_body: bool,
+    relationships: Vec<Relationship>,
+    default_relationships: Vec<Relationship>,
 }
 
 #[derive(Clone)]
@@ -29,6 +33,7 @@ struct DefaultHead {
     params: Vec<String>,
     defaults: Vec<String>,
     exported: bool,
+    default_relationships: Vec<Relationship>,
 }
 
 #[derive(Clone)]
@@ -59,6 +64,7 @@ struct ModuleBody {
     fields: Vec<FieldSignature>,
     has_struct: bool,
     has_exception: bool,
+    relationships: Vec<Relationship>,
 }
 
 pub(super) fn parse_file(path: &str, contents: &str, root: Node<'_>) -> SourceFile {
@@ -162,6 +168,29 @@ fn parse_module(
     };
 
     let range = node_range(node);
+    let mut module_relationships = match &owner {
+        SymbolOwner::Implementation { protocol, for_type } => vec![
+            Relationship {
+                kind: RelationshipKind::ProtocolImplementation,
+                target: RelationshipTarget::Module {
+                    module: protocol.clone(),
+                    role: ModuleRelationshipRole::Protocol,
+                },
+                line: range.start_line,
+                site: node.start_byte(),
+            },
+            Relationship {
+                kind: RelationshipKind::ProtocolImplementation,
+                target: RelationshipTarget::Module {
+                    module: for_type.clone(),
+                    role: ModuleRelationshipRole::ForType,
+                },
+                line: range.start_line,
+                site: node.start_byte(),
+            },
+        ],
+        SymbolOwner::Module { .. } => Vec::new(),
+    };
     let symbol_index = file.symbols.len();
     file.modules.push(ModuleDecl {
         name: display_name.clone(),
@@ -174,12 +203,21 @@ fn parse_module(
         initial_kind,
         range,
         Vec::new(),
+        module_relationships.clone(),
     ));
 
     let mut body = ModuleBody::default();
     if let Some(do_block) =
         direct_child_kind(node, "do_block").or_else(|| keyword_value(arguments, contents, "do:"))
     {
+        collect_directives(
+            do_block,
+            contents,
+            &display_name,
+            &owner,
+            lexical_scope(do_block),
+            file,
+        );
         collect_module_body(
             do_block,
             contents,
@@ -204,6 +242,7 @@ fn parse_module(
     } else {
         SymbolKind::Module
     };
+    module_relationships.extend(body.relationships.clone());
     file.symbols[symbol_index] = module_symbol(
         path,
         owner.clone(),
@@ -211,6 +250,7 @@ fn parse_module(
         final_kind,
         range,
         body.fields.clone(),
+        module_relationships,
     );
 
     emit_callables(path, &display_name, &owner, &body, file);
@@ -238,7 +278,8 @@ fn collect_module_body(
             "def" | "defp" | "defmacro" | "defmacrop" | "defguard" | "defguardp"
             | "defdelegate" => {
                 if !unsafe_subtree(node)
-                    && let Some(clause) = callable_clause(node, contents, &target)
+                    && let Some(clause) =
+                        callable_clause(node, contents, path, module_name, &target)
                 {
                     if !clause.has_body
                         && clause.defaults.is_empty()
@@ -255,6 +296,7 @@ fn collect_module_body(
                             params: clause.params,
                             defaults: clause.defaults,
                             exported: clause.exported,
+                            default_relationships: clause.default_relationships,
                         });
                     } else {
                         body.callables.push(clause);
@@ -284,7 +326,7 @@ fn collect_module_body(
         && operator_text(node, contents).as_deref() == Some("@")
         && !unsafe_subtree(node)
     {
-        collect_attribute(node, contents, body);
+        collect_attribute(node, contents, module_name, body);
         return;
     }
 
@@ -302,7 +344,191 @@ fn collect_module_body(
     }
 }
 
-fn collect_attribute(node: Node<'_>, contents: &str, body: &mut ModuleBody) {
+fn collect_directives(
+    node: Node<'_>,
+    contents: &str,
+    module_name: &str,
+    owner: &SymbolOwner,
+    scope: LexicalScope,
+    file: &mut SourceFile,
+) {
+    if declaration_target(node, contents)
+        .as_deref()
+        .is_some_and(is_module_declaration)
+    {
+        return;
+    }
+    if let Some(target) = declaration_target(node, contents)
+        && let Some(kind) = directive_kind(&target)
+    {
+        if !unsafe_subtree(node) {
+            file.imports.extend(parse_directive(
+                node,
+                contents,
+                module_name,
+                owner,
+                scope,
+                kind,
+            ));
+        }
+        return;
+    }
+
+    let child_scope = if matches!(node.kind(), "do_block" | "stab_clause")
+        || is_lexical_keyword_pair(node, contents)
+    {
+        lexical_scope(node)
+    } else {
+        scope
+    };
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_directives(child, contents, module_name, owner, child_scope, file);
+    }
+}
+
+fn is_lexical_keyword_pair(node: Node<'_>, contents: &str) -> bool {
+    node.kind() == "pair"
+        && node
+            .child_by_field_name("key")
+            .and_then(|key| node_text(key, contents))
+            .is_some_and(|key| {
+                matches!(
+                    key.trim().trim_end_matches(':'),
+                    "do" | "else" | "rescue" | "catch" | "after"
+                )
+            })
+}
+
+fn directive_kind(target: &str) -> Option<DirectiveKind> {
+    match target {
+        "alias" => Some(DirectiveKind::Alias),
+        "import" => Some(DirectiveKind::Import),
+        "require" => Some(DirectiveKind::Require),
+        "use" => Some(DirectiveKind::Use),
+        _ => None,
+    }
+}
+
+fn parse_directive(
+    node: Node<'_>,
+    contents: &str,
+    module_name: &str,
+    owner: &SymbolOwner,
+    scope: LexicalScope,
+    kind: DirectiveKind,
+) -> Vec<Import> {
+    let Some(arguments) = direct_child_kind(node, "arguments") else {
+        return Vec::new();
+    };
+    let Some(module_text) = first_named_child(arguments).and_then(|node| node_text(node, contents))
+    else {
+        return Vec::new();
+    };
+    let explicit_alias = keyword_value(arguments, contents, "as:")
+        .and_then(|node| node_text(node, contents))
+        .map(|value| normalize_alias_name(&value));
+    let only = keyword_value(arguments, contents, "only:")
+        .and_then(|node| node_text(node, contents))
+        .and_then(|value| parse_directive_filter(&value));
+    let except = keyword_value(arguments, contents, "except:")
+        .and_then(|node| node_text(node, contents))
+        .map(|value| parse_callable_filters(&value))
+        .unwrap_or_default();
+    let absolute = is_explicit_elixir_module(&module_text);
+    let modules = expand_reference_modules(&module_text, module_name);
+    let one_module = modules.len() == 1;
+    modules
+        .into_iter()
+        .map(|module| {
+            let alias = if one_module {
+                explicit_alias.clone().or_else(|| match kind {
+                    DirectiveKind::Alias => module
+                        .rsplit('.')
+                        .next()
+                        .map(str::to_string)
+                        .filter(|value| !value.starts_with(':')),
+                    DirectiveKind::Import
+                    | DirectiveKind::Require
+                    | DirectiveKind::Use
+                    | DirectiveKind::Legacy => None,
+                })
+            } else if kind == DirectiveKind::Alias {
+                module.rsplit('.').next().map(str::to_string)
+            } else {
+                None
+            };
+            Import {
+                module,
+                line: node.start_position().row + 1,
+                site: node.start_byte(),
+                kind,
+                owner: Some(owner.clone()),
+                scope: Some(scope),
+                alias,
+                only: only.clone(),
+                except: except.clone(),
+                absolute,
+            }
+        })
+        .collect()
+}
+
+fn expand_reference_modules(text: &str, module_name: &str) -> Vec<String> {
+    let text = text.trim();
+    if let Some((prefix, suffix)) = text.split_once(".{")
+        && let Some(inner) = suffix.strip_suffix('}')
+    {
+        return split_top_level(inner, ',')
+            .into_iter()
+            .filter_map(|part| static_reference_module(&format!("{prefix}.{part}"), module_name))
+            .collect();
+    }
+    static_reference_module(text, module_name)
+        .into_iter()
+        .collect()
+}
+
+fn normalize_alias_name(value: &str) -> String {
+    value
+        .trim()
+        .trim_start_matches(':')
+        .trim_matches('"')
+        .to_string()
+}
+
+fn is_explicit_elixir_module(value: &str) -> bool {
+    let value = value.trim();
+    value.starts_with("Elixir.") || value.starts_with(":\"Elixir.")
+}
+
+fn parse_directive_filter(value: &str) -> Option<DirectiveFilter> {
+    match value.trim() {
+        ":functions" => Some(DirectiveFilter::Functions),
+        ":macros" => Some(DirectiveFilter::Macros),
+        ":sigils" => Some(DirectiveFilter::Sigils),
+        value => {
+            let filters = parse_callable_filters(value);
+            (!filters.is_empty()).then_some(DirectiveFilter::Callables(filters))
+        }
+    }
+}
+
+fn parse_callable_filters(value: &str) -> Vec<CallableFilter> {
+    let value = value.trim().trim_start_matches('[').trim_end_matches(']');
+    split_top_level(value, ',')
+        .into_iter()
+        .filter_map(|entry| {
+            let (name, arity) = entry.split_once(':')?;
+            Some(CallableFilter {
+                name: normalize_callable_name(name.trim()),
+                arity: arity.trim().parse().ok()?,
+            })
+        })
+        .collect()
+}
+
+fn collect_attribute(node: Node<'_>, contents: &str, module_name: &str, body: &mut ModuleBody) {
     let Some(call) = descendant_call(node) else {
         return;
     };
@@ -349,25 +575,59 @@ fn collect_attribute(node: Node<'_>, contents: &str, body: &mut ModuleBody) {
         "optional_callbacks" => {
             body.optional_callbacks.extend(optional_callbacks(&text));
         }
+        "behaviour" => {
+            if let Some(module) = static_relationship_module(&text, module_name) {
+                body.relationships.push(Relationship {
+                    kind: RelationshipKind::BehaviourImplementation,
+                    target: RelationshipTarget::Module {
+                        module,
+                        role: ModuleRelationshipRole::Behaviour,
+                    },
+                    line: node.start_position().row + 1,
+                    site: node.start_byte(),
+                });
+            }
+        }
         _ => {}
     }
 }
 
-fn callable_clause(node: Node<'_>, contents: &str, declaration: &str) -> Option<CallableClause> {
+fn callable_clause(
+    node: Node<'_>,
+    contents: &str,
+    path: &str,
+    module_name: &str,
+    declaration: &str,
+) -> Option<CallableClause> {
     let arguments = direct_child_kind(node, "arguments")?;
     let mut head = first_named_child(arguments)?;
     let mut guards = Vec::new();
+    let mut relationships = Vec::new();
     if head.kind() == "binary_operator" && operator_text(head, contents).as_deref() == Some("when")
     {
-        if let Some(guard) = head
-            .child_by_field_name("right")
-            .and_then(|node| node_text(node, contents))
-        {
-            guards.push(guard);
+        if let Some(guard_node) = head.child_by_field_name("right") {
+            if let Some(guard) = node_text(guard_node, contents) {
+                guards.push(guard);
+            }
+            collect_expression_relationships(
+                guard_node,
+                contents,
+                path,
+                module_name,
+                &mut relationships,
+            );
         }
         head = head.child_by_field_name("left")?;
     }
     let (name, params) = callable_head(head, contents)?;
+    let mut default_relationships = Vec::new();
+    collect_default_relationships(
+        head,
+        contents,
+        path,
+        module_name,
+        &mut default_relationships,
+    );
     let defaults = params
         .iter()
         .filter(|parameter| parameter.contains("\\\\"))
@@ -380,6 +640,30 @@ fn callable_clause(node: Node<'_>, contents: &str, declaration: &str) -> Option<
         _ => return None,
     };
     let exported = !matches!(declaration, "defp" | "defmacrop" | "defguardp");
+    if declaration == "defdelegate" {
+        relationships.push(delegate_relationship(
+            node,
+            contents,
+            path,
+            module_name,
+            &name,
+            params.len(),
+        ));
+    } else if let Some(body_node) =
+        direct_child_kind(node, "do_block").or_else(|| keyword_value(arguments, contents, "do:"))
+    {
+        collect_expression_relationships(
+            body_node,
+            contents,
+            path,
+            module_name,
+            &mut relationships,
+        );
+    }
+    relationships.sort();
+    relationships.dedup();
+    default_relationships.sort();
+    default_relationships.dedup();
     Some(CallableClause {
         kind,
         name,
@@ -392,6 +676,8 @@ fn callable_clause(node: Node<'_>, contents: &str, declaration: &str) -> Option<
         has_body: direct_child_kind(node, "do_block").is_some()
             || keyword_value(arguments, contents, "do:").is_some()
             || declaration == "defdelegate",
+        relationships,
+        default_relationships,
     })
 }
 
@@ -435,6 +721,417 @@ fn callable_head(node: Node<'_>, contents: &str) -> Option<(String, Vec<String>)
         }
         _ => None,
     }
+}
+
+fn collect_default_relationships(
+    node: Node<'_>,
+    contents: &str,
+    path: &str,
+    module_name: &str,
+    relationships: &mut Vec<Relationship>,
+) {
+    if node.kind() == "binary_operator" && operator_text(node, contents).as_deref() == Some("\\\\")
+    {
+        if let Some(default) = node.child_by_field_name("right") {
+            collect_expression_relationships(default, contents, path, module_name, relationships);
+        }
+        return;
+    }
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_default_relationships(child, contents, path, module_name, relationships);
+    }
+}
+
+fn collect_expression_relationships(
+    node: Node<'_>,
+    contents: &str,
+    path: &str,
+    module_name: &str,
+    relationships: &mut Vec<Relationship>,
+) {
+    if node.kind() == "unary_operator"
+        && operator_text(node, contents).as_deref() == Some("&")
+        && let Some(capture) = capture_relationship(node, contents, path, module_name)
+    {
+        relationships.push(capture);
+        return;
+    }
+
+    if node.kind() == "binary_operator" && operator_text(node, contents).as_deref() == Some("|>") {
+        if let Some(left) = node.child_by_field_name("left") {
+            collect_expression_relationships(left, contents, path, module_name, relationships);
+        }
+        if let Some(right) = node.child_by_field_name("right") {
+            if right.kind() == "call" {
+                collect_call_relationship(right, contents, path, module_name, 1, relationships);
+            } else {
+                collect_expression_relationships(right, contents, path, module_name, relationships);
+            }
+        }
+        return;
+    }
+
+    if node.kind() == "binary_operator"
+        && let Some(operator) = operator_text(node, contents)
+        && !matches!(operator.as_str(), "when" | "\\\\" | "::" | ".")
+    {
+        relationships.push(Relationship {
+            kind: RelationshipKind::Call,
+            target: RelationshipTarget::Callable {
+                module: None,
+                name: operator,
+                arity: 2,
+            },
+            line: node.start_position().row + 1,
+            site: node.start_byte(),
+        });
+        for field in ["left", "right"] {
+            if let Some(child) = node.child_by_field_name(field) {
+                collect_expression_relationships(child, contents, path, module_name, relationships);
+            }
+        }
+        return;
+    }
+
+    if node.kind() == "unary_operator"
+        && let Some(operator) = operator_text(node, contents)
+        && !matches!(operator.as_str(), "&" | "@")
+    {
+        relationships.push(Relationship {
+            kind: RelationshipKind::Call,
+            target: RelationshipTarget::Callable {
+                module: None,
+                name: operator,
+                arity: 1,
+            },
+            line: node.start_position().row + 1,
+            site: node.start_byte(),
+        });
+        if let Some(operand) = node
+            .child_by_field_name("operand")
+            .or_else(|| first_named_child(node))
+        {
+            collect_expression_relationships(operand, contents, path, module_name, relationships);
+        }
+        return;
+    }
+
+    if node.kind() == "call" {
+        collect_call_relationship(node, contents, path, module_name, 0, relationships);
+        return;
+    }
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        collect_expression_relationships(child, contents, path, module_name, relationships);
+    }
+}
+
+fn collect_call_relationship(
+    node: Node<'_>,
+    contents: &str,
+    path: &str,
+    module_name: &str,
+    pipeline_arguments: usize,
+    relationships: &mut Vec<Relationship>,
+) {
+    let Some(target_node) = node.child_by_field_name("target") else {
+        return;
+    };
+    let target_text = node_text(target_node, contents).unwrap_or_default();
+    if is_excluded_call_tree(&target_text) {
+        return;
+    }
+    let arguments = direct_child_kind(node, "arguments");
+    let arity = arguments.map_or(0, named_child_count) + pipeline_arguments;
+
+    if target_text == "apply" && pipeline_arguments == 0 {
+        relationships.push(apply_relationship(node, contents, path, module_name));
+    } else if !is_elixir_special_form(&target_text) {
+        relationships.push(Relationship {
+            kind: RelationshipKind::Call,
+            target: callable_relationship_target(
+                target_node,
+                contents,
+                path,
+                module_name,
+                arity,
+                node,
+            ),
+            line: node.start_position().row + 1,
+            site: node.start_byte(),
+        });
+    }
+
+    if let Some(arguments) = arguments {
+        let mut cursor = arguments.walk();
+        for argument in arguments.named_children(&mut cursor) {
+            collect_expression_relationships(argument, contents, path, module_name, relationships);
+        }
+    }
+    if let Some(do_block) = direct_child_kind(node, "do_block") {
+        collect_expression_relationships(do_block, contents, path, module_name, relationships);
+    }
+}
+
+fn callable_relationship_target(
+    target: Node<'_>,
+    contents: &str,
+    path: &str,
+    module_name: &str,
+    arity: usize,
+    call_site: Node<'_>,
+) -> RelationshipTarget {
+    match target.kind() {
+        "identifier" | "operator_identifier" => RelationshipTarget::Callable {
+            module: None,
+            name: normalize_callable_name(&node_text(target, contents).unwrap_or_default()),
+            arity,
+        },
+        "dot" => {
+            let left = target.child_by_field_name("left");
+            let right = target.child_by_field_name("right");
+            match (left, right) {
+                (Some(left), Some(right)) => {
+                    let name =
+                        normalize_callable_name(&node_text(right, contents).unwrap_or_default());
+                    let module = node_text(left, contents)
+                        .and_then(|value| static_relationship_module(&value, module_name));
+                    match module {
+                        Some(module) => RelationshipTarget::Callable {
+                            module: Some(module),
+                            name,
+                            arity,
+                        },
+                        None => dynamic_target(
+                            path,
+                            call_site,
+                            format!("dynamic.{name}/{arity}"),
+                            arity,
+                        ),
+                    }
+                }
+                _ => dynamic_target(path, call_site, format!("anonymous/{arity}"), arity),
+            }
+        }
+        _ => dynamic_target(path, call_site, format!("dynamic/{arity}"), arity),
+    }
+}
+
+fn capture_relationship(
+    node: Node<'_>,
+    contents: &str,
+    path: &str,
+    module_name: &str,
+) -> Option<Relationship> {
+    let operand = node
+        .child_by_field_name("operand")
+        .or_else(|| first_named_child(node))?;
+    if operand.kind() != "binary_operator"
+        || operator_text(operand, contents).as_deref() != Some("/")
+    {
+        return None;
+    }
+    let target = operand.child_by_field_name("left")?;
+    let arity = operand
+        .child_by_field_name("right")
+        .and_then(|node| node_text(node, contents))?
+        .parse::<usize>()
+        .ok()?;
+    let target = if target.kind() == "call" {
+        callable_relationship_target(
+            target.child_by_field_name("target")?,
+            contents,
+            path,
+            module_name,
+            arity,
+            node,
+        )
+    } else {
+        callable_relationship_target(target, contents, path, module_name, arity, node)
+    };
+    Some(Relationship {
+        kind: RelationshipKind::Capture,
+        target,
+        line: node.start_position().row + 1,
+        site: node.start_byte(),
+    })
+}
+
+fn delegate_relationship(
+    node: Node<'_>,
+    contents: &str,
+    path: &str,
+    module_name: &str,
+    source_name: &str,
+    arity: usize,
+) -> Relationship {
+    let arguments = direct_child_kind(node, "arguments");
+    let target_name = arguments
+        .and_then(|arguments| keyword_value(arguments, contents, "as:"))
+        .and_then(|node| node_text(node, contents))
+        .map(|value| normalize_callable_name(&value))
+        .unwrap_or_else(|| source_name.to_string());
+    let module = arguments
+        .and_then(|arguments| keyword_value(arguments, contents, "to:"))
+        .and_then(|node| node_text(node, contents))
+        .and_then(|value| static_relationship_module(&value, module_name));
+    let target = match module {
+        Some(module) => RelationshipTarget::Callable {
+            module: Some(module),
+            name: target_name,
+            arity,
+        },
+        None => dynamic_target(path, node, format!("delegate.{target_name}/{arity}"), arity),
+    };
+    Relationship {
+        kind: RelationshipKind::Delegate,
+        target,
+        line: node.start_position().row + 1,
+        site: node.start_byte(),
+    }
+}
+
+fn apply_relationship(
+    node: Node<'_>,
+    contents: &str,
+    path: &str,
+    module_name: &str,
+) -> Relationship {
+    let arguments = direct_child_kind(node, "arguments")
+        .map(|arguments| named_children(arguments))
+        .unwrap_or_default();
+    let target = if let [module, function, arguments] = arguments.as_slice() {
+        let module = node_text(*module, contents)
+            .and_then(|value| static_relationship_module(&value, module_name));
+        let function =
+            node_text(*function, contents).and_then(|value| static_function_atom(&value));
+        let arity = static_list_arity(*arguments, contents);
+        match (module, function, arity) {
+            (Some(module), Some(name), Some(arity)) => RelationshipTarget::Callable {
+                module: Some(module),
+                name,
+                arity,
+            },
+            _ => dynamic_target(path, node, "apply/3".into(), 3),
+        }
+    } else {
+        dynamic_target(path, node, "apply/3".into(), 3)
+    };
+    Relationship {
+        kind: RelationshipKind::Call,
+        target,
+        line: node.start_position().row + 1,
+        site: node.start_byte(),
+    }
+}
+
+fn static_function_atom(value: &str) -> Option<String> {
+    let value = value.trim();
+    value
+        .starts_with(':')
+        .then(|| normalize_callable_name(value))
+        .filter(|value| !value.is_empty())
+}
+
+fn static_list_arity(node: Node<'_>, contents: &str) -> Option<usize> {
+    if node.kind() != "list" {
+        return None;
+    }
+    let mut arity = 0usize;
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == "binary_operator"
+            && operator_text(child, contents).as_deref() == Some("|")
+        {
+            return None;
+        }
+        arity += if child.kind() == "keywords" {
+            named_child_count(child)
+        } else {
+            1
+        };
+    }
+    Some(arity)
+}
+
+fn dynamic_target(path: &str, node: Node<'_>, label: String, arity: usize) -> RelationshipTarget {
+    RelationshipTarget::Dynamic {
+        id: format!(
+            "{path}:{}:{}",
+            node.start_position().row + 1,
+            node.start_byte()
+        ),
+        label,
+        arity,
+    }
+}
+
+fn named_child_count(node: Node<'_>) -> usize {
+    node.named_child_count()
+}
+
+fn named_children(node: Node<'_>) -> Vec<Node<'_>> {
+    let mut cursor = node.walk();
+    node.named_children(&mut cursor).collect()
+}
+
+fn is_elixir_special_form(target: &str) -> bool {
+    matches!(
+        target,
+        "alias"
+            | "import"
+            | "require"
+            | "use"
+            | "def"
+            | "defp"
+            | "defmacro"
+            | "defmacrop"
+            | "defguard"
+            | "defguardp"
+            | "defdelegate"
+            | "defmodule"
+            | "defprotocol"
+            | "defimpl"
+            | "defstruct"
+            | "defexception"
+            | "case"
+            | "cond"
+            | "if"
+            | "unless"
+            | "with"
+            | "for"
+            | "receive"
+            | "try"
+            | "fn"
+            | "quote"
+            | "unquote"
+    )
+}
+
+fn is_excluded_call_tree(target: &str) -> bool {
+    matches!(
+        target,
+        "alias"
+            | "import"
+            | "require"
+            | "use"
+            | "def"
+            | "defp"
+            | "defmacro"
+            | "defmacrop"
+            | "defguard"
+            | "defguardp"
+            | "defdelegate"
+            | "defmodule"
+            | "defprotocol"
+            | "defimpl"
+            | "defstruct"
+            | "defexception"
+            | "quote"
+            | "unquote"
+    )
 }
 
 fn emit_callables(
@@ -519,6 +1216,32 @@ fn emit_callables(
             .iter()
             .flat_map(|clause| clause.guards.clone())
             .collect::<Vec<_>>();
+        let mut relationships = clauses
+            .iter()
+            .flat_map(|clause| {
+                let mut relationships = clause
+                    .relationships
+                    .iter()
+                    .cloned()
+                    .map(|relationship| {
+                        effective_relationship_arity(relationship, clause.arity, arity)
+                    })
+                    .collect::<Vec<_>>();
+                if arity < clause.arity {
+                    relationships.extend(clause.default_relationships.clone());
+                }
+                relationships
+            })
+            .collect::<Vec<_>>();
+        for head in body
+            .default_heads
+            .iter()
+            .filter(|head| head.kind == kind && head.name == name && arity < head.full_arity)
+        {
+            relationships.extend(head.default_relationships.clone());
+        }
+        relationships.sort();
+        relationships.dedup();
         let range = ranges[0];
         let selector = elixir_symbol_selector(kind, owner, &name, Some(arity))
             .expect("Elixir callable selector");
@@ -551,8 +1274,23 @@ fn emit_callables(
             range,
             clause_ranges: ranges,
             calls: Vec::new(),
+            relationships,
         });
     }
+}
+
+fn effective_relationship_arity(
+    mut relationship: Relationship,
+    source_arity: usize,
+    effective_arity: usize,
+) -> Relationship {
+    if relationship.kind == RelationshipKind::Delegate
+        && source_arity != effective_arity
+        && let RelationshipTarget::Callable { arity, .. } = &mut relationship.target
+    {
+        *arity = effective_arity;
+    }
+    relationship
 }
 
 fn emit_callbacks(
@@ -598,6 +1336,7 @@ fn emit_callbacks(
             range: callback.range,
             clause_ranges: vec![callback.range],
             calls: Vec::new(),
+            relationships: Vec::new(),
         });
     }
 }
@@ -609,6 +1348,7 @@ fn module_symbol(
     kind: SymbolKind,
     range: SymbolRange,
     mut fields: Vec<FieldSignature>,
+    relationships: Vec<Relationship>,
 ) -> Symbol {
     fields.sort();
     fields.dedup();
@@ -643,6 +1383,7 @@ fn module_symbol(
         range,
         clause_ranges: vec![range],
         calls: Vec::new(),
+        relationships,
     }
 }
 
@@ -687,6 +1428,39 @@ fn static_module_name(text: &str, parent: Option<&str>) -> Option<String> {
         return None;
     }
     Some(parent.map_or_else(|| text.to_string(), |parent| format!("{parent}.{text}")))
+}
+
+fn static_reference_module(text: &str, current_module: &str) -> Option<String> {
+    let text = text.trim();
+    if text == "__MODULE__" {
+        return Some(current_module.to_string());
+    }
+    if let Some(child) = text.strip_prefix("__MODULE__.") {
+        return static_alias(child).then(|| format!("{current_module}.{child}"));
+    }
+    if let Some(name) = text
+        .strip_prefix(":\"Elixir.")
+        .and_then(|name| name.strip_suffix('"'))
+        .or_else(|| text.strip_prefix("Elixir."))
+    {
+        return static_alias(name).then(|| name.to_string());
+    }
+    if text.starts_with(':') {
+        return static_atom(text).then(|| text.to_string());
+    }
+    static_alias(text).then(|| text.to_string())
+}
+
+fn static_relationship_module(text: &str, current_module: &str) -> Option<String> {
+    let text = text.trim();
+    if let Some(name) = text
+        .strip_prefix(":\"Elixir.")
+        .and_then(|name| name.strip_suffix('"'))
+        .or_else(|| text.strip_prefix("Elixir."))
+    {
+        return static_alias(name).then(|| format!("Elixir.{name}"));
+    }
+    static_reference_module(text, current_module)
 }
 
 fn static_alias(value: &str) -> bool {
@@ -762,6 +1536,13 @@ fn node_range(node: Node<'_>) -> SymbolRange {
     SymbolRange {
         start_line: node.start_position().row + 1,
         end_line: node.end_position().row + 1,
+    }
+}
+
+fn lexical_scope(node: Node<'_>) -> LexicalScope {
+    LexicalScope {
+        start_byte: node.start_byte(),
+        end_byte: node.end_byte(),
     }
 }
 
@@ -1104,6 +1885,268 @@ end
             broken.is_none(),
             "unexpected recovered declaration: {broken:?}"
         );
+    }
+
+    #[test]
+    fn extracts_lexical_directives_and_distinct_relationships() {
+        let file = parse(
+            "lib/relationships.ex",
+            r#"
+defmodule Root.Repo do
+  def fetch(value), do: value
+  def fetch(value, opts), do: {value, opts}
+end
+
+defmodule Root.Helpers do
+  def allowed(value), do: value
+  def blocked(value), do: value
+end
+
+defmodule Root.Macros do
+  defmacro build(value), do: value
+end
+
+defmodule Root.Behaviour do
+  @callback run(term()) :: term()
+end
+
+defprotocol Root.Proto do
+  def work(value)
+end
+
+defmodule My.App do
+  alias Root.{Repo, Other}
+  import Root.Helpers, only: [allowed: 1], except: [blocked: 1]
+  require Root.Macros, as: M
+  use Root.Framework
+  @behaviour Root.Behaviour
+
+  def run(value \\ fallback()) when guard_check(value) do
+    value |> Repo.fetch(opt())
+    M.build(value)
+    allowed(value)
+    blocked(value)
+    &Repo.fetch/2
+    &local/1
+    &(&1 + helper())
+    fun.(value)
+    fun.(value)
+    mod.fetch(value)
+    apply(Repo, :fetch, [value])
+    apply(mod, name, args)
+    quote do
+      hidden()
+    end
+  end
+
+  def local(value), do: value
+  defdelegate delegated(value), to: Repo, as: :fetch
+end
+
+defimpl Root.Proto, for: My.App do
+  def work(value), do: value
+end
+"#,
+        );
+
+        assert_eq!(
+            file.imports
+                .iter()
+                .filter(|directive| directive.kind == DirectiveKind::Alias)
+                .map(|directive| (directive.module.as_str(), directive.alias.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![("Root.Repo", Some("Repo")), ("Root.Other", Some("Other"))]
+        );
+        assert!(file.imports.iter().any(|directive| {
+            directive.kind == DirectiveKind::Import
+                && directive.only
+                    == Some(DirectiveFilter::Callables(vec![CallableFilter {
+                        name: "allowed".into(),
+                        arity: 1,
+                    }]))
+                && directive.except
+                    == vec![CallableFilter {
+                        name: "blocked".into(),
+                        arity: 1,
+                    }]
+        }));
+        assert!(file.imports.iter().any(|directive| {
+            directive.kind == DirectiveKind::Require && directive.alias.as_deref() == Some("M")
+        }));
+        assert!(
+            file.imports
+                .iter()
+                .any(|directive| directive.kind == DirectiveKind::Use)
+        );
+
+        let run_zero = file
+            .symbols
+            .iter()
+            .find(|symbol| symbol.id.selector == "module:My.App/fn:run/0")
+            .unwrap();
+        let run_one = file
+            .symbols
+            .iter()
+            .find(|symbol| symbol.id.selector == "module:My.App/fn:run/1")
+            .unwrap();
+        assert!(run_zero.relationships.iter().any(|relationship| {
+            relationship.kind == RelationshipKind::Call
+                && relationship.target
+                    == RelationshipTarget::Callable {
+                        module: None,
+                        name: "fallback".into(),
+                        arity: 0,
+                    }
+        }));
+        assert!(!run_one.relationships.iter().any(|relationship| {
+            matches!(
+                &relationship.target,
+                RelationshipTarget::Callable { name, .. } if name == "fallback"
+            )
+        }));
+        for target in [
+            RelationshipTarget::Callable {
+                module: Some("Repo".into()),
+                name: "fetch".into(),
+                arity: 2,
+            },
+            RelationshipTarget::Callable {
+                module: Some("M".into()),
+                name: "build".into(),
+                arity: 1,
+            },
+            RelationshipTarget::Callable {
+                module: None,
+                name: "guard_check".into(),
+                arity: 1,
+            },
+            RelationshipTarget::Callable {
+                module: None,
+                name: "+".into(),
+                arity: 2,
+            },
+        ] {
+            assert!(run_one.relationships.iter().any(|relationship| {
+                relationship.kind == RelationshipKind::Call && relationship.target == target
+            }));
+        }
+        assert_eq!(
+            run_one
+                .relationships
+                .iter()
+                .filter(|relationship| relationship.kind == RelationshipKind::Capture)
+                .count(),
+            2
+        );
+        assert!(run_one.relationships.iter().any(|relationship| {
+            matches!(relationship.target, RelationshipTarget::Dynamic { .. })
+        }));
+        let anonymous_sites = run_one
+            .relationships
+            .iter()
+            .filter_map(|relationship| match &relationship.target {
+                RelationshipTarget::Dynamic { id, label, .. } if label == "anonymous/1" => Some(id),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(anonymous_sites.len(), 2);
+        assert!(run_one.relationships.iter().any(|relationship| {
+            matches!(
+                &relationship.target,
+                RelationshipTarget::Dynamic { label, .. } if label == "dynamic.fetch/1"
+            )
+        }));
+        assert!(!run_one.relationships.iter().any(|relationship| {
+            matches!(
+                &relationship.target,
+                RelationshipTarget::Callable { name, .. } if name == "hidden"
+            )
+        }));
+
+        let delegate = file
+            .symbols
+            .iter()
+            .find(|symbol| symbol.id.selector == "module:My.App/fn:delegated/1")
+            .unwrap();
+        assert!(delegate.relationships.iter().any(|relationship| {
+            relationship.kind == RelationshipKind::Delegate
+                && relationship.target
+                    == RelationshipTarget::Callable {
+                        module: Some("Repo".into()),
+                        name: "fetch".into(),
+                        arity: 1,
+                    }
+        }));
+
+        let module = file
+            .symbols
+            .iter()
+            .find(|symbol| symbol.id.selector == "module:My.App")
+            .unwrap();
+        assert!(module.relationships.iter().any(|relationship| {
+            relationship.kind == RelationshipKind::BehaviourImplementation
+                && relationship.target
+                    == RelationshipTarget::Module {
+                        module: "Root.Behaviour".into(),
+                        role: ModuleRelationshipRole::Behaviour,
+                    }
+        }));
+        let implementation = file
+            .symbols
+            .iter()
+            .find(|symbol| symbol.id.selector == "impl:Root.Proto/for:My.App")
+            .unwrap();
+        assert_eq!(
+            implementation
+                .relationships
+                .iter()
+                .filter(|relationship| {
+                    relationship.kind == RelationshipKind::ProtocolImplementation
+                })
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn expands_all_directive_braces_and_keeps_filter_classes() {
+        let file = parse(
+            "lib/directives.ex",
+            r#"
+defmodule Directives do
+  import Root.Functions, only: :functions
+  import Root.Macros, only: :macros
+  import Root.Sigils, only: :sigils
+  import Root.{One, Two}
+  require Root.{Three, Four}
+  use Root.{Five, Six}
+end
+"#,
+        );
+
+        for (module, filter) in [
+            ("Root.Functions", DirectiveFilter::Functions),
+            ("Root.Macros", DirectiveFilter::Macros),
+            ("Root.Sigils", DirectiveFilter::Sigils),
+        ] {
+            assert!(file.imports.iter().any(|directive| {
+                directive.module == module && directive.only == Some(filter.clone())
+            }));
+        }
+        for (kind, module) in [
+            (DirectiveKind::Import, "Root.One"),
+            (DirectiveKind::Import, "Root.Two"),
+            (DirectiveKind::Require, "Root.Three"),
+            (DirectiveKind::Require, "Root.Four"),
+            (DirectiveKind::Use, "Root.Five"),
+            (DirectiveKind::Use, "Root.Six"),
+        ] {
+            assert!(
+                file.imports
+                    .iter()
+                    .any(|directive| directive.kind == kind && directive.module == module)
+            );
+        }
     }
 
     #[test]

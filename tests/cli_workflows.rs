@@ -931,6 +931,80 @@ fn query_subcommands_cover_docs_sources_and_governance() {
 }
 
 #[test]
+fn elixir_call_queries_resolve_arity_delegates_and_dynamic_sites() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    init(root);
+    fs::create_dir_all(root.join("lib")).unwrap();
+    write_criv_config(
+        root,
+        vec!["lib"],
+        vec!["**/target/**", "**/node_modules/**"],
+        true,
+    );
+    fs::write(
+        root.join("lib/sample.ex"),
+        r#"
+defmodule Repo do
+  def fetch(value), do: value
+end
+
+defmodule Client do
+  alias Repo, as: Data
+
+  def run(value) do
+    Data.fetch(value)
+    fun.(value)
+  end
+
+  defdelegate delegated(value), to: Data, as: :fetch
+  def capture_only(), do: &Data.fetch/1
+end
+"#,
+    )
+    .unwrap();
+
+    let callees = criv(root)
+        .args([
+            "query",
+            "callees",
+            "lib/sample.ex#Client.run/1",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success();
+    let callees: Vec<String> = serde_json::from_slice(&callees.get_output().stdout).unwrap();
+    assert!(callees.contains(&"lib/sample.ex#module:Repo/fn:fetch/1".to_string()));
+    assert!(callees.iter().any(|row| row.starts_with("dynamic:")));
+
+    let callers = criv(root)
+        .args([
+            "query",
+            "callers",
+            "lib/sample.ex#Repo.fetch/1",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success();
+    let callers: Vec<String> = serde_json::from_slice(&callers.get_output().stdout).unwrap();
+    assert_eq!(
+        callers,
+        vec![
+            "lib/sample.ex#module:Client/fn:delegated/1",
+            "lib/sample.ex#module:Client/fn:run/1",
+        ]
+    );
+
+    criv(root)
+        .args(["query", "callees", "lib/sample.ex#Client.delegated/1"])
+        .assert()
+        .success()
+        .stdout(predicate::eq("lib/sample.ex#module:Repo/fn:fetch/1\n"));
+}
+
+#[test]
 fn reverse_queries_keep_exact_public_rows() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
