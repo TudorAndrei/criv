@@ -620,18 +620,20 @@ fn callable_clause(
         head = head.child_by_field_name("left")?;
     }
     let (name, params) = callable_head(head, contents)?;
+    let default_parameters = callable_default_parameters(head, contents);
     let mut default_relationships = Vec::new();
-    collect_default_relationships(
-        head,
-        contents,
-        path,
-        module_name,
-        &mut default_relationships,
-    );
-    let defaults = params
-        .iter()
-        .filter(|parameter| parameter.contains("\\\\"))
-        .cloned()
+    for parameter in &default_parameters {
+        collect_default_relationship(
+            *parameter,
+            contents,
+            path,
+            module_name,
+            &mut default_relationships,
+        );
+    }
+    let defaults = default_parameters
+        .into_iter()
+        .filter_map(|parameter| node_text(parameter, contents))
         .collect::<Vec<_>>();
     let kind = match declaration {
         "def" | "defp" | "defdelegate" => SymbolKind::Function,
@@ -723,23 +725,29 @@ fn callable_head(node: Node<'_>, contents: &str) -> Option<(String, Vec<String>)
     }
 }
 
-fn collect_default_relationships(
+fn callable_default_parameters<'tree>(node: Node<'tree>, contents: &str) -> Vec<Node<'tree>> {
+    let Some(arguments) = direct_child_kind(node, "arguments") else {
+        return Vec::new();
+    };
+    let mut cursor = arguments.walk();
+    arguments
+        .named_children(&mut cursor)
+        .filter(|parameter| {
+            parameter.kind() == "binary_operator"
+                && operator_text(*parameter, contents).as_deref() == Some("\\\\")
+        })
+        .collect()
+}
+
+fn collect_default_relationship(
     node: Node<'_>,
     contents: &str,
     path: &str,
     module_name: &str,
     relationships: &mut Vec<Relationship>,
 ) {
-    if node.kind() == "binary_operator" && operator_text(node, contents).as_deref() == Some("\\\\")
-    {
-        if let Some(default) = node.child_by_field_name("right") {
-            collect_expression_relationships(default, contents, path, module_name, relationships);
-        }
-        return;
-    }
-    let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
-        collect_default_relationships(child, contents, path, module_name, relationships);
+    if let Some(default) = node.child_by_field_name("right") {
+        collect_expression_relationships(default, contents, path, module_name, relationships);
     }
 }
 
@@ -1881,6 +1889,38 @@ end
                         signature.specifications == ["naïve(term()) :: Macro.t()"]
                     })
         }));
+    }
+
+    #[test]
+    fn distinguishes_default_operators_from_backslashes_in_parameter_text() {
+        let file = parse(
+            "lib/defaults.ex",
+            r#"
+defmodule Defaults do
+  def actual(value \\ "\\"), do: value
+  def escaped("\\"), do: :ok
+end
+"#,
+        );
+
+        for selector in [
+            "module:Defaults/fn:actual/0",
+            "module:Defaults/fn:actual/1",
+            "module:Defaults/fn:escaped/1",
+        ] {
+            assert!(
+                file.symbols
+                    .iter()
+                    .any(|symbol| symbol.id.selector == selector),
+                "missing {selector}"
+            );
+        }
+        assert!(
+            !file
+                .symbols
+                .iter()
+                .any(|symbol| symbol.id.selector == "module:Defaults/fn:escaped/0")
+        );
     }
 
     #[test]
