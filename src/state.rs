@@ -10,6 +10,7 @@ use std::{cell::Cell, thread_local};
 use criv_state_wire::STATE_SCHEMA;
 use criv_state_wire::{
     Edge, Graph, LikeC4ArchitectureState, Node, PatternMatch, SourceIndexEntry, StateDocument,
+    source_identity::SourceIdentity,
 };
 use serde::{Serialize, Serializer};
 
@@ -1716,7 +1717,7 @@ fn note_node_id(id: &str) -> String {
 }
 
 fn code_node_id(path: &str) -> String {
-    format!("code:{path}")
+    format!("code:{}", SourceIdentity::file(path))
 }
 
 fn pattern_node_id(id: &str) -> String {

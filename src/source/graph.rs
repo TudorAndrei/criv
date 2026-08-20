@@ -8,6 +8,11 @@ use std::{cell::Cell, thread_local};
 use serde::{Deserialize, Serialize};
 use tree_sitter::{Node, Parser};
 
+use criv_state_wire::source_identity::{
+    ElixirCallableKind, ElixirOwner as SharedElixirOwner, ElixirSelector, SourceIdentity,
+    SourceSelector,
+};
+
 use super::paths::read_source_bytes;
 use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
@@ -228,14 +233,12 @@ pub(crate) enum SymbolOwner {
 }
 
 impl SymbolOwner {
-    fn selector(&self) -> String {
+    fn shared_identity(&self) -> SharedElixirOwner {
         match self {
-            Self::Module { name } => format!("module:{}", selector_value(name)),
-            Self::Implementation { protocol, for_type } => format!(
-                "impl:{}/for:{}",
-                selector_value(protocol),
-                selector_value(for_type)
-            ),
+            Self::Module { name } => SharedElixirOwner::module(name),
+            Self::Implementation { protocol, for_type } => {
+                SharedElixirOwner::implementation(protocol, for_type)
+            }
         }
     }
 
@@ -256,7 +259,11 @@ pub(crate) struct SymbolId {
 
 impl SymbolId {
     pub(crate) fn display(&self) -> String {
-        format!("{}#{}", self.path, self.selector)
+        SourceIdentity::symbol(
+            self.path.clone(),
+            SourceSelector::opaque(self.selector.clone()),
+        )
+        .to_string()
     }
 }
 
@@ -358,24 +365,6 @@ impl SymbolKind {
             Self::Guard => "guard",
             Self::Callback => "callback",
             Self::MacroCallback => "macro-callback",
-        }
-    }
-
-    fn elixir_selector_prefix(self) -> Option<&'static str> {
-        match self {
-            Self::Function => Some("fn"),
-            Self::Macro => Some("macro"),
-            Self::Guard => Some("guard"),
-            Self::Callback => Some("callback"),
-            Self::MacroCallback => Some("macro-callback"),
-            Self::Method
-            | Self::Class
-            | Self::Module
-            | Self::Protocol
-            | Self::Implementation
-            | Self::Struct
-            | Self::Exception
-            | Self::Behaviour => None,
         }
     }
 }
@@ -1512,19 +1501,6 @@ fn symbol_aliases(symbol: &Symbol) -> Vec<String> {
     aliases
 }
 
-fn selector_value(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-            encoded.push(char::from(byte));
-        } else {
-            use std::fmt::Write as _;
-            write!(&mut encoded, "%{byte:02X}").expect("writing to String cannot fail");
-        }
-    }
-    encoded
-}
-
 fn symbol_selector(kind: SymbolKind, parent: Option<&str>, name: &str) -> String {
     match (kind, parent) {
         (SymbolKind::Function, _) => format!("fn:{name}"),
@@ -1541,7 +1517,7 @@ fn elixir_symbol_selector(
     name: &str,
     arity: Option<usize>,
 ) -> Option<String> {
-    let owner_selector = owner.selector();
+    let owner = owner.shared_identity();
     if matches!(
         kind,
         SymbolKind::Module
@@ -1551,14 +1527,24 @@ fn elixir_symbol_selector(
             | SymbolKind::Exception
             | SymbolKind::Behaviour
     ) {
-        return Some(owner_selector);
+        return Some(SourceSelector::elixir(ElixirSelector::owner(owner)).to_string());
     }
-    Some(format!(
-        "{owner_selector}/{}:{}/{}",
-        kind.elixir_selector_prefix()?,
-        selector_value(name),
-        arity?
-    ))
+    let kind = match kind {
+        SymbolKind::Function => ElixirCallableKind::Function,
+        SymbolKind::Macro => ElixirCallableKind::Macro,
+        SymbolKind::Guard => ElixirCallableKind::Guard,
+        SymbolKind::Callback => ElixirCallableKind::Callback,
+        SymbolKind::MacroCallback => ElixirCallableKind::MacroCallback,
+        SymbolKind::Method
+        | SymbolKind::Class
+        | SymbolKind::Module
+        | SymbolKind::Protocol
+        | SymbolKind::Implementation
+        | SymbolKind::Struct
+        | SymbolKind::Exception
+        | SymbolKind::Behaviour => return None,
+    };
+    Some(SourceSelector::elixir(ElixirSelector::callable(owner, kind, name, arity?)).to_string())
 }
 
 fn parse_tree_sitter_file(path: &str, contents: &str) -> Option<SourceFile> {

@@ -3,7 +3,7 @@
 use std::collections::{BTreeSet, HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 
-use criv_state_wire::{Node, SourceIndexEntry};
+use criv_state_wire::{Node, SourceIndexEntry, source_identity::SourceIdentity};
 
 use super::*;
 
@@ -73,17 +73,25 @@ pub(super) fn editor_graph_nodes(state: &StateDocument) -> Vec<EditorGraphNode> 
         .graph
         .nodes
         .iter()
-        .map(|node| EditorGraphNode {
-            id: node.id.clone(),
-            kind: node.kind.clone(),
-            label: if node.label.is_empty() {
-                node.id.clone()
-            } else {
-                node.label.clone()
-            },
-            path: node.path.clone(),
-            source_target: source_target(node),
-            line_range: node.path.as_deref().and_then(line_range),
+        .map(|node| {
+            let source_target = source_target(node);
+            let source_identity = source_target
+                .as_deref()
+                .map(SourceIdentity::parse)
+                .map(Box::new);
+            EditorGraphNode {
+                id: node.id.clone(),
+                kind: node.kind.clone(),
+                label: if node.label.is_empty() {
+                    node.id.clone()
+                } else {
+                    node.label.clone()
+                },
+                path: node.path.clone(),
+                source_target,
+                line_range: node.path.as_deref().and_then(line_range),
+                source_identity,
+            }
         })
         .collect()
 }
@@ -93,6 +101,10 @@ pub(super) fn take_editor_graph_nodes(nodes: Vec<Node>) -> Vec<EditorGraphNode> 
         .into_iter()
         .map(|node| {
             let source_target = source_target(&node);
+            let source_identity = source_target
+                .as_deref()
+                .map(SourceIdentity::parse)
+                .map(Box::new);
             let line_range = node.path.as_deref().and_then(line_range);
             let label = if node.label.is_empty() {
                 node.id.clone()
@@ -106,6 +118,7 @@ pub(super) fn take_editor_graph_nodes(nodes: Vec<Node>) -> Vec<EditorGraphNode> 
                 path: node.path,
                 source_target,
                 line_range,
+                source_identity,
             }
         })
         .collect()
@@ -419,11 +432,16 @@ fn legacy_node_targets(node: &EditorGraphNode) -> Vec<String> {
             if !node.label.is_empty() {
                 targets.push(format!("{path}#{}", node.label));
             }
-            if let Some(module) = elixir_callable_owner(fragment)
+            if let Some(selector) = node
+                .source_identity
+                .as_deref()
+                .and_then(SourceIdentity::selector)
+                .and_then(|selector| selector.as_elixir())
+                .filter(|selector| selector.callable_kind().is_some())
                 && let Some((name, _)) = callable_label_parts(&node.label)
             {
                 targets.push(format!("{path}#{name}"));
-                if let Some(module) = module {
+                if let Some(module) = selector.owner_identity().module_name() {
                     targets.push(format!("{path}#{module}.{}", node.label));
                 }
             }
@@ -440,61 +458,9 @@ fn legacy_node_targets(node: &EditorGraphNode) -> Vec<String> {
     targets
 }
 
-fn elixir_callable_owner(fragment: &str) -> Option<Option<String>> {
-    const CALLABLE_MARKERS: [&str; 5] = [
-        "/fn:",
-        "/macro:",
-        "/guard:",
-        "/callback:",
-        "/macro-callback:",
-    ];
-    let marker_index = CALLABLE_MARKERS
-        .iter()
-        .filter_map(|marker| fragment.rfind(marker))
-        .max()?;
-    let callable = &fragment[marker_index + 1..];
-    let (_, identity) = callable.split_once(':')?;
-    let (name, arity) = identity.rsplit_once('/')?;
-    if name.is_empty() || arity.parse::<usize>().is_err() {
-        return None;
-    }
-    let owner = &fragment[..marker_index];
-    if let Some(module) = owner.strip_prefix("module:") {
-        return Some(Some(decode_selector_value(module)?));
-    }
-    owner.starts_with("impl:").then_some(None)
-}
-
 fn callable_label_parts(label: &str) -> Option<(&str, usize)> {
     let (name, arity) = label.rsplit_once('/')?;
     (!name.is_empty()).then_some((name, arity.parse().ok()?))
-}
-
-fn decode_selector_value(value: &str) -> Option<String> {
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] != b'%' {
-            decoded.push(bytes[index]);
-            index += 1;
-            continue;
-        }
-        let high = hex_value(*bytes.get(index + 1)?)?;
-        let low = hex_value(*bytes.get(index + 2)?)?;
-        decoded.push((high << 4) | low);
-        index += 3;
-    }
-    String::from_utf8(decoded).ok()
-}
-
-fn hex_value(value: u8) -> Option<u8> {
-    match value {
-        b'0'..=b'9' => Some(value - b'0'),
-        b'a'..=b'f' => Some(value - b'a' + 10),
-        b'A'..=b'F' => Some(value - b'A' + 10),
-        _ => None,
-    }
 }
 
 fn fuzzy_subsequence_score(value: &str, query: &str) -> Option<i64> {

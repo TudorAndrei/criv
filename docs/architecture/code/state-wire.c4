@@ -1,0 +1,34 @@
+// Code architecture for the shared Rust State and Source identity contract.
+model {
+  extend criv.stateWire.sourceIdentity {
+    rustSourceIdentity = module 'criv-state-wire::source_identity' {
+      technology 'Rust'
+      description 'Parses, structures, encodes, and decodes stable Source identity text.'
+      link ../../crates/criv-state-wire/src/source_identity.rs 'source'
+    }
+  }
+
+  extend criv.stateProjection.selectorProjection {
+    rustWasmSource = module 'criv-wasm::source' {
+      technology 'Rust and WebAssembly'
+      description 'Builds prepared Source lookup and selector indexes from one loaded revision.'
+      link ../../crates/criv-wasm/src/source.rs 'source'
+    }
+  }
+
+  criv.cli.sourceIntelligence.rustSourceGraph -> criv.stateWire.sourceIdentity.rustSourceIdentity 'Creates canonical Source identities'
+  criv.stateProjection.selectorProjection.rustWasmSource -> criv.stateWire.sourceIdentity.rustSourceIdentity 'Parses canonical Source identities'
+}
+
+views {
+  global style architectureTheme
+
+  view codeSourceIdentity of criv.stateWire.sourceIdentity {
+    title 'Code / Shared Source identity'
+    description 'The shared identity implementation and its native producer and Wasm consumer.'
+
+    include *
+    include criv.cli.sourceIntelligence.rustSourceGraph
+    include criv.stateProjection.selectorProjection.rustWasmSource
+  }
+}

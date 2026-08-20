@@ -74,10 +74,13 @@ model {
     }
   }
 
-  criv.cli.statePublisher -> criv.stateWire 'Builds the shared State document' {
+  criv.cli.statePublisher -> criv.stateWire.stateDocument 'Builds the shared State document' {
     technology 'Rust crate'
   }
-  criv.cli.installation -> criv.stateWire 'Creates the empty State document' {
+  criv.cli.installation -> criv.stateWire.stateDocument 'Creates the empty State document' {
+    technology 'Rust crate'
+  }
+  criv.cli.sourceIntelligence -> criv.stateWire.sourceIdentity 'Creates stable Source identity text' {
     technology 'Rust crate'
   }
 }

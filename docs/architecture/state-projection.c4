@@ -1,9 +1,20 @@
 model {
   extend criv {
-    stateWire = container 'State wire document' {
+    stateWire = container 'State contract library' {
       technology 'Rust library'
-      description 'Owns the shared State schema identity and serialized wire rows.'
+      description 'Owns the shared State schema, serialized wire rows, and stable Source identity text.'
       link ../../crates/criv-state-wire/src/lib.rs 'source'
+
+      stateDocument = component 'State document' {
+        technology 'Rust and serde'
+        description 'Defines the shared State schema identity and serialized wire rows.'
+        link ../../crates/criv-state-wire/src/lib.rs 'source'
+      }
+      sourceIdentity = component 'Source identity' {
+        technology 'Rust'
+        description 'Owns structured Source identity and stable selector text conversion.'
+        link ../../crates/criv-state-wire/src/source_identity.rs 'source'
+      }
     }
 
     stateProjection = container 'State projection library' {
@@ -34,7 +45,10 @@ model {
     }
   }
 
-  criv.stateProjection.stateDecoder -> criv.stateWire 'Decodes the shared State document' {
+  criv.stateProjection.stateDecoder -> criv.stateWire.stateDocument 'Decodes the shared State document' {
+    technology 'Rust crate'
+  }
+  criv.stateProjection.selectorProjection -> criv.stateWire.sourceIdentity 'Parses Source identity text' {
     technology 'Rust crate'
   }
   criv.stateProjection.architectureProjection -> criv.stateProjection.stateDecoder 'Validates the optional architecture value'
@@ -49,5 +63,6 @@ views {
 
     include *
     include criv.stateWire
+    include criv.stateWire.*
   }
 }

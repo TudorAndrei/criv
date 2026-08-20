@@ -1,5 +1,7 @@
 //! Shared wire contract for published criv State documents.
 
+pub mod source_identity;
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
