@@ -219,6 +219,17 @@ jobs:
             executable_suffix: .exe
             primary: false
 
+    env:
+      GIT_CONFIG_COUNT: "4"
+      GIT_CONFIG_KEY_0: gc.auto
+      GIT_CONFIG_VALUE_0: "0"
+      GIT_CONFIG_KEY_1: gc.autoDetach
+      GIT_CONFIG_VALUE_1: "false"
+      GIT_CONFIG_KEY_2: maintenance.auto
+      GIT_CONFIG_VALUE_2: "false"
+      GIT_CONFIG_KEY_3: maintenance.autoDetach
+      GIT_CONFIG_VALUE_3: "false"
+
     steps:
       - name: Checkout exact release commit
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -277,13 +288,24 @@ jobs:
         run: |
           mkdir -p target/release-evidence/evidence
           baseline_revision="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$EXPECTED_COMMIT^")"
-          candidate_contract="$(tr -d '\r\n' < scripts/performance/release-evidence-contract.txt)"
+          candidate_contract="$(git show "$EXPECTED_COMMIT:scripts/performance/release-evidence-contract.txt" 2>/dev/null | tr -d '\r\n' || true)"
           baseline_contract="$(git show "$baseline_revision:scripts/performance/release-evidence-contract.txt" 2>/dev/null | tr -d '\r\n' || true)"
           baseline_root="target/release-evidence/baseline"
+          if [ -z "$candidate_contract" ]; then
+            candidate_contract="criv.release-evidence.pre-elixir.v1"
+          fi
           if [ -z "$baseline_contract" ]; then
             baseline_contract="criv.release-evidence.pre-elixir.v1"
           fi
-          if [ "$baseline_contract" = "$candidate_contract" ]; then
+          if [ "$baseline_revision" = v0.9.0 ] && \
+            [ "$baseline_contract" = criv.release-evidence.pre-elixir.v1 ] && \
+            [ "$candidate_contract" = criv.release-evidence.pre-elixir.v1 ]; then
+            transition="legacy-v0.9-adapter"
+            target/release-evidence/tools/criv-discovery-adapter${{ matrix.executable_suffix }} \
+              --repository-root . \
+              --revision "$baseline_revision" \
+              --output "$baseline_root"
+          elif [ "$baseline_contract" = "$candidate_contract" ]; then
             transition="compatible-baseline"
             git worktree add --detach "$baseline_root" "$baseline_revision"
           elif [ "$baseline_revision" = v0.9.0 ] && \
@@ -324,6 +346,7 @@ jobs:
           mkdir -p "$(dirname "$root")" "$evidence"
           target/release-evidence/tools/criv-discovery-fixtures${{ matrix.executable_suffix }} \
             --manifest "fixtures/performance/discovery/$workload.toml" --output "$root"
+          git -C "$root" gc --quiet
           target/release-evidence/tools/criv-discovery-inventory${{ matrix.executable_suffix }} \
             --root "$root" --workload-id "$workload" \
             --output "$evidence/workload-inventory.json" \
@@ -360,6 +383,7 @@ jobs:
             mkdir -p "$(dirname "$root")" "$evidence"
             target/release-evidence/tools/criv-discovery-fixtures \
               --manifest "fixtures/performance/discovery/$workload.toml" --output "$root"
+            git -C "$root" gc --quiet
             target/release-evidence/tools/criv-discovery-inventory \
               --root "$root" --workload-id "$workload" \
               --output "$evidence/workload-inventory.json" \
@@ -457,8 +481,13 @@ jobs:
           }
           $baselineBinary = Join-Path $output "baseline-criv$($env:EXECUTABLE_SUFFIX)"
           $candidateBinary = Join-Path $output "candidate-criv$($env:EXECUTABLE_SUFFIX)"
+          $artifactSchema = if ($env:CRIV_CANDIDATE_CONTRACT -eq "criv.release-evidence.pre-elixir.v1") {
+            "criv.discovery-remote-artifact.v2"
+          } else {
+            "criv.discovery-remote-artifact.v3"
+          }
           $manifest = [ordered]@{
-            schema = "criv.discovery-remote-artifact.v3"
+            schema = $artifactSchema
             commit = $env:EXPECTED_COMMIT
             target = $env:RELEASE_TARGET
             baseline_revision = $env:CRIV_BASELINE_REVISION
@@ -486,6 +515,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          if ($env:CRIV_CANDIDATE_CONTRACT -ne "criv.release-evidence.elixir.v1") {
+            Write-Host "Skipping Elixir coverage for $env:CRIV_CANDIDATE_CONTRACT"
+            exit 0
+          }
           $artifactRoot = Join-Path $env:GITHUB_WORKSPACE "target/release-evidence/evidence/artifacts"
           $candidate = Join-Path $artifactRoot "candidate-criv${{ matrix.executable_suffix }}"
           $coverageRoot = Join-Path $env:GITHUB_WORKSPACE "target/release-evidence/elixir-coverage"
@@ -555,6 +588,7 @@ jobs:
           mkdir -p "$(dirname "$root")" "$evidence/candidate" "$RUNNER_TEMP/criv-live-samples"
           target/release-evidence/tools/criv-discovery-fixtures \
             --manifest "fixtures/performance/discovery/$workload.toml" --output "$root"
+          git -C "$root" gc --quiet
           target/release-evidence/tools/criv-discovery-inventory \
             --root "$root" --workload-id "$workload" \
             --output "$evidence/workload-inventory.json" \

@@ -59,6 +59,16 @@ The retry accepts an untagged prepared commit, matching tags, or a matching
 draft. It rejects tags that point to another commit. A receipt older than seven
 days causes the evidence to run again.
 
+An automatic retry reads the evidence contract from the exact prepared commit.
+If that commit is older than the evidence-contract file, the workflow uses the
+pre-Elixir contract, the v0.9.0 adapter, and the matching artifact schema. It
+does not run Elixir-only coverage checks for that older commit. New workflow
+steps must not require files that were added after the prepared commit.
+
+Generated release workloads disable automatic Git maintenance and complete one
+synchronous `git gc` before measurement. This keeps `.git/objects` stable while
+the macOS copy-on-write snapshot is created.
+
 Download raw measured binaries and evidence from a run with:
 
 ```sh

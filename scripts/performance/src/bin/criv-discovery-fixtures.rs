@@ -267,8 +267,13 @@ fn initialize_git(root: &Path) -> Result<(), String> {
         &["init", "--quiet"][..],
         &["config", "user.email", "performance@criv.invalid"][..],
         &["config", "user.name", "criv performance"][..],
+        &["config", "gc.auto", "0"][..],
+        &["config", "gc.autoDetach", "false"][..],
+        &["config", "maintenance.auto", "false"][..],
+        &["config", "maintenance.autoDetach", "false"][..],
         &["add", "--all"][..],
         &["commit", "--quiet", "-m", "fixture root"][..],
+        &["gc", "--quiet"][..],
     ] {
         let output = Command::new("git")
             .args(args)
@@ -382,6 +387,36 @@ mod tests {
             output.stdout
         };
         assert_eq!(revision(left.path()), revision(right.path()));
+    }
+
+    #[test]
+    fn generated_git_repository_is_stable_before_returning() {
+        let root = tempfile::TempDir::new().unwrap();
+        fs::write(root.path().join("input.txt"), "same\n").unwrap();
+
+        initialize_git(root.path()).unwrap();
+
+        let config = Command::new("git")
+            .args(["config", "--get", "gc.auto"])
+            .current_dir(root.path())
+            .output()
+            .unwrap();
+        assert!(config.status.success());
+        assert_eq!(String::from_utf8(config.stdout).unwrap().trim(), "0");
+
+        let counts = Command::new("git")
+            .args(["count-objects", "-v"])
+            .current_dir(root.path())
+            .output()
+            .unwrap();
+        assert!(counts.status.success());
+        let counts = String::from_utf8(counts.stdout).unwrap();
+        assert!(counts.lines().any(|line| line == "count: 0"));
+        assert!(counts.lines().any(|line| {
+            line.strip_prefix("in-pack: ")
+                .and_then(|value| value.parse::<usize>().ok())
+                .is_some_and(|value| value > 0)
+        }));
     }
 
     #[test]

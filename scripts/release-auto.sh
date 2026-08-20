@@ -76,7 +76,7 @@ if [[ -n "$latest_tag" ]]; then
   range="$latest_tag..HEAD"
 fi
 
-prepared_line="$(git log "$range" --format='%H%x09%s' | awk -F '\t' '$2 ~ /^chore\(release\): v[0-9]+\.[0-9]+\.[0-9]+/ { print; exit }')"
+prepared_line="$(git log "$range" --format='%H%x09%s' | awk -F '\t' '$2 ~ /^chore\(release\): v[0-9]+\.[0-9]+\.[0-9]+/ && !found { print; found=1 }')"
 if [[ -n "$prepared_line" ]]; then
   prepared_commit="${prepared_line%%$'\t'*}"
   prepared_subject="${prepared_line#*$'\t'}"

@@ -14,6 +14,8 @@ sed -n \
 grep -F 'GH_TOKEN: ${{ github.token }}' "$prepare_step" >/dev/null
 grep -F 'git push --no-verify origin HEAD:main' \
   "$repository_root/scripts/release-auto.sh" >/dev/null
+grep -F '&& !found { print; found=1 }' \
+  "$repository_root/scripts/release-auto.sh" >/dev/null
 
 quality_job="$test_root/quality-job.yml"
 sed -n \
@@ -44,17 +46,34 @@ grep -F 'git describe --tags --abbrev=0 --match' "$baseline_step" >/dev/null
 grep -F '"$EXPECTED_COMMIT^"' "$baseline_step" >/dev/null
 grep -F 'git worktree add --detach "$baseline_root" "$baseline_revision"' "$baseline_step" >/dev/null
 grep -F '"$baseline_revision" = v0.9.0' "$baseline_step" >/dev/null
+grep -F 'git show "$EXPECTED_COMMIT:scripts/performance/release-evidence-contract.txt"' \
+  "$baseline_step" >/dev/null
+grep -F 'transition="legacy-v0.9-adapter"' "$baseline_step" >/dev/null
 test "$(tr -d '\r\n' < "$repository_root/scripts/performance/release-evidence-contract.txt")" = \
   "criv.release-evidence.elixir.v1"
+
+clean_build_step="$test_root/clean-build-step.yml"
+sed -n \
+  '/      - name: Measure clean builds and stage exact binaries/,/      - name: Prove complete Elixir file coverage/p' \
+  "$repository_root/.github/workflows/release.yml" >"$clean_build_step"
+grep -F 'criv.discovery-remote-artifact.v2' "$clean_build_step" >/dev/null
+grep -F 'criv.discovery-remote-artifact.v3' "$clean_build_step" >/dev/null
 
 coverage_step="$test_root/coverage-step.yml"
 sed -n \
   '/      - name: Prove complete Elixir file coverage/,/      - name: Measure live-watch convergence/p' \
   "$repository_root/.github/workflows/release.yml" >"$coverage_step"
+grep -F 'Skipping Elixir coverage for $env:CRIV_CANDIDATE_CONTRACT' "$coverage_step" >/dev/null
 grep -F 'lib/coverage.ex' "$coverage_step" >/dev/null
 grep -F 'src/coverage.exs' "$coverage_step" >/dev/null
 grep -F 'module:Coverage.Ex/fn:last/1' "$coverage_step" >/dev/null
 grep -F 'module:Coverage.Exs/fn:last/1' "$coverage_step" >/dev/null
+
+live_step="$test_root/live-step.yml"
+sed -n \
+  '/      - name: Measure live-watch convergence/,/      - name: Record hosted evidence identity/p' \
+  "$repository_root/.github/workflows/release.yml" >"$live_step"
+grep -F 'git -C "$root" gc --quiet' "$live_step" >/dev/null
 
 targets=(
   aarch64-apple-darwin
