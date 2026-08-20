@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::check;
 use crate::config::Config;
 use crate::policy_scan::PolicyScanPlan;
+use crate::repository::RepositoryFiles;
 use crate::source::SourceState;
 use crate::state::{self, State};
 use crate::vault::Vault;
@@ -23,21 +24,36 @@ pub(crate) struct RefreshResult {
 
 #[derive(Debug)]
 pub(crate) struct RefreshSession {
+    files: RepositoryFiles,
     config: Config,
     previous: Option<RefreshResult>,
 }
 
 impl RefreshSession {
+    #[cfg(test)]
     pub(crate) fn one_shot(root: &Path) -> Result<Self> {
-        let config = Config::load(root)?;
+        let files = RepositoryFiles::open(root)?;
+        Self::one_shot_from(&files)
+    }
+
+    pub(crate) fn one_shot_from(files: &RepositoryFiles) -> Result<Self> {
+        let config = Config::load_from(files)?;
         Ok(Self {
+            files: files.clone(),
             config,
             previous: None,
         })
     }
 
-    pub(crate) fn live(_root: &Path, config: &Config) -> Result<Self> {
+    #[cfg(test)]
+    pub(crate) fn live(root: &Path, config: &Config) -> Result<Self> {
+        let files = RepositoryFiles::open(root)?;
+        Self::live_from(&files, config)
+    }
+
+    pub(crate) fn live_from(files: &RepositoryFiles, config: &Config) -> Result<Self> {
         Ok(Self {
+            files: files.clone(),
             config: config.clone(),
             previous: None,
         })
@@ -49,7 +65,7 @@ impl RefreshSession {
 
     pub(crate) fn refresh_with_precommit_check(
         &mut self,
-        root: &Path,
+        _root: &Path,
         cause: RefreshCause,
         precommit_check: impl FnOnce() -> Result<()>,
     ) -> Result<&RefreshResult> {
@@ -63,10 +79,10 @@ impl RefreshSession {
             .flatten();
         let source = match (cause, previous_source) {
             (RefreshCause::DocsChanged, Some(source)) => source.reuse_for_docs(),
-            _ => SourceState::refresh(root, &self.config, previous_source)?,
+            _ => SourceState::refresh_from(&self.files, &self.config, previous_source)?,
         };
         let next = execute(
-            root,
+            &self.files,
             &self.config,
             previous_state,
             diagnostic_previous_state,
@@ -82,14 +98,15 @@ impl RefreshSession {
     }
 }
 fn execute(
-    root: &Path,
+    files: &RepositoryFiles,
     config: &Config,
     previous_state: Option<&State>,
     diagnostic_previous_state: Option<&State>,
     source: SourceState,
     precommit_check: impl FnOnce() -> Result<()>,
 ) -> Result<RefreshResult> {
-    let vault = Vault::load_incremental_with_config_and_source_state(root, config, source)?;
+    let root = files.root();
+    let vault = Vault::load_incremental_with_config_and_source_state(files, config, source)?;
     let blockers = check::publication_blocking_diagnostics(&vault);
     if !blockers.is_empty() {
         return Err(CrivError::new(format!(

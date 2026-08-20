@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::reconcile_transaction::Snapshot;
 use crate::git::{self, ChangeStatus, ChangedEntry, ChangedSet};
-use crate::util::{read_to_string_in, write_atomic_in};
+use crate::repository::RepositoryFiles;
 use crate::vault::Vault;
 use crate::{CrivError, Result};
 
@@ -85,13 +85,14 @@ struct ScalarSpan {
 }
 
 pub(crate) fn run(root: &Path, options: Options) -> Result<()> {
+    let files = RepositoryFiles::open(root)?;
     if !git::is_repository(root)? {
         return Err(CrivError::new(
             "`criv adr reconcile-sources` requires a Git worktree",
         ));
     }
     let target_sha = git::resolve_commit(root, &options.base)?;
-    let plan = build_plan(root, &options.base, &target_sha)?;
+    let plan = build_plan(&files, &options.base, &target_sha)?;
     println!("source reconciliation target: {}", plan.target_sha);
     if plan.files.is_empty() {
         println!("governed source paths are current; no reconciliation is required");
@@ -123,13 +124,13 @@ pub(crate) fn run(root: &Path, options: Options) -> Result<()> {
         .cloned()
         .chain(std::iter::once(RECEIPT_PATH.to_string()))
         .collect::<Vec<_>>();
-    let snapshot = Snapshot::capture(root, &rollback_paths)?;
+    let snapshot = Snapshot::capture_from(&files, &rollback_paths)?;
     let result = (|| {
-        apply_plan(root, &plan)?;
+        apply_plan(&files, &plan)?;
         ensure_stable_base(root, &plan, "during source reconciliation")?;
         git::stage_paths(root, &paths)?;
         let staged = git::staged_changes(root)?;
-        if !receipt_allows_transaction(root, &staged.entries) {
+        if !receipt_allows_transaction_from(&files, &staged.entries) {
             return Err(CrivError::new(
                 "source reconciliation receipt does not prove the complete staged transaction",
             ));
@@ -155,8 +156,9 @@ pub(crate) fn run(root: &Path, options: Options) -> Result<()> {
     Ok(())
 }
 
-fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<Plan> {
-    let vault = Vault::load(root)?;
+fn build_plan(files: &RepositoryFiles, base_ref: &str, target_sha: &str) -> Result<Plan> {
+    let root = files.root();
+    let vault = Vault::load_from(files)?;
     let head_sha = git::resolve_commit(root, "HEAD")?;
     let merge_base = git::merge_base(root, target_sha, &head_sha)?;
     let changes = git::changes_between(root, &merge_base, &head_sha)?;
@@ -229,7 +231,9 @@ fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<Plan> {
             if !note.governs.iter().any(|path| required.contains_key(path)) {
                 continue;
             }
-            let before = read_to_string_in(root, Path::new(&note.rel_path))?;
+            let before = vault
+                .repository_files()
+                .read_string(Path::new(&note.rel_path))?;
             let after = rewrite_governs(&before, &required)?;
             if before != after {
                 files.push(PlannedFile {
@@ -337,11 +341,12 @@ fn ensure_stable_base(root: &Path, plan: &Plan, moment: &str) -> Result<()> {
     }
 }
 
-fn apply_plan(root: &Path, plan: &Plan) -> Result<()> {
+fn apply_plan(files: &RepositoryFiles, plan: &Plan) -> Result<()> {
+    let scope = files.write_scope(Path::new("."))?;
     for file in &plan.files {
-        write_atomic_in(root, Path::new("."), Path::new(&file.path), &file.after)?;
+        scope.write_atomic(Path::new(&file.path), &file.after)?;
     }
-    let errors = crate::check::validate_all(root)?
+    let errors = crate::check::validate_all_from(files)?
         .into_iter()
         .filter(|diagnostic| diagnostic.is_error())
         .map(|diagnostic| diagnostic.describe())
@@ -374,7 +379,9 @@ fn apply_plan(root: &Path, plan: &Plan) -> Result<()> {
             "cannot serialize source reconciliation receipt: {error}"
         ))
     })? + "\n";
-    write_atomic_in(root, Path::new(".criv"), Path::new(RECEIPT_PATH), &contents)
+    files
+        .write_scope(Path::new(".criv"))?
+        .write_atomic(Path::new(RECEIPT_PATH), &contents)
 }
 
 pub(crate) fn receipt_is_current(root: &Path) -> bool {
@@ -385,7 +392,15 @@ pub(crate) fn receipt_is_current(root: &Path) -> bool {
 }
 
 pub(crate) fn receipt_allows_transaction(root: &Path, entries: &[ChangedEntry]) -> bool {
-    let Ok(receipt) = read_receipt(root) else {
+    let Ok(files) = RepositoryFiles::open(root) else {
+        return false;
+    };
+    receipt_allows_transaction_from(&files, entries)
+}
+
+fn receipt_allows_transaction_from(files: &RepositoryFiles, entries: &[ChangedEntry]) -> bool {
+    let root = files.root();
+    let Ok(receipt) = read_receipt_from(files) else {
         return false;
     };
     if receipt.schema != RECEIPT_SCHEMA
@@ -449,7 +464,9 @@ pub(crate) fn allows_history_change(
     };
     let new = match new_ref {
         Some(reference) => git::blob(root, reference, &entry.path),
-        None => read_to_string_in(root, Path::new(&entry.path)),
+        None => {
+            RepositoryFiles::open(root).and_then(|files| files.read_string(Path::new(&entry.path)))
+        }
     };
     new.is_ok_and(|new| transition_matches(&old, &new, &mappings))
 }
@@ -671,7 +688,13 @@ fn top_level_scalar(contents: &str, key: &str) -> Option<String> {
 }
 
 fn read_receipt(root: &Path) -> Result<Receipt> {
-    let contents = read_to_string_in(root, Path::new(RECEIPT_PATH))
+    let files = RepositoryFiles::open(root)?;
+    read_receipt_from(&files)
+}
+
+fn read_receipt_from(files: &RepositoryFiles) -> Result<Receipt> {
+    let contents = files
+        .read_string(Path::new(RECEIPT_PATH))
         .map_err(|_| CrivError::new("source reconciliation receipt is unavailable"))?;
     serde_json::from_str(&contents)
         .map_err(|_| CrivError::new("source reconciliation receipt is malformed"))

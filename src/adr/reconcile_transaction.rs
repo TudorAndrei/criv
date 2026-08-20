@@ -2,12 +2,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::git;
-use crate::util::{
-    file_exists_in, read_file_with_permissions_in, remove_file_in, write_atomic_with_permissions_in,
-};
+use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
 pub(crate) struct Snapshot {
+    files: RepositoryFiles,
     index: git::IndexSnapshot,
     paths: Vec<CapturedPath>,
 }
@@ -19,23 +18,30 @@ struct CapturedPath {
 }
 
 impl Snapshot {
+    #[cfg(test)]
     pub(crate) fn capture(root: &Path, paths: &[String]) -> Result<Self> {
+        let files = RepositoryFiles::open(root)?;
+        Self::capture_from(&files, paths)
+    }
+
+    pub(crate) fn capture_from(files: &RepositoryFiles, paths: &[String]) -> Result<Self> {
         Ok(Self {
-            index: git::IndexSnapshot::capture(root)?,
+            files: files.clone(),
+            index: git::IndexSnapshot::capture(files)?,
             paths: paths
                 .iter()
-                .map(|path| CapturedPath::capture(root, path))
+                .map(|path| CapturedPath::capture(files, path))
                 .collect::<Result<Vec<_>>>()?,
         })
     }
 
-    pub(crate) fn rollback(self, root: &Path) -> Vec<String> {
+    pub(crate) fn rollback(self, _root: &Path) -> Vec<String> {
         let mut errors = Vec::new();
-        if let Err(error) = self.index.restore(root) {
+        if let Err(error) = self.index.restore() {
             errors.push(error.to_string());
         }
         for path in self.paths {
-            if let Err(error) = path.restore(root) {
+            if let Err(error) = path.restore(&self.files) {
                 errors.push(error.to_string());
             }
         }
@@ -44,16 +50,16 @@ impl Snapshot {
 }
 
 impl CapturedPath {
-    fn capture(root: &Path, path: &str) -> Result<Self> {
+    fn capture(files: &RepositoryFiles, path: &str) -> Result<Self> {
         let relative = Path::new(path);
-        if !file_exists_in(root, relative)? {
+        if !files.file_exists(relative)? {
             return Ok(Self {
                 path: path.to_string(),
                 contents: None,
                 permissions: None,
             });
         }
-        let (contents, permissions) = read_file_with_permissions_in(root, relative)?;
+        let (contents, permissions) = files.read_with_permissions(relative)?;
         Ok(Self {
             path: path.to_string(),
             contents: Some(String::from_utf8(contents).map_err(|error| {
@@ -63,18 +69,14 @@ impl CapturedPath {
         })
     }
 
-    fn restore(self, root: &Path) -> Result<()> {
+    fn restore(self, files: &RepositoryFiles) -> Result<()> {
         let relative = PathBuf::from(&self.path);
         match (self.contents, self.permissions) {
-            (Some(contents), Some(permissions)) => write_atomic_with_permissions_in(
-                root,
-                Path::new("."),
-                &relative,
-                &contents,
-                permissions,
-            ),
-            (None, None) if file_exists_in(root, &relative)? => {
-                remove_file_in(root, Path::new("."), &relative)
+            (Some(contents), Some(permissions)) => files
+                .write_scope(Path::new("."))?
+                .write_atomic_with_permissions(&relative, &contents, permissions),
+            (None, None) if files.file_exists(&relative)? => {
+                files.write_scope(Path::new("."))?.remove_file(&relative)
             }
             (None, None) => Ok(()),
             _ => Err(CrivError::new(format!(

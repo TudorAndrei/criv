@@ -1,6 +1,6 @@
 // Code architecture for the criv CLI. Every node is a Rust module, and every
-// relation is an import relation between modules. `criv::util` is a
-// cross-cutting helper module and stays outside the architecture.
+// relation is an import relation between modules. `criv::util` holds only
+// non-I/O helpers and stays outside the architecture.
 model {
   extend criv.cli.commandInterface {
     rustMain = module 'criv::main' {
@@ -59,6 +59,19 @@ model {
     }
   }
 
+  extend criv.cli.repositoryFiles {
+    rustRepository = module 'criv::repository' {
+      technology 'Rust'
+      description 'Exposes one capability-rooted repository handle and bound write scopes.'
+      link ../../src/repository.rs 'source'
+    }
+    rustRepositoryFilesystem = module 'criv::repository::filesystem' {
+      technology 'Rust, cap-std, and cap-fs-ext'
+      description 'Privately implements no-follow traversal, atomic publication, permissions, links, and directory durability.'
+      link ../../src/repository/filesystem.rs 'source'
+    }
+  }
+
   extend criv.cli.architectureService {
     rustC4 = module 'criv::c4' {
       technology 'Rust'
@@ -95,7 +108,7 @@ model {
     }
     rustSourcePaths = module 'criv::source::paths' {
       technology 'Rust'
-      description 'Selects and reads source paths from configured roots.'
+      description 'Converts selected repository bytes to Source text.'
       link ../../src/source/paths.rs 'source'
     }
     rustSourceGraph = module 'criv::source::graph' {
@@ -228,11 +241,31 @@ model {
   criv.cli.sourceIntelligence.rustSource -> criv.cli.sourceIntelligence.rustDiscovery 'Selects Source candidates'
   criv.cli.sourceIntelligence.rustSource -> criv.cli.sourceIntelligence.rustSourceCatalog 'Owns stable Source paths'
   criv.cli.sourceIntelligence.rustSource -> criv.cli.sourceIntelligence.rustSourceGraph 'Builds and reuses the parsed graph'
-  criv.cli.sourceIntelligence.rustSource -> criv.cli.sourceIntelligence.rustSourcePaths 'Exposes confined Source reads'
+  criv.cli.sourceIntelligence.rustSource -> criv.cli.sourceIntelligence.rustSourcePaths 'Owns Source text conversion'
   criv.cli.sourceIntelligence.rustDiscovery -> criv.cli.vaultModel.rustConfig 'Reads file-selection rules'
-  criv.cli.sourceIntelligence.rustSourceGraph -> criv.cli.sourceIntelligence.rustSourcePaths 'Reads selected source content'
   criv.cli.sourceIntelligence.rustStructural -> criv.cli.sourceIntelligence.rustSource 'Reads selected Source text'
+  criv.cli.sourceIntelligence.rustSourceGraph -> criv.cli.sourceIntelligence.rustSourcePaths 'Reads selected source content'
   criv.cli.sourceIntelligence.rustStructural -> criv.cli.diagnosticLocations.rustDiagnostic 'Keeps exact match byte spans'
+
+  // Repository file access.
+  criv.cli.repositoryFiles.rustRepository -> criv.cli.repositoryFiles.rustRepositoryFilesystem 'Uses the private operating-system implementation'
+  criv.cli.vaultModel.rustConfig -> criv.cli.repositoryFiles.rustRepository 'Reads repository configuration'
+  criv.cli.vaultModel.rustVault -> criv.cli.repositoryFiles.rustRepository 'Reads selected vault files'
+  criv.cli.sourceIntelligence.rustDiscovery -> criv.cli.repositoryFiles.rustRepository 'Reads selected files'
+  criv.cli.sourceIntelligence.rustSourcePaths -> criv.cli.repositoryFiles.rustRepository 'Reads selected Source bytes'
+  criv.cli.sourceIntelligence.rustSourceGraph -> criv.cli.repositoryFiles.rustRepository 'Reads Source bytes and publishes its cache'
+  criv.cli.sourceIntelligence.rustStructural -> criv.cli.repositoryFiles.rustRepository 'Reads selected Source text'
+  criv.cli.installation.rustInit -> criv.cli.repositoryFiles.rustRepository 'Writes the vault scaffold'
+  criv.cli.installation.rustInstallSkills -> criv.cli.repositoryFiles.rustRepository 'Publishes and inspects generated skills'
+  criv.cli.refreshCoordinator.rustWatch -> criv.cli.repositoryFiles.rustRepository 'Keeps the watch lock and generation handle'
+  criv.cli.refreshCoordinator.rustRefresh -> criv.cli.repositoryFiles.rustRepository 'Keeps one refresh handle'
+  criv.cli.governanceEngine.rustCheck -> criv.cli.repositoryFiles.rustRepository 'Reads and fixes checked files'
+  criv.cli.governanceEngine.rustAdr -> criv.cli.repositoryFiles.rustRepository 'Writes ADR reconciliation files'
+  criv.cli.governanceEngine.rustSourceReconcile -> criv.cli.repositoryFiles.rustRepository 'Writes source reconciliation files'
+  criv.cli.governanceEngine.rustReconcileTransaction -> criv.cli.repositoryFiles.rustRepository 'Captures and restores worktree files'
+  criv.cli.repositoryHistory.rustGit -> criv.cli.repositoryFiles.rustRepository 'Captures and restores raw Git index bytes'
+  criv.cli.statePublisher.rustStatePublication -> criv.cli.repositoryFiles.rustRepository 'Publishes and recovers State transactions'
+  criv.cli.statePublisher.rustSnapshots -> criv.cli.repositoryFiles.rustRepository 'Reads and retains snapshots'
 
   // Validation and enforcement.
   criv.cli.governanceEngine.rustCheck -> criv.cli.vaultModel.rustVault 'Validates repository artifacts'
@@ -293,6 +326,7 @@ views {
     include criv.cli.sourceIntelligence.rustSourceCatalog
     include criv.cli.sourceIntelligence.rustDiscovery
     include criv.cli.sourceIntelligence.rustSourceGraph
+    include criv.cli.sourceIntelligence.rustSourcePaths
     include criv.cli.governanceEngine.rustCheck
     include criv.cli.architectureService.*
     include criv.cli.statePublisher.rustState
@@ -305,12 +339,26 @@ views {
     include criv.cli.sourceIntelligence.rustSource
     include criv.cli.sourceIntelligence.rustSourceCatalog
     include criv.cli.sourceIntelligence.rustSourceGraph
-    include criv.cli.sourceIntelligence.rustSourcePaths
     include criv.cli.sourceIntelligence.rustDiscovery
     include criv.cli.refreshCoordinator.rustRefresh
     include criv.cli.vaultModel.rustVault
     include criv.cli.statePublisher.rustState
     include criv.cli.knowledgeQueries.rustQuery
+  }
+
+  view codeRepositoryFiles of criv.cli.repositoryFiles {
+    title 'Code / CLI / Repository files'
+    description 'The parent repository interface, its private implementation, and the owners that keep one handle for complete operations.'
+
+    include *
+    include criv.cli.vaultModel.rustVault
+    include criv.cli.sourceIntelligence.rustSourceGraph
+    include criv.cli.installation.rustInit
+    include criv.cli.refreshCoordinator.rustWatch
+    include criv.cli.governanceEngine.rustAdr
+    include criv.cli.governanceEngine.rustReconcileTransaction
+    include criv.cli.repositoryHistory.rustGit
+    include criv.cli.statePublisher.rustStatePublication
   }
 
   view codeInstallation of criv.cli.installation {

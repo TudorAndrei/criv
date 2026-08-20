@@ -11,9 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::git;
-use crate::util::{
-    file_permissions_in, remove_file_in, write_atomic_in, write_atomic_with_permissions_in,
-};
+use crate::repository::RepositoryFiles;
 use crate::vault::Vault;
 use crate::{CrivError, Result};
 
@@ -322,6 +320,7 @@ fn receipt_paths_match(receipt: &Receipt, entries: &[git::ChangedEntry]) -> bool
 }
 
 fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
+    let files = RepositoryFiles::open(root)?;
     if !git::is_repository(root)? {
         return Err(CrivError::new(
             "`criv adr reconcile` requires a Git worktree",
@@ -329,7 +328,7 @@ fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
     }
     let target_sha = git::resolve_commit(root, &options.base)?;
     let materialized = current_materialized_receipt(root)?;
-    let plan = build_plan(root, &options.base, &target_sha)?;
+    let plan = build_plan_from(&files, &options.base, &target_sha)?;
     println!("ADR reconciliation target: {}", plan.target_sha);
     if plan.mappings.is_empty() {
         println!("ADR allocation is current; no reconciliation is required");
@@ -362,9 +361,9 @@ fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
         .cloned()
         .chain(std::iter::once(RECEIPT_PATH.to_string()))
         .collect::<Vec<_>>();
-    let snapshot = Snapshot::capture(root, &rollback_paths)?;
+    let snapshot = Snapshot::capture_from(&files, &rollback_paths)?;
     let commit = (|| {
-        apply_plan(root, &plan)?;
+        apply_plan(&files, &plan)?;
         if !git::ref_is_stable(root, &options.base, &plan.target_sha)? {
             return Err(CrivError::new(format!(
                 "target ref `{}` moved during reconciliation; retry against its new SHA",
@@ -409,8 +408,13 @@ fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
     Ok(())
 }
 
-fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<ReconcilePlan> {
-    let vault = Vault::load(root)?;
+fn build_plan_from(
+    files: &RepositoryFiles,
+    base_ref: &str,
+    target_sha: &str,
+) -> Result<ReconcilePlan> {
+    let root = files.root();
+    let vault = Vault::load_from(files)?;
     let current_config = &vault.config;
     let target_config = if git::tree_paths(root, target_sha, "criv.toml")?
         .iter()
@@ -889,7 +893,8 @@ fn receipt_paths(receipt: &Receipt) -> Vec<String> {
         .collect()
 }
 
-fn apply_plan(root: &Path, plan: &ReconcilePlan) -> Result<()> {
+fn apply_plan(files: &RepositoryFiles, plan: &ReconcilePlan) -> Result<()> {
+    let root = files.root();
     let rewrite_paths = rewrite_candidates(root, plan)?;
     // Capture every source before publishing any destination. A destination
     // may be another mapping's source, so reading permissions inside the write
@@ -900,22 +905,20 @@ fn apply_plan(root: &Path, plan: &ReconcilePlan) -> Result<()> {
         .map(|mapping| {
             Ok((
                 mapping.new_path.clone(),
-                file_permissions_in(root, Path::new(&mapping.old_path))?,
+                files.read_with_permissions(Path::new(&mapping.old_path))?.1,
             ))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
     let mut receipt_files = Vec::new();
     for (path, contents) in &rewrite_paths {
         if let Some(permissions) = destination_permissions.get(path) {
-            write_atomic_with_permissions_in(
-                root,
-                Path::new("."),
-                Path::new(path),
-                contents,
-                permissions.clone(),
-            )?;
+            files
+                .write_scope(Path::new("."))?
+                .write_atomic_with_permissions(Path::new(path), contents, permissions.clone())?;
         } else {
-            write_atomic_in(root, Path::new("."), Path::new(path), contents)?;
+            files
+                .write_scope(Path::new("."))?
+                .write_atomic(Path::new(path), contents)?;
         }
         receipt_files.push(ReceiptFile {
             path: path.clone(),
@@ -938,11 +941,13 @@ fn apply_plan(root: &Path, plan: &ReconcilePlan) -> Result<()> {
     for path in physical_deletions {
         // A retry expresses its final transaction against the original HEAD;
         // an earlier materialized receipt may already have removed this path.
-        if root.join(path).exists() {
-            remove_file_in(root, Path::new("."), Path::new(path))?;
+        if files.file_exists(Path::new(path))? {
+            files
+                .write_scope(Path::new("."))?
+                .remove_file(Path::new(path))?;
         }
     }
-    let errors = crate::check::validate_all(root)?
+    let errors = crate::check::validate_all_from(files)?
         .into_iter()
         .filter(|diagnostic| diagnostic.is_error())
         .collect::<Vec<_>>();
@@ -982,12 +987,9 @@ fn apply_plan(root: &Path, plan: &ReconcilePlan) -> Result<()> {
     let contents = serde_json::to_string_pretty(&receipt).map_err(|error| {
         CrivError::new(format!("cannot serialize reconciliation receipt: {error}"))
     })? + "\n";
-    write_atomic_in(
-        root,
-        Path::new(".criv"),
-        Path::new(".criv/adr-reconcile.json"),
-        &contents,
-    )
+    files
+        .write_scope(Path::new(".criv"))?
+        .write_atomic(Path::new(".criv/adr-reconcile.json"), &contents)
 }
 
 /// A generated reconcile operation is safe to re-plan before it is staged or

@@ -10,11 +10,7 @@ use std::path::PathBuf;
 use criv_state_wire::is_supported_schema;
 use serde::{Deserialize, Serialize};
 
-use crate::util::{
-    directory_exists_in, read_dir_names_in, read_file_with_metadata_in, read_optional_to_string_in,
-};
-#[cfg(test)]
-use crate::util::{remove_file_in, write_atomic_if_changed_in, write_atomic_in};
+use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
 #[cfg(test)]
@@ -70,19 +66,20 @@ pub(crate) struct PublicationPlan {
 
 #[cfg(test)]
 fn publish(root: &Path, hash: &str, contents: &str, keep: usize) -> Result<()> {
-    plan_publication(root, hash, contents, keep)?;
-    publish_preflighted(root, hash, contents, keep)
+    let files = RepositoryFiles::open(root)?;
+    plan_publication(&files, hash, contents, keep)?;
+    publish_preflighted(&files, hash, contents, keep)
 }
 
 pub(crate) fn plan_publication(
-    root: &Path,
+    files: &RepositoryFiles,
     hash: &str,
     contents: &str,
     keep: usize,
 ) -> Result<PublicationPlan> {
     validate_keep(keep)?;
     validate_snapshot(hash, contents)?;
-    let mut view = reconcile(root)?;
+    let mut view = reconcile(files)?;
     if let Some(latest) = &view.latest
         && !view.files.contains_key(latest)
     {
@@ -119,8 +116,13 @@ pub(crate) fn plan_publication(
 }
 
 #[cfg(test)]
-fn publish_preflighted(root: &Path, hash: &str, contents: &str, keep: usize) -> Result<()> {
-    let mut view = reconcile(root)?;
+fn publish_preflighted(
+    files: &RepositoryFiles,
+    hash: &str,
+    contents: &str,
+    keep: usize,
+) -> Result<()> {
+    let mut view = reconcile(files)?;
     view.order.retain(|existing| existing != hash);
     view.order.push(hash.to_string());
     view.files.insert(
@@ -133,34 +135,30 @@ fn publish_preflighted(root: &Path, hash: &str, contents: &str, keep: usize) -> 
     );
     view.latest = Some(hash.to_string());
     let snapshot_path = snapshot_relative_path(hash);
-    write_atomic_if_changed_in(root, Path::new(".criv"), &snapshot_path, contents)?;
-    write_atomic_in(
-        root,
-        Path::new(".criv"),
-        Path::new(LATEST_PATH),
-        &format!("{hash}\n"),
-    )?;
-    apply_prune(root, view, keep, false)?;
+    let scope = files.write_scope(Path::new(".criv"))?;
+    scope.write_atomic_if_changed(&snapshot_path, contents)?;
+    scope.write_atomic(Path::new(LATEST_PATH), &format!("{hash}\n"))?;
+    apply_prune(files, view, keep, false)?;
     Ok(())
 }
 
-pub(crate) fn load_unlocked(root: &Path, id: &str) -> Result<Option<String>> {
+pub(crate) fn load_unlocked(files: &RepositoryFiles, id: &str) -> Result<Option<String>> {
     let hash = if id == "latest" {
-        read_latest(root)?
+        read_latest(files)?
             .ok_or_else(|| CrivError::new("local snapshot `latest` does not resolve"))?
     } else if is_hash_reference(id) {
         id.to_string()
     } else {
         return Ok(None);
     };
-    let Some(()) = existing_store_dir(root)? else {
+    let Some(()) = existing_store_dir(files)? else {
         if id == "latest" {
             return Err(CrivError::new("local snapshot `latest` does not resolve"));
         }
         return Ok(None);
     };
     let path = format!(".criv/snapshots/{hash}.json");
-    let Some(contents) = read_optional_to_string_in(root, Path::new(&path))? else {
+    let Some(contents) = files.read_optional_string(Path::new(&path))? else {
         if id == "latest" {
             return Err(CrivError::new(format!(
                 "local latest snapshot `{hash}` does not resolve"
@@ -174,20 +172,22 @@ pub(crate) fn load_unlocked(root: &Path, id: &str) -> Result<Option<String>> {
 
 #[cfg(test)]
 fn list(root: &Path) -> Result<Vec<SnapshotRecord>> {
-    let view = reconcile(root)?;
+    let files = RepositoryFiles::open(root)?;
+    let view = reconcile(&files)?;
     Ok(records_newest_first(&view))
 }
 
 #[cfg(test)]
 fn prune(root: &Path, keep: usize, dry_run: bool) -> Result<PruneReport> {
+    let files = RepositoryFiles::open(root)?;
     validate_keep(keep)?;
-    let view = reconcile(root)?;
-    apply_prune(root, view, keep, dry_run)
+    let view = reconcile(&files)?;
+    apply_prune(&files, view, keep, dry_run)
 }
 
 #[cfg(test)]
 fn apply_prune(
-    root: &Path,
+    files: &RepositoryFiles,
     mut view: StoreView,
     keep: usize,
     dry_run: bool,
@@ -228,13 +228,15 @@ fn apply_prune(
 
     if !dry_run {
         for hash in &removed_hashes {
-            remove_file_in(root, Path::new(STORE_DIR), &snapshot_relative_path(hash))?;
+            files
+                .write_scope(Path::new(STORE_DIR))?
+                .remove_file(&snapshot_relative_path(hash))?;
             view.files.remove(hash);
         }
         let removed = removed_hashes.into_iter().collect::<BTreeSet<_>>();
         view.order.retain(|hash| !removed.contains(hash));
-        if !view.order.is_empty() || existing_store_dir(root)?.is_some() {
-            write_index(root, &view.order)?;
+        if !view.order.is_empty() || existing_store_dir(files)?.is_some() {
+            write_index(files, &view.order)?;
         }
     }
 
@@ -246,9 +248,9 @@ fn apply_prune(
     })
 }
 
-fn reconcile(root: &Path) -> Result<StoreView> {
-    let latest = read_latest(root)?;
-    let Some(()) = existing_store_dir(root)? else {
+fn reconcile(files: &RepositoryFiles) -> Result<StoreView> {
+    let latest = read_latest(files)?;
+    let Some(()) = existing_store_dir(files)? else {
         return Ok(StoreView {
             order: Vec::new(),
             files: BTreeMap::new(),
@@ -256,8 +258,10 @@ fn reconcile(root: &Path) -> Result<StoreView> {
         });
     };
 
-    let mut files = BTreeMap::new();
-    let names = read_dir_names_in(root, Path::new(".criv/snapshots"))?.unwrap_or_default();
+    let mut snapshot_files = BTreeMap::new();
+    let names = files
+        .read_dir_names(Path::new(".criv/snapshots"))?
+        .unwrap_or_default();
     for name in names {
         let name = name.to_string_lossy().to_string();
         let Some(hash) = name
@@ -268,14 +272,16 @@ fn reconcile(root: &Path) -> Result<StoreView> {
         };
         let relative = format!(".criv/snapshots/{name}");
         let (contents, metadata) =
-            read_file_with_metadata_in(root, Path::new(&relative)).map_err(|error| {
-                CrivError::new(format!("failed to read snapshot `{hash}`: {error}"))
-            })?;
+            files
+                .read_with_metadata(Path::new(&relative))
+                .map_err(|error| {
+                    CrivError::new(format!("failed to read snapshot `{hash}`: {error}"))
+                })?;
         let contents = String::from_utf8(contents).map_err(|error| {
             CrivError::new(format!("failed to read snapshot `{hash}`: {error}"))
         })?;
         validate_snapshot(hash, &contents)?;
-        files.insert(
+        snapshot_files.insert(
             hash.to_string(),
             SnapshotFile {
                 #[cfg(test)]
@@ -285,14 +291,14 @@ fn reconcile(root: &Path) -> Result<StoreView> {
         );
     }
 
-    let indexed = read_index(root)?;
+    let indexed = read_index(files)?;
     let mut seen = BTreeSet::new();
     let mut order = indexed
         .unwrap_or_default()
         .into_iter()
-        .filter(|hash| files.contains_key(hash) && seen.insert(hash.clone()))
+        .filter(|hash| snapshot_files.contains_key(hash) && seen.insert(hash.clone()))
         .collect::<Vec<_>>();
-    let mut orphans = files
+    let mut orphans = snapshot_files
         .iter()
         .filter(|(hash, _)| !seen.contains(*hash))
         .map(|(hash, file)| (file.modified, hash.clone()))
@@ -300,20 +306,23 @@ fn reconcile(root: &Path) -> Result<StoreView> {
     orphans.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
     order.extend(orphans.into_iter().map(|(_, hash)| hash));
 
-    if let Some(latest_hash) = latest.as_ref().filter(|hash| files.contains_key(*hash)) {
+    if let Some(latest_hash) = latest
+        .as_ref()
+        .filter(|hash| snapshot_files.contains_key(*hash))
+    {
         order.retain(|hash| hash != latest_hash);
         order.push(latest_hash.clone());
     }
 
     Ok(StoreView {
         order,
-        files,
+        files: snapshot_files,
         latest,
     })
 }
 
-fn read_index(root: &Path) -> Result<Option<Vec<String>>> {
-    let Some(contents) = read_optional_to_string_in(root, Path::new(".criv/snapshots/index.json"))?
+fn read_index(files: &RepositoryFiles) -> Result<Option<Vec<String>>> {
+    let Some(contents) = files.read_optional_string(Path::new(".criv/snapshots/index.json"))?
     else {
         return Ok(None);
     };
@@ -329,8 +338,8 @@ fn read_index(root: &Path) -> Result<Option<Vec<String>>> {
     Ok(Some(index.order))
 }
 
-fn read_latest(root: &Path) -> Result<Option<String>> {
-    let Some(contents) = read_optional_to_string_in(root, Path::new(".criv/latest"))? else {
+fn read_latest(files: &RepositoryFiles) -> Result<Option<String>> {
+    let Some(contents) = files.read_optional_string(Path::new(".criv/latest"))? else {
         return Ok(None);
     };
     let hash = contents.trim();
@@ -343,13 +352,10 @@ fn read_latest(root: &Path) -> Result<Option<String>> {
 }
 
 #[cfg(test)]
-fn write_index(root: &Path, order: &[String]) -> Result<()> {
-    write_atomic_in(
-        root,
-        Path::new(STORE_DIR),
-        Path::new(INDEX_PATH),
-        &index_contents(order)?,
-    )
+fn write_index(files: &RepositoryFiles, order: &[String]) -> Result<()> {
+    files
+        .write_scope(Path::new(STORE_DIR))?
+        .write_atomic(Path::new(INDEX_PATH), &index_contents(order)?)
 }
 
 fn index_contents(order: &[String]) -> Result<String> {
@@ -376,8 +382,10 @@ fn records_newest_first(view: &StoreView) -> Vec<SnapshotRecord> {
         .collect()
 }
 
-fn existing_store_dir(root: &Path) -> Result<Option<()>> {
-    directory_exists_in(root, Path::new(".criv/snapshots")).map(|exists| exists.then_some(()))
+fn existing_store_dir(files: &RepositoryFiles) -> Result<Option<()>> {
+    files
+        .directory_exists(Path::new(".criv/snapshots"))
+        .map(|exists| exists.then_some(()))
 }
 
 fn validate_snapshot(hash: &str, contents: &str) -> Result<()> {
@@ -441,6 +449,17 @@ mod tests {
 
     use super::*;
 
+    fn write_fixture(
+        root: &Path,
+        allowed_dir: &Path,
+        destination: &Path,
+        contents: &str,
+    ) -> Result<()> {
+        RepositoryFiles::open(root)?
+            .write_scope(allowed_dir)?
+            .write_atomic(destination, contents)
+    }
+
     fn state(seed: &str) -> (String, String) {
         let contents =
             format!("{{\n  \"schema\": \"criv.state.v1\",\n  \"seed\": \"{seed}\"\n}}\n");
@@ -479,7 +498,7 @@ mod tests {
         let first = state("first");
         let second = state("second");
         for item in [&second, &first] {
-            write_atomic_in(
+            write_fixture(
                 root.path(),
                 Path::new(".criv"),
                 &snapshot_relative_path(&item.0),
@@ -493,7 +512,7 @@ mod tests {
             file.set_times(FileTimes::new().set_modified(UNIX_EPOCH + Duration::from_secs(10)))
                 .unwrap();
         }
-        write_atomic_in(
+        write_fixture(
             root.path(),
             Path::new(STORE_DIR),
             Path::new(INDEX_PATH),
@@ -522,7 +541,7 @@ mod tests {
         let first = state("first");
         let orphan = state("orphan");
         for item in [&first, &orphan] {
-            write_atomic_in(
+            write_fixture(
                 root.path(),
                 Path::new(".criv"),
                 &snapshot_relative_path(&item.0),
@@ -531,8 +550,9 @@ mod tests {
             .unwrap();
         }
         let missing = "f".repeat(64);
-        write_index(root.path(), &[missing, first.0.clone()]).unwrap();
-        write_atomic_in(
+        let files = RepositoryFiles::open(root.path()).unwrap();
+        write_index(&files, &[missing, first.0.clone()]).unwrap();
+        write_fixture(
             root.path(),
             Path::new(".criv"),
             Path::new(LATEST_PATH),
@@ -572,7 +592,7 @@ mod tests {
     fn corrupt_snapshots_fail_closed_and_are_preserved() {
         let root = tempfile::TempDir::new().unwrap();
         let corrupt_hash = "a".repeat(64);
-        write_atomic_in(
+        write_fixture(
             root.path(),
             Path::new(".criv"),
             &snapshot_relative_path(&corrupt_hash),

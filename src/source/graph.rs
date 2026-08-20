@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tree_sitter::{Node, Parser};
 
 use super::paths::read_source_bytes;
-use crate::util::{file_exists_in, read_optional_to_string_in, write_atomic_in};
+use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
 mod elixir;
@@ -470,13 +470,23 @@ pub(super) struct SourceGraphBuild {
 }
 
 impl SourceGraphBuild {
+    #[cfg(test)]
     pub(super) fn build_incremental(
         root: &Path,
         source_files: &[String],
         previous: Option<&Self>,
     ) -> Result<Self> {
+        let files = RepositoryFiles::open(root)?;
+        Self::build_incremental_from(&files, source_files, previous)
+    }
+
+    pub(super) fn build_incremental_from(
+        files: &RepositoryFiles,
+        source_files: &[String],
+        previous: Option<&Self>,
+    ) -> Result<Self> {
         Self::build_incremental_with_workers_inner(
-            root,
+            files,
             source_files,
             previous,
             source_worker_count(source_files.len()),
@@ -490,18 +500,19 @@ impl SourceGraphBuild {
         previous: Option<&Self>,
         workers: usize,
     ) -> Result<Self> {
+        let files = RepositoryFiles::open(root)?;
         assert!(workers > 0, "Source test worker count must be positive");
-        Self::build_incremental_with_workers_inner(root, source_files, previous, workers)
+        Self::build_incremental_with_workers_inner(&files, source_files, previous, workers)
     }
 
     fn build_incremental_with_workers_inner(
-        root: &Path,
+        files: &RepositoryFiles,
         source_files: &[String],
         previous: Option<&Self>,
         workers: usize,
     ) -> Result<Self> {
         let graph = SourceGraph::build_incremental_with_workers(
-            root,
+            files,
             source_files,
             previous.map(SourceGraphBuild::graph),
             workers,
@@ -509,7 +520,7 @@ impl SourceGraphBuild {
         let can_reuse = previous.is_some_and(|previous| {
             previous.cache == CacheDisposition::Clean && graph.changed_files().is_empty()
         });
-        let cache = if can_reuse && file_exists_in(root, Path::new(".criv/source-graph.json"))? {
+        let cache = if can_reuse && files.file_exists(Path::new(".criv/source-graph.json"))? {
             CacheDisposition::Clean
         } else {
             CacheDisposition::Dirty
@@ -538,20 +549,33 @@ impl SourceGraphBuild {
         self.graph.files.keys().cloned().collect()
     }
 
-    pub(super) fn publish(mut self, root: &Path) -> Result<Self> {
+    #[cfg(test)]
+    pub(super) fn publish(self, root: &Path) -> Result<Self> {
+        let files = RepositoryFiles::open(root)?;
+        self.publish_from(&files)
+    }
+
+    pub(super) fn publish_from(mut self, files: &RepositoryFiles) -> Result<Self> {
         if self.cache == CacheDisposition::Dirty {
-            store_cached(root, &self.graph)?;
+            store_cached(files, &self.graph)?;
             self.cache = CacheDisposition::Clean;
         }
         Ok(self)
     }
 }
 
+#[cfg(test)]
 pub(super) fn load_cached(root: &Path) -> Option<SourceGraphBuild> {
+    let files = RepositoryFiles::open(root).ok()?;
+    load_cached_from(&files)
+}
+
+pub(super) fn load_cached_from(files: &RepositoryFiles) -> Option<SourceGraphBuild> {
     #[cfg(test)]
     record_work(|counts| counts.cache_loads += 1);
 
-    let contents = read_optional_to_string_in(root, Path::new(".criv/source-graph.json"))
+    let contents = files
+        .read_optional_string(Path::new(".criv/source-graph.json"))
         .ok()
         .flatten()?;
     let mut cache = serde_json::from_str::<GraphCacheFile>(&contents).ok()?;
@@ -562,7 +586,7 @@ pub(super) fn load_cached(root: &Path) -> Option<SourceGraphBuild> {
     })
 }
 
-fn store_cached(root: &Path, graph: &SourceGraph) -> Result<()> {
+fn store_cached(files: &RepositoryFiles, graph: &SourceGraph) -> Result<()> {
     let cache = BorrowedGraphCacheFile {
         schema: GRAPH_CACHE_SCHEMA,
         graph,
@@ -572,12 +596,9 @@ fn store_cached(root: &Path, graph: &SourceGraph) -> Result<()> {
     let contents = serde_json::to_string_pretty(&cache)
         .map_err(|err| CrivError::new(format!("failed to serialize source graph cache: {err}")))?;
     let contents = format!("{contents}\n");
-    write_atomic_in(
-        root,
-        Path::new(".criv"),
-        Path::new(".criv/source-graph.json"),
-        &contents,
-    )?;
+    files
+        .write_scope(Path::new(".criv"))?
+        .write_atomic(Path::new(".criv/source-graph.json"), &contents)?;
     #[cfg(test)]
     record_work(|counts| {
         counts.cache_publications += 1;
@@ -716,8 +737,9 @@ impl SourceGraph {
         source_files: &[String],
         previous: Option<&Self>,
     ) -> Result<Self> {
+        let files = RepositoryFiles::open(root)?;
         Self::build_incremental_with_workers(
-            root,
+            &files,
             source_files,
             previous,
             source_worker_count(source_files.len()),
@@ -725,13 +747,13 @@ impl SourceGraph {
     }
 
     fn build_incremental_with_workers(
-        root: &Path,
+        files: &RepositoryFiles,
         source_files: &[String],
         previous: Option<&Self>,
         workers: usize,
     ) -> Result<Self> {
         let mut graph = Self::default();
-        for processed in process_source_files(root, source_files, previous, workers)? {
+        for processed in process_source_files(files, source_files, previous, workers)? {
             #[cfg(test)]
             record_work(|counts| counts.source_reads += 1);
             let Some(processed) = processed else {
@@ -1179,7 +1201,7 @@ struct ProcessedSource {
 }
 
 fn process_source_files(
-    root: &Path,
+    files: &RepositoryFiles,
     source_files: &[String],
     previous: Option<&SourceGraph>,
     workers: usize,
@@ -1190,7 +1212,7 @@ fn process_source_files(
     if workers == 1 {
         return source_files
             .iter()
-            .map(|source_file| process_source_file(root, source_file, previous))
+            .map(|source_file| process_source_file(files, source_file, previous))
             .collect();
     }
 
@@ -1202,7 +1224,7 @@ fn process_source_files(
                 scope.spawn(move || {
                     chunk
                         .iter()
-                        .map(|source_file| process_source_file(root, source_file, previous))
+                        .map(|source_file| process_source_file(files, source_file, previous))
                         .collect::<Result<Vec<_>>>()
                 })
             })
@@ -1229,11 +1251,11 @@ fn source_worker_count(source_files: usize) -> usize {
 }
 
 fn process_source_file(
-    root: &Path,
+    files: &RepositoryFiles,
     source_file: &str,
     previous: Option<&SourceGraph>,
 ) -> Result<Option<ProcessedSource>> {
-    let bytes = read_source_bytes(root, source_file).map_err(|error| {
+    let bytes = read_source_bytes(files, source_file).map_err(|error| {
         CrivError::new(format!(
             "failed to read selected file `{source_file}`: {error}"
         ))

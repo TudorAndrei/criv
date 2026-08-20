@@ -3,7 +3,7 @@
 mod artifact;
 mod likec4;
 
-pub(crate) use artifact::{C4Artifact, C4ArtifactFormat, parse_file};
+pub(crate) use artifact::{C4Artifact, C4ArtifactFormat, parse_file_from};
 pub(crate) use likec4::LikeC4Workspace;
 
 use std::path::Path;

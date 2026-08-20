@@ -273,13 +273,13 @@ impl State {
 
     fn publish_snapshot_with_check(
         &self,
-        root: &Path,
+        vault: &Vault,
         serialized: &SerializedState,
         keep: usize,
         precommit_check: impl FnOnce() -> Result<()>,
     ) -> Result<String> {
         publication::publish_with_precommit_check(
-            root,
+            vault.repository_files(),
             &serialized.hash,
             &serialized.published,
             keep,
@@ -1355,7 +1355,7 @@ pub(crate) fn write_state_with_policy_plan_and_check(
     let state = State::build_with_policy_plan(root, vault, None, &[], policy_plan)?;
     let serialized = state.serialize()?;
     let snapshot = state.publish_snapshot_with_check(
-        root,
+        vault,
         &serialized,
         vault.config.state_keep,
         precommit_check,
@@ -1403,7 +1403,7 @@ pub(crate) fn write_state_incremental_with_policy_plan_and_check(
     let state = State::build_with_policy_plan(root, vault, previous, changed_files, policy_plan)?;
     let serialized = state.serialize()?;
     let snapshot = state.publish_snapshot_with_check(
-        root,
+        vault,
         &serialized,
         vault.config.state_keep,
         precommit_check,

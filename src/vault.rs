@@ -11,7 +11,8 @@ use crate::Result;
 use crate::c4;
 use crate::config::Config;
 use crate::diagnostic::SourceLocation;
-use crate::discovery::{discover_vault, read_selected_text};
+use crate::discovery::{discover_vault, read_selected_text_from};
+use crate::repository::RepositoryFiles;
 use crate::source::{IndexedSource, SourceGraph, SourceState};
 use crate::util::{
     GlobMatcher, find_wiki_links_with_lines, is_adr_id, kebab,
@@ -143,6 +144,7 @@ impl Note {
 
 #[derive(Debug)]
 pub(crate) struct Vault {
+    files: RepositoryFiles,
     pub(crate) config: Config,
     pub(crate) notes: Vec<Note>,
     pub(crate) c4_artifacts: Vec<c4::C4Artifact>,
@@ -173,46 +175,58 @@ pub(crate) enum SourceTargetResolution {
 
 impl Vault {
     pub(crate) fn load(root: &Path) -> Result<Self> {
-        Self::load_with_source_facilities(root, None, true, None)
+        let files = RepositoryFiles::open(root)?;
+        Self::load_from(&files)
+    }
+
+    pub(crate) fn load_from(files: &RepositoryFiles) -> Result<Self> {
+        Self::load_with_source_facilities(files, None, true, None)
     }
 
     pub(crate) fn load_docs_only(root: &Path) -> Result<Self> {
-        Self::load_with_source_facilities(root, None, false, None)
+        let files = RepositoryFiles::open(root)?;
+        Self::load_docs_only_from(&files)
+    }
+
+    pub(crate) fn load_docs_only_from(files: &RepositoryFiles) -> Result<Self> {
+        Self::load_with_source_facilities(files, None, false, None)
     }
 
     #[cfg(test)]
     fn load_incremental_with_source_state(root: &Path, source: SourceState) -> Result<Self> {
-        Self::load_with_source_facilities(root, Some(source), true, None)
+        let files = RepositoryFiles::open(root)?;
+        Self::load_with_source_facilities(&files, Some(source), true, None)
     }
 
     pub(crate) fn load_incremental_with_config_and_source_state(
-        root: &Path,
+        files: &RepositoryFiles,
         config: &Config,
         source: SourceState,
     ) -> Result<Self> {
-        Self::load_with_source_facilities(root, Some(source), true, Some(config.clone()))
+        Self::load_with_source_facilities(files, Some(source), true, Some(config.clone()))
     }
 
     fn load_with_source_facilities(
-        root: &Path,
+        files: &RepositoryFiles,
         source: Option<SourceState>,
         load_sources: bool,
         config: Option<Config>,
     ) -> Result<Self> {
-        let config = config.map_or_else(|| Config::load(root), Ok)?;
+        let root = files.root();
+        let config = config.map_or_else(|| Config::load_from(files), Ok)?;
         let docs_path = config.docs_path(root);
         let discovered = discover_vault(root, &config.docs_dir)?;
         let notes = discovered
             .markdown
             .into_iter()
             .map(|path| root.join(path))
-            .map(|path| parse_note(root, &docs_path, &path))
+            .map(|path| parse_note(files, &docs_path, &path))
             .collect::<Result<Vec<_>>>()?;
         let c4_artifacts = discovered
             .c4
             .into_iter()
             .map(|path| root.join(path))
-            .map(|path| c4::parse_file(root, &docs_path, &path))
+            .map(|path| c4::parse_file_from(files, &docs_path, &path))
             .collect::<Result<Vec<_>>>()?;
         let likec4_workspace = c4::load_workspace(root, &docs_path, &c4_artifacts);
 
@@ -237,13 +251,14 @@ impl Vault {
         let source = if load_sources {
             match source {
                 Some(source) => source,
-                None => SourceState::refresh(root, &config, None)?,
+                None => SourceState::refresh_from(files, &config, None)?,
             }
         } else {
             SourceState::disabled()
         };
 
         let mut vault = Self {
+            files: files.clone(),
             config,
             notes,
             c4_artifacts,
@@ -267,6 +282,10 @@ impl Vault {
             .or_else(|| self.filenames.get(&key))
             .or_else(|| self.titles.get(&key))
             .and_then(|index| self.notes.get(*index))
+    }
+
+    pub(crate) fn repository_files(&self) -> &RepositoryFiles {
+        &self.files
     }
 
     pub(crate) fn is_file_backed_note_target(&self, target: &str) -> bool {
@@ -551,8 +570,11 @@ impl Vault {
         }
         let effective_decisions = effective_accepted_decision_ids(&notes);
         let patterns = registered_policy_patterns(&notes, &effective_decisions);
+        let files = RepositoryFiles::open(Path::new("."))
+            .expect("test vault repository root must be available");
 
         let mut vault = Self {
+            files,
             config: Config::default(),
             notes,
             c4_artifacts: Vec::new(),
@@ -623,8 +645,9 @@ fn effective_accepted_decision_ids(notes: &[Note]) -> BTreeSet<String> {
     accepted.difference(&superseded).cloned().collect()
 }
 
-fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
-    let contents = read_selected_text(root, path)?;
+fn parse_note(files: &RepositoryFiles, docs_path: &Path, path: &Path) -> Result<Note> {
+    let root = files.root();
+    let contents = read_selected_text_from(files, path)?;
     let source: Arc<str> = Arc::from(contents.as_str());
     let rel_path = strip_prefix(path, root);
     let (frontmatter, body, frontmatter_lines, frontmatter_start, body_start) =
@@ -1488,7 +1511,10 @@ roots = ["src"]
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("note.md");
         std::fs::write(&path, contents).unwrap();
-        let note = parse_note(&root, &root, &path).unwrap();
+        let files = RepositoryFiles::open(&root).unwrap();
+        let canonical_root = files.root().to_path_buf();
+        let canonical_path = canonical_root.join("note.md");
+        let note = parse_note(&files, &canonical_root, &canonical_path).unwrap();
         let _ = std::fs::remove_dir_all(&root);
         note
     }

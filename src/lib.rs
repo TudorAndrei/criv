@@ -11,6 +11,7 @@ mod install;
 mod policy_scan;
 mod query;
 mod refresh;
+mod repository;
 mod source;
 mod state;
 mod structural;

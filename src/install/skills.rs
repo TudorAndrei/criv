@@ -4,14 +4,10 @@
 //! Template identity, marker handling, confined publication, and the
 //! `.claude/skills` link-or-copy policy stay inside this module.
 
-use std::fs;
 use std::path::Path;
 
 use crate::Result;
-use crate::util::{
-    LinkOutcome, file_exists_in, link_dir_in, read_optional_to_string_in, write_atomic_in,
-    write_new_in,
-};
+use crate::repository::{LinkLayout, LinkOutcome, RepositoryFiles, RepositoryWriteScope};
 
 const AGENT_SKILLS_DIR: &str = ".agents/skills";
 const CLAUDE_SKILLS_DIR: &str = ".claude/skills";
@@ -141,10 +137,15 @@ impl SkillInventory {
 }
 
 /// Install all generated skills through one create-only or refresh operation.
+#[cfg(test)]
 pub(crate) fn install(root: &Path, mode: InstallMode) -> Result<InstallReport> {
-    install_with_linker(root, mode, |root, replace_directory| {
-        link_dir_in(
-            root,
+    let files = RepositoryFiles::open(root)?;
+    install_from(&files, mode)
+}
+
+pub(crate) fn install_from(files: &RepositoryFiles, mode: InstallMode) -> Result<InstallReport> {
+    install_with_linker(files, mode, |scope, replace_directory| {
+        scope.link_dir(
             Path::new(CLAUDE_SKILLS_DIR),
             Path::new(AGENT_SKILLS_DIR),
             replace_directory,
@@ -153,35 +154,64 @@ pub(crate) fn install(root: &Path, mode: InstallMode) -> Result<InstallReport> {
 }
 
 /// Inspect installed skill identity without making advisory checks fallible.
+#[cfg(test)]
 pub(crate) fn inventory(root: &Path) -> SkillInventory {
+    let Ok(files) = RepositoryFiles::open(root) else {
+        return unreadable_inventory();
+    };
+    inventory_from(&files)
+}
+
+pub(crate) fn inventory_from(files: &RepositoryFiles) -> SkillInventory {
     let skills = SKILLS
         .iter()
         .map(|skill| InstalledSkillFact {
             path: skill.agent_path,
-            status: installed_status(root, skill),
+            status: installed_status(files, skill),
         })
         .collect();
     SkillInventory {
         skills,
-        claude: claude_layout(root),
+        claude: claude_layout(files),
+    }
+}
+
+#[cfg(test)]
+fn unreadable_inventory() -> SkillInventory {
+    SkillInventory {
+        skills: SKILLS
+            .iter()
+            .map(|skill| InstalledSkillFact {
+                path: skill.agent_path,
+                status: InstalledSkillStatus::Unreadable,
+            })
+            .collect(),
+        claude: ClaudeLayout::Other,
     }
 }
 
 fn install_with_linker(
-    root: &Path,
+    files: &RepositoryFiles,
     mode: InstallMode,
-    linker: impl FnOnce(&Path, bool) -> Result<LinkOutcome>,
+    linker: impl FnOnce(&RepositoryWriteScope<'_>, bool) -> Result<LinkOutcome>,
 ) -> Result<InstallReport> {
+    let scope = files.write_scope(Path::new("."))?;
     let mut skills = Vec::with_capacity(SKILLS.len());
     for skill in SKILLS {
-        skills.push(publish_skill(root, skill.agent_path, skill.contents, mode)?);
+        skills.push(publish_skill(
+            files,
+            &scope,
+            skill.agent_path,
+            skill.contents,
+            mode,
+        )?);
     }
 
     let replace = mode == InstallMode::Refresh;
-    let link_outcome = if claude_layout(root) == ClaudeLayout::Linked {
+    let link_outcome = if claude_layout(files) == ClaudeLayout::Linked {
         LinkOutcome::Unchanged
     } else {
-        linker(root, replace)?
+        linker(&scope, replace)?
     };
     let claude = match link_outcome {
         LinkOutcome::Unchanged => ClaudePublication::Current,
@@ -190,7 +220,7 @@ fn install_with_linker(
         LinkOutcome::DirectoryInTheWay => ClaudePublication::Blocked,
         LinkOutcome::Unsupported => {
             for skill in SKILLS {
-                publish_skill(root, skill.claude_path, skill.contents, mode)?;
+                publish_skill(files, &scope, skill.claude_path, skill.contents, mode)?;
             }
             ClaudePublication::Copied
         }
@@ -200,16 +230,17 @@ fn install_with_linker(
 }
 
 fn publish_skill(
-    root: &Path,
+    files: &RepositoryFiles,
+    scope: &RepositoryWriteScope<'_>,
     path: &'static str,
     contents: &str,
     mode: InstallMode,
 ) -> Result<SkillPublicationFact> {
     let contents = stamp_skill(contents);
-    let publication = if mode == InstallMode::Refresh && file_exists_in(root, Path::new(path))? {
-        write_atomic_in(root, Path::new("."), Path::new(path), &contents)?;
+    let publication = if mode == InstallMode::Refresh && files.file_exists(Path::new(path))? {
+        scope.write_atomic(Path::new(path), &contents)?;
         SkillPublication::Refreshed
-    } else if write_new_in(root, Path::new("."), Path::new(path), &contents)? {
+    } else if scope.write_new(Path::new(path), &contents)? {
         SkillPublication::Created
     } else {
         SkillPublication::Preserved
@@ -217,8 +248,8 @@ fn publish_skill(
     Ok(SkillPublicationFact { path, publication })
 }
 
-fn installed_status(root: &Path, skill: &SkillTemplate) -> InstalledSkillStatus {
-    let contents = match read_optional_to_string_in(root, Path::new(skill.agent_path)) {
+fn installed_status(files: &RepositoryFiles, skill: &SkillTemplate) -> InstalledSkillStatus {
+    let contents = match files.read_optional_string(Path::new(skill.agent_path)) {
         Ok(Some(contents)) => contents,
         Ok(None) => return InstalledSkillStatus::Missing,
         Err(_) => return InstalledSkillStatus::Unreadable,
@@ -230,23 +261,12 @@ fn installed_status(root: &Path, skill: &SkillTemplate) -> InstalledSkillStatus 
     }
 }
 
-fn claude_layout(root: &Path) -> ClaudeLayout {
-    let path = root.join(CLAUDE_SKILLS_DIR);
-    let Ok(metadata) = fs::symlink_metadata(&path) else {
-        return ClaudeLayout::Missing;
-    };
-    let has_canonical_target = fs::canonicalize(&path)
-        .ok()
-        .zip(fs::canonicalize(root.join(AGENT_SKILLS_DIR)).ok())
-        .is_some_and(|(link, target)| link == target);
-    let has_expected_relative_target = metadata.file_type().is_symlink()
-        && fs::read_link(&path).is_ok_and(|target| target == Path::new("../.agents/skills"));
-    if has_canonical_target || has_expected_relative_target {
-        ClaudeLayout::Linked
-    } else if metadata.is_dir() {
-        ClaudeLayout::Copied
-    } else {
-        ClaudeLayout::Other
+fn claude_layout(files: &RepositoryFiles) -> ClaudeLayout {
+    match files.link_layout(Path::new(CLAUDE_SKILLS_DIR), Path::new(AGENT_SKILLS_DIR)) {
+        Ok(LinkLayout::Missing) => ClaudeLayout::Missing,
+        Ok(LinkLayout::Expected) => ClaudeLayout::Linked,
+        Ok(LinkLayout::Directory) => ClaudeLayout::Copied,
+        Ok(LinkLayout::Other) | Err(_) => ClaudeLayout::Other,
     }
 }
 
@@ -404,6 +424,7 @@ const SKILLS: &[SkillTemplate] = &[
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::PathBuf;
 
     use super::*;
@@ -541,7 +562,8 @@ mod tests {
     #[test]
     fn unsupported_link_platform_copies_the_same_inventory() {
         let root = temp_root("copy-fallback");
-        let report = install_with_linker(&root, InstallMode::CreateOnly, |_, _| {
+        let files = RepositoryFiles::open(&root).unwrap();
+        let report = install_with_linker(&files, InstallMode::CreateOnly, |_, _| {
             Ok(LinkOutcome::Unsupported)
         })
         .unwrap();
@@ -601,7 +623,15 @@ mod tests {
     fn remove_link_or_dir(path: &Path) {
         let metadata = fs::symlink_metadata(path).unwrap();
         if metadata.file_type().is_symlink() {
-            crate::util::remove_dir_link(path).unwrap();
+            #[cfg(unix)]
+            fs::remove_file(path).unwrap();
+            #[cfg(windows)]
+            {
+                if junction::exists(path).unwrap_or(false) {
+                    junction::delete(path).unwrap();
+                }
+                let _ = fs::remove_dir(path);
+            }
         } else {
             fs::remove_dir_all(path).unwrap();
         }

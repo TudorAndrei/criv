@@ -13,13 +13,16 @@ use rumdl_lib::rules::{all_rules, filter_rules};
 use serde::Serialize;
 
 use crate::diagnostic::{LspRange, SourceLocation};
-use crate::discovery::{MarkdownPolicy, discover_markdown, read_selected_text, select_markdown};
+use crate::discovery::{
+    MarkdownPolicy, discover_markdown, read_selected_text_from, select_markdown,
+};
 #[cfg(test)]
 use crate::git::ChangedEntry;
 use crate::git::{ChangeStatus, ChangedSet};
 use crate::policy_scan::{PolicyDiagnostic, PolicyDiagnosticKind, PolicyScanPlan};
+use crate::repository::RepositoryFiles;
 use crate::state::{self, State};
-use crate::util::{is_adr_id, kebab, read_optional_to_string_in, write_atomic_in};
+use crate::util::{is_adr_id, kebab};
 use crate::vault::{
     Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault, is_typed_source_target,
     source_target_body,
@@ -76,7 +79,7 @@ struct JsonDiagnostic<'a> {
 
 #[derive(Clone, Copy)]
 struct MarkdownFixScope<'a> {
-    root: &'a Path,
+    files: &'a RepositoryFiles,
     docs_dir: &'a Path,
 }
 
@@ -109,10 +112,11 @@ impl Diagnostic {
 }
 
 pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
+    let files = RepositoryFiles::open(root)?;
     let mut diagnostics = if options.changed {
-        validate_changed(root)?
+        validate_changed(&files)?
     } else {
-        validate_all_with_fix(root, options.fix)?
+        validate_all_with_fix(&files, options.fix)?
     };
 
     if let Some(filter) = &options.filter {
@@ -129,7 +133,7 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
             let stale_skills = if options.changed {
                 Vec::new()
             } else {
-                crate::install::skill_inventory(root).advisory_outdated_paths()
+                crate::install::skill_inventory_from(&files).advisory_outdated_paths()
             };
             if !stale_skills.is_empty() {
                 let subject = if stale_skills.len() == 1 {
@@ -154,17 +158,16 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
     Ok(())
 }
 
-/// Full read-only validation for commands that make a confined write and need
-/// to verify the resulting vault before reporting success.
-pub(crate) fn validate_all(root: &Path) -> Result<Vec<Diagnostic>> {
-    validate_all_with_fix(root, false)
+pub(crate) fn validate_all_from(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
+    validate_all_with_fix(files, false)
 }
 
-fn validate_all_with_fix(root: &Path, fix: bool) -> Result<Vec<Diagnostic>> {
-    let mut diagnostics = validate_markdown_format(root, fix, None)?;
-    let vault = Vault::load(root)?;
+fn validate_all_with_fix(files: &RepositoryFiles, fix: bool) -> Result<Vec<Diagnostic>> {
+    let root = files.root();
+    let mut diagnostics = validate_markdown_format(files, fix, None)?;
+    let vault = Vault::load_from(files)?;
     let policy_plan = PolicyScanPlan::new(&vault);
-    let previous_interface_hashes = previous_architecture_interface_hashes(root)?;
+    let previous_interface_hashes = previous_architecture_interface_hashes(files)?;
     diagnostics.extend(validate_with_previous_architecture_interfaces(
         &vault,
         previous_interface_hashes.as_ref(),
@@ -191,25 +194,26 @@ fn validate_all_with_fix(root: &Path, fix: bool) -> Result<Vec<Diagnostic>> {
     Ok(diagnostics)
 }
 
-fn validate_changed(root: &Path) -> Result<Vec<Diagnostic>> {
+fn validate_changed(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
+    let root = files.root();
     let changes = crate::git::staged_changes(root)?;
     if changes.entries.is_empty() {
         return Ok(Vec::new());
     }
 
-    let config = crate::config::Config::load(root)?;
+    let config = crate::config::Config::load_from(files)?;
     if changed_scope_requires_full_check(&changes, &config.docs_dir, &config.adr_dir) {
-        return validate_all_with_fix(root, false);
+        return validate_all_with_fix(files, false);
     }
 
     let changed_paths = changes
         .affected_paths()
         .into_iter()
         .collect::<BTreeSet<_>>();
-    let mut diagnostics = validate_markdown_format(root, false, Some(&changed_paths))?;
-    let vault = Vault::load(root)?;
+    let mut diagnostics = validate_markdown_format(files, false, Some(&changed_paths))?;
+    let vault = Vault::load_from(files)?;
     let policy_plan = PolicyScanPlan::new(&vault);
-    let previous_interface_hashes = previous_architecture_interface_hashes(root)?;
+    let previous_interface_hashes = previous_architecture_interface_hashes(files)?;
     diagnostics.extend(validate_changed_vault(
         &vault,
         previous_interface_hashes.as_ref(),
@@ -259,12 +263,13 @@ fn changed_scope_requires_full_check(changes: &ChangedSet, docs_dir: &str, adr_d
 }
 
 fn validate_markdown_format(
-    root: &Path,
+    repository_files: &RepositoryFiles,
     fix: bool,
     changed_paths: Option<&BTreeSet<String>>,
 ) -> Result<Vec<Diagnostic>> {
+    let root = repository_files.root();
     let config = load_rumdl_config(root)?;
-    let vault_config = crate::config::Config::load(root)?;
+    let vault_config = crate::config::Config::load_from(repository_files)?;
     let policy = MarkdownPolicy {
         include: &config.global.include,
         exclude: &config.global.exclude,
@@ -279,11 +284,11 @@ fn validate_markdown_format(
 
     for rel_path in files {
         let path = root.join(&rel_path);
-        let mut contents = read_selected_text(root, &path)?;
+        let mut contents = read_selected_text_from(repository_files, &path)?;
         if fix {
             apply_markdown_fixes(
                 MarkdownFixScope {
-                    root,
+                    files: repository_files,
                     docs_dir: Path::new(&vault_config.docs_dir),
                 },
                 &path,
@@ -382,7 +387,7 @@ fn apply_markdown_fixes(
             .map_err(|err| CrivError::new(format!("rumdl failed to fix {rel_path}: {err}")))?
     };
     if *contents != original {
-        let destination = path.strip_prefix(write_scope.root).map_err(|_| {
+        let destination = path.strip_prefix(write_scope.files.root()).map_err(|_| {
             CrivError::new(format!(
                 "refusing to fix Markdown outside vault root: {}",
                 path.display()
@@ -398,7 +403,10 @@ fn apply_markdown_fixes(
         } else {
             Path::new(".")
         };
-        write_atomic_in(write_scope.root, allowed_dir, destination, contents)?;
+        write_scope
+            .files
+            .write_scope(allowed_dir)?
+            .write_atomic(destination, contents)?;
     }
 
     if !result.converged {
@@ -629,8 +637,10 @@ fn policy_diagnostic(diagnostic: &PolicyDiagnostic) -> Diagnostic {
     error(code, &diagnostic.path, Some(diagnostic.line), message)
 }
 
-fn previous_architecture_interface_hashes(root: &Path) -> Result<Option<BTreeMap<String, String>>> {
-    let Some(contents) = read_optional_to_string_in(root, Path::new(".criv/state.json"))? else {
+fn previous_architecture_interface_hashes(
+    files: &RepositoryFiles,
+) -> Result<Option<BTreeMap<String, String>>> {
+    let Some(contents) = files.read_optional_string(Path::new(".criv/state.json"))? else {
         return Ok(None);
     };
     let value: serde_json::Value = serde_json::from_str(&contents)
@@ -1929,10 +1939,12 @@ pub fn run(input: String, fallback: usize) -> usize {
         let config = RumdlConfig::default();
         let base_rules = base_rules(&config);
         let mut diagnostics = Vec::new();
+        let files = RepositoryFiles::open(root).unwrap();
+        let path = files.root().join("README.md");
 
         apply_markdown_fixes(
             MarkdownFixScope {
-                root,
+                files: &files,
                 docs_dir: Path::new("."),
             },
             &path,

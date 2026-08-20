@@ -14,7 +14,7 @@ use ast_grep_core::{Doc, NodeMatch, Pattern};
 use ast_grep_language::{Language, LanguageExt, SupportLang};
 
 use crate::diagnostic::SourceLocation;
-use crate::source::read_source_to_string;
+use crate::source::read_source_to_string_from;
 use crate::vault::{PolicyPattern, Vault};
 use crate::{CrivError, Result};
 
@@ -149,7 +149,7 @@ pub(crate) fn compile_policy(
 }
 
 pub(crate) fn find_policies_batch(
-    root: &Path,
+    _root: &Path,
     vault: &Vault,
     requests: &[PolicyScanRequest<'_>],
 ) -> Result<BTreeMap<usize, Vec<StructuralMatch>>> {
@@ -172,7 +172,10 @@ pub(crate) fn find_policies_batch(
             continue;
         }
 
-        let contents: Arc<str> = Arc::from(read_source_to_string(root, source_file)?);
+        let contents: Arc<str> = Arc::from(read_source_to_string_from(
+            vault.repository_files(),
+            source_file,
+        )?);
         #[cfg(test)]
         record_work(|counts| counts.ast_parses += 1);
         let ast = language.ast_grep(contents.as_ref());

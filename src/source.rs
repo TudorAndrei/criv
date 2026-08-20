@@ -4,6 +4,7 @@ mod catalog;
 mod graph;
 mod paths;
 
+#[cfg(test)]
 use std::path::Path;
 
 #[cfg(test)]
@@ -14,18 +15,18 @@ use std::sync::{Mutex, MutexGuard};
 use crate::Result;
 use crate::config::Config;
 use crate::discovery::discover_source_candidates;
+use crate::repository::RepositoryFiles;
 
 pub(crate) use graph::{
     DirectiveKind, Import, Language, ModuleRelationshipRole, Relationship, RelationshipKind,
     RelationshipTarget, SourceFile, SourceGraph, Symbol, SymbolKind,
 };
-pub(crate) use paths::read_source_to_string;
-
 #[cfg(test)]
 pub(crate) use graph::{
     WorkCounts as GraphWorkCounts, reset_work_counts as reset_graph_work_counts,
     work_counts as graph_work_counts,
 };
+pub(crate) use paths::read_source_to_string_from;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct IndexedSource {
@@ -40,21 +41,33 @@ pub(crate) struct SourceState {
 }
 
 impl SourceState {
+    #[cfg(test)]
     pub(crate) fn refresh(root: &Path, config: &Config, previous: Option<&Self>) -> Result<Self> {
+        let files = RepositoryFiles::open(root)?;
+        Self::refresh_from(&files, config, previous)
+    }
+
+    pub(crate) fn refresh_from(
+        files: &RepositoryFiles,
+        config: &Config,
+        previous: Option<&Self>,
+    ) -> Result<Self> {
         if !config.source_index {
             return Ok(Self::disabled());
         }
 
+        let root = files.root();
         #[cfg(test)]
         record_scan();
         let candidates = discover_source_candidates(root, config)?;
         let cached = previous
             .is_none()
-            .then(|| graph::load_cached(root))
+            .then(|| graph::load_cached_from(files))
             .flatten();
         let previous_graph = previous.map(|state| &state.graph).or(cached.as_ref());
-        let graph = graph::SourceGraphBuild::build_incremental(root, &candidates, previous_graph)?
-            .publish(root)?;
+        let graph =
+            graph::SourceGraphBuild::build_incremental_from(files, &candidates, previous_graph)?
+                .publish_from(files)?;
         let catalog = catalog::SourceCatalog::enabled(graph.paths());
         Ok(Self { catalog, graph })
     }

@@ -3,14 +3,13 @@ pub(crate) mod templates;
 #[cfg(test)]
 mod tests;
 
-use std::fs;
 use std::path::Path;
 
 use clap::Args as ClapArgs;
 
+use crate::Result;
 use crate::install::{self, InstallMode, SkillPublication};
-use crate::util::{append_line_if_missing_in, create_dir_in, write_new_in};
-use crate::{CrivError, Result};
+use crate::repository::RepositoryFiles;
 
 #[derive(Debug, Default, ClapArgs)]
 pub(crate) struct InitOptions {
@@ -21,23 +20,15 @@ pub(crate) struct InitOptions {
 }
 
 pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
-    // Resolve once up front, the way `install_git_hooks` already does. Every
-    // confined write canonicalizes its root, so doing it here keeps scaffolding
-    // from repeating the syscall for each of the ~20 templates, and pins one
-    // resolved root for the whole run.
-    let root = &fs::canonicalize(root).map_err(|err| {
-        CrivError::new(format!(
-            "failed to resolve criv root {}: {err}",
-            root.display()
-        ))
-    })?;
+    let files = RepositoryFiles::open(root)?;
+    let scope = files.write_scope(Path::new("."))?;
     let mut created = Vec::new();
     let mut refreshed = Vec::new();
     let mut link_messages = Vec::new();
 
     if options.force_skills {
         if !options.no_skills {
-            let report = install::install_skills(root, InstallMode::Refresh)?;
+            let report = install::install_skills_from(&files, InstallMode::Refresh)?;
             collect_skill_publications(&report, &mut created, &mut refreshed);
             link_messages.push(
                 install::describe_claude_publication(report.claude_publication()).to_string(),
@@ -48,36 +39,36 @@ pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
     }
 
     write_template(
-        root,
+        &scope,
         "criv.toml",
         &templates::default_config()?,
         &mut created,
     )?;
 
-    create_dir_in(root, Path::new("docs/adr"))?;
-    create_dir_in(root, Path::new(".criv/snapshots"))?;
+    scope.create_dir(Path::new("docs/adr"))?;
+    scope.create_dir(Path::new(".criv/snapshots"))?;
 
     write_template(
-        root,
+        &scope,
         ".criv/state.json",
         &templates::default_state()?,
         &mut created,
     )?;
     write_template(
-        root,
+        &scope,
         "docs/adr/README.md",
         &templates::adr_readme()?,
         &mut created,
     )?;
 
     if !options.no_skills {
-        let report = install::install_skills(root, InstallMode::CreateOnly)?;
+        let report = install::install_skills_from(&files, InstallMode::CreateOnly)?;
         collect_skill_publications(&report, &mut created, &mut refreshed);
         link_messages
             .push(install::describe_claude_publication(report.claude_publication()).to_string());
     }
 
-    append_line_if_missing_in(root, Path::new("."), Path::new(".gitignore"), ".criv/")?;
+    scope.append_line_if_missing(Path::new(".gitignore"), ".criv/")?;
 
     print_init_result(created, refreshed, link_messages);
 
@@ -120,7 +111,7 @@ fn collect_skill_publications(
 }
 
 fn write_template(
-    root: &Path,
+    scope: &crate::repository::RepositoryWriteScope<'_>,
     path: &'static str,
     contents: &str,
     created: &mut Vec<&'static str>,
@@ -128,7 +119,7 @@ fn write_template(
     // Scaffolding lands all over the repository, so the scope is the root
     // itself. Per ADR-0044 that still enforces root confinement, symlink
     // rejection, and relative-path validation.
-    if write_new_in(root, Path::new("."), Path::new(path), contents)? {
+    if scope.write_new(Path::new(path), contents)? {
         created.push(path);
     }
     Ok(())

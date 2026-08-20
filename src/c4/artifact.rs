@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use crate::Result;
 use crate::diagnostic::SourceLocation;
-use crate::discovery::read_selected_text;
+use crate::discovery::read_selected_text_from;
+use crate::repository::RepositoryFiles;
 use crate::util::strip_prefix;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,9 +29,13 @@ pub(crate) struct C4ArtifactDiagnostic {
     pub(crate) location: Option<SourceLocation>,
 }
 
-pub(crate) fn parse_file(root: &Path, docs_path: &Path, path: &Path) -> Result<C4Artifact> {
-    let contents = read_selected_text(root, path)?;
-    Ok(parse_contents(root, docs_path, path, &contents))
+pub(crate) fn parse_file_from(
+    files: &RepositoryFiles,
+    docs_path: &Path,
+    path: &Path,
+) -> Result<C4Artifact> {
+    let contents = read_selected_text_from(files, path)?;
+    Ok(parse_contents(files.root(), docs_path, path, &contents))
 }
 
 fn parse_contents(root: &Path, docs_path: &Path, path: &Path, contents: &str) -> C4Artifact {

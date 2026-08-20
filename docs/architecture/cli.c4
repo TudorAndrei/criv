@@ -25,6 +25,11 @@ model {
         description 'Reads commits, diffs, renames, staged files, and push scopes through one embedded Git boundary.'
         link ../../src/git.rs 'source'
       }
+      repositoryFiles = component 'Repository files' {
+        technology 'Rust and capability file handles'
+        description 'Provides capability-rooted reads and bound write scopes through one repository interface.'
+        link ../../src/repository.rs 'source'
+      }
       sourceIntelligence = component 'Source intelligence' {
         technology 'Rust, ignore, tree-sitter, and ast-grep'
         description 'Owns one Source state while it discovers, reads, parses, caches, resolves, and structurally matches selected source files.'
@@ -89,6 +94,10 @@ views {
     include vscode
     include criv.stateStore
     include criv.stateWire
+    include
+      criv.cli.repositoryFiles with {
+        navigateTo codeRepositoryFiles
+      }
     include
       criv.cli.vaultModel with {
         navigateTo codeVaultLoading

@@ -69,11 +69,13 @@ model {
   criv.cli.refreshCoordinator -> criv.cli.sourceIntelligence 'Refreshes or reuses one Source state'
   criv.cli.refreshCoordinator -> criv.cli.governanceEngine 'Validates before and after publication'
   criv.cli.refreshCoordinator -> criv.cli.statePublisher 'Publishes the refreshed graph'
+  criv.cli.refreshCoordinator -> criv.cli.repositoryFiles 'Keeps one repository file handle per refresh generation'
 
   criv.cli.vaultModel -> criv.cli.sourceIntelligence 'Stores one completed Source state'
   criv.cli.vaultModel -> criv.cli.architectureService 'Validates agent-authored architecture' {
     technology 'Node.js bridge process'
   }
+  criv.cli.vaultModel -> criv.cli.repositoryFiles 'Reads selected vault files'
 
   criv.cli.governanceEngine -> criv.cli.vaultModel 'Reads notes, decisions, links, and configuration'
   criv.cli.governanceEngine -> criv.cli.sourceIntelligence 'Evaluates policies and source interfaces'
@@ -81,6 +83,7 @@ model {
   criv.cli.governanceEngine -> criv.cli.statePublisher 'Compares the previous published state'
   criv.cli.governanceEngine -> criv.cli.installation 'Checks the generated skill inventory'
   criv.cli.governanceEngine -> criv.cli.diagnosticLocations 'Converts exact locations for command output'
+  criv.cli.governanceEngine -> criv.cli.repositoryFiles 'Reads governed files and writes reconciliation transactions'
   criv.cli.vaultModel -> criv.cli.diagnosticLocations 'Keeps exact parsed document locations'
   criv.cli.architectureService -> criv.cli.diagnosticLocations 'Validates C4 producer ranges'
   criv.cli.sourceIntelligence -> criv.cli.diagnosticLocations 'Keeps exact structural match locations'
@@ -93,21 +96,18 @@ model {
   criv.cli.architectureService -> criv.cli.vaultModel 'Reads agent-authored architecture sources'
   criv.cli.statePublisher -> criv.cli.vaultModel 'Builds the state envelope from vault facts'
   criv.cli.statePublisher -> criv.cli.sourceIntelligence 'Serializes source graph facts'
+  criv.cli.statePublisher -> criv.cli.repositoryFiles 'Publishes and recovers State files'
   criv.cli.statePublisher -> criv.stateStore 'Writes state and retained snapshots' {
     technology 'Atomic JSON writes'
   }
 
-  criv.cli.vaultModel -> repository 'Reads documents, decisions, configuration, and architecture' {
-    technology 'File system'
-  }
-  criv.cli.sourceIntelligence -> repository 'Reads configured source roots' {
-    technology 'File system and ignore rules'
+  criv.cli.sourceIntelligence -> criv.cli.repositoryFiles 'Reads selected Source content'
+  criv.cli.installation -> criv.cli.repositoryFiles 'Writes canonical vault and agent files'
+  criv.cli.repositoryFiles -> repository 'Reads and writes confined repository content' {
+    technology 'Handle-relative file operations'
   }
   criv.cli.repositoryHistory -> repository 'Reads commits, diffs, and changed files' {
     technology 'libgit2'
-  }
-  criv.cli.installation -> repository 'Writes canonical vault and agent files' {
-    technology 'Confined atomic writes'
   }
   criv.cli.installation -> vscode 'Installs the optional local viewer' {
     technology 'Editor CLI process'

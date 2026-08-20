@@ -7,10 +7,7 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 use std::path::Path;
 
-use crate::util::{
-    file_exists_in, read_optional_file_with_permissions_in, remove_file_in,
-    write_atomic_bytes_with_permissions_in,
-};
+use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -63,6 +60,7 @@ pub(crate) struct GitRepository {
 }
 
 pub(crate) struct IndexSnapshot {
+    git_files: RepositoryFiles,
     file: Option<IndexFileSnapshot>,
 }
 
@@ -72,33 +70,31 @@ struct IndexFileSnapshot {
 }
 
 impl IndexSnapshot {
-    pub(crate) fn capture(root: &Path) -> Result<Self> {
-        let repository = required_repository(root)?;
-        let file = read_optional_file_with_permissions_in(
-            repository.repository.path(),
-            Path::new("index"),
-        )
-        .map_err(|error| CrivError::new(format!("Git index could not be snapshotted: {error}")))?
-        .map(|(contents, permissions)| IndexFileSnapshot {
-            contents,
-            permissions,
-        });
-        Ok(Self { file })
+    pub(crate) fn capture(files: &RepositoryFiles) -> Result<Self> {
+        let repository = required_repository(files.root())?;
+        let git_files = RepositoryFiles::open(repository.repository.path())?;
+        let file = git_files
+            .read_optional_with_permissions(Path::new("index"))
+            .map_err(|error| {
+                CrivError::new(format!("Git index could not be snapshotted: {error}"))
+            })?
+            .map(|(contents, permissions)| IndexFileSnapshot {
+                contents,
+                permissions,
+            });
+        Ok(Self { git_files, file })
     }
 
-    pub(crate) fn restore(self, root: &Path) -> Result<()> {
-        let repository = required_repository(root)?;
-        let git_dir = repository.repository.path();
+    pub(crate) fn restore(self) -> Result<()> {
+        let scope = self.git_files.write_scope(Path::new("."))?;
         match self.file {
-            Some(file) => write_atomic_bytes_with_permissions_in(
-                git_dir,
-                Path::new("."),
+            Some(file) => scope.write_atomic_bytes_with_permissions(
                 Path::new("index"),
                 &file.contents,
                 file.permissions,
             ),
-            None if file_exists_in(git_dir, Path::new("index"))? => {
-                remove_file_in(git_dir, Path::new("."), Path::new("index"))
+            None if self.git_files.file_exists(Path::new("index"))? => {
+                scope.remove_file(Path::new("index"))
             }
             None => Ok(()),
         }
