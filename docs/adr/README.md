@@ -139,3 +139,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0126-own-one-source-state-per-refresh|ADR-0126]] - Own one Source state per refresh
 - [[0127-own-repository-files-behind-one-interface|ADR-0127]] - Own repository files behind one interface
 - [[0128-enforce-runtime-paths-through-repository-files|ADR-0128]] - Enforce runtime paths through Repository Files
+- [[0129-own-elixir-graph-meaning-in-the-elixir-module|ADR-0129]] - Own Elixir graph meaning in the Elixir module
