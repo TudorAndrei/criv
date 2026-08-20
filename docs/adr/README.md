@@ -141,3 +141,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0128-enforce-runtime-paths-through-repository-files|ADR-0128]] - Enforce runtime paths through Repository Files
 - [[0129-own-elixir-graph-meaning-in-the-elixir-module|ADR-0129]] - Own Elixir graph meaning in the Elixir module
 - [[0130-share-structured-source-identity-text|ADR-0130]] - Share structured Source identity text
+- [[0131-publish-verified-documentation-assets-for-native-previews|ADR-0131]] - Publish verified documentation assets for native previews
