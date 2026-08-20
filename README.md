@@ -226,15 +226,11 @@ criv query coverage
 criv query nodes --kind code --without-docs
 criv query governs ADR-0001
 criv query governing src/main.rs
-criv query c4-code 'src/**'
 criv query diff latest latest
 ```
 
 See [docs/query-reference.md](docs/query-reference.md) for every `criv query`
 subcommand, positional argument, flag, and example.
-
-`c4-code` emits LikeC4 source with modules and imports for a focused source
-glob. It does not emit files, classes, functions, methods, or calls.
 
 Run the same enforcement path used by hooks and CI:
 
