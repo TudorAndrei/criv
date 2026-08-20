@@ -67,6 +67,13 @@ fi
 grep -F 'dist/release-manifest.json' "$workflow" >/dev/null
 grep -F '"release-manifest.json"' "$workflow" >/dev/null
 
+tag_step="$test_root/tag-step.yml"
+sed -n \
+  '/      - name: Create or validate release tags/,/      - name: Create or update draft release/p' \
+  "$workflow" >"$tag_step"
+grep -F 'GH_TOKEN: ${{ github.token }}' "$tag_step" >/dev/null
+grep -F 'git push --atomic origin' "$tag_step" >/dev/null
+
 bundle="$test_root/bundle"
 targets=(
   aarch64-apple-darwin

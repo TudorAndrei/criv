@@ -457,6 +457,7 @@ jobs:
       - name: Create or validate release tags
         env:
           COMMIT: ${{ needs.prepare.outputs.commit }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         shell: bash
         run: |
