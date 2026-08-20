@@ -1569,10 +1569,7 @@ fn signature_parts(text: &str) -> Option<(String, usize, Vec<String>, Option<Str
 
 fn split_top_level_operator<'a>(value: &'a str, operator: &str) -> Option<(&'a str, &'a str)> {
     let mut depths = [0usize; 4];
-    let bytes = value.as_bytes();
-    let mut index = 0usize;
-    while index + operator.len() <= bytes.len() {
-        let character = bytes[index] as char;
+    for (index, character) in value.char_indices() {
         match character {
             '(' => depths[0] += 1,
             ')' => depths[0] = depths[0].saturating_sub(1),
@@ -1587,7 +1584,6 @@ fn split_top_level_operator<'a>(value: &'a str, operator: &str) -> Option<(&'a s
         if depths == [0; 4] && value[index..].starts_with(operator) {
             return Some((&value[..index], &value[index + operator.len()..]));
         }
-        index += 1;
     }
     None
 }
@@ -1831,6 +1827,60 @@ defmodule Inline, do: (def ready(), do: :ok)
                 .as_deref(),
             Some("optional")
         );
+    }
+
+    #[test]
+    fn extracts_utf8_specification_names_without_panicking() {
+        assert_eq!(
+            split_top_level_operator("café(term()) when term: term()", "when"),
+            Some(("café(term()) ", " term: term()"))
+        );
+
+        let file = parse(
+            "lib/unicode_contract.ex",
+            r#"
+defmodule UnicodeContract do
+  @spec café(term()) :: :ok
+  def café(value), do: value
+
+  @callback résumé(term()) :: :ok
+  @macrocallback naïve(term()) :: Macro.t()
+end
+"#,
+        );
+
+        let function = file
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "café")
+            .expect("UTF-8 function should be extracted");
+        assert_eq!(
+            function
+                .interface_signature
+                .as_ref()
+                .expect("UTF-8 function should have an interface")
+                .specifications
+                .len(),
+            1
+        );
+        assert!(file.symbols.iter().any(|symbol| {
+            symbol.kind == SymbolKind::Callback
+                && symbol.name == "résumé"
+                && symbol
+                    .interface_signature
+                    .as_ref()
+                    .is_some_and(|signature| signature.specifications == ["résumé(term()) :: :ok"])
+        }));
+        assert!(file.symbols.iter().any(|symbol| {
+            symbol.kind == SymbolKind::MacroCallback
+                && symbol.name == "naïve"
+                && symbol
+                    .interface_signature
+                    .as_ref()
+                    .is_some_and(|signature| {
+                        signature.specifications == ["naïve(term()) :: Macro.t()"]
+                    })
+        }));
     }
 
     #[test]
