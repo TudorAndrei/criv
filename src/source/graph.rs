@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::Path;
 use std::thread;
 
@@ -10,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use tree_sitter::{Node, Parser};
 
 use super::paths::read_source_bytes;
-use crate::util::write_atomic_in;
+use crate::util::{file_exists_in, read_optional_to_string_in, write_atomic_in};
 use crate::{CrivError, Result};
 
 mod elixir;
@@ -454,11 +453,10 @@ impl SourceGraphBuild {
             source_files,
             previous.map(SourceGraphBuild::graph),
         )?;
-        let cache = if previous.is_some_and(|previous| {
-            previous.cache == CacheDisposition::Clean
-                && graph.changed_files().is_empty()
-                && graph_cache_path(root).is_file()
-        }) {
+        let can_reuse = previous.is_some_and(|previous| {
+            previous.cache == CacheDisposition::Clean && graph.changed_files().is_empty()
+        });
+        let cache = if can_reuse && file_exists_in(root, Path::new(".criv/source-graph.json"))? {
             CacheDisposition::Clean
         } else {
             CacheDisposition::Dirty
@@ -500,8 +498,9 @@ pub(crate) fn load_cached(root: &Path) -> Option<SourceGraphBuild> {
     #[cfg(test)]
     record_work(|counts| counts.cache_loads += 1);
 
-    let path = graph_cache_path(root);
-    let contents = fs::read_to_string(path).ok()?;
+    let contents = read_optional_to_string_in(root, Path::new(".criv/source-graph.json"))
+        .ok()
+        .flatten()?;
     let cache = serde_json::from_str::<GraphCacheFile>(&contents).ok()?;
     (cache.schema == GRAPH_CACHE_SCHEMA).then_some(SourceGraphBuild {
         graph: cache.graph,
@@ -533,6 +532,7 @@ fn store_cached(root: &Path, graph: &SourceGraph) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn graph_cache_path(root: &Path) -> std::path::PathBuf {
     root.join(".criv/source-graph.json")
 }
@@ -2537,7 +2537,10 @@ mod tests {
         let error = SourceGraph::build_incremental(&root, &["src/secret.rs".into()], None)
             .expect_err("source graph should reject a linked source file");
 
-        assert!(error.to_string().contains("linked source path"));
+        assert!(
+            error.to_string().contains("symlinked vault path component"),
+            "{error}"
+        );
     }
 
     #[test]

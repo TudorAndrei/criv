@@ -570,12 +570,7 @@ impl LiveWatchSession {
 }
 
 fn read_config_source(root: &Path) -> Result<Option<String>> {
-    let path = root.join("criv.toml");
-    match fs::read_to_string(path) {
-        Ok(contents) => Ok(Some(contents)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
-    }
+    crate::util::read_optional_to_string_in(root, Path::new("criv.toml"))
 }
 
 impl WatchTopology {

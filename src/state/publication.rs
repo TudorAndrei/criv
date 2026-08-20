@@ -7,7 +7,11 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use super::snapshots;
-use crate::util::{open_regular_file_in, remove_file_in, rename_file_in, write_atomic_in};
+use crate::util::{
+    directory_exists_in, file_exists_in, open_regular_file_in, read_dir_names_in,
+    read_optional_to_string_in, remove_empty_dir_in, remove_file_in, rename_file_in,
+    write_atomic_in,
+};
 use crate::{CrivError, Result};
 
 const LOCK_PATH: &str = ".criv/state-publication.lock";
@@ -184,14 +188,10 @@ fn publish_with_check(
 
 fn reject_orphan_transaction_workspace(root: &Path) -> Result<()> {
     for relative in [STAGE_DIR, QUARANTINE_DIR] {
-        match fs::symlink_metadata(root.join(relative)) {
-            Ok(_) => {
-                return Err(CrivError::new(format!(
-                    "State transaction workspace `{relative}` exists without a transaction record"
-                )));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
+        if directory_exists_in(root, Path::new(relative))? {
+            return Err(CrivError::new(format!(
+                "State transaction workspace `{relative}` exists without a transaction record"
+            )));
         }
     }
     Ok(())
@@ -313,7 +313,9 @@ fn quarantine_removals(
     for hash in &record.removals {
         let source = format!(".criv/snapshots/{hash}.json");
         let destination = format!(".criv/state-quarantine/{hash}.json");
-        if root.join(&source).exists() && !root.join(&destination).exists() {
+        if file_exists_in(root, Path::new(&source))?
+            && !file_exists_in(root, Path::new(&destination))?
+        {
             rename_file_in(
                 root,
                 Path::new(".criv"),
@@ -386,7 +388,9 @@ fn restore_prior(root: &Path, record: &TransactionRecord) -> Result<()> {
     for hash in &record.removals {
         let quarantined = format!(".criv/state-quarantine/{hash}.json");
         let restored = format!(".criv/snapshots/{hash}.json");
-        if root.join(&quarantined).exists() && !root.join(&restored).exists() {
+        if file_exists_in(root, Path::new(&quarantined))?
+            && !file_exists_in(root, Path::new(&restored))?
+        {
             rename_file_in(
                 root,
                 Path::new(".criv"),
@@ -422,42 +426,20 @@ fn restore_optional(root: &Path, path: &str, contents: Option<&str>) -> Result<(
 }
 
 fn remove_optional(root: &Path, path: &str) -> Result<()> {
-    match fs::symlink_metadata(root.join(path)) {
-        Ok(_) => remove_file_in(root, Path::new(".criv"), Path::new(path)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
+    if file_exists_in(root, Path::new(path))? {
+        remove_file_in(root, Path::new(".criv"), Path::new(path))
+    } else {
+        Ok(())
     }
 }
 
 fn remove_empty_dir(root: &Path, relative: &str) -> Result<()> {
-    let path = root.join(relative);
-    match fs::symlink_metadata(&path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-            Err(CrivError::new(format!(
-                "transaction path {} must be a real directory",
-                path.display()
-            )))
-        }
-        Ok(_) => match fs::remove_dir(path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error.into()),
-        },
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
-    }
+    remove_empty_dir_in(root, Path::new(relative))
 }
 
 fn read_optional(root: &Path, path: &str, label: &str) -> Result<Option<String>> {
-    let path = root.join(path);
-    match fs::symlink_metadata(&path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => Err(
-            CrivError::new(format!("{label} {} must be a regular file", path.display())),
-        ),
-        Ok(_) => fs::read_to_string(path).map(Some).map_err(Into::into),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
-    }
+    read_optional_to_string_in(root, Path::new(path))
+        .map_err(|error| CrivError::new(format!("failed to read {label} `{path}`: {error}")))
 }
 
 fn capture_snapshots(root: &Path) -> Result<BTreeMap<String, String>> {
@@ -471,22 +453,12 @@ fn capture_snapshots(root: &Path) -> Result<BTreeMap<String, String>> {
 }
 
 fn managed_snapshot_paths(root: &Path) -> Result<BTreeSet<String>> {
-    let store = root.join(".criv/snapshots");
-    match fs::symlink_metadata(&store) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeSet::new()),
-        Err(error) => return Err(error.into()),
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-            return Err(CrivError::new(format!(
-                "snapshot store {} must be a real directory",
-                store.display()
-            )));
-        }
-        Ok(_) => {}
-    }
+    let Some(names) = read_dir_names_in(root, Path::new(".criv/snapshots"))? else {
+        return Ok(BTreeSet::new());
+    };
     let mut paths = BTreeSet::new();
-    for entry in fs::read_dir(store)? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().to_string();
+    for name in names {
+        let name = name.to_string_lossy().to_string();
         let Some(hash) = name.strip_suffix(".json") else {
             continue;
         };

@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::fs;
 use std::path::Path;
+
+#[cfg(test)]
+use std::fs;
 
 use clap::{Args as ClapArgs, ValueEnum};
 use rumdl_lib::config::Config as RumdlConfig;
@@ -15,7 +17,7 @@ use crate::git::ChangedEntry;
 use crate::git::{ChangeStatus, ChangedSet};
 use crate::policy_scan::{PolicyDiagnostic, PolicyDiagnosticKind, PolicyScanPlan};
 use crate::state::{self, State};
-use crate::util::{is_adr_id, kebab, write_atomic_in};
+use crate::util::{is_adr_id, kebab, read_optional_to_string_in, write_atomic_in};
 use crate::vault::{
     Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault, is_typed_source_target,
     source_target_body,
@@ -591,11 +593,10 @@ fn policy_diagnostic(diagnostic: &PolicyDiagnostic) -> Diagnostic {
 }
 
 fn previous_architecture_interface_hashes(root: &Path) -> Result<Option<BTreeMap<String, String>>> {
-    let path = root.join(".criv/state.json");
-    if !path.exists() {
+    let Some(contents) = read_optional_to_string_in(root, Path::new(".criv/state.json"))? else {
         return Ok(None);
-    }
-    let value: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path)?)
+    };
+    let value: serde_json::Value = serde_json::from_str(&contents)
         .map_err(|err| CrivError::new(format!("failed to parse .criv/state.json: {err}")))?;
     let hashes = value
         .pointer("/graph/nodes")

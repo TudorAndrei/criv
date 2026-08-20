@@ -1,18 +1,17 @@
+use std::ffi::OsString;
 use std::fs;
-use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
+use cap_std::ambient_authority;
+use cap_std::fs::{Dir, OpenOptions as CapOpenOptions, Permissions as CapPermissions};
 use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 
 use crate::{CrivError, Result};
-
-pub(crate) fn read_to_string(path: &Path) -> Result<String> {
-    Ok(fs::read_to_string(path)?)
-}
 
 #[cfg(test)]
 pub(crate) fn copy_fixture_tree(source: &Path, destination: &Path) -> Result<()> {
@@ -35,16 +34,8 @@ pub(crate) fn copy_fixture_tree(source: &Path, destination: &Path) -> Result<()>
 /// materialize outside the vault before anything is written into it.
 pub(crate) fn create_dir_in(root: &Path, destination: &Path) -> Result<()> {
     validate_relative_path("directory destination", destination)?;
-    let root = fs::canonicalize(root).map_err(|err| {
-        CrivError::new(format!(
-            "failed to resolve vault root {} for confined write: {err}",
-            root.display()
-        ))
-    })?;
-    reject_symlink_components(&root, destination)?;
-    fs::create_dir_all(root.join(destination))?;
-    // Recheck: `create_dir_all` may have raced with a symlink being planted.
-    reject_symlink_components(&root, destination)
+    open_confined_dir(root, destination, true)?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -192,13 +183,11 @@ pub(crate) fn write_new_in(
     destination: &Path,
     contents: &str,
 ) -> Result<bool> {
-    // Resolve first so an existence check never follows a symlinked path out of
-    // the vault; `prepare_confined_write` rejects symlink components outright.
-    let path = prepare_confined_write(root, allowed_dir, destination)?;
-    if path.exists() {
+    let target = ConfinedFile::for_write(root, allowed_dir, destination)?;
+    if target.open_regular(false)?.is_some() {
         return Ok(false);
     }
-    write_atomic_ready(&path, contents)?;
+    target.write_atomic(contents, None)?;
     Ok(true)
 }
 
@@ -210,12 +199,8 @@ pub(crate) fn append_line_if_missing_in(
     destination: &Path,
     line: &str,
 ) -> Result<()> {
-    let path = prepare_confined_write(root, allowed_dir, destination)?;
-    let mut contents = if path.exists() {
-        fs::read_to_string(&path)?
-    } else {
-        String::new()
-    };
+    let target = ConfinedFile::for_write(root, allowed_dir, destination)?;
+    let mut contents = target.read_optional_string()?.unwrap_or_default();
 
     if !contents.lines().any(|existing| existing.trim() == line) {
         if !contents.is_empty() && !contents.ends_with('\n') {
@@ -223,7 +208,7 @@ pub(crate) fn append_line_if_missing_in(
         }
         contents.push_str(line);
         contents.push('\n');
-        write_atomic_ready(&path, &contents)?;
+        target.write_atomic(&contents, None)?;
     }
 
     Ok(())
@@ -241,20 +226,15 @@ pub(crate) fn write_atomic_in(
     destination: &Path,
     contents: &str,
 ) -> Result<()> {
-    let path = prepare_confined_write(root, allowed_dir, destination)?;
-    write_atomic_ready(&path, contents)
+    ConfinedFile::for_write(root, allowed_dir, destination)?.write_atomic(contents, None)
 }
 
 pub(crate) fn file_permissions_in(root: &Path, source: &Path) -> Result<fs::Permissions> {
-    let source_path = prepare_confined_write(root, Path::new("."), source)?;
-    let metadata = fs::symlink_metadata(source_path)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(CrivError::new(format!(
-            "refusing to inherit file permissions from non-file vault path {}",
-            source.display()
-        )));
-    }
-    Ok(metadata.permissions())
+    let target = ConfinedFile::for_read(root, source)?;
+    let file = target.open_required_regular()?;
+    let permissions = file.metadata()?.permissions();
+    let file = file.into_std();
+    Ok(permissions.into_std(&file)?)
 }
 
 pub(crate) fn write_atomic_with_permissions_in(
@@ -264,8 +244,8 @@ pub(crate) fn write_atomic_with_permissions_in(
     contents: &str,
     permissions: fs::Permissions,
 ) -> Result<()> {
-    let path = prepare_confined_write(root, allowed_dir, destination)?;
-    write_atomic_ready_with_permissions(&path, contents, Some(permissions))
+    ConfinedFile::for_write(root, allowed_dir, destination)?
+        .write_atomic(contents, Some(CapPermissions::from_std(permissions)))
 }
 
 /// Like [`write_atomic_in`], but leaves an identical existing file untouched.
@@ -276,11 +256,11 @@ pub(crate) fn write_atomic_if_changed_in(
     destination: &Path,
     contents: &str,
 ) -> Result<bool> {
-    let path = prepare_confined_write(root, allowed_dir, destination)?;
-    if path.exists() && fs::read_to_string(&path)? == contents {
+    let target = ConfinedFile::for_write(root, allowed_dir, destination)?;
+    if target.read_optional_string()?.as_deref() == Some(contents) {
         return Ok(false);
     }
-    write_atomic_ready(&path, contents)?;
+    target.write_atomic(contents, None)?;
     Ok(true)
 }
 
@@ -288,17 +268,7 @@ pub(crate) fn write_atomic_if_changed_in(
 /// after publishing replacement files so a failed reconciliation remains
 /// recoverable from its newly written destinations.
 pub(crate) fn remove_file_in(root: &Path, allowed_dir: &Path, destination: &Path) -> Result<()> {
-    let path = prepare_confined_write(root, allowed_dir, destination)?;
-    let metadata = fs::symlink_metadata(&path)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(CrivError::new(format!(
-            "refusing to remove non-file vault path {}",
-            destination.display()
-        )));
-    }
-    fs::remove_file(path)?;
-    sync_parent_directory(&root.join(destination))?;
-    Ok(())
+    ConfinedFile::for_write(root, allowed_dir, destination)?.remove()
 }
 
 pub(crate) fn rename_file_in(
@@ -307,22 +277,9 @@ pub(crate) fn rename_file_in(
     source: &Path,
     destination: &Path,
 ) -> Result<()> {
-    let source_path = prepare_confined_write(root, allowed_dir, source)?;
-    let destination_path = prepare_confined_write(root, allowed_dir, destination)?;
-    let metadata = fs::symlink_metadata(&source_path)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(CrivError::new(format!(
-            "refusing to move non-file vault path {}",
-            source.display()
-        )));
-    }
-    let source_parent = source_path.parent().map(Path::to_path_buf);
-    fs::rename(source_path, &destination_path)?;
-    if let Some(source_parent) = source_parent {
-        sync_directory(&source_parent)?;
-    }
-    sync_parent_directory(&destination_path)?;
-    Ok(())
+    let source = ConfinedFile::for_write(root, allowed_dir, source)?;
+    let destination = ConfinedFile::for_write(root, allowed_dir, destination)?;
+    source.rename_to(&destination)
 }
 
 /// Open or create one persistent regular file without following the final path.
@@ -331,165 +288,341 @@ pub(crate) fn open_regular_file_in(
     allowed_dir: &Path,
     destination: &Path,
 ) -> Result<(PathBuf, fs::File)> {
-    let path = prepare_confined_write(root, allowed_dir, destination)?;
-    let mut options = OpenOptions::new();
+    let target = ConfinedFile::for_write(root, allowed_dir, destination)?;
+    let mut options = nofollow_options();
     options.read(true).write(true).create(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-    let file = options.open(&path)?;
+    let mut attempts = 0;
+    let file = loop {
+        match target.parent.open_with(&target.name, &options) {
+            Ok(file) => break file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && attempts < 9 => {
+                attempts += 1;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
     if !file.metadata()?.is_file() {
         return Err(CrivError::new(format!(
             "vault path {} must be a regular file",
             destination.display()
         )));
     }
-    Ok((path, file))
+    Ok((root.join(destination), file.into_std()))
 }
 
-fn write_atomic_ready(path: &Path, contents: &str) -> Result<()> {
-    let permissions = fs::symlink_metadata(path)
-        .ok()
-        .filter(|metadata| metadata.is_file() && !metadata.file_type().is_symlink())
-        .map(|metadata| metadata.permissions());
-    write_atomic_ready_with_permissions(path, contents, permissions)
+/// Read one regular repository file through no-follow directory handles.
+pub(crate) fn read_file_in(root: &Path, source: &Path) -> Result<Vec<u8>> {
+    let target = ConfinedFile::for_read(root, source)?;
+    let mut file = target.open_required_regular()?;
+    let mut contents = Vec::new();
+    file.read_to_end(&mut contents)?;
+    Ok(contents)
 }
 
-fn write_atomic_ready_with_permissions(
-    path: &Path,
-    contents: &str,
-    permissions: Option<fs::Permissions>,
-) -> Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| CrivError::new(format!("cannot write atomic file at {}", path.display())))?
-        .to_string_lossy();
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
+pub(crate) fn read_file_with_permissions_in(
+    root: &Path,
+    source: &Path,
+) -> Result<(Vec<u8>, fs::Permissions)> {
+    let target = ConfinedFile::for_read(root, source)?;
+    let mut file = target.open_required_regular()?;
+    let permissions = file.metadata()?.permissions();
+    let mut contents = Vec::new();
+    file.read_to_end(&mut contents)?;
+    let file = file.into_std();
+    Ok((contents, permissions.into_std(&file)?))
+}
 
-    for attempt in 0..100 {
-        let temp_path = parent.join(format!(
-            ".{file_name}.{}.{}.tmp",
-            std::process::id(),
-            nonce + attempt
-        ));
-        let mut file = match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)
-        {
-            Ok(file) => file,
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(err) => return Err(err.into()),
-        };
+pub(crate) fn read_file_with_metadata_in(
+    root: &Path,
+    source: &Path,
+) -> Result<(Vec<u8>, fs::Metadata)> {
+    let target = ConfinedFile::for_read(root, source)?;
+    let mut file = target.open_required_regular()?;
+    let mut contents = Vec::new();
+    file.read_to_end(&mut contents)?;
+    let file = file.into_std();
+    Ok((contents, file.metadata()?))
+}
 
-        let write_result = file
-            .write_all(contents.as_bytes())
-            .and_then(|_| file.sync_all());
-        if let Err(err) = write_result {
-            let _ = fs::remove_file(&temp_path);
-            return Err(err.into());
-        }
-        if let Some(permissions) = &permissions
-            && let Err(err) = fs::set_permissions(&temp_path, permissions.clone())
-        {
-            let _ = fs::remove_file(&temp_path);
-            return Err(err.into());
-        }
-        if let Err(err) = fs::rename(&temp_path, path) {
-            let _ = fs::remove_file(&temp_path);
-            return Err(err.into());
-        }
-        sync_parent_directory(path)?;
+pub(crate) fn read_to_string_in(root: &Path, source: &Path) -> Result<String> {
+    let target = ConfinedFile::for_read(root, source)?;
+    target
+        .read_optional_string()?
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound).into())
+}
+
+pub(crate) fn read_optional_to_string_in(root: &Path, source: &Path) -> Result<Option<String>> {
+    let Some(target) = ConfinedFile::for_read_optional(root, source)? else {
+        return Ok(None);
+    };
+    target.read_optional_string()
+}
+
+pub(crate) fn file_exists_in(root: &Path, source: &Path) -> Result<bool> {
+    let Some(target) = ConfinedFile::for_read_optional(root, source)? else {
+        return Ok(false);
+    };
+    Ok(target.open_regular(false)?.is_some())
+}
+
+pub(crate) fn directory_exists_in(root: &Path, source: &Path) -> Result<bool> {
+    validate_relative_path("directory source", source)?;
+    Ok(open_confined_dir_optional(root, source, false)?.is_some())
+}
+
+pub(crate) fn read_dir_names_in(root: &Path, source: &Path) -> Result<Option<Vec<OsString>>> {
+    validate_relative_path("directory source", source)?;
+    let Some(directory) = open_confined_dir_optional(root, source, false)? else {
+        return Ok(None);
+    };
+    let mut names = Vec::new();
+    for entry in directory.entries()? {
+        names.push(entry?.file_name());
+    }
+    Ok(Some(names))
+}
+
+pub(crate) fn remove_empty_dir_in(root: &Path, source: &Path) -> Result<()> {
+    let Some(target) = ConfinedFile::for_read_optional(root, source)? else {
         return Ok(());
+    };
+    match target.parent.open_dir_nofollow(&target.name) {
+        Ok(directory) => drop(directory),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    }
+    match target.parent.remove_dir(&target.name) {
+        Ok(()) => {
+            sync_directory_handle(&target.parent)?;
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+struct ConfinedFile {
+    parent: Dir,
+    name: OsString,
+    relative: PathBuf,
+}
+
+impl ConfinedFile {
+    fn for_read(root: &Path, source: &Path) -> Result<Self> {
+        Self::for_read_optional(root, source)?.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("vault file {} does not exist", source.display()),
+            )
+            .into()
+        })
     }
 
-    Err(CrivError::new(format!(
-        "failed to create temporary file for {}",
-        path.display()
-    )))
+    fn for_read_optional(root: &Path, source: &Path) -> Result<Option<Self>> {
+        validate_relative_path("read source", source)?;
+        Self::prepare_optional(root, source, false)
+    }
+
+    fn for_write(root: &Path, allowed_dir: &Path, destination: &Path) -> Result<Self> {
+        validate_relative_path("allowed write directory", allowed_dir)?;
+        validate_relative_path("write destination", destination)?;
+        if allowed_dir != Path::new(".") && !destination.starts_with(allowed_dir) {
+            return Err(CrivError::new(format!(
+                "refusing to write {} outside allowed vault directory {}",
+                destination.display(),
+                allowed_dir.display()
+            )));
+        }
+        Self::prepare_optional(root, destination, true)?.ok_or_else(|| {
+            CrivError::new(format!(
+                "failed to create parent for {}",
+                destination.display()
+            ))
+        })
+    }
+
+    fn prepare_optional(
+        root: &Path,
+        relative: &Path,
+        create_parents: bool,
+    ) -> Result<Option<Self>> {
+        let canonical_root = fs::canonicalize(root).map_err(|error| {
+            CrivError::new(format!(
+                "failed to resolve vault root {} for confined access: {error}",
+                root.display()
+            ))
+        })?;
+        reject_symlink_components(&canonical_root, relative)?;
+        let parent = relative.parent().unwrap_or_else(|| Path::new("."));
+        let Some(directory) = open_confined_dir_optional(root, parent, create_parents)? else {
+            return Ok(None);
+        };
+        let name = relative.file_name().ok_or_else(|| {
+            CrivError::new(format!(
+                "repository file path {} has no name",
+                relative.display()
+            ))
+        })?;
+        Ok(Some(Self {
+            parent: directory,
+            name: name.to_os_string(),
+            relative: relative.to_path_buf(),
+        }))
+    }
+
+    fn open_regular(&self, write: bool) -> Result<Option<cap_std::fs::File>> {
+        let mut options = nofollow_options();
+        options.read(true).write(write);
+        match self.parent.open_with(&self.name, &options) {
+            Ok(file) if file.metadata()?.is_file() => Ok(Some(file)),
+            Ok(_) => Err(CrivError::new(format!(
+                "vault path {} must be a regular file",
+                self.relative.display()
+            ))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn open_required_regular(&self) -> Result<cap_std::fs::File> {
+        self.open_regular(false)?.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("vault file {} does not exist", self.relative.display()),
+            )
+            .into()
+        })
+    }
+
+    fn read_optional_string(&self) -> Result<Option<String>> {
+        let Some(mut file) = self.open_regular(false)? else {
+            return Ok(None);
+        };
+        let mut contents = String::new();
+        file.read_to_string(&mut contents)?;
+        Ok(Some(contents))
+    }
+
+    fn write_atomic(&self, contents: &str, permissions: Option<CapPermissions>) -> Result<()> {
+        let inherited_permissions = match permissions {
+            Some(permissions) => Some(permissions),
+            None => self
+                .open_regular(false)?
+                .map(|file| file.metadata().map(|metadata| metadata.permissions()))
+                .transpose()?,
+        };
+        let file_name = self.name.to_string_lossy();
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default();
+
+        for attempt in 0..100 {
+            let temp_name = OsString::from(format!(
+                ".{file_name}.{}.{}.tmp",
+                std::process::id(),
+                nonce + attempt
+            ));
+            let mut options = nofollow_options();
+            options.write(true).create_new(true);
+            let mut file = match self.parent.open_with(&temp_name, &options) {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error.into()),
+            };
+            let result = (|| -> std::io::Result<()> {
+                file.write_all(contents.as_bytes())?;
+                file.sync_all()?;
+                if let Some(permissions) = inherited_permissions.clone() {
+                    file.set_permissions(permissions)?;
+                }
+                self.parent.rename(&temp_name, &self.parent, &self.name)?;
+                Ok(())
+            })();
+            if let Err(error) = result {
+                let _ = self.parent.remove_file(&temp_name);
+                return Err(error.into());
+            }
+            sync_directory_handle(&self.parent)?;
+            return Ok(());
+        }
+
+        Err(CrivError::new(format!(
+            "failed to create temporary file for {}",
+            self.relative.display()
+        )))
+    }
+
+    fn remove(&self) -> Result<()> {
+        self.open_required_regular()?;
+        self.parent.remove_file(&self.name)?;
+        sync_directory_handle(&self.parent)
+    }
+
+    fn rename_to(&self, destination: &Self) -> Result<()> {
+        self.open_required_regular()?;
+        self.parent
+            .rename(&self.name, &destination.parent, &destination.name)?;
+        sync_directory_handle(&self.parent)?;
+        sync_directory_handle(&destination.parent)
+    }
 }
 
-fn sync_parent_directory(path: &Path) -> Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    sync_directory(parent)
+fn open_confined_dir(root: &Path, relative: &Path, create: bool) -> Result<Dir> {
+    open_confined_dir_optional(root, relative, create)?.ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("vault directory {} does not exist", relative.display()),
+        )
+        .into()
+    })
+}
+
+fn open_confined_dir_optional(root: &Path, relative: &Path, create: bool) -> Result<Option<Dir>> {
+    let canonical_root = fs::canonicalize(root).map_err(|error| {
+        CrivError::new(format!(
+            "failed to resolve vault root {} for confined access: {error}",
+            root.display()
+        ))
+    })?;
+    reject_symlink_components(&canonical_root, relative)?;
+    let mut directory = Dir::open_ambient_dir(&canonical_root, ambient_authority())?;
+    for component in relative.components() {
+        let std::path::Component::Normal(part) = component else {
+            continue;
+        };
+        directory = match directory.open_dir_nofollow(part) {
+            Ok(next) => next,
+            Err(error) if create && error.kind() == std::io::ErrorKind::NotFound => {
+                match directory.create_dir(part) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    Err(error) => return Err(error.into()),
+                }
+                directory.open_dir_nofollow(part)?
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+    }
+    Ok(Some(directory))
+}
+
+fn nofollow_options() -> CapOpenOptions {
+    let mut options = CapOpenOptions::new();
+    options.follow(FollowSymlinks::No);
+    options
 }
 
 #[cfg(windows)]
-fn sync_directory(_path: &Path) -> Result<()> {
-    // Windows commits directory-entry changes with the file operation. A
-    // directory handle cannot be synchronized with FlushFileBuffers.
+fn sync_directory_handle(_directory: &Dir) -> Result<()> {
     Ok(())
 }
 
 #[cfg(not(windows))]
-fn sync_directory(path: &Path) -> Result<()> {
-    let directory = fs::File::open(path)?;
-    directory.sync_all()?;
+fn sync_directory_handle(directory: &Dir) -> Result<()> {
+    directory.try_clone()?.into_std_file().sync_all()?;
     Ok(())
-}
-
-fn prepare_confined_write(root: &Path, allowed_dir: &Path, destination: &Path) -> Result<PathBuf> {
-    validate_relative_path("allowed write directory", allowed_dir)?;
-    validate_relative_path("write destination", destination)?;
-    if allowed_dir != Path::new(".") && !destination.starts_with(allowed_dir) {
-        return Err(CrivError::new(format!(
-            "refusing to write {} outside allowed vault directory {}",
-            destination.display(),
-            allowed_dir.display()
-        )));
-    }
-
-    let root = fs::canonicalize(root).map_err(|err| {
-        CrivError::new(format!(
-            "failed to resolve vault root {} for confined write: {err}",
-            root.display()
-        ))
-    })?;
-    reject_symlink_components(&root, destination)?;
-
-    let path = root.join(destination);
-    let parent = path
-        .parent()
-        .ok_or_else(|| CrivError::new(format!("cannot write atomic file at {}", path.display())))?;
-    fs::create_dir_all(parent)?;
-
-    // Recheck after directory creation: a pre-existing or concurrently placed
-    // symlink must never become the parent of our temporary file.
-    reject_symlink_components(&root, destination)?;
-    let allowed = root.join(allowed_dir);
-    let allowed = fs::canonicalize(&allowed).map_err(|err| {
-        CrivError::new(format!(
-            "failed to resolve allowed vault directory {}: {err}",
-            allowed.display()
-        ))
-    })?;
-    let resolved_parent = fs::canonicalize(parent).map_err(|err| {
-        CrivError::new(format!(
-            "failed to resolve write parent {}: {err}",
-            parent.display()
-        ))
-    })?;
-    if !resolved_parent.starts_with(&allowed) {
-        return Err(CrivError::new(format!(
-            "refusing to write {} outside resolved allowed vault directory {}",
-            path.display(),
-            allowed.display()
-        )));
-    }
-
-    Ok(path)
 }
 
 fn validate_relative_path(label: &str, path: &Path) -> Result<()> {
@@ -870,5 +1003,100 @@ mod tests {
 
         assert!(error.to_string().contains("symlinked vault path component"));
         assert!(!outside.path().join("generated/architecture.md").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn held_directory_handle_contains_operations_after_path_replacement() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        fs::create_dir(root.path().join("docs")).unwrap();
+        fs::write(root.path().join("docs/original.md"), "inside\n").unwrap();
+        fs::write(root.path().join("docs/remove.md"), "remove\n").unwrap();
+        fs::write(root.path().join("docs/rename.md"), "rename\n").unwrap();
+        fs::write(outside.path().join("original.md"), "outside\n").unwrap();
+        fs::write(outside.path().join("remove.md"), "outside remove\n").unwrap();
+        fs::write(outside.path().join("renamed.md"), "outside rename\n").unwrap();
+
+        let read_target =
+            ConfinedFile::for_read(root.path(), Path::new("docs/original.md")).unwrap();
+        let write_target = ConfinedFile::for_write(
+            root.path(),
+            Path::new("docs"),
+            Path::new("docs/generated.md"),
+        )
+        .unwrap();
+        let remove_target =
+            ConfinedFile::for_write(root.path(), Path::new("docs"), Path::new("docs/remove.md"))
+                .unwrap();
+        let rename_source =
+            ConfinedFile::for_write(root.path(), Path::new("docs"), Path::new("docs/rename.md"))
+                .unwrap();
+        let rename_destination =
+            ConfinedFile::for_write(root.path(), Path::new("docs"), Path::new("docs/renamed.md"))
+                .unwrap();
+
+        fs::rename(root.path().join("docs"), root.path().join("held-docs")).unwrap();
+        symlink(outside.path(), root.path().join("docs")).unwrap();
+
+        assert_eq!(
+            read_target.read_optional_string().unwrap().unwrap(),
+            "inside\n"
+        );
+        write_target.write_atomic("generated\n", None).unwrap();
+        remove_target.remove().unwrap();
+        rename_source.rename_to(&rename_destination).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(outside.path().join("original.md")).unwrap(),
+            "outside\n"
+        );
+        assert!(!outside.path().join("generated.md").exists());
+        assert_eq!(
+            fs::read_to_string(outside.path().join("remove.md")).unwrap(),
+            "outside remove\n"
+        );
+        assert_eq!(
+            fs::read_to_string(outside.path().join("renamed.md")).unwrap(),
+            "outside rename\n"
+        );
+        assert_eq!(
+            fs::read_to_string(root.path().join("held-docs/generated.md")).unwrap(),
+            "generated\n"
+        );
+        assert!(!root.path().join("held-docs/remove.md").exists());
+        assert!(!root.path().join("held-docs/rename.md").exists());
+        assert_eq!(
+            fs::read_to_string(root.path().join("held-docs/renamed.md")).unwrap(),
+            "rename\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn final_symlink_replacement_is_never_followed() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        fs::create_dir(root.path().join("docs")).unwrap();
+        fs::write(outside.path().join("target.md"), "outside\n").unwrap();
+        let target =
+            ConfinedFile::for_write(root.path(), Path::new("docs"), Path::new("docs/target.md"))
+                .unwrap();
+        symlink(
+            outside.path().join("target.md"),
+            root.path().join("docs/target.md"),
+        )
+        .unwrap();
+
+        assert!(target.write_atomic("changed\n", None).is_err());
+        assert!(target.remove().is_err());
+        assert_eq!(
+            fs::read_to_string(outside.path().join("target.md")).unwrap(),
+            "outside\n"
+        );
     }
 }

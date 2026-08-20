@@ -1,14 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::ops::Range;
 use std::path::Path;
+
+#[cfg(test)]
+use std::fs;
 
 use clap::Args as ClapArgs;
 use serde::{Deserialize, Serialize};
 
 use crate::git::{self, ChangeStatus, ChangedEntry, ChangedSet};
 use crate::reconcile_transaction::Snapshot;
-use crate::util::write_atomic_in;
+use crate::util::{read_to_string_in, write_atomic_in};
 use crate::vault::Vault;
 use crate::{CrivError, Result};
 
@@ -227,7 +229,7 @@ fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<Plan> {
             if !note.governs.iter().any(|path| required.contains_key(path)) {
                 continue;
             }
-            let before = fs::read_to_string(&note.path)?;
+            let before = read_to_string_in(root, Path::new(&note.rel_path))?;
             let after = rewrite_governs(&before, &required)?;
             if before != after {
                 files.push(PlannedFile {
@@ -447,7 +449,7 @@ pub(crate) fn allows_history_change(
     };
     let new = match new_ref {
         Some(reference) => git::blob(root, reference, &entry.path),
-        None => fs::read_to_string(root.join(&entry.path)).map_err(Into::into),
+        None => read_to_string_in(root, Path::new(&entry.path)),
     };
     new.is_ok_and(|new| transition_matches(&old, &new, &mappings))
 }
@@ -669,7 +671,7 @@ fn top_level_scalar(contents: &str, key: &str) -> Option<String> {
 }
 
 fn read_receipt(root: &Path) -> Result<Receipt> {
-    let contents = fs::read_to_string(root.join(RECEIPT_PATH))
+    let contents = read_to_string_in(root, Path::new(RECEIPT_PATH))
         .map_err(|_| CrivError::new("source reconciliation receipt is unavailable"))?;
     serde_json::from_str(&contents)
         .map_err(|_| CrivError::new("source reconciliation receipt is malformed"))

@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use ignore::{DirEntry, Error as WalkError, ParallelVisitor, ParallelVisitorBuilder, WalkBuilder};
 
 use crate::config::Config;
-use crate::util::GlobMatcher;
+use crate::util::{GlobMatcher, read_to_string_in};
 use crate::{CrivError, Result};
 
 const VAULT_WALK_THREADS: usize = 8;
@@ -245,7 +245,7 @@ pub(crate) fn discover_markdown(root: &Path, policy: MarkdownPolicy<'_>) -> Resu
 
 pub(crate) fn read_selected_text(root: &Path, path: &Path) -> Result<String> {
     let relative = relative_utf8(root, path)?;
-    fs::read_to_string(path).map_err(|error| {
+    read_to_string_in(root, Path::new(&relative)).map_err(|error| {
         CrivError::new(format!(
             "failed to read selected file `{relative}`: {error}"
         ))

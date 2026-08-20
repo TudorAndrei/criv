@@ -3,7 +3,7 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::util::read_to_string;
+use crate::util::read_optional_to_string_in;
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone)]
@@ -43,8 +43,7 @@ impl Default for Config {
 
 impl Config {
     pub(crate) fn load(root: &Path) -> Result<Self> {
-        let path = root.join("criv.toml");
-        let contents = path.exists().then(|| read_to_string(&path)).transpose()?;
+        let contents = read_optional_to_string_in(root, Path::new("criv.toml"))?;
         Self::parse(contents.as_deref())
     }
 

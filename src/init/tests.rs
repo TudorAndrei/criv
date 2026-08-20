@@ -149,7 +149,8 @@ fn init_force_skills_refuses_symlinked_destination() {
     assert!(
         error
             .to_string()
-            .contains("refusing to write through symlinked vault path component")
+            .contains("refusing to write through symlinked vault path component"),
+        "{error}"
     );
     assert!(!outside.join("SKILL.md").exists());
 

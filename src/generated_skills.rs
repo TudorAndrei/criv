@@ -8,7 +8,10 @@ use std::fs;
 use std::path::Path;
 
 use crate::Result;
-use crate::util::{LinkOutcome, link_dir_in, write_atomic_in, write_new_in};
+use crate::util::{
+    LinkOutcome, file_exists_in, link_dir_in, read_optional_to_string_in, write_atomic_in,
+    write_new_in,
+};
 
 const AGENT_SKILLS_DIR: &str = ".agents/skills";
 const CLAUDE_SKILLS_DIR: &str = ".claude/skills";
@@ -203,7 +206,7 @@ fn publish_skill(
     mode: InstallMode,
 ) -> Result<SkillPublicationFact> {
     let contents = stamp_skill(contents);
-    let publication = if mode == InstallMode::Refresh && root.join(path).exists() {
+    let publication = if mode == InstallMode::Refresh && file_exists_in(root, Path::new(path))? {
         write_atomic_in(root, Path::new("."), Path::new(path), &contents)?;
         SkillPublication::Refreshed
     } else if write_new_in(root, Path::new("."), Path::new(path), &contents)? {
@@ -215,12 +218,10 @@ fn publish_skill(
 }
 
 fn installed_status(root: &Path, skill: &SkillTemplate) -> InstalledSkillStatus {
-    let path = root.join(skill.agent_path);
-    if !path.exists() {
-        return InstalledSkillStatus::Missing;
-    }
-    let Ok(contents) = fs::read_to_string(path) else {
-        return InstalledSkillStatus::Unreadable;
+    let contents = match read_optional_to_string_in(root, Path::new(skill.agent_path)) {
+        Ok(Some(contents)) => contents,
+        Ok(None) => return InstalledSkillStatus::Missing,
+        Err(_) => return InstalledSkillStatus::Unreadable,
     };
     match skill_marker(&contents) {
         Some(marker) if marker == skill.identity() => InstalledSkillStatus::Current,

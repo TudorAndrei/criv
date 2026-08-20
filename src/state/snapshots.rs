@@ -1,13 +1,18 @@
 //! Confined lifecycle for content-addressed local State snapshots.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(test)]
+use std::path::PathBuf;
 
 use criv_state_wire::is_supported_schema;
 use serde::{Deserialize, Serialize};
 
+use crate::util::{
+    directory_exists_in, read_dir_names_in, read_file_with_metadata_in, read_optional_to_string_in,
+};
 #[cfg(test)]
 use crate::util::{remove_file_in, write_atomic_if_changed_in, write_atomic_in};
 use crate::{CrivError, Result};
@@ -148,14 +153,14 @@ pub(crate) fn load_unlocked(root: &Path, id: &str) -> Result<Option<String>> {
     } else {
         return Ok(None);
     };
-    let Some(store) = existing_store_dir(root)? else {
+    let Some(()) = existing_store_dir(root)? else {
         if id == "latest" {
             return Err(CrivError::new("local snapshot `latest` does not resolve"));
         }
         return Ok(None);
     };
-    let path = store.join(format!("{hash}.json"));
-    let Some(contents) = read_regular_file_optional(&path, "snapshot")? else {
+    let path = format!(".criv/snapshots/{hash}.json");
+    let Some(contents) = read_optional_to_string_in(root, Path::new(&path))? else {
         if id == "latest" {
             return Err(CrivError::new(format!(
                 "local latest snapshot `{hash}` does not resolve"
@@ -243,7 +248,7 @@ fn apply_prune(
 
 fn reconcile(root: &Path) -> Result<StoreView> {
     let latest = read_latest(root)?;
-    let Some(store) = existing_store_dir(root)? else {
+    let Some(()) = existing_store_dir(root)? else {
         return Ok(StoreView {
             order: Vec::new(),
             files: BTreeMap::new(),
@@ -252,30 +257,23 @@ fn reconcile(root: &Path) -> Result<StoreView> {
     };
 
     let mut files = BTreeMap::new();
-    for entry in fs::read_dir(&store)? {
-        let entry = entry?;
-        let name = entry.file_name().to_string_lossy().to_string();
+    let names = read_dir_names_in(root, Path::new(".criv/snapshots"))?.unwrap_or_default();
+    for name in names {
+        let name = name.to_string_lossy().to_string();
         let Some(hash) = name
             .strip_suffix(".json")
             .filter(|hash| is_managed_hash(hash))
         else {
             continue;
         };
-        if entry.file_type()?.is_symlink() {
-            return Err(CrivError::new(format!(
-                "snapshot path {} must be a regular file",
-                entry.path().display()
-            )));
-        }
-        let metadata = entry.metadata()?;
-        if !metadata.is_file() {
-            return Err(CrivError::new(format!(
-                "snapshot path {} must be a regular file",
-                entry.path().display()
-            )));
-        }
-        let contents = fs::read_to_string(entry.path())
-            .map_err(|err| CrivError::new(format!("failed to read snapshot `{hash}`: {err}")))?;
+        let relative = format!(".criv/snapshots/{name}");
+        let (contents, metadata) =
+            read_file_with_metadata_in(root, Path::new(&relative)).map_err(|error| {
+                CrivError::new(format!("failed to read snapshot `{hash}`: {error}"))
+            })?;
+        let contents = String::from_utf8(contents).map_err(|error| {
+            CrivError::new(format!("failed to read snapshot `{hash}`: {error}"))
+        })?;
         validate_snapshot(hash, &contents)?;
         files.insert(
             hash.to_string(),
@@ -287,7 +285,7 @@ fn reconcile(root: &Path) -> Result<StoreView> {
         );
     }
 
-    let indexed = read_index(&store)?;
+    let indexed = read_index(root)?;
     let mut seen = BTreeSet::new();
     let mut order = indexed
         .unwrap_or_default()
@@ -314,8 +312,8 @@ fn reconcile(root: &Path) -> Result<StoreView> {
     })
 }
 
-fn read_index(store: &Path) -> Result<Option<Vec<String>>> {
-    let Some(contents) = read_regular_file_optional(&store.join("index.json"), "snapshot index")?
+fn read_index(root: &Path) -> Result<Option<Vec<String>>> {
+    let Some(contents) = read_optional_to_string_in(root, Path::new(".criv/snapshots/index.json"))?
     else {
         return Ok(None);
     };
@@ -332,11 +330,7 @@ fn read_index(store: &Path) -> Result<Option<Vec<String>>> {
 }
 
 fn read_latest(root: &Path) -> Result<Option<String>> {
-    let Some(criv) = existing_criv_dir(root)? else {
-        return Ok(None);
-    };
-    let path = criv.join("latest");
-    let Some(contents) = read_regular_file_optional(&path, "latest snapshot pointer")? else {
+    let Some(contents) = read_optional_to_string_in(root, Path::new(".criv/latest"))? else {
         return Ok(None);
     };
     let hash = contents.trim();
@@ -382,54 +376,8 @@ fn records_newest_first(view: &StoreView) -> Vec<SnapshotRecord> {
         .collect()
 }
 
-fn existing_store_dir(root: &Path) -> Result<Option<PathBuf>> {
-    let Some(criv) = existing_criv_dir(root)? else {
-        return Ok(None);
-    };
-    let store = criv.join("snapshots");
-    let Some(_) = regular_directory_optional(&store, "snapshot store")? else {
-        return Ok(None);
-    };
-    Ok(Some(store))
-}
-
-fn existing_criv_dir(root: &Path) -> Result<Option<PathBuf>> {
-    let root = fs::canonicalize(root).map_err(|err| {
-        CrivError::new(format!(
-            "failed to resolve vault root {} for snapshot access: {err}",
-            root.display()
-        ))
-    })?;
-    let criv = root.join(".criv");
-    let Some(_) = regular_directory_optional(&criv, "snapshot state directory")? else {
-        return Ok(None);
-    };
-    Ok(Some(criv))
-}
-
-fn regular_directory_optional(path: &Path, label: &str) -> Result<Option<()>> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-            Err(CrivError::new(format!(
-                "{label} {} must be a real directory",
-                path.display()
-            )))
-        }
-        Ok(_) => Ok(Some(())),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(err.into()),
-    }
-}
-
-fn read_regular_file_optional(path: &Path, label: &str) -> Result<Option<String>> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => Err(
-            CrivError::new(format!("{label} {} must be a regular file", path.display())),
-        ),
-        Ok(_) => fs::read_to_string(path).map(Some).map_err(Into::into),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(err) => Err(err.into()),
-    }
+fn existing_store_dir(root: &Path) -> Result<Option<()>> {
+    directory_exists_in(root, Path::new(".criv/snapshots")).map(|exists| exists.then_some(()))
 }
 
 fn validate_snapshot(hash: &str, contents: &str) -> Result<()> {
@@ -673,6 +621,9 @@ mod tests {
         symlink(outside.path(), root.path().join(STORE_DIR)).unwrap();
 
         let error = list(root.path()).unwrap_err();
-        assert!(error.to_string().contains("real directory"));
+        assert!(
+            error.to_string().contains("symlinked vault path component"),
+            "{error}"
+        );
     }
 }

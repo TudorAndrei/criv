@@ -2,7 +2,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::git;
-use crate::util::{file_permissions_in, remove_file_in, write_atomic_with_permissions_in};
+use crate::util::{
+    file_exists_in, read_file_with_permissions_in, remove_file_in, write_atomic_with_permissions_in,
+};
 use crate::{CrivError, Result};
 
 pub(crate) struct Snapshot {
@@ -44,23 +46,21 @@ impl Snapshot {
 impl CapturedPath {
     fn capture(root: &Path, path: &str) -> Result<Self> {
         let relative = Path::new(path);
-        let absolute = root.join(relative);
-        match fs::symlink_metadata(&absolute) {
-            Ok(_) => {
-                let permissions = file_permissions_in(root, relative)?;
-                Ok(Self {
-                    path: path.to_string(),
-                    contents: Some(fs::read_to_string(absolute)?),
-                    permissions: Some(permissions),
-                })
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self {
+        if !file_exists_in(root, relative)? {
+            return Ok(Self {
                 path: path.to_string(),
                 contents: None,
                 permissions: None,
-            }),
-            Err(error) => Err(error.into()),
+            });
         }
+        let (contents, permissions) = read_file_with_permissions_in(root, relative)?;
+        Ok(Self {
+            path: path.to_string(),
+            contents: Some(String::from_utf8(contents).map_err(|error| {
+                CrivError::new(format!("snapshot file `{path}` is not UTF-8: {error}"))
+            })?),
+            permissions: Some(permissions),
+        })
     }
 
     fn restore(self, root: &Path) -> Result<()> {
@@ -73,11 +73,10 @@ impl CapturedPath {
                 &contents,
                 permissions,
             ),
-            (None, None) => match fs::symlink_metadata(root.join(&relative)) {
-                Ok(_) => remove_file_in(root, Path::new("."), &relative),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(error) => Err(error.into()),
-            },
+            (None, None) if file_exists_in(root, &relative)? => {
+                remove_file_in(root, Path::new("."), &relative)
+            }
+            (None, None) => Ok(()),
             _ => Err(CrivError::new(format!(
                 "cannot restore incomplete snapshot for `{}`",
                 self.path
