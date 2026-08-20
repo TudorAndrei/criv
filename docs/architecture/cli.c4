@@ -2,7 +2,7 @@ model {
   extend criv {
     cli = container 'criv CLI' {
       technology 'Rust'
-      description 'Runs repository initialization, validation, refresh, enforcement, query, and search workflows.'
+      description 'Runs repository initialization, validation, refresh, enforcement, and query workflows.'
       link ../../src/lib.rs 'source'
 
       commandInterface = component 'Command interface' {
@@ -26,8 +26,8 @@ model {
         link ../../src/git.rs 'source'
       }
       sourceIntelligence = component 'Source intelligence' {
-        technology 'Rust, fff, and tree-sitter'
-        description 'Indexes source files and builds module, import, symbol, call, and structural-match data.'
+        technology 'Rust, ignore, tree-sitter, and ast-grep'
+        description 'Discovers and reads selected source files, then builds module, import, symbol, call, and structural-match data.'
         link ../../src/source.rs 'source'
       }
       architectureService = component 'Architecture service' {

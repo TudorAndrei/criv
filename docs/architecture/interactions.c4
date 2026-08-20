@@ -70,7 +70,7 @@ model {
   criv.cli.refreshCoordinator -> criv.cli.governanceEngine 'Validates before and after publication'
   criv.cli.refreshCoordinator -> criv.cli.statePublisher 'Publishes the refreshed graph'
 
-  criv.cli.vaultModel -> criv.cli.sourceIntelligence 'Builds source indexes and relations'
+  criv.cli.vaultModel -> criv.cli.sourceIntelligence 'Builds the Source catalog and graph'
   criv.cli.vaultModel -> criv.cli.architectureService 'Validates agent-authored architecture' {
     technology 'Node.js bridge process'
   }
@@ -82,7 +82,7 @@ model {
   criv.cli.governanceEngine -> criv.cli.scaffoldInstaller 'Checks the generated skill inventory'
 
   criv.cli.knowledgeQueries -> criv.cli.vaultModel 'Reads the repository knowledge graph'
-  criv.cli.knowledgeQueries -> criv.cli.sourceIntelligence 'Reads indexed source data'
+  criv.cli.knowledgeQueries -> criv.cli.sourceIntelligence 'Reads Source catalog and graph data'
   criv.cli.knowledgeQueries -> criv.cli.repositoryHistory 'Reads commit history and stored revisions'
   criv.cli.knowledgeQueries -> criv.cli.statePublisher 'Reads retained snapshots'
 
@@ -97,7 +97,7 @@ model {
     technology 'File system'
   }
   criv.cli.sourceIntelligence -> repository 'Reads configured source roots' {
-    technology 'File system and fff index'
+    technology 'File system and ignore rules'
   }
   criv.cli.repositoryHistory -> repository 'Reads commits, diffs, and changed files' {
     technology 'libgit2'

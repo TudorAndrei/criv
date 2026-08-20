@@ -80,7 +80,7 @@ model {
     }
     rustSourceGraph = module 'criv::source::graph' {
       technology 'Rust and tree-sitter'
-      description 'Extracts language modules, imports, and symbols from indexed sources.'
+      description 'Extracts language modules, imports, and symbols from selected sources.'
       link ../../src/source/graph.rs 'source'
     }
     rustStructural = module 'criv::structural' {
@@ -197,7 +197,7 @@ model {
   criv.cli.sourceIntelligence.rustSourceCatalog -> criv.cli.sourceIntelligence.rustDiscovery 'Selects Source paths'
   criv.cli.sourceIntelligence.rustDiscovery -> criv.cli.vaultModel.rustConfig 'Reads file-selection rules'
   criv.cli.sourceIntelligence.rustSourceCatalog -> criv.cli.sourceIntelligence.rustSourcePaths 'Owns selected source paths'
-  criv.cli.sourceIntelligence.rustSourceGraph -> criv.cli.sourceIntelligence.rustSourcePaths 'Reads indexed source content'
+  criv.cli.sourceIntelligence.rustSourceGraph -> criv.cli.sourceIntelligence.rustSourcePaths 'Reads selected source content'
 
   // Validation and enforcement.
   criv.cli.governanceEngine.rustCheck -> criv.cli.vaultModel.rustVault 'Validates repository artifacts'

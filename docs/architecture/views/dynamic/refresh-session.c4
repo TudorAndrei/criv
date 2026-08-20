@@ -7,7 +7,7 @@ views {
 
     codingAgent -> repository 'Changes source code or vault content'
     criv.cli.refreshCoordinator -> criv.cli.vaultModel 'Loads the current vault'
-    criv.cli.vaultModel -> criv.cli.sourceIntelligence 'Updates source indexes and relations'
+    criv.cli.vaultModel -> criv.cli.sourceIntelligence 'Updates the Source catalog and graph'
     criv.cli.vaultModel -> criv.cli.architectureService 'Compiles the LikeC4 workspace'
     criv.cli.architectureService -> criv.cli.vaultModel 'Returns the model and diagnostics'
     criv.cli.refreshCoordinator -> criv.cli.governanceEngine 'Checks publication blockers and vault drift'
