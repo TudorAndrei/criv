@@ -8,10 +8,7 @@ use std::{cell::Cell, thread_local};
 use serde::{Deserialize, Serialize};
 use tree_sitter::{Node, Parser};
 
-use criv_state_wire::source_identity::{
-    ElixirCallableKind, ElixirOwner as SharedElixirOwner, ElixirSelector, SourceIdentity,
-    SourceSelector,
-};
+use criv_state_wire::source_identity::{SourceIdentity, SourceSelector};
 
 use super::paths::read_source_bytes;
 use crate::repository::RepositoryFiles;
@@ -76,32 +73,7 @@ pub(crate) struct SourceGraph {
     changed_files: Vec<String>,
     symbol_index: BTreeMap<String, Vec<SymbolId>>,
     #[serde(skip)]
-    relationship_indexes: RelationshipIndexes,
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-struct RelationshipIndexes {
-    modules: BTreeMap<String, IndexedModule>,
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-struct IndexedModule {
-    symbols: Vec<SymbolLocation>,
-    callables: Vec<IndexedCallable>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SymbolLocation {
-    path: String,
-    index: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct IndexedCallable {
-    name: String,
-    arity: usize,
-    location: SymbolLocation,
-    kind: SymbolKind,
+    elixir_relationships: elixir::ElixirRelationships,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -232,24 +204,6 @@ pub(crate) enum SymbolOwner {
     Implementation { protocol: String, for_type: String },
 }
 
-impl SymbolOwner {
-    fn shared_identity(&self) -> SharedElixirOwner {
-        match self {
-            Self::Module { name } => SharedElixirOwner::module(name),
-            Self::Implementation { protocol, for_type } => {
-                SharedElixirOwner::implementation(protocol, for_type)
-            }
-        }
-    }
-
-    fn qualified_callable_alias(&self, name: &str, arity: usize) -> Option<String> {
-        match self {
-            Self::Module { name: module } => Some(format!("{module}.{name}/{arity}")),
-            Self::Implementation { .. } => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub(crate) struct SymbolId {
     pub(crate) path: String,
@@ -283,10 +237,6 @@ pub(crate) enum RelationshipKind {
 }
 
 impl RelationshipKind {
-    fn is_executable_query_edge(self) -> bool {
-        matches!(self, Self::Call | Self::Delegate)
-    }
-
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Call => "calls",
@@ -568,7 +518,7 @@ pub(super) fn load_cached_from(files: &RepositoryFiles) -> Option<SourceGraphBui
         .ok()
         .flatten()?;
     let mut cache = serde_json::from_str::<GraphCacheFile>(&contents).ok()?;
-    cache.graph.rebuild_relationship_indexes();
+    cache.graph.rebuild_elixir_relationships();
     (cache.schema == GRAPH_CACHE_SCHEMA).then_some(SourceGraphBuild {
         graph: cache.graph,
         cache: CacheDisposition::Clean,
@@ -759,13 +709,13 @@ impl SourceGraph {
             for symbol in &processed.parsed.symbols {
                 if let Some(owner) = &symbol.owner {
                     debug_assert_eq!(
-                        elixir_symbol_selector(symbol.kind, owner, &symbol.name, symbol.arity)
+                        elixir::symbol_selector(symbol.kind, owner, &symbol.name, symbol.arity)
                             .as_deref(),
                         Some(symbol.id.selector.as_str()),
                         "structured Source owner and selector must agree"
                     );
                 }
-                for key in symbol_aliases(symbol)
+                for key in elixir::compatibility_aliases(symbol)
                     .into_iter()
                     .chain(std::iter::once(symbol.id.selector.clone()))
                 {
@@ -790,83 +740,12 @@ impl SourceGraph {
             graph.changed_files.sort();
             graph.changed_files.dedup();
         }
-        graph.rebuild_relationship_indexes();
+        graph.rebuild_elixir_relationships();
         Ok(graph)
     }
 
-    fn rebuild_relationship_indexes(&mut self) {
-        let mut indexes = RelationshipIndexes::default();
-        for (path, file) in &self.files {
-            for (index, symbol) in file.symbols.iter().enumerate() {
-                let Some(SymbolOwner::Module { name: module }) = symbol.owner.as_ref() else {
-                    continue;
-                };
-                let module = indexes.modules.entry(module.clone()).or_default();
-                let location = SymbolLocation {
-                    path: path.clone(),
-                    index,
-                };
-                if symbol.arity.is_none() {
-                    module.symbols.push(location.clone());
-                }
-                if let Some(arity) = symbol.arity
-                    && elixir_callable_identity_matches(symbol, &symbol.name, arity)
-                {
-                    module.callables.push(IndexedCallable {
-                        name: symbol.name.clone(),
-                        arity,
-                        location,
-                        kind: symbol.kind,
-                    });
-                }
-            }
-        }
-        for module in indexes.modules.values_mut() {
-            module.callables.sort_by(|left, right| {
-                (
-                    &left.name,
-                    left.arity,
-                    &left.location.path,
-                    left.location.index,
-                )
-                    .cmp(&(
-                        &right.name,
-                        right.arity,
-                        &right.location.path,
-                        right.location.index,
-                    ))
-            });
-        }
-        self.relationship_indexes = indexes;
-    }
-
-    fn indexed_callables(&self, module: &str, name: &str, arity: usize) -> &[IndexedCallable] {
-        let Some(module) = self.relationship_indexes.modules.get(module) else {
-            return &[];
-        };
-        let start = module.callables.partition_point(|callable| {
-            callable.name.as_str() < name || (callable.name == name && callable.arity < arity)
-        });
-        let count = module.callables[start..]
-            .partition_point(|callable| callable.name == name && callable.arity == arity);
-        &module.callables[start..start + count]
-    }
-
-    fn symbol_at(&self, location: &SymbolLocation) -> Option<&Symbol> {
-        self.files
-            .get(&location.path)
-            .and_then(|file| file.symbols.get(location.index))
-    }
-
-    fn unique_locations<'a>(
-        &self,
-        locations: impl IntoIterator<Item = &'a SymbolLocation>,
-    ) -> Option<SymbolId> {
-        unique_symbol_ids(
-            locations
-                .into_iter()
-                .filter_map(|location| self.symbol_at(location).map(|symbol| &symbol.id)),
-        )
+    fn rebuild_elixir_relationships(&mut self) {
+        self.elixir_relationships = elixir::ElixirRelationships::build(&self.files);
     }
 
     fn resolve_symbol_result(&self, query: &str) -> SymbolResolution {
@@ -887,7 +766,11 @@ impl SourceGraph {
             let aliases = file
                 .symbols
                 .iter()
-                .filter(|symbol| symbol_aliases(symbol).iter().any(|alias| alias == selector))
+                .filter(|symbol| {
+                    elixir::compatibility_aliases(symbol)
+                        .iter()
+                        .any(|alias| alias == selector)
+                })
                 .map(|symbol| symbol.id.clone())
                 .collect::<Vec<_>>();
             return symbol_resolution(aliases);
@@ -922,7 +805,7 @@ impl SourceGraph {
                     symbol
                         .relationships
                         .iter()
-                        .filter(|relationship| relationship.kind.is_executable_query_edge())
+                        .filter(|relationship| elixir::is_executable_query_edge(relationship.kind))
                         .map(|relationship| {
                             self.resolve_relationship(&symbol.id, relationship)
                                 .map_or_else(
@@ -951,7 +834,7 @@ impl SourceGraph {
                         .is_some_and(|target| target == symbol_id)
                         || call.target == symbol_id.name
                 }) || symbol.relationships.iter().any(|relationship| {
-                    relationship.kind.is_executable_query_edge()
+                    elixir::is_executable_query_edge(relationship.kind)
                         && self.resolve_relationship(&symbol.id, relationship).as_ref()
                             == Some(&symbol_id)
                 }) {
@@ -974,7 +857,7 @@ impl SourceGraph {
                     }
                 }
                 for relationship in &symbol.relationships {
-                    if relationship.kind.is_executable_query_edge()
+                    if elixir::is_executable_query_edge(relationship.kind)
                         && let Some(target) = self.resolve_relationship(&symbol.id, relationship)
                     {
                         called.insert(target);
@@ -1030,91 +913,8 @@ impl SourceGraph {
         caller: &SymbolId,
         relationship: &Relationship,
     ) -> Option<SymbolId> {
-        let caller_symbol = self.symbol(caller)?;
-        let file = self.files.get(&caller.path)?;
-        match &relationship.target {
-            RelationshipTarget::Dynamic { .. } => None,
-            RelationshipTarget::Module { module, .. } => {
-                let module = resolve_elixir_module(
-                    file,
-                    caller_symbol.owner.as_ref(),
-                    module,
-                    relationship.line,
-                    relationship.site,
-                );
-                self.unique_locations(
-                    self.relationship_indexes
-                        .modules
-                        .get(&module)
-                        .into_iter()
-                        .flat_map(|module| &module.symbols),
-                )
-            }
-            RelationshipTarget::Callable {
-                module,
-                name,
-                arity,
-            } => {
-                if let Some(module) = module {
-                    let module = resolve_elixir_module(
-                        file,
-                        caller_symbol.owner.as_ref(),
-                        module,
-                        relationship.line,
-                        relationship.site,
-                    );
-                    return self.unique_locations(
-                        self.indexed_callables(&module, name, *arity)
-                            .iter()
-                            .map(|callable| &callable.location),
-                    );
-                }
-
-                let local = symbol_resolution(
-                    file.symbols
-                        .iter()
-                        .filter(|symbol| {
-                            symbol.owner == caller_symbol.owner
-                                && elixir_callable_identity_matches(symbol, name, *arity)
-                        })
-                        .map(|symbol| symbol.id.clone())
-                        .collect(),
-                );
-                match local {
-                    SymbolResolution::Resolved(id) => return Some(id),
-                    SymbolResolution::Ambiguous(_) => return None,
-                    SymbolResolution::Missing => {}
-                }
-
-                let mut candidates = Vec::new();
-                for module in effective_elixir_imports(
-                    file,
-                    caller_symbol.owner.as_ref(),
-                    relationship.line,
-                    relationship.site,
-                    name,
-                    *arity,
-                ) {
-                    candidates.extend(
-                        self.indexed_callables(&module, name, *arity)
-                            .iter()
-                            .filter(|callable| {
-                                import_kind_allows(
-                                    file,
-                                    caller_symbol.owner.as_ref(),
-                                    &module,
-                                    relationship.line,
-                                    relationship.site,
-                                    (name, *arity),
-                                    callable.kind,
-                                )
-                            })
-                            .map(|callable| &callable.location),
-                    );
-                }
-                self.unique_locations(candidates)
-            }
-        }
+        self.elixir_relationships
+            .resolve(&self.files, caller, relationship)
     }
 
     pub(crate) fn relationship_target_label(
@@ -1122,41 +922,8 @@ impl SourceGraph {
         caller: &SymbolId,
         relationship: &Relationship,
     ) -> String {
-        let file = self.files.get(&caller.path);
-        let owner = self.symbol(caller).and_then(|symbol| symbol.owner.as_ref());
-        match &relationship.target {
-            RelationshipTarget::Callable {
-                module,
-                name,
-                arity,
-            } => module.as_ref().map_or_else(
-                || format!("{name}/{arity}"),
-                |module| {
-                    let module = file.map_or_else(
-                        || module.clone(),
-                        |file| {
-                            resolve_elixir_module(
-                                file,
-                                owner,
-                                module,
-                                relationship.line,
-                                relationship.site,
-                            )
-                        },
-                    );
-                    format!("{module}.{name}/{arity}")
-                },
-            ),
-            RelationshipTarget::Module { module, .. } => file.map_or_else(
-                || module.clone(),
-                |file| {
-                    resolve_elixir_module(file, owner, module, relationship.line, relationship.site)
-                },
-            ),
-            RelationshipTarget::Dynamic { id, label, .. } => {
-                format!("dynamic:{id}:{label}")
-            }
-        }
+        self.elixir_relationships
+            .target_label(&self.files, caller, relationship)
     }
 
     pub(crate) fn interface_hash(&self, query: &str) -> Option<String> {
@@ -1296,211 +1063,6 @@ fn symbol_resolution(mut matches: Vec<SymbolId>) -> SymbolResolution {
     }
 }
 
-fn unique_symbol_ids<'a>(ids: impl IntoIterator<Item = &'a SymbolId>) -> Option<SymbolId> {
-    let mut matches = ids.into_iter().cloned().collect::<Vec<_>>();
-    matches.sort();
-    matches.dedup();
-    (matches.len() == 1).then(|| matches.remove(0))
-}
-
-fn elixir_callable_identity_matches(symbol: &Symbol, name: &str, arity: usize) -> bool {
-    symbol.name == name
-        && symbol.arity == Some(arity)
-        && matches!(
-            symbol.kind,
-            SymbolKind::Function | SymbolKind::Macro | SymbolKind::Guard
-        )
-}
-
-fn directive_is_active(
-    directive: &Import,
-    owner: Option<&SymbolOwner>,
-    line: usize,
-    site: usize,
-) -> bool {
-    directive.owner.as_ref() == owner
-        && (directive.line < line || (directive.line == line && directive.site <= site))
-        && directive
-            .scope
-            .is_none_or(|scope| scope.start_byte <= site && site <= scope.end_byte)
-}
-
-fn resolve_elixir_module(
-    file: &SourceFile,
-    owner: Option<&SymbolOwner>,
-    module: &str,
-    line: usize,
-    site: usize,
-) -> String {
-    resolve_elixir_module_inner(file, owner, module, line, site, 0)
-}
-
-fn resolve_elixir_module_inner(
-    file: &SourceFile,
-    owner: Option<&SymbolOwner>,
-    module: &str,
-    line: usize,
-    site: usize,
-    depth: usize,
-) -> String {
-    if depth >= 16 || module.starts_with(':') {
-        return module.to_string();
-    }
-    if let Some(absolute) = module.strip_prefix("Elixir.") {
-        return absolute.to_string();
-    }
-    let (first, suffix) = module
-        .split_once('.')
-        .map_or((module, ""), |(first, suffix)| (first, suffix));
-    let mapping = file
-        .imports
-        .iter()
-        .filter(|directive| {
-            directive_is_active(directive, owner, line, site)
-                && matches!(
-                    directive.kind,
-                    DirectiveKind::Alias | DirectiveKind::Require
-                )
-                && directive.alias.as_deref() == Some(first)
-        })
-        .max_by_key(|directive| (directive.line, directive.site));
-    let Some(mapping) = mapping else {
-        return module.to_string();
-    };
-    let mapped = if suffix.is_empty() {
-        mapping.module.clone()
-    } else {
-        format!("{}.{suffix}", mapping.module)
-    };
-    if mapping.absolute {
-        return mapped;
-    }
-    resolve_elixir_module_inner(
-        file,
-        owner,
-        &mapped,
-        mapping.line,
-        mapping.site.saturating_sub(1),
-        depth + 1,
-    )
-}
-
-fn effective_elixir_imports(
-    file: &SourceFile,
-    owner: Option<&SymbolOwner>,
-    line: usize,
-    site: usize,
-    _name: &str,
-    _arity: usize,
-) -> Vec<String> {
-    let mut modules = file
-        .imports
-        .iter()
-        .filter(|directive| {
-            directive.kind == DirectiveKind::Import
-                && directive_is_active(directive, owner, line, site)
-        })
-        .map(|directive| resolve_directive_module(file, owner, directive))
-        .collect::<Vec<_>>();
-    modules.sort();
-    modules.dedup();
-    modules
-}
-
-fn import_kind_allows(
-    file: &SourceFile,
-    owner: Option<&SymbolOwner>,
-    module: &str,
-    line: usize,
-    site: usize,
-    callable: (&str, usize),
-    kind: SymbolKind,
-) -> bool {
-    let (name, arity) = callable;
-    let mut directives = file
-        .imports
-        .iter()
-        .filter(|directive| {
-            directive.kind == DirectiveKind::Import
-                && directive_is_active(directive, owner, line, site)
-                && resolve_directive_module(file, owner, directive) == module
-        })
-        .collect::<Vec<_>>();
-    directives.sort_by_key(|directive| (directive.line, directive.site));
-    let mut selection: Option<DirectiveFilter> = None;
-    let mut exclusions = Vec::new();
-    for directive in directives {
-        if let Some(only) = &directive.only {
-            selection = Some(only.clone());
-            exclusions.clear();
-        } else if directive.except.is_empty() {
-            selection = None;
-            exclusions.clear();
-        } else if selection.is_none() && exclusions.is_empty() {
-            selection = None;
-        }
-        exclusions.extend(directive.except.clone());
-    }
-    if exclusions
-        .iter()
-        .any(|filter| filter.name == name && filter.arity == arity)
-    {
-        return false;
-    }
-    selection.is_none_or(|filter| directive_filter_allows(&filter, name, arity, kind))
-}
-
-fn resolve_directive_module(
-    file: &SourceFile,
-    owner: Option<&SymbolOwner>,
-    directive: &Import,
-) -> String {
-    if directive.absolute {
-        directive.module.clone()
-    } else {
-        resolve_elixir_module(
-            file,
-            owner,
-            &directive.module,
-            directive.line,
-            directive.site.saturating_sub(1),
-        )
-    }
-}
-
-fn directive_filter_allows(
-    filter: &DirectiveFilter,
-    name: &str,
-    arity: usize,
-    kind: SymbolKind,
-) -> bool {
-    match filter {
-        DirectiveFilter::Callables(filters) => filters
-            .iter()
-            .any(|filter| filter.name == name && filter.arity == arity),
-        DirectiveFilter::Functions => kind == SymbolKind::Function,
-        DirectiveFilter::Macros => matches!(kind, SymbolKind::Macro | SymbolKind::Guard),
-        DirectiveFilter::Sigils => kind == SymbolKind::Macro && name.starts_with("sigil_"),
-    }
-}
-
-fn symbol_aliases(symbol: &Symbol) -> Vec<String> {
-    let mut aliases = vec![symbol.name.clone()];
-    if let Some(arity) = symbol.arity {
-        aliases.push(format!("{}/{arity}", symbol.name));
-        if let Some(qualified) = symbol
-            .owner
-            .as_ref()
-            .and_then(|owner| owner.qualified_callable_alias(&symbol.name, arity))
-        {
-            aliases.push(qualified);
-        }
-    }
-    aliases.sort();
-    aliases.dedup();
-    aliases
-}
-
 fn symbol_selector(kind: SymbolKind, parent: Option<&str>, name: &str) -> String {
     match (kind, parent) {
         (SymbolKind::Function, _) => format!("fn:{name}"),
@@ -1509,42 +1071,6 @@ fn symbol_selector(kind: SymbolKind, parent: Option<&str>, name: &str) -> String
         (SymbolKind::Class, _) => format!("type:{name}"),
         _ => format!("{}:{name}", kind.as_str()),
     }
-}
-
-fn elixir_symbol_selector(
-    kind: SymbolKind,
-    owner: &SymbolOwner,
-    name: &str,
-    arity: Option<usize>,
-) -> Option<String> {
-    let owner = owner.shared_identity();
-    if matches!(
-        kind,
-        SymbolKind::Module
-            | SymbolKind::Protocol
-            | SymbolKind::Implementation
-            | SymbolKind::Struct
-            | SymbolKind::Exception
-            | SymbolKind::Behaviour
-    ) {
-        return Some(SourceSelector::elixir(ElixirSelector::owner(owner)).to_string());
-    }
-    let kind = match kind {
-        SymbolKind::Function => ElixirCallableKind::Function,
-        SymbolKind::Macro => ElixirCallableKind::Macro,
-        SymbolKind::Guard => ElixirCallableKind::Guard,
-        SymbolKind::Callback => ElixirCallableKind::Callback,
-        SymbolKind::MacroCallback => ElixirCallableKind::MacroCallback,
-        SymbolKind::Method
-        | SymbolKind::Class
-        | SymbolKind::Module
-        | SymbolKind::Protocol
-        | SymbolKind::Implementation
-        | SymbolKind::Struct
-        | SymbolKind::Exception
-        | SymbolKind::Behaviour => return None,
-    };
-    Some(SourceSelector::elixir(ElixirSelector::callable(owner, kind, name, arity?)).to_string())
 }
 
 fn parse_tree_sitter_file(path: &str, contents: &str) -> Option<SourceFile> {
@@ -2631,7 +2157,7 @@ mod tests {
     fn graph_with_file(file: SourceFile) -> SourceGraph {
         let mut graph = SourceGraph::default();
         for symbol in &file.symbols {
-            for key in symbol_aliases(symbol)
+            for key in elixir::compatibility_aliases(symbol)
                 .into_iter()
                 .chain(std::iter::once(symbol.id.selector.clone()))
             {
@@ -2643,7 +2169,7 @@ mod tests {
             }
         }
         graph.files.insert(file.path.clone(), file);
-        graph.rebuild_relationship_indexes();
+        graph.rebuild_elixir_relationships();
         graph
     }
 
@@ -2655,7 +2181,7 @@ mod tests {
         arity: Option<usize>,
         ranges: Vec<SymbolRange>,
     ) -> Symbol {
-        let selector = elixir_symbol_selector(kind, &owner, name, arity).unwrap();
+        let selector = elixir::symbol_selector(kind, &owner, name, arity).unwrap();
         Symbol {
             id: SymbolId {
                 path: path.into(),
@@ -3122,40 +2648,6 @@ mod tests {
         )
         .unwrap();
         assert!(load_cached(temp.path()).is_none());
-    }
-
-    #[test]
-    fn elixir_selectors_encode_owner_kind_name_and_arity() {
-        let module = SymbolOwner::Module {
-            name: "My App.Δ".into(),
-        };
-        assert_eq!(
-            elixir_symbol_selector(SymbolKind::Module, &module, "My App.Δ", None).unwrap(),
-            "module:My%20App.%CE%94"
-        );
-        assert_eq!(
-            elixir_symbol_selector(SymbolKind::Function, &module, "+", Some(2)).unwrap(),
-            "module:My%20App.%CE%94/fn:%2B/2"
-        );
-        assert_eq!(
-            elixir_symbol_selector(SymbolKind::MacroCallback, &module, "build!", Some(1)).unwrap(),
-            "module:My%20App.%CE%94/macro-callback:build%21/1"
-        );
-
-        let implementation = SymbolOwner::Implementation {
-            protocol: "Enumerable".into(),
-            for_type: "My App".into(),
-        };
-        assert_eq!(
-            elixir_symbol_selector(
-                SymbolKind::Implementation,
-                &implementation,
-                "Enumerable for My App",
-                None
-            )
-            .unwrap(),
-            "impl:Enumerable/for:My%20App"
-        );
     }
 
     #[test]
@@ -3770,7 +3262,7 @@ end
     }
 
     #[test]
-    fn relationship_indexes_restore_from_cache_and_keep_cross_file_ambiguity() {
+    fn elixir_relationships_restore_from_cache_and_keep_cross_file_ambiguity() {
         fn resolved_target(graph: &SourceGraph) -> Option<String> {
             let caller = graph
                 .resolve_symbol("lib/caller.ex#module:Caller/fn:run/0")

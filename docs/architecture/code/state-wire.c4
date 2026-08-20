@@ -16,7 +16,8 @@ model {
     }
   }
 
-  criv.cli.sourceIntelligence.rustSourceGraph -> criv.stateWire.sourceIdentity.rustSourceIdentity 'Creates canonical Source identities'
+  criv.cli.sourceIntelligence.rustSourceGraph -> criv.stateWire.sourceIdentity.rustSourceIdentity 'Formats generic Source identities'
+  criv.cli.sourceIntelligence.rustElixirGraph -> criv.stateWire.sourceIdentity.rustSourceIdentity 'Creates canonical Elixir identities'
   criv.stateProjection.selectorProjection.rustWasmSource -> criv.stateWire.sourceIdentity.rustSourceIdentity 'Parses canonical Source identities'
 }
 
@@ -29,6 +30,7 @@ views {
 
     include *
     include criv.cli.sourceIntelligence.rustSourceGraph
+    include criv.cli.sourceIntelligence.rustElixirGraph
     include criv.stateProjection.selectorProjection.rustWasmSource
   }
 }

@@ -116,6 +116,11 @@ model {
       description 'Privately builds, caches, and reuses parsed Source graph data.'
       link ../../src/source/graph.rs 'source'
     }
+    rustElixirGraph = module 'criv::source::graph::elixir' {
+      technology 'Rust and tree-sitter'
+      description 'Privately owns Elixir parsing, identity aliases, directives, and relationship resolution.'
+      link ../../src/source/graph/elixir.rs 'source'
+    }
     rustStructural = module 'criv::structural' {
       technology 'Rust and ast-grep'
       description 'Matches structural patterns against parsed source files.'
@@ -244,6 +249,7 @@ model {
   criv.cli.sourceIntelligence.rustSource -> criv.cli.sourceIntelligence.rustSourcePaths 'Owns Source text conversion'
   criv.cli.sourceIntelligence.rustDiscovery -> criv.cli.vaultModel.rustConfig 'Reads file-selection rules'
   criv.cli.sourceIntelligence.rustStructural -> criv.cli.sourceIntelligence.rustSource 'Reads selected Source text'
+  criv.cli.sourceIntelligence.rustSourceGraph -> criv.cli.sourceIntelligence.rustElixirGraph 'Uses private Elixir graph meaning'
   criv.cli.sourceIntelligence.rustSourceGraph -> criv.cli.sourceIntelligence.rustSourcePaths 'Reads selected source content'
   criv.cli.sourceIntelligence.rustStructural -> criv.cli.diagnosticLocations.rustDiagnostic 'Keeps exact match byte spans'
 
@@ -339,11 +345,21 @@ views {
     include criv.cli.sourceIntelligence.rustSource
     include criv.cli.sourceIntelligence.rustSourceCatalog
     include criv.cli.sourceIntelligence.rustSourceGraph
+    include criv.cli.sourceIntelligence.rustElixirGraph
     include criv.cli.sourceIntelligence.rustDiscovery
     include criv.cli.refreshCoordinator.rustRefresh
     include criv.cli.vaultModel.rustVault
     include criv.cli.statePublisher.rustState
     include criv.cli.knowledgeQueries.rustQuery
+  }
+
+  view codeElixirGraph of criv.cli.sourceIntelligence.rustElixirGraph {
+    title 'Code / CLI / Elixir graph'
+    description 'The general Source graph and its private owner for Elixir graph meaning.'
+
+    include *
+    include criv.cli.sourceIntelligence.rustSourceGraph
+    include criv.stateWire.sourceIdentity.rustSourceIdentity
   }
 
   view codeRepositoryFiles of criv.cli.repositoryFiles {

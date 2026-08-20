@@ -1,13 +1,518 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use criv_state_wire::source_identity::{
+    ElixirCallableKind, ElixirOwner as SharedElixirOwner, ElixirSelector, SourceSelector,
+};
 use tree_sitter::Node;
 
 use super::{
     CallableFilter, DirectiveFilter, DirectiveKind, FieldSignature, Import, InterfaceSignature,
     Language, LexicalScope, ModuleDecl, ModuleRelationshipRole, Relationship, RelationshipKind,
     RelationshipTarget, SourceFile, Symbol, SymbolId, SymbolKind, SymbolOwner, SymbolRange,
-    elixir_symbol_selector, node_text,
+    node_text,
 };
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(super) struct ElixirRelationships {
+    modules: BTreeMap<String, IndexedModule>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct IndexedModule {
+    symbols: Vec<SymbolLocation>,
+    callables: Vec<IndexedCallable>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SymbolLocation {
+    path: String,
+    index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct IndexedCallable {
+    name: String,
+    arity: usize,
+    location: SymbolLocation,
+    kind: SymbolKind,
+}
+
+enum LocalResolution {
+    Missing,
+    Resolved(SymbolId),
+    Ambiguous,
+}
+
+impl ElixirRelationships {
+    pub(super) fn build(files: &BTreeMap<String, SourceFile>) -> Self {
+        let mut relationships = Self::default();
+        for (path, file) in files {
+            for (index, symbol) in file.symbols.iter().enumerate() {
+                let Some(SymbolOwner::Module { name: module }) = symbol.owner.as_ref() else {
+                    continue;
+                };
+                let module = relationships.modules.entry(module.clone()).or_default();
+                let location = SymbolLocation {
+                    path: path.clone(),
+                    index,
+                };
+                if symbol.arity.is_none() {
+                    module.symbols.push(location.clone());
+                }
+                if let Some(arity) = symbol.arity
+                    && callable_identity_matches(symbol, &symbol.name, arity)
+                {
+                    module.callables.push(IndexedCallable {
+                        name: symbol.name.clone(),
+                        arity,
+                        location,
+                        kind: symbol.kind,
+                    });
+                }
+            }
+        }
+        for module in relationships.modules.values_mut() {
+            module.callables.sort_by(|left, right| {
+                (
+                    &left.name,
+                    left.arity,
+                    &left.location.path,
+                    left.location.index,
+                )
+                    .cmp(&(
+                        &right.name,
+                        right.arity,
+                        &right.location.path,
+                        right.location.index,
+                    ))
+            });
+        }
+        relationships
+    }
+
+    pub(super) fn resolve(
+        &self,
+        files: &BTreeMap<String, SourceFile>,
+        caller: &SymbolId,
+        relationship: &Relationship,
+    ) -> Option<SymbolId> {
+        let caller_symbol = symbol(files, caller)?;
+        let file = files.get(&caller.path)?;
+        match &relationship.target {
+            RelationshipTarget::Dynamic { .. } => None,
+            RelationshipTarget::Module { module, .. } => {
+                let module = resolve_module(
+                    file,
+                    caller_symbol.owner.as_ref(),
+                    module,
+                    relationship.line,
+                    relationship.site,
+                );
+                self.unique_locations(
+                    files,
+                    self.modules
+                        .get(&module)
+                        .into_iter()
+                        .flat_map(|module| &module.symbols),
+                )
+            }
+            RelationshipTarget::Callable {
+                module,
+                name,
+                arity,
+            } => {
+                if let Some(module) = module {
+                    let module = resolve_module(
+                        file,
+                        caller_symbol.owner.as_ref(),
+                        module,
+                        relationship.line,
+                        relationship.site,
+                    );
+                    return self.unique_locations(
+                        files,
+                        self.indexed_callables(&module, name, *arity)
+                            .iter()
+                            .map(|callable| &callable.location),
+                    );
+                }
+
+                match local_resolution(file, caller_symbol, name, *arity) {
+                    LocalResolution::Resolved(id) => return Some(id),
+                    LocalResolution::Ambiguous => return None,
+                    LocalResolution::Missing => {}
+                }
+
+                let mut candidates = Vec::new();
+                for module in effective_imports(
+                    file,
+                    caller_symbol.owner.as_ref(),
+                    relationship.line,
+                    relationship.site,
+                ) {
+                    candidates.extend(
+                        self.indexed_callables(&module, name, *arity)
+                            .iter()
+                            .filter(|callable| {
+                                import_kind_allows(
+                                    file,
+                                    caller_symbol.owner.as_ref(),
+                                    &module,
+                                    relationship.line,
+                                    relationship.site,
+                                    (name, *arity),
+                                    callable.kind,
+                                )
+                            })
+                            .map(|callable| &callable.location),
+                    );
+                }
+                self.unique_locations(files, candidates)
+            }
+        }
+    }
+
+    pub(super) fn target_label(
+        &self,
+        files: &BTreeMap<String, SourceFile>,
+        caller: &SymbolId,
+        relationship: &Relationship,
+    ) -> String {
+        let file = files.get(&caller.path);
+        let owner = symbol(files, caller).and_then(|symbol| symbol.owner.as_ref());
+        match &relationship.target {
+            RelationshipTarget::Callable {
+                module,
+                name,
+                arity,
+            } => module.as_ref().map_or_else(
+                || format!("{name}/{arity}"),
+                |module| {
+                    let module = file.map_or_else(
+                        || module.clone(),
+                        |file| {
+                            resolve_module(
+                                file,
+                                owner,
+                                module,
+                                relationship.line,
+                                relationship.site,
+                            )
+                        },
+                    );
+                    format!("{module}.{name}/{arity}")
+                },
+            ),
+            RelationshipTarget::Module { module, .. } => file.map_or_else(
+                || module.clone(),
+                |file| resolve_module(file, owner, module, relationship.line, relationship.site),
+            ),
+            RelationshipTarget::Dynamic { id, label, .. } => format!("dynamic:{id}:{label}"),
+        }
+    }
+
+    fn indexed_callables(&self, module: &str, name: &str, arity: usize) -> &[IndexedCallable] {
+        let Some(module) = self.modules.get(module) else {
+            return &[];
+        };
+        let start = module.callables.partition_point(|callable| {
+            callable.name.as_str() < name || (callable.name == name && callable.arity < arity)
+        });
+        let count = module.callables[start..]
+            .partition_point(|callable| callable.name == name && callable.arity == arity);
+        &module.callables[start..start + count]
+    }
+
+    fn unique_locations<'a>(
+        &self,
+        files: &BTreeMap<String, SourceFile>,
+        locations: impl IntoIterator<Item = &'a SymbolLocation>,
+    ) -> Option<SymbolId> {
+        unique_symbol_ids(locations.into_iter().filter_map(|location| {
+            files
+                .get(&location.path)
+                .and_then(|file| file.symbols.get(location.index))
+                .map(|symbol| &symbol.id)
+        }))
+    }
+}
+
+pub(super) fn is_executable_query_edge(kind: RelationshipKind) -> bool {
+    matches!(kind, RelationshipKind::Call | RelationshipKind::Delegate)
+}
+
+pub(super) fn compatibility_aliases(symbol: &Symbol) -> Vec<String> {
+    let mut aliases = vec![symbol.name.clone()];
+    if let Some(arity) = symbol.arity {
+        aliases.push(format!("{}/{arity}", symbol.name));
+        if let Some(SymbolOwner::Module { name: module }) = symbol.owner.as_ref() {
+            aliases.push(format!("{module}.{}/{arity}", symbol.name));
+        }
+    }
+    aliases.sort();
+    aliases.dedup();
+    aliases
+}
+
+pub(super) fn symbol_selector(
+    kind: SymbolKind,
+    owner: &SymbolOwner,
+    name: &str,
+    arity: Option<usize>,
+) -> Option<String> {
+    let owner = shared_owner(owner);
+    if matches!(
+        kind,
+        SymbolKind::Module
+            | SymbolKind::Protocol
+            | SymbolKind::Implementation
+            | SymbolKind::Struct
+            | SymbolKind::Exception
+            | SymbolKind::Behaviour
+    ) {
+        return Some(SourceSelector::elixir(ElixirSelector::owner(owner)).to_string());
+    }
+    let kind = match kind {
+        SymbolKind::Function => ElixirCallableKind::Function,
+        SymbolKind::Macro => ElixirCallableKind::Macro,
+        SymbolKind::Guard => ElixirCallableKind::Guard,
+        SymbolKind::Callback => ElixirCallableKind::Callback,
+        SymbolKind::MacroCallback => ElixirCallableKind::MacroCallback,
+        SymbolKind::Method
+        | SymbolKind::Class
+        | SymbolKind::Module
+        | SymbolKind::Protocol
+        | SymbolKind::Implementation
+        | SymbolKind::Struct
+        | SymbolKind::Exception
+        | SymbolKind::Behaviour => return None,
+    };
+    Some(SourceSelector::elixir(ElixirSelector::callable(owner, kind, name, arity?)).to_string())
+}
+
+fn shared_owner(owner: &SymbolOwner) -> SharedElixirOwner {
+    match owner {
+        SymbolOwner::Module { name } => SharedElixirOwner::module(name),
+        SymbolOwner::Implementation { protocol, for_type } => {
+            SharedElixirOwner::implementation(protocol, for_type)
+        }
+    }
+}
+
+fn symbol<'a>(files: &'a BTreeMap<String, SourceFile>, id: &SymbolId) -> Option<&'a Symbol> {
+    files
+        .get(&id.path)
+        .and_then(|file| file.symbols.iter().find(|symbol| symbol.id == *id))
+}
+
+fn local_resolution(
+    file: &SourceFile,
+    caller: &Symbol,
+    name: &str,
+    arity: usize,
+) -> LocalResolution {
+    let mut matches = file
+        .symbols
+        .iter()
+        .filter(|symbol| {
+            symbol.owner == caller.owner && callable_identity_matches(symbol, name, arity)
+        })
+        .map(|symbol| symbol.id.clone())
+        .collect::<Vec<_>>();
+    matches.sort();
+    matches.dedup();
+    match matches.len() {
+        0 => LocalResolution::Missing,
+        1 => LocalResolution::Resolved(matches.remove(0)),
+        _ => LocalResolution::Ambiguous,
+    }
+}
+
+fn unique_symbol_ids<'a>(ids: impl IntoIterator<Item = &'a SymbolId>) -> Option<SymbolId> {
+    let mut matches = ids.into_iter().cloned().collect::<Vec<_>>();
+    matches.sort();
+    matches.dedup();
+    (matches.len() == 1).then(|| matches.remove(0))
+}
+
+fn callable_identity_matches(symbol: &Symbol, name: &str, arity: usize) -> bool {
+    symbol.name == name
+        && symbol.arity == Some(arity)
+        && matches!(
+            symbol.kind,
+            SymbolKind::Function | SymbolKind::Macro | SymbolKind::Guard
+        )
+}
+
+fn directive_is_active(
+    directive: &Import,
+    owner: Option<&SymbolOwner>,
+    line: usize,
+    site: usize,
+) -> bool {
+    directive.owner.as_ref() == owner
+        && (directive.line < line || (directive.line == line && directive.site <= site))
+        && directive
+            .scope
+            .is_none_or(|scope| scope.start_byte <= site && site <= scope.end_byte)
+}
+
+fn resolve_module(
+    file: &SourceFile,
+    owner: Option<&SymbolOwner>,
+    module: &str,
+    line: usize,
+    site: usize,
+) -> String {
+    resolve_module_inner(file, owner, module, line, site, 0)
+}
+
+fn resolve_module_inner(
+    file: &SourceFile,
+    owner: Option<&SymbolOwner>,
+    module: &str,
+    line: usize,
+    site: usize,
+    depth: usize,
+) -> String {
+    if depth >= 16 || module.starts_with(':') {
+        return module.to_string();
+    }
+    if let Some(absolute) = module.strip_prefix("Elixir.") {
+        return absolute.to_string();
+    }
+    let (first, suffix) = module
+        .split_once('.')
+        .map_or((module, ""), |(first, suffix)| (first, suffix));
+    let mapping = file
+        .imports
+        .iter()
+        .filter(|directive| {
+            directive_is_active(directive, owner, line, site)
+                && matches!(
+                    directive.kind,
+                    DirectiveKind::Alias | DirectiveKind::Require
+                )
+                && directive.alias.as_deref() == Some(first)
+        })
+        .max_by_key(|directive| (directive.line, directive.site));
+    let Some(mapping) = mapping else {
+        return module.to_string();
+    };
+    let mapped = if suffix.is_empty() {
+        mapping.module.clone()
+    } else {
+        format!("{}.{suffix}", mapping.module)
+    };
+    if mapping.absolute {
+        return mapped;
+    }
+    resolve_module_inner(
+        file,
+        owner,
+        &mapped,
+        mapping.line,
+        mapping.site.saturating_sub(1),
+        depth + 1,
+    )
+}
+
+fn effective_imports(
+    file: &SourceFile,
+    owner: Option<&SymbolOwner>,
+    line: usize,
+    site: usize,
+) -> Vec<String> {
+    let mut modules = file
+        .imports
+        .iter()
+        .filter(|directive| {
+            directive.kind == DirectiveKind::Import
+                && directive_is_active(directive, owner, line, site)
+        })
+        .map(|directive| resolve_directive_module(file, owner, directive))
+        .collect::<Vec<_>>();
+    modules.sort();
+    modules.dedup();
+    modules
+}
+
+fn import_kind_allows(
+    file: &SourceFile,
+    owner: Option<&SymbolOwner>,
+    module: &str,
+    line: usize,
+    site: usize,
+    callable: (&str, usize),
+    kind: SymbolKind,
+) -> bool {
+    let (name, arity) = callable;
+    let mut directives = file
+        .imports
+        .iter()
+        .filter(|directive| {
+            directive.kind == DirectiveKind::Import
+                && directive_is_active(directive, owner, line, site)
+                && resolve_directive_module(file, owner, directive) == module
+        })
+        .collect::<Vec<_>>();
+    directives.sort_by_key(|directive| (directive.line, directive.site));
+    let mut selection: Option<DirectiveFilter> = None;
+    let mut exclusions = Vec::new();
+    for directive in directives {
+        if let Some(only) = &directive.only {
+            selection = Some(only.clone());
+            exclusions.clear();
+        } else if directive.except.is_empty() {
+            selection = None;
+            exclusions.clear();
+        } else if selection.is_none() && exclusions.is_empty() {
+            selection = None;
+        }
+        exclusions.extend(directive.except.clone());
+    }
+    if exclusions
+        .iter()
+        .any(|filter| filter.name == name && filter.arity == arity)
+    {
+        return false;
+    }
+    selection.is_none_or(|filter| directive_filter_allows(&filter, name, arity, kind))
+}
+
+fn resolve_directive_module(
+    file: &SourceFile,
+    owner: Option<&SymbolOwner>,
+    directive: &Import,
+) -> String {
+    if directive.absolute {
+        directive.module.clone()
+    } else {
+        resolve_module(
+            file,
+            owner,
+            &directive.module,
+            directive.line,
+            directive.site.saturating_sub(1),
+        )
+    }
+}
+
+fn directive_filter_allows(
+    filter: &DirectiveFilter,
+    name: &str,
+    arity: usize,
+    kind: SymbolKind,
+) -> bool {
+    match filter {
+        DirectiveFilter::Callables(filters) => filters
+            .iter()
+            .any(|filter| filter.name == name && filter.arity == arity),
+        DirectiveFilter::Functions => kind == SymbolKind::Function,
+        DirectiveFilter::Macros => matches!(kind, SymbolKind::Macro | SymbolKind::Guard),
+        DirectiveFilter::Sigils => kind == SymbolKind::Macro && name.starts_with("sigil_"),
+    }
+}
 
 #[derive(Clone)]
 struct CallableClause {
@@ -1251,8 +1756,8 @@ fn emit_callables(
         relationships.sort();
         relationships.dedup();
         let range = ranges[0];
-        let selector = elixir_symbol_selector(kind, owner, &name, Some(arity))
-            .expect("Elixir callable selector");
+        let selector =
+            symbol_selector(kind, owner, &name, Some(arity)).expect("Elixir callable selector");
         file.symbols.push(Symbol {
             id: SymbolId {
                 path: path.into(),
@@ -1309,9 +1814,8 @@ fn emit_callbacks(
     file: &mut SourceFile,
 ) {
     for callback in &body.callbacks {
-        let selector =
-            elixir_symbol_selector(callback.kind, owner, &callback.name, Some(callback.arity))
-                .expect("Elixir callback selector");
+        let selector = symbol_selector(callback.kind, owner, &callback.name, Some(callback.arity))
+            .expect("Elixir callback selector");
         let optional = body
             .optional_callbacks
             .contains(&(callback.name.clone(), callback.arity));
@@ -1360,8 +1864,7 @@ fn module_symbol(
 ) -> Symbol {
     fields.sort();
     fields.dedup();
-    let selector =
-        elixir_symbol_selector(kind, &owner, &name, None).expect("Elixir module selector");
+    let selector = symbol_selector(kind, &owner, &name, None).expect("Elixir module selector");
     Symbol {
         id: SymbolId {
             path: path.into(),
@@ -1692,6 +2195,40 @@ mod tests {
             .unwrap();
         let tree = parser.parse(source, None).unwrap();
         parse_file(path, source, tree.root_node())
+    }
+
+    #[test]
+    fn creates_stable_selectors_for_elixir_owners_and_callables() {
+        let module = SymbolOwner::Module {
+            name: "My App.Δ".into(),
+        };
+        assert_eq!(
+            symbol_selector(SymbolKind::Module, &module, "My App.Δ", None).unwrap(),
+            "module:My%20App.%CE%94"
+        );
+        assert_eq!(
+            symbol_selector(SymbolKind::Function, &module, "+", Some(2)).unwrap(),
+            "module:My%20App.%CE%94/fn:%2B/2"
+        );
+        assert_eq!(
+            symbol_selector(SymbolKind::MacroCallback, &module, "build!", Some(1)).unwrap(),
+            "module:My%20App.%CE%94/macro-callback:build%21/1"
+        );
+
+        let implementation = SymbolOwner::Implementation {
+            protocol: "Enumerable".into(),
+            for_type: "My App".into(),
+        };
+        assert_eq!(
+            symbol_selector(
+                SymbolKind::Implementation,
+                &implementation,
+                "Enumerable for My App",
+                None,
+            )
+            .unwrap(),
+            "impl:Enumerable/for:My%20App"
+        );
     }
 
     #[test]
