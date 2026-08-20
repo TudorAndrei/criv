@@ -9,6 +9,13 @@ Canonical workload inputs live in `fixtures/performance/`. Generated vaults and
 measurement results are temporary or user-selected output and are never
 committed.
 
+The canonical list includes `elixir-mixed.toml` and
+`elixir-parse-heavy.toml`. The generator creates valid `.ex` and `.exs`
+modules, and the harness rejects a sample if one selected Elixir file is not in
+the Elixir source graph. Raw rows record source counts, bytes, Elixir coverage,
+peak resident memory, and output identity. This is observation evidence. It is
+not a language-throughput gate.
+
 `render-git-note.sh` validates a completed release-profile result directory and
 reduces it to the deterministic JSON summary stored by the push workflow.
 `criv-perf-report` validates the same evidence and renders a dependency-free

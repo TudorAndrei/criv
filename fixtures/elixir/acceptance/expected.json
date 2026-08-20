@@ -1,0 +1,35 @@
+{
+  "schema": "criv.elixir-acceptance.v1",
+  "elixir_files": [
+    "lib/acceptance/contracts.ex",
+    "lib/acceptance/data.ex",
+    "lib/acceptance/partial.ex",
+    "lib/acceptance/renderable_impl.ex",
+    "lib/acceptance/support.ex",
+    "lib/acceptance/worker.ex",
+    "test/acceptance_script.exs"
+  ],
+  "template_files": [
+    "templates/page.html.heex",
+    "templates/schema.ex.eex"
+  ],
+  "selectors": [
+    "lib/acceptance/contracts.ex#module:Acceptance.WorkerBehaviour",
+    "lib/acceptance/contracts.ex#module:Acceptance.WorkerBehaviour/callback:run/2",
+    "lib/acceptance/contracts.ex#module:Acceptance.WorkerBehaviour/macro-callback:build/1",
+    "lib/acceptance/contracts.ex#module:Acceptance.Renderable",
+    "lib/acceptance/data.ex#module:Acceptance.User",
+    "lib/acceptance/data.ex#module:Acceptance.Failure",
+    "lib/acceptance/data.ex#module:Acceptance.Container.Child/fn:value/0",
+    "lib/acceptance/renderable_impl.ex#impl:Acceptance.Renderable/for:Acceptance.User",
+    "lib/acceptance/renderable_impl.ex#impl:Acceptance.Renderable/for:Acceptance.User/fn:render/1",
+    "lib/acceptance/worker.ex#module:Acceptance.Worker/fn:run/1",
+    "lib/acceptance/worker.ex#module:Acceptance.Worker/fn:run/2",
+    "lib/acceptance/worker.ex#module:Acceptance.Worker/macro:build/1",
+    "lib/acceptance/worker.ex#module:Acceptance.Worker/guard:valid/1",
+    "lib/acceptance/worker.ex#module:Acceptance.Worker/fn:delegated/1",
+    "lib/acceptance/partial.ex#module:Acceptance.BeforeError/fn:safe_after/0",
+    "lib/acceptance/partial.ex#module:Acceptance.AfterError/fn:safe/0",
+    "test/acceptance_script.exs#module:Acceptance.Script/fn:run/0"
+  ]
+}

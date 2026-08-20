@@ -90,6 +90,9 @@ pub fn append_source_revision(
         Some("mjs") => format!(
             "\nexport function crivPerformanceSnapshotRevision{revision}() {{ return {revision}; }}"
         ),
+        Some("ex" | "exs") => format!(
+            "\ndefmodule CrivPerformance.SnapshotRevision{revision} do\n  def value(), do: {revision}\nend"
+        ),
         _ => {
             return Err(format!(
                 "workload snapshot history needs a supported code file: {}",
@@ -105,7 +108,9 @@ fn mutation_priority(path: &Path) -> u8 {
         Some("rs") => 0,
         Some("ts") => 1,
         Some("mjs") => 2,
-        _ => 3,
+        Some("ex") => 3,
+        Some("exs") => 4,
+        _ => 5,
     }
 }
 
@@ -132,14 +137,21 @@ fn source_contents(
     let mut contents = paths
         .iter()
         .cloned()
-        .map(|path| (path, Vec::new()))
+        .map(|path| {
+            let initial = if is_elixir_path(&path) {
+                format!("defmodule {} do\n", elixir_module_name(&path)).into_bytes()
+            } else {
+                Vec::new()
+            };
+            (path, initial)
+        })
         .collect::<BTreeMap<_, _>>();
     let code_paths = paths
         .iter()
         .filter(|path| {
             matches!(
                 path.extension().and_then(|value| value.to_str()),
-                Some("rs" | "ts" | "mjs")
+                Some("rs" | "ts" | "mjs" | "ex" | "exs")
             )
         })
         .collect::<Vec<_>>();
@@ -156,6 +168,7 @@ fn source_contents(
                 format!("export function symbol_{symbol:06}(): number {{ return {symbol}; }}\n")
             }
             "mjs" => format!("export function symbol_{symbol:06}() {{ return {symbol}; }}\n"),
+            "ex" | "exs" => format!("  def symbol_{symbol:06}(), do: {symbol}\n"),
             _ => unreachable!(),
         };
         contents
@@ -163,7 +176,28 @@ fn source_contents(
             .unwrap()
             .extend_from_slice(line.as_bytes());
     }
+    for path in paths.iter().filter(|path| is_elixir_path(path)) {
+        contents.get_mut(path).unwrap().extend_from_slice(b"end\n");
+    }
     Ok(contents)
+}
+
+fn is_elixir_path(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|value| value.to_str()),
+        Some("ex" | "exs")
+    )
+}
+
+fn elixir_module_name(path: &Path) -> String {
+    let suffix = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("source")
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<String>();
+    format!("CrivPerformance.{suffix}")
 }
 
 fn pad_source_bytes(
@@ -405,7 +439,12 @@ mod tests {
     #[test]
     fn generation_is_deterministic_and_matches_manifest_shape() {
         let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        for name in ["barrs-small.toml", "criv-medium.toml"] {
+        for name in [
+            "barrs-small.toml",
+            "criv-medium.toml",
+            "elixir-mixed.toml",
+            "elixir-parse-heavy.toml",
+        ] {
             let loaded =
                 LoadedManifest::load(&repository.join("fixtures/performance").join(name)).unwrap();
             let first = tempfile::TempDir::new().unwrap();
@@ -523,5 +562,36 @@ mod tests {
             .map(|path| fs::read_to_string(root.path().join(path)).unwrap())
             .collect::<String>();
         assert!(contents.contains("pub fn criv_performance_snapshot_revision_2() -> usize { 2 }"));
+    }
+
+    #[test]
+    fn elixir_workloads_are_valid_modules_with_exact_manifest_bytes() {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let loaded =
+            LoadedManifest::load(&repository.join("fixtures/performance/elixir-parse-heavy.toml"))
+                .unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let generated = generate(root.path(), &loaded.manifest).unwrap();
+
+        let paths = generated
+            .source_paths
+            .iter()
+            .filter(|path| is_elixir_path(path))
+            .collect::<Vec<_>>();
+        assert_eq!(paths.len(), loaded.manifest.source_files);
+        for path in paths {
+            let contents = fs::read_to_string(root.path().join(path)).unwrap();
+            assert!(contents.starts_with("defmodule CrivPerformance."));
+            assert!(contents.contains("\n  def symbol_"));
+            assert!(contents.contains("\nend\n"));
+        }
+
+        append_source_revision(root.path(), &generated, 2).unwrap();
+        let contents = generated
+            .source_paths
+            .iter()
+            .map(|path| fs::read_to_string(root.path().join(path)).unwrap())
+            .collect::<String>();
+        assert!(contents.contains("defmodule CrivPerformance.SnapshotRevision2 do"));
     }
 }

@@ -35,6 +35,18 @@ packages those measured bytes, verifies each archive on its native host, pushes
 both tags atomically, uploads a draft, adds provenance attestations, and then
 publishes it.
 
+The first release with default Elixir support uses the v0.9.0 pre-Elixir
+baseline. It permits `tree-sitter-elixir` as the only new normal package name
+and records the full binary-size change. It does not use an Elixir speed limit.
+Each native release binary must read and parse the complete `.ex` and `.exs`
+coverage set. Later releases compare with the last stable release that has the
+same Elixir evidence contract. Those later comparisons permit no new normal
+package name, no normal dependency-count increase, and no binary growth.
+
+Release notes for this transition must state that the Elixir grammar is in the
+default binary. They must also state that criv reads configured `.ex` and
+`.exs` roots without Mix and does not support EEx, HEEx, or macro expansion.
+
 If a run fails, use the exact prepared commit and tag shown in the run:
 
 ```sh

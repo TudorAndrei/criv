@@ -3,11 +3,11 @@ mod manifest;
 
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use clap::{Parser, ValueEnum};
@@ -136,6 +136,19 @@ impl Case {
     fn snapshot_history(self) -> usize {
         1
     }
+
+    fn selects_source(self) -> bool {
+        matches!(
+            self,
+            Self::WatchOnceCold
+                | Self::WatchOnceWarm
+                | Self::WatchOnceChanged
+                | Self::WatchOnceSemanticChanged
+                | Self::Check
+                | Self::EnforceCi
+                | Self::QueryNodesCodeWithoutDocs
+        )
+    }
 }
 
 const ALL_CASES: [Case; 11] = [
@@ -171,6 +184,8 @@ struct ManifestIdentity {
     digest: String,
     observed_repository: String,
     observed_revision: String,
+    source_files: usize,
+    source_bytes: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -207,6 +222,14 @@ struct SampleRow {
     real_seconds: f64,
     user_seconds: Option<f64>,
     system_seconds: Option<f64>,
+    peak_rss_bytes: Option<u64>,
+    selected_source_files: usize,
+    selected_source_bytes: usize,
+    selected_elixir_files: usize,
+    selected_elixir_bytes: u64,
+    parsed_elixir_files: usize,
+    parsed_elixir_bytes: u64,
+    elixir_path_digest: Option<String>,
     stdout_digest: String,
     stderr_digest: String,
     stdout_path: String,
@@ -232,9 +255,35 @@ struct CaseSummary {
     cache_state: String,
     successful_samples: usize,
     failed_samples: usize,
+    selected_source_files: usize,
+    selected_source_bytes: usize,
+    selected_elixir_files: usize,
+    selected_elixir_bytes: u64,
+    parsed_elixir_files: usize,
+    parsed_elixir_bytes: u64,
+    elixir_path_digest: Option<String>,
     real_seconds: Option<MetricSummary>,
     user_seconds: Option<MetricSummary>,
     system_seconds: Option<MetricSummary>,
+    peak_rss_bytes: Option<MetricSummary>,
+}
+
+struct ChildOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    user_seconds: Option<f64>,
+    system_seconds: Option<f64>,
+    peak_rss_bytes: Option<u64>,
+}
+
+#[derive(Debug, Default)]
+struct ElixirCoverage {
+    selected_files: usize,
+    selected_bytes: u64,
+    parsed_files: usize,
+    parsed_bytes: u64,
+    path_digest: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -265,6 +314,8 @@ fn run(mut args: Args) -> Result<(), String> {
         args.manifest = vec![
             repository_root.join("fixtures/performance/barrs-small.toml"),
             repository_root.join("fixtures/performance/criv-medium.toml"),
+            repository_root.join("fixtures/performance/elixir-mixed.toml"),
+            repository_root.join("fixtures/performance/elixir-parse-heavy.toml"),
         ];
     }
     let manifests = args
@@ -328,6 +379,8 @@ fn run(mut args: Args) -> Result<(), String> {
                 digest: loaded.digest.clone(),
                 observed_repository: loaded.manifest.observed_repository.clone(),
                 observed_revision: loaded.manifest.observed_revision.clone(),
+                source_files: loaded.manifest.source_files,
+                source_bytes: loaded.manifest.source_bytes,
             })
             .collect(),
         cases: cases.iter().map(|case| case.id().to_string()).collect(),
@@ -521,7 +574,6 @@ fn measure_sample(
     sample: usize,
     root: &Path,
 ) -> Result<SampleRow, String> {
-    let usage_before = child_usage();
     let start = Instant::now();
     let output = run_criv(
         binary,
@@ -532,8 +584,16 @@ fn measure_sample(
         case,
     )?;
     let real_seconds = start.elapsed().as_secs_f64();
-    let usage_after = child_usage();
-    let (user_seconds, system_seconds) = usage_delta(usage_before, usage_after);
+    let coverage = if case.selects_source() {
+        elixir_coverage(root, generated)?
+    } else {
+        ElixirCoverage::default()
+    };
+    let (selected_source_files, selected_source_bytes) = if case.selects_source() {
+        (loaded.manifest.source_files, loaded.manifest.source_bytes)
+    } else {
+        (0, 0)
+    };
     let prefix = format!("{}-{}-{sample:03}", loaded.manifest.id, case.id());
     let stdout_path = Path::new("outputs").join(format!("{prefix}.stdout"));
     let stderr_path = Path::new("outputs").join(format!("{prefix}.stderr"));
@@ -553,8 +613,16 @@ fn measure_sample(
         machine_digest: run.machine.digest.clone(),
         exit_status: output.status.code().unwrap_or(-1),
         real_seconds,
-        user_seconds,
-        system_seconds,
+        user_seconds: output.user_seconds,
+        system_seconds: output.system_seconds,
+        peak_rss_bytes: output.peak_rss_bytes,
+        selected_source_files,
+        selected_source_bytes,
+        selected_elixir_files: coverage.selected_files,
+        selected_elixir_bytes: coverage.selected_bytes,
+        parsed_elixir_files: coverage.parsed_files,
+        parsed_elixir_bytes: coverage.parsed_bytes,
+        elixir_path_digest: coverage.path_digest,
         stdout_digest: bytes_digest(&output.stdout),
         stderr_digest: bytes_digest(&output.stderr),
         stdout_path: stdout_path.display().to_string(),
@@ -574,7 +642,7 @@ fn run_criv(
     run_id: &str,
     sample_id: &str,
     case: Case,
-) -> Result<Output, String> {
+) -> Result<ChildOutput, String> {
     let mut command = Command::new(binary);
     command
         .args(args)
@@ -584,13 +652,84 @@ fn run_criv(
         .env("CRIV_PERF_CASE", case.id())
         .env("CRIV_PERF_CACHE_STATE", case.cache_state())
         .env_remove("CRIV_BASE_REF")
-        .env_remove("GITHUB_BASE_REF");
+        .env_remove("GITHUB_BASE_REF")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     if case == Case::EnforceCi {
         command.env("CRIV_BASE_REF", "HEAD^");
     }
-    command
-        .output()
-        .map_err(|error| format!("failed to execute {}: {error}", binary.display()))
+    run_child(command).map_err(|error| format!("failed to execute {}: {error}", binary.display()))
+}
+
+fn elixir_coverage(root: &Path, generated: &GeneratedWorkload) -> Result<ElixirCoverage, String> {
+    let mut selected = generated
+        .source_paths
+        .iter()
+        .filter(|path| {
+            matches!(
+                path.extension().and_then(|value| value.to_str()),
+                Some("ex" | "exs")
+            )
+        })
+        .map(|path| {
+            let bytes = fs::metadata(root.join(path)).map_err(display_error)?.len();
+            Ok((path.to_string_lossy().replace('\\', "/"), bytes))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    selected.sort();
+    if selected.is_empty() {
+        return Ok(ElixirCoverage::default());
+    }
+
+    let cache_path = root.join(".criv/source-graph.json");
+    let cache: serde_json::Value = serde_json::from_slice(
+        &fs::read(&cache_path)
+            .map_err(|error| format!("failed to read {}: {error}", cache_path.display()))?,
+    )
+    .map_err(|error| format!("failed to parse {}: {error}", cache_path.display()))?;
+    let files = cache
+        .get("graph")
+        .and_then(|graph| graph.get("files"))
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| format!("{} has no source file map", cache_path.display()))?;
+    let parsed = selected
+        .iter()
+        .filter(|(path, _)| {
+            files
+                .get(path)
+                .and_then(|file| file.get("language"))
+                .and_then(serde_json::Value::as_str)
+                == Some("Elixir")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if parsed.len() != selected.len() {
+        let missing = selected
+            .iter()
+            .filter(|item| !parsed.contains(item))
+            .map(|(path, _)| path.as_str())
+            .collect::<Vec<_>>();
+        return Err(format!(
+            "Elixir source graph coverage is incomplete; missing: {}",
+            missing.join(", ")
+        ));
+    }
+    let selected_bytes = selected.iter().map(|(_, bytes)| bytes).sum();
+    let mut hasher = blake3::Hasher::new();
+    for (path, bytes) in &selected {
+        hasher.update(path.as_bytes());
+        hasher.update(&[0]);
+        hasher.update(&bytes.to_le_bytes());
+        hasher.update(&[0]);
+    }
+    Ok(ElixirCoverage {
+        selected_files: selected.len(),
+        selected_bytes,
+        parsed_files: parsed.len(),
+        parsed_bytes: parsed.iter().map(|(_, bytes)| bytes).sum(),
+        path_digest: Some(hasher.finalize().to_hex().to_string()),
+    })
 }
 
 fn summarize(rows: &[SampleRow]) -> Vec<CaseSummary> {
@@ -621,6 +760,13 @@ fn summarize(rows: &[SampleRow]) -> Vec<CaseSummary> {
                 cache_state,
                 successful_samples: successful.len(),
                 failed_samples: rows.len() - successful.len(),
+                selected_source_files: rows[0].selected_source_files,
+                selected_source_bytes: rows[0].selected_source_bytes,
+                selected_elixir_files: rows[0].selected_elixir_files,
+                selected_elixir_bytes: rows[0].selected_elixir_bytes,
+                parsed_elixir_files: rows[0].parsed_elixir_files,
+                parsed_elixir_bytes: rows[0].parsed_elixir_bytes,
+                elixir_path_digest: rows[0].elixir_path_digest.clone(),
                 real_seconds: metric(successful.iter().map(|row| row.real_seconds).collect()),
                 user_seconds: metric(
                     successful
@@ -632,6 +778,12 @@ fn summarize(rows: &[SampleRow]) -> Vec<CaseSummary> {
                     successful
                         .iter()
                         .filter_map(|row| row.system_seconds)
+                        .collect(),
+                ),
+                peak_rss_bytes: metric(
+                    successful
+                        .iter()
+                        .filter_map(|row| row.peak_rss_bytes.map(|value| value as f64))
                         .collect(),
                 ),
             }
@@ -759,19 +911,52 @@ fn unix_millis() -> u128 {
 }
 
 #[cfg(unix)]
-fn child_usage() -> Option<(f64, f64)> {
+fn run_child(mut command: Command) -> Result<ChildOutput, String> {
+    use std::os::unix::process::ExitStatusExt;
+
+    let mut child = command.spawn().map_err(display_error)?;
+    let stdout_reader = spawn_pipe_reader(
+        child
+            .stdout
+            .take()
+            .ok_or_else(|| "child stdout pipe is missing".to_string())?,
+    );
+    let stderr_reader = spawn_pipe_reader(
+        child
+            .stderr
+            .take()
+            .ok_or_else(|| "child stderr pipe is missing".to_string())?,
+    );
+    let pid = child.id() as libc::pid_t;
+    let mut status = 0;
     let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
-    // SAFETY: getrusage initializes the provided rusage on a zero return code.
-    let status = unsafe { libc::getrusage(libc::RUSAGE_CHILDREN, usage.as_mut_ptr()) };
-    if status != 0 {
-        return None;
+    loop {
+        // SAFETY: pid identifies this child, and both output pointers are valid.
+        let waited = unsafe { libc::wait4(pid, &mut status, 0, usage.as_mut_ptr()) };
+        if waited == pid {
+            break;
+        }
+        if waited == -1 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+        {
+            continue;
+        }
+        return Err(format!(
+            "wait4 failed for child {pid}: {}",
+            std::io::Error::last_os_error()
+        ));
     }
-    // SAFETY: the successful getrusage call initialized usage.
+    // SAFETY: wait4 returned the child pid and initialized usage.
     let usage = unsafe { usage.assume_init() };
-    Some((
-        timeval_seconds(usage.ru_utime),
-        timeval_seconds(usage.ru_stime),
-    ))
+    let stdout = join_pipe_reader(stdout_reader)?;
+    let stderr = join_pipe_reader(stderr_reader)?;
+    Ok(ChildOutput {
+        status: ExitStatus::from_raw(status),
+        stdout,
+        stderr,
+        user_seconds: Some(timeval_seconds(usage.ru_utime)),
+        system_seconds: Some(timeval_seconds(usage.ru_stime)),
+        peak_rss_bytes: Some(peak_rss_bytes(&usage)),
+    })
 }
 
 #[cfg(unix)]
@@ -779,22 +964,136 @@ fn timeval_seconds(value: libc::timeval) -> f64 {
     value.tv_sec as f64 + value.tv_usec as f64 / 1_000_000.0
 }
 
-#[cfg(not(unix))]
-fn child_usage() -> Option<(f64, f64)> {
-    None
+#[cfg(all(unix, target_os = "macos"))]
+fn peak_rss_bytes(usage: &libc::rusage) -> u64 {
+    usage.ru_maxrss.max(0) as u64
 }
 
-fn usage_delta(
-    before: Option<(f64, f64)>,
-    after: Option<(f64, f64)>,
-) -> (Option<f64>, Option<f64>) {
-    match (before, after) {
-        (Some(before), Some(after)) => (
-            Some((after.0 - before.0).max(0.0)),
-            Some((after.1 - before.1).max(0.0)),
-        ),
-        _ => (None, None),
-    }
+#[cfg(all(unix, not(target_os = "macos")))]
+fn peak_rss_bytes(usage: &libc::rusage) -> u64 {
+    (usage.ru_maxrss.max(0) as u64).saturating_mul(1024)
+}
+
+#[cfg(windows)]
+fn run_child(mut command: Command) -> Result<ChildOutput, String> {
+    use std::mem::{MaybeUninit, size_of};
+    use std::os::windows::io::AsRawHandle;
+    use std::thread;
+    use std::time::Duration;
+
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::ProcessStatus::{
+        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+    };
+    use windows_sys::Win32::System::Threading::GetProcessTimes;
+
+    let mut child = command.spawn().map_err(display_error)?;
+    let stdout_reader = spawn_pipe_reader(
+        child
+            .stdout
+            .take()
+            .ok_or_else(|| "child stdout pipe is missing".to_string())?,
+    );
+    let stderr_reader = spawn_pipe_reader(
+        child
+            .stderr
+            .take()
+            .ok_or_else(|| "child stderr pipe is missing".to_string())?,
+    );
+    let handle = child.as_raw_handle() as *mut core::ffi::c_void;
+    let mut observed_peak = 0_u64;
+    let status = loop {
+        let mut counters = MaybeUninit::<PROCESS_MEMORY_COUNTERS>::zeroed();
+        // SAFETY: handle belongs to the live child and counters has the documented size.
+        let ok = unsafe {
+            GetProcessMemoryInfo(
+                handle,
+                counters.as_mut_ptr(),
+                size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+            )
+        };
+        if ok != 0 {
+            // SAFETY: the successful call initialized counters.
+            observed_peak =
+                observed_peak.max(unsafe { counters.assume_init() }.PeakWorkingSetSize as u64);
+        }
+        if let Some(status) = child.try_wait().map_err(display_error)? {
+            break status;
+        }
+        thread::sleep(Duration::from_millis(2));
+    };
+    let mut creation = MaybeUninit::<FILETIME>::uninit();
+    let mut exit = MaybeUninit::<FILETIME>::uninit();
+    let mut kernel = MaybeUninit::<FILETIME>::uninit();
+    let mut user = MaybeUninit::<FILETIME>::uninit();
+    // SAFETY: the child handle stays valid until Child is dropped and all pointers are valid.
+    let has_times = unsafe {
+        GetProcessTimes(
+            handle,
+            creation.as_mut_ptr(),
+            exit.as_mut_ptr(),
+            kernel.as_mut_ptr(),
+            user.as_mut_ptr(),
+        )
+    } != 0;
+    let stdout = join_pipe_reader(stdout_reader)?;
+    let stderr = join_pipe_reader(stderr_reader)?;
+    let (user_seconds, system_seconds) = if has_times {
+        // SAFETY: GetProcessTimes initialized kernel and user on success.
+        let kernel = unsafe { kernel.assume_init() };
+        // SAFETY: GetProcessTimes initialized kernel and user on success.
+        let user = unsafe { user.assume_init() };
+        (Some(filetime_seconds(user)), Some(filetime_seconds(kernel)))
+    } else {
+        (None, None)
+    };
+    Ok(ChildOutput {
+        status,
+        stdout,
+        stderr,
+        user_seconds,
+        system_seconds,
+        peak_rss_bytes: (observed_peak > 0).then_some(observed_peak),
+    })
+}
+
+#[cfg(windows)]
+fn filetime_seconds(value: windows_sys::Win32::Foundation::FILETIME) -> f64 {
+    let ticks = ((value.dwHighDateTime as u64) << 32) | value.dwLowDateTime as u64;
+    ticks as f64 / 10_000_000.0
+}
+
+#[cfg(any(unix, windows))]
+fn spawn_pipe_reader(
+    mut pipe: impl Read + Send + 'static,
+) -> std::thread::JoinHandle<Result<Vec<u8>, String>> {
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes).map_err(display_error)?;
+        Ok(bytes)
+    })
+}
+
+#[cfg(any(unix, windows))]
+fn join_pipe_reader(
+    reader: std::thread::JoinHandle<Result<Vec<u8>, String>>,
+) -> Result<Vec<u8>, String> {
+    reader
+        .join()
+        .map_err(|_| "child output reader panicked".to_string())?
+}
+
+#[cfg(not(any(unix, windows)))]
+fn run_child(mut command: Command) -> Result<ChildOutput, String> {
+    let output = command.output().map_err(display_error)?;
+    Ok(ChildOutput {
+        status: output.status,
+        stdout: output.stdout,
+        stderr: output.stderr,
+        user_seconds: None,
+        system_seconds: None,
+        peak_rss_bytes: None,
+    })
 }
 
 fn display_error(error: impl std::fmt::Display) -> String {
@@ -845,5 +1144,33 @@ mod tests {
             &["query", "nodes", "--kind", "code", "--without-docs"]
         );
         assert_eq!(Case::QueryNodesCodeWithoutDocs.cache_state(), "cold");
+        assert!(Case::QueryNodesCodeWithoutDocs.selects_source());
+    }
+
+    #[test]
+    fn source_selection_is_recorded_only_for_commands_that_load_source() {
+        for case in [
+            Case::WatchOnceCold,
+            Case::WatchOnceWarm,
+            Case::WatchOnceChanged,
+            Case::WatchOnceSemanticChanged,
+            Case::Check,
+            Case::EnforceCi,
+            Case::QueryNodesCodeWithoutDocs,
+        ] {
+            assert!(case.selects_source(), "{} must select Source", case.id());
+        }
+        for case in [
+            Case::QueryNextAdrId,
+            Case::QueryOrphanDocs,
+            Case::QueryNodesDocs,
+            Case::DiffLatest,
+        ] {
+            assert!(
+                !case.selects_source(),
+                "{} must not select Source",
+                case.id()
+            );
+        }
     }
 }

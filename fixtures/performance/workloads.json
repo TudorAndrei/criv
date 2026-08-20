@@ -2,7 +2,9 @@
   "schema": "criv.performance-workloads.v1",
   "canonical": [
     "barrs-small.toml",
-    "criv-medium.toml"
+    "criv-medium.toml",
+    "elixir-mixed.toml",
+    "elixir-parse-heavy.toml"
   ],
   "deferred": [
     {

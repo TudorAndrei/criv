@@ -107,9 +107,19 @@ impl WorkloadManifest {
                 path.display()
             ));
         }
-        if !self.extensions.contains_key("rs") {
+        let has_supported_code = self
+            .extensions
+            .keys()
+            .any(|extension| matches!(extension.as_str(), "rs" | "ts" | "mjs" | "ex" | "exs"));
+        if !has_supported_code {
             return Err(format!(
-                "manifest {} needs at least one Rust source for deterministic symbols and policies",
+                "manifest {} needs at least one supported source for deterministic symbols",
+                path.display()
+            ));
+        }
+        if self.policies > 0 && !self.extensions.contains_key("rs") {
+            return Err(format!(
+                "manifest {} needs at least one Rust source for deterministic policies",
                 path.display()
             ));
         }
@@ -124,7 +134,12 @@ mod tests {
     #[test]
     fn canonical_manifests_are_internally_consistent() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        for name in ["barrs-small.toml", "criv-medium.toml"] {
+        for name in [
+            "barrs-small.toml",
+            "criv-medium.toml",
+            "elixir-mixed.toml",
+            "elixir-parse-heavy.toml",
+        ] {
             LoadedManifest::load(&root.join("fixtures/performance").join(name)).unwrap();
         }
     }

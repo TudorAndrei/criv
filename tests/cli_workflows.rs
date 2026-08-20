@@ -32,6 +32,20 @@ fn normalize_newlines(contents: &str) -> String {
     contents.replace("\r\n", "\n")
 }
 
+fn copy_fixture_tree(source: &Path, destination: &Path) {
+    for entry in fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            fs::create_dir_all(&destination_path).unwrap();
+            copy_fixture_tree(&source_path, &destination_path);
+        } else {
+            fs::copy(&source_path, &destination_path).unwrap();
+        }
+    }
+}
+
 #[cfg(unix)]
 fn write_fake_node(root: &Path, output: &str) -> TempDir {
     use std::os::unix::fs::PermissionsExt;
@@ -1096,6 +1110,176 @@ governs:
         .assert()
         .success()
         .stdout(predicate::eq("lib/sample.ex#module:Repo/fn:fetch/2\n"));
+}
+
+#[test]
+fn elixir_acceptance_fixture_covers_the_complete_static_contract() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    init(root);
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "base vault"]);
+
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/elixir/acceptance");
+    copy_fixture_tree(&fixture, root);
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "add Elixir acceptance fixture"]);
+
+    criv(root)
+        .args(["watch", "--once"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("state updated"));
+    criv(root).arg("check").assert().success();
+    criv(root)
+        .args(["enforce", "--stage", "ci"])
+        .env("CRIV_BASE_REF", "HEAD^")
+        .assert()
+        .success();
+
+    let expected: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("expected.json")).unwrap()).unwrap();
+    assert_eq!(expected["schema"], "criv.elixir-acceptance.v1");
+    let state: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join(".criv/state.json")).unwrap()).unwrap();
+    let nodes = state["graph"]["nodes"].as_array().unwrap();
+    let node_ids = nodes
+        .iter()
+        .filter_map(|node| node["id"].as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    for selector in expected["selectors"].as_array().unwrap() {
+        let selector = selector.as_str().unwrap();
+        assert!(
+            node_ids.contains(format!("symbol:{selector}").as_str()),
+            "missing fixture selector {selector}"
+        );
+    }
+
+    let source_index = state["source-index"].as_array().unwrap();
+    for path in expected["elixir_files"].as_array().unwrap() {
+        let path = path.as_str().unwrap();
+        assert!(source_index.iter().any(|entry| {
+            entry["path"].as_str() == Some(path) && entry["mime"].as_str() == Some("text/x-elixir")
+        }));
+    }
+    assert!(
+        !source_index
+            .iter()
+            .any(|entry| { entry["path"].as_str() == Some("mix.exs") })
+    );
+    for path in expected["template_files"].as_array().unwrap() {
+        let path = path.as_str().unwrap();
+        assert!(source_index.iter().any(|entry| entry["path"] == path));
+        assert!(
+            !node_ids
+                .iter()
+                .any(|id| { id.starts_with(format!("symbol:{path}#").as_str()) })
+        );
+    }
+
+    for kind in [
+        "module",
+        "protocol",
+        "implementation",
+        "struct",
+        "exception",
+        "behaviour",
+        "function",
+        "macro",
+        "guard",
+        "callback",
+        "macro-callback",
+        "alias",
+        "import",
+        "require",
+        "use",
+    ] {
+        assert!(
+            nodes.iter().any(|node| node["kind"] == kind),
+            "missing fixture node kind {kind}"
+        );
+    }
+
+    let callees = criv(root)
+        .args([
+            "query",
+            "callees",
+            "lib/acceptance/worker.ex#Acceptance.Worker.run/2",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success();
+    let callees: Vec<String> = serde_json::from_slice(&callees.get_output().stdout).unwrap();
+    for target in [
+        "lib/acceptance/support.ex#module:Acceptance.Helpers/fn:tag/1",
+        "lib/acceptance/support.ex#module:Acceptance.Macros/macro:build/1",
+        "lib/acceptance/support.ex#module:Acceptance.Repo/fn:fetch/2",
+    ] {
+        assert!(callees.iter().any(|row| row == target), "missing {target}");
+    }
+
+    criv(root)
+        .args([
+            "query",
+            "callees",
+            "lib/acceptance/worker.ex#Acceptance.Worker.delegated/1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::eq(
+            "lib/acceptance/support.ex#module:Acceptance.Repo/fn:fetch/1\n",
+        ));
+    criv(root)
+        .args([
+            "query",
+            "callees",
+            "test/acceptance_script.exs#Acceptance.Script.run/0",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::eq(
+            "lib/acceptance/worker.ex#module:Acceptance.Worker/fn:run/1\n",
+        ));
+    criv(root)
+        .args([
+            "query",
+            "governing",
+            "lib/acceptance/worker.ex#Acceptance.Worker.run/2",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::eq("ADR-0001\n"));
+
+    let attack_surface = criv(root)
+        .args(["query", "attack-surface", "--format", "json"])
+        .assert()
+        .success();
+    let attack_surface: Vec<String> =
+        serde_json::from_slice(&attack_surface.get_output().stdout).unwrap();
+    assert!(
+        attack_surface
+            .iter()
+            .any(|row| row.ends_with("module:Acceptance.Worker/fn:run/2"))
+    );
+    assert!(!attack_surface.iter().any(|row| {
+        row.contains("hidden") || row.contains("private_build") || row.contains("private_valid")
+    }));
+
+    let ambiguous = criv(root)
+        .args([
+            "query",
+            "callees",
+            "lib/acceptance/worker.ex#Acceptance.Worker.run",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .success();
+    assert_eq!(ambiguous.get_output().stdout, b"[]\n");
 }
 
 #[test]

@@ -63,6 +63,8 @@ struct ManifestIdentity {
     digest: String,
     observed_repository: String,
     observed_revision: String,
+    source_files: usize,
+    source_bytes: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,9 +82,17 @@ struct CaseSummary {
     cache_state: String,
     successful_samples: usize,
     failed_samples: usize,
+    selected_source_files: usize,
+    selected_source_bytes: usize,
+    selected_elixir_files: usize,
+    selected_elixir_bytes: u64,
+    parsed_elixir_files: usize,
+    parsed_elixir_bytes: u64,
+    elixir_path_digest: Option<String>,
     real_seconds: Option<MetricSummary>,
     user_seconds: Option<MetricSummary>,
     system_seconds: Option<MetricSummary>,
+    peak_rss_bytes: Option<MetricSummary>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -217,6 +227,25 @@ fn load_evidence(result_dir: &Path, note_path: &Path) -> Result<Evidence, String
             .any(|manifest| manifest.id == case.workload && manifest.digest == case.workload_digest)
     }) {
         return Err("timing summaries contain an unknown workload identity".into());
+    }
+    for case in &summary.cases {
+        let manifest = run
+            .manifests
+            .iter()
+            .find(|manifest| manifest.id == case.workload)
+            .unwrap();
+        let no_source_selected = case.selected_source_files == 0 && case.selected_source_bytes == 0;
+        let complete_source_selected = case.selected_source_files == manifest.source_files
+            && case.selected_source_bytes == manifest.source_bytes;
+        if !no_source_selected && !complete_source_selected {
+            return Err("timing summaries do not match the manifest source shape".into());
+        }
+        if case.selected_elixir_files != case.parsed_elixir_files
+            || case.selected_elixir_bytes != case.parsed_elixir_bytes
+            || (case.selected_elixir_files > 0) != case.elixir_path_digest.is_some()
+        {
+            return Err("timing summaries have incomplete Elixir parse coverage".into());
+        }
     }
     let failed_samples = samples
         .iter()
@@ -359,7 +388,7 @@ fn render_html(evidence: &Evidence) -> String {
         );
         let _ = writeln!(
             html,
-            "<div class=\"table-wrap\" role=\"region\" tabindex=\"0\" aria-label=\"Exact timing summary for {}\"><table><thead><tr><th scope=\"col\">Command</th><th scope=\"col\">State</th><th scope=\"col\" class=\"num\">Median</th><th scope=\"col\" class=\"num\">MAD</th><th scope=\"col\" class=\"num\">Min–max</th><th scope=\"col\" class=\"num\">User</th><th scope=\"col\" class=\"num\">System</th><th scope=\"col\" class=\"num\">Samples</th></tr></thead><tbody>",
+            "<div class=\"table-wrap\" role=\"region\" tabindex=\"0\" aria-label=\"Exact timing summary for {}\"><table><thead><tr><th scope=\"col\">Command</th><th scope=\"col\">State</th><th scope=\"col\" class=\"num\">Median</th><th scope=\"col\" class=\"num\">MAD</th><th scope=\"col\" class=\"num\">Min–max</th><th scope=\"col\" class=\"num\">User</th><th scope=\"col\" class=\"num\">System</th><th scope=\"col\" class=\"num\">Peak RSS</th><th scope=\"col\" class=\"num\">Elixir parsed</th><th scope=\"col\" class=\"num\">Samples</th></tr></thead><tbody>",
             escape_html(&manifest.id)
         );
         for case in cases {
@@ -367,7 +396,7 @@ fn render_html(evidence: &Evidence) -> String {
             let is_focal = focal == Some((case.workload.as_str(), case.case.as_str()));
             let _ = writeln!(
                 html,
-                "<tr{}><th scope=\"row\"><code>{}</code></th><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}–{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}/{}</td></tr>",
+                "<tr{}><th scope=\"row\"><code>{}</code></th><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}–{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}/{} files<br>{}/{} bytes</td><td class=\"num\">{}/{}</td></tr>",
                 if is_focal { " class=\"focal-row\"" } else { "" },
                 escape_html(&case.case),
                 escape_html(&case.cache_state),
@@ -381,6 +410,13 @@ fn render_html(evidence: &Evidence) -> String {
                 case.system_seconds
                     .as_ref()
                     .map_or("n/a".into(), |metric| format_duration(metric.median)),
+                case.peak_rss_bytes
+                    .as_ref()
+                    .map_or("n/a".into(), |metric| format_bytes(metric.median as u64)),
+                case.parsed_elixir_files,
+                case.selected_elixir_files,
+                case.parsed_elixir_bytes,
+                case.selected_elixir_bytes,
                 case.successful_samples,
                 case.successful_samples + case.failed_samples
             );
@@ -410,13 +446,15 @@ fn render_html(evidence: &Evidence) -> String {
             .next()
             .unwrap_or("unavailable"),
     );
-    html.push_str("</dl>\n<h3>Workload provenance</h3>\n<div class=\"table-wrap\" role=\"region\" tabindex=\"0\" aria-label=\"Workload provenance\"><table><thead><tr><th scope=\"col\">Workload</th><th scope=\"col\">Tier</th><th scope=\"col\">Observed repository</th><th scope=\"col\">Observed revision</th><th scope=\"col\">Manifest digest</th></tr></thead><tbody>\n");
+    html.push_str("</dl>\n<h3>Workload provenance</h3>\n<div class=\"table-wrap\" role=\"region\" tabindex=\"0\" aria-label=\"Workload provenance\"><table><thead><tr><th scope=\"col\">Workload</th><th scope=\"col\">Tier</th><th scope=\"col\">Sources</th><th scope=\"col\">Bytes</th><th scope=\"col\">Observed repository</th><th scope=\"col\">Observed revision</th><th scope=\"col\">Manifest digest</th></tr></thead><tbody>\n");
     for manifest in &evidence.run.manifests {
         let _ = writeln!(
             html,
-            "<tr><th scope=\"row\">{}</th><td>{}</td><td>{}</td><td><code>{}</code></td><td><code>{}</code></td></tr>",
+            "<tr><th scope=\"row\">{}</th><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>{}</td><td><code>{}</code></td><td><code>{}</code></td></tr>",
             escape_html(&manifest.id),
             escape_html(&manifest.tier),
+            manifest.source_files,
+            format_bytes(manifest.source_bytes as u64),
             escape_html(&manifest.observed_repository),
             escape_html(&manifest.observed_revision),
             escape_html(&manifest.digest)
@@ -573,6 +611,16 @@ fn format_duration(seconds: f64) -> String {
         format!("{:.2} ms", seconds * 1_000.0)
     } else {
         format!("{:.3} ms", seconds * 1_000.0)
+    }
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1_048_576 {
+        format!("{:.2} MiB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1_024 {
+        format!("{:.1} KiB", bytes as f64 / 1_024.0)
+    } else {
+        format!("{bytes} B")
     }
 }
 

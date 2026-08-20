@@ -1,0 +1,13 @@
+[vault]
+docs = "docs"
+adr = "adr"
+
+[source]
+roots = ["lib", "test", "templates"]
+exclude = []
+
+[index]
+source = true
+
+[enforce]
+stages = ["commit", "push", "ci"]

@@ -200,6 +200,12 @@ and state.
 Elixir policies use `language: elixir` or its `language: ex` alias. Both names
 scan `.ex` and `.exs` files with the Elixir parser.
 
+criv also gives Elixir modules, protocols, implementations, functions, macros,
+guards, callbacks, directives, and calls first-class Source graph identities.
+It uses callable arity in canonical selectors. See
+[the Elixir source support guide](docs/elixir-support.md) for selector forms,
+short aliases, ambiguity, static call limits, and the no-Mix boundary.
+
 Use a filtered check to inspect policy diagnostics for one decision:
 
 ```sh

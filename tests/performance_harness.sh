@@ -46,10 +46,27 @@ run_harness >"$test_root/second.out"
 test "$(find "$test_root/results" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')" = "2"
 first_result="$(find "$test_root/results" -mindepth 1 -maxdepth 1 -type d | sort | head -1)"
 run_revision="$(jq -r .revision "$first_result/run.json")"
-jq -e '.schema == "criv.performance-summary.v2" and (.cases | length) == 2' \
+jq -e '
+  .schema == "criv.performance-summary.v2"
+  and (.cases | length) == 2
+  and all(.cases[];
+    .selected_source_files == 12
+    and .selected_source_bytes == 273948
+    and .selected_elixir_files == 0
+    and .parsed_elixir_files == 0
+    and has("peak_rss_bytes"))
+' \
   "$first_result/summary.json" >/dev/null
 test "$(wc -l <"$first_result/samples.jsonl" | tr -d ' ')" = "2"
-jq -e '.schema == "criv.performance-sample.v2" and has("measurement") == false' \
+jq -e '
+  .schema == "criv.performance-sample.v2"
+  and has("measurement") == false
+  and .selected_source_files == 12
+  and .selected_source_bytes == 273948
+  and .selected_elixir_files == 0
+  and .parsed_elixir_files == 0
+  and has("peak_rss_bytes")
+' \
   "$first_result/samples.jsonl" >/dev/null
 test "$(cut -f1 "$test_root/fake.log" | sort -u | wc -l | tr -d ' ')" -ge "8"
 
@@ -90,6 +107,7 @@ cargo run --locked --quiet -p criv-perf-harness --bin criv-perf-report -- \
 grep -q '<!doctype html>' "$test_root/report.html"
 grep -q 'role="img"' "$test_root/report.html"
 grep -q 'JSON evidence remains canonical' "$test_root/report.html"
+grep -q 'Peak RSS' "$test_root/report.html"
 grep -q '^## Performance report' "$test_root/report-summary.md"
 
 foreign_sample="$test_root/foreign-sample"

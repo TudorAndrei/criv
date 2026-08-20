@@ -426,6 +426,7 @@ jobs:
         if: needs.changes.outputs.performance == 'true'
         run: |
           bash tests/performance_harness.sh
+          bash tests/performance_elixir_workloads.sh
           bash tests/performance_git_note.sh
           bash tests/performance_release_gate_note.sh
           bash tests/hosted_release_scripts.sh

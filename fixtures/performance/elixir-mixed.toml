@@ -1,0 +1,24 @@
+schema = "criv.performance-workload.v1"
+id = "elixir-mixed"
+tier = "medium"
+observed_repository = "synthetic/elixir-mixed"
+observed_revision = "ADR-0120"
+observed_date = "2026-08-20"
+notes = 12
+decisions = 8
+docs = 4
+source_files = 24
+source_bytes = 524288
+symbols = 600
+note_links = 24
+source_references = 8
+policies = 1
+c4_artifacts = 1
+changed_source_files = 1
+changed_file_fraction = 0.041666666666666664
+
+[extensions]
+ex = 6
+exs = 6
+rs = 6
+ts = 6
