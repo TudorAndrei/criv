@@ -7,9 +7,9 @@ title: Releasing criv
 # Releasing criv
 
 The `Automatic release` GitHub Actions workflow owns release preparation,
-acceptance, and publication. A successful CI run for a qualifying push to
-`main` starts it. No local computer or self-hosted runner is part of the
-release boundary.
+quality checks, native builds, verification, and publication. A successful CI
+run for a qualifying push to `main` starts it. No local computer or self-hosted
+runner is part of the release boundary.
 
 The workflow uses Cocogitto to calculate the next SemVer version from
 Conventional Commits. It uses `cargo-release` to update all workspace Cargo
@@ -24,24 +24,20 @@ Preview the next automatically selected version:
 mise run release-plan
 ```
 
-The release workflow measures matched 100,000-entry Source workloads on all
-four native hosts. Hosted macOS also runs the 250,000-entry Vault and Markdown
-workloads and the live-watch gate. Ouro is an optional `mise run perf` workload
-and does not block publication.
-
-Each clean-build lane supplies the exact binary that enters the release. The
-workflow publishes a seven-day receipt to `refs/notes/criv-release-gates`,
-packages those measured bytes, verifies each archive on its native host, pushes
-both tags atomically, uploads a draft, adds provenance attestations, and then
+Each native build lane builds the exact release commit once and uploads that
+binary. The package job does not rebuild it. It records the commit, version,
+target, archive, byte size, and SHA-256 digest in `release-manifest.json`.
+Native jobs verify each archive, the binary digest and version, one-shot State
+publication, and operation without a Git executable. The workflow then pushes
+both tags atomically, uploads a draft, adds provenance attestations, and
 publishes it.
 
-The first release with default Elixir support uses the v0.9.0 pre-Elixir
-baseline. It permits `tree-sitter-elixir` as the only new normal package name
-and records the full binary-size change. It does not use an Elixir speed limit.
-Each native release binary must read and parse the complete `.ex` and `.exs`
-coverage set. Later releases compare with the last stable release that has the
-same Elixir evidence contract. Those later comparisons permit no new normal
-package name, no normal dependency-count increase, and no binary growth.
+Performance notes are separate, non-gating observations. Automatic release
+does not generate large synthetic workloads, compare a baseline, or collect
+repeated build samples. Use `mise run perf` for an explicit performance study.
+
+Workspace and CI tests require default Elixir support to read and parse the
+complete selected `.ex` and `.exs` coverage set. There is no Elixir speed limit.
 
 Release notes for this transition must state that the Elixir grammar is in the
 default binary. They must also state that criv reads configured `.ex` and
@@ -56,32 +52,22 @@ gh workflow run release.yml --ref main \
 ```
 
 The retry accepts an untagged prepared commit, matching tags, or a matching
-draft. It rejects tags that point to another commit. A receipt older than seven
-days causes the evidence to run again.
+draft. It rejects tags that point to another commit. Current workflow tools can
+package binaries and the VS Code package from an older prepared release commit.
 
-An automatic retry reads the evidence contract from the exact prepared commit.
-If that commit is older than the evidence-contract file, the workflow uses the
-pre-Elixir contract, the v0.9.0 adapter, and the matching artifact schema. It
-does not run Elixir-only coverage checks for that older commit. New workflow
-steps must not require files that were added after the prepared commit.
-
-Generated release workloads disable automatic Git maintenance and complete one
-synchronous `git gc` before measurement. This keeps `.git/objects` stable while
-the macOS copy-on-write snapshot is created.
-
-Download raw measured binaries and evidence from a run with:
+Download the exact native build artifacts from a run with:
 
 ```sh
 gh run list --workflow release.yml
 gh run download <run-id> \
-  --pattern 'release-evidence-*' \
-  --dir release-evidence
+  --pattern 'release-binary-*' \
+  --dir release-binaries
 ```
 
-The per-platform evidence, combined evidence bundle, and packaged release
-candidate remain as Actions artifacts for 90 days. Published archives,
-`SHA256SUMS.txt`, `release-gate.json`, and attestations remain with the GitHub
-release. Download them without an Actions run ID:
+The per-platform binaries and packaged release candidate remain as Actions
+artifacts for 90 days. Published archives, `SHA256SUMS.txt`,
+`release-manifest.json`, and attestations remain with the GitHub release.
+Download them without an Actions run ID:
 
 ```sh
 gh release download vX.Y.Z --dir dist

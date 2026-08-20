@@ -188,12 +188,12 @@ jobs:
           npm --prefix extensions/vscode-criv test
           xvfb-run -a npm --prefix extensions/vscode-criv run test:integration
 
-  measure:
-    name: Measure ${{ matrix.name }}
+  build:
+    name: Build ${{ matrix.name }}
     needs: prepare
     if: needs.prepare.outputs.release == 'true'
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 240
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -202,49 +202,28 @@ jobs:
             runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             executable_suffix: ""
-            primary: false
           - name: Linux ARM64
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             executable_suffix: ""
-            primary: false
           - name: macOS ARM64
             runner: macos-15
             target: aarch64-apple-darwin
             executable_suffix: ""
-            primary: true
           - name: Windows x86_64
             runner: windows-2025
             target: x86_64-pc-windows-msvc
             executable_suffix: .exe
-            primary: false
-
-    env:
-      GIT_CONFIG_COUNT: "4"
-      GIT_CONFIG_KEY_0: gc.auto
-      GIT_CONFIG_VALUE_0: "0"
-      GIT_CONFIG_KEY_1: gc.autoDetach
-      GIT_CONFIG_VALUE_1: "false"
-      GIT_CONFIG_KEY_2: maintenance.auto
-      GIT_CONFIG_VALUE_2: "false"
-      GIT_CONFIG_KEY_3: maintenance.autoDetach
-      GIT_CONFIG_VALUE_3: "false"
 
     steps:
       - name: Checkout exact release commit
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.prepare.outputs.commit }}
-          fetch-depth: 0
           persist-credentials: false
 
-      - name: Verify commit and install Rust
-        env:
-          EXPECTED_COMMIT: ${{ needs.prepare.outputs.commit }}
-        shell: bash
-        run: |
-          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
-          rustup toolchain install 1.97.1 --profile minimal --no-self-update
+      - name: Install Rust
+        run: rustup toolchain install 1.97.1 --profile minimal --no-self-update
 
       - name: Cache Cargo registry inputs
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -253,461 +232,91 @@ jobs:
             ~/.cargo/git/db
             ~/.cargo/registry/cache
             ~/.cargo/registry/index
-          key: release-evidence-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          key: release-build-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            release-evidence-${{ matrix.target }}-
+            release-build-${{ matrix.target }}-
 
-      - name: Run discovery contract corpus
-        shell: bash
-        run: |
-          cargo +1.97.1 test --locked --lib discovery::tests::
-
-      - name: Build evidence tools
+      - name: Build exact release binary
         env:
-          CARGO_TARGET_DIR: target/release-evidence/tool-target
-        shell: bash
-        run: |
-          cargo build --locked --release -p criv-perf-harness \
-            --bin criv-discovery-adapter \
-            --bin criv-discovery-baseline \
-            --bin criv-discovery-commands \
-            --bin criv-discovery-fixtures \
-            --bin criv-discovery-inventory \
-            --bin criv-discovery-snapshot
-          mkdir -p target/release-evidence/tools
-          for tool in criv-discovery-adapter criv-discovery-baseline criv-discovery-commands criv-discovery-fixtures criv-discovery-inventory criv-discovery-snapshot; do
-            cp "target/release-evidence/tool-target/release/${tool}${{ matrix.executable_suffix }}" \
-              "target/release-evidence/tools/${tool}${{ matrix.executable_suffix }}"
-          done
-          rm -rf target/release-evidence/tool-target
-
-      - name: Select compatible release baseline
-        env:
-          EXPECTED_COMMIT: ${{ needs.prepare.outputs.commit }}
-        shell: bash
-        run: |
-          mkdir -p target/release-evidence/evidence
-          baseline_revision="$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$EXPECTED_COMMIT^")"
-          candidate_contract="$(git show "$EXPECTED_COMMIT:scripts/performance/release-evidence-contract.txt" 2>/dev/null | tr -d '\r\n' || true)"
-          baseline_contract="$(git show "$baseline_revision:scripts/performance/release-evidence-contract.txt" 2>/dev/null | tr -d '\r\n' || true)"
-          baseline_root="target/release-evidence/baseline"
-          if [ -z "$candidate_contract" ]; then
-            candidate_contract="criv.release-evidence.pre-elixir.v1"
-          fi
-          if [ -z "$baseline_contract" ]; then
-            baseline_contract="criv.release-evidence.pre-elixir.v1"
-          fi
-          if [ "$baseline_revision" = v0.9.0 ] && \
-            [ "$baseline_contract" = criv.release-evidence.pre-elixir.v1 ] && \
-            [ "$candidate_contract" = criv.release-evidence.pre-elixir.v1 ]; then
-            transition="legacy-v0.9-adapter"
-            target/release-evidence/tools/criv-discovery-adapter${{ matrix.executable_suffix }} \
-              --repository-root . \
-              --revision "$baseline_revision" \
-              --output "$baseline_root"
-          elif [ "$baseline_contract" = "$candidate_contract" ]; then
-            transition="compatible-baseline"
-            git worktree add --detach "$baseline_root" "$baseline_revision"
-          elif [ "$baseline_revision" = v0.9.0 ] && \
-            [ "$baseline_contract" = criv.release-evidence.pre-elixir.v1 ] && \
-            [ "$candidate_contract" = criv.release-evidence.elixir.v1 ]; then
-            transition="elixir-baseline-reset"
-            target/release-evidence/tools/criv-discovery-adapter${{ matrix.executable_suffix }} \
-              --repository-root . \
-              --revision "$baseline_revision" \
-              --output "$baseline_root"
-          else
-            echo "unsupported release evidence transition from $baseline_contract to $candidate_contract" >&2
-            exit 1
-          fi
-          jq -n \
-            --arg baseline_revision "$baseline_revision" \
-            --arg baseline_contract "$baseline_contract" \
-            --arg candidate_contract "$candidate_contract" \
-            --arg transition "$transition" \
-            '{schema:"criv.release-baseline-selection.v1",baseline_revision:$baseline_revision,baseline_contract:$baseline_contract,candidate_contract:$candidate_contract,transition:$transition}' \
-            > target/release-evidence/evidence/baseline-selection.json
-          {
-            echo "CRIV_BASELINE_ROOT=$baseline_root"
-            echo "CRIV_BASELINE_REVISION=$baseline_revision"
-            echo "CRIV_BASELINE_CONTRACT=$baseline_contract"
-            echo "CRIV_CANDIDATE_CONTRACT=$candidate_contract"
-            echo "CRIV_EVIDENCE_TRANSITION=$transition"
-          } >>"$GITHUB_ENV"
-
-      - name: Measure 100k Source workload
-        env:
-          EXPECTED_COMMIT: ${{ needs.prepare.outputs.commit }}
-        shell: bash
-        run: |
-          workload=source-100000
-          root="target/release-evidence/workloads/$workload"
-          evidence="target/release-evidence/evidence/scaling/$workload"
-          mkdir -p "$(dirname "$root")" "$evidence"
-          target/release-evidence/tools/criv-discovery-fixtures${{ matrix.executable_suffix }} \
-            --manifest "fixtures/performance/discovery/$workload.toml" --output "$root"
-          git -C "$root" gc --quiet
-          target/release-evidence/tools/criv-discovery-inventory${{ matrix.executable_suffix }} \
-            --root "$root" --workload-id "$workload" \
-            --output "$evidence/workload-inventory.json" \
-            --summary-output "$evidence/workload-summary.json"
-          baseline_adapter_args=()
-          if [ -f "$CRIV_BASELINE_ROOT/discovery-adapter.json" ]; then
-            baseline_adapter_args=(--adapter-receipt "$CRIV_BASELINE_ROOT/discovery-adapter.json")
-          fi
-          target/release-evidence/tools/criv-discovery-baseline${{ matrix.executable_suffix }} \
-            --repository-root "$CRIV_BASELINE_ROOT" \
-            --workload-root "$root" --workload-inventory "$evidence/workload-inventory.json" \
-            "${baseline_adapter_args[@]}" \
-            --probe-label "$CRIV_BASELINE_REVISION" --profile source --profile source-candidates \
-            --samples 5 --results-root "$evidence/baseline"
-          target/release-evidence/tools/criv-discovery-baseline${{ matrix.executable_suffix }} \
-            --repository-root . \
-            --workload-root "$root" --workload-inventory "$evidence/workload-inventory.json" \
-            --probe-label "candidate-$EXPECTED_COMMIT" \
-            --profile source --profile source-candidates \
-            --samples 5 --results-root "$evidence/candidate"
-          rm -rf "$root"
-
-      - name: Measure primary 250k workloads
-        if: matrix.primary
-        env:
-          EXPECTED_COMMIT: ${{ needs.prepare.outputs.commit }}
-        shell: bash
-        run: |
-          measure_workload() {
-            workload="$1"
-            shift
-            root="target/release-evidence/workloads/$workload"
-            evidence="target/release-evidence/evidence/scaling/$workload"
-            mkdir -p "$(dirname "$root")" "$evidence"
-            target/release-evidence/tools/criv-discovery-fixtures \
-              --manifest "fixtures/performance/discovery/$workload.toml" --output "$root"
-            git -C "$root" gc --quiet
-            target/release-evidence/tools/criv-discovery-inventory \
-              --root "$root" --workload-id "$workload" \
-              --output "$evidence/workload-inventory.json" \
-              --summary-output "$evidence/workload-summary.json"
-            baseline_profiles=()
-            candidate_profiles=()
-            for profile in "$@"; do
-              baseline_profiles+=(--profile "$profile")
-              candidate_profiles+=(--profile "$profile")
-            done
-            baseline_adapter_args=()
-            if [ -f "$CRIV_BASELINE_ROOT/discovery-adapter.json" ]; then
-              baseline_adapter_args=(--adapter-receipt "$CRIV_BASELINE_ROOT/discovery-adapter.json")
-            fi
-            target/release-evidence/tools/criv-discovery-baseline \
-              --repository-root "$CRIV_BASELINE_ROOT" \
-              --workload-root "$root" --workload-inventory "$evidence/workload-inventory.json" \
-              "${baseline_adapter_args[@]}" \
-              --probe-label "$CRIV_BASELINE_REVISION" "${baseline_profiles[@]}" \
-              --samples 5 --results-root "$evidence/baseline"
-            target/release-evidence/tools/criv-discovery-baseline \
-              --repository-root . \
-              --workload-root "$root" --workload-inventory "$evidence/workload-inventory.json" \
-              --probe-label "candidate-$EXPECTED_COMMIT" "${candidate_profiles[@]}" \
-              --samples 5 --results-root "$evidence/candidate"
-            rm -rf "$root"
-          }
-          measure_workload vault-250000 vault
-          measure_workload markdown-250000 markdown
-
-      - name: Measure clean builds and stage exact binaries
-        env:
-          CANDIDATE_ROOT: ${{ github.workspace }}
-          EXPECTED_COMMIT: ${{ needs.prepare.outputs.commit }}
           EXECUTABLE_SUFFIX: ${{ matrix.executable_suffix }}
           RELEASE_TARGET: ${{ matrix.target }}
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $output = Join-Path $env:GITHUB_WORKSPACE "target/release-evidence/evidence/artifacts"
-          New-Item -ItemType Directory -Force -Path $output | Out-Null
-          if (Test-Path Env:RUSTC_WRAPPER) { Remove-Item Env:RUSTC_WRAPPER }
-          $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { Join-Path ([Environment]::GetFolderPath("UserProfile")) ".cargo" }
-          $registryInputsPresent = Test-Path (Join-Path $cargoHome "registry")
-
-          function Normal-DependencyLines([string]$SourceRoot) {
-            Push-Location $SourceRoot
-            try {
-              $lines = cargo tree --locked --package criv --edges normal --prefix none
-              if ($LASTEXITCODE -ne 0) { throw "cargo tree failed" }
-              return ,@($lines | ForEach-Object { $_ -replace ' \(\*\)$', '' } | Where-Object { $_ } | Sort-Object -Unique)
-            } finally { Pop-Location }
-          }
-
-          function Normal-PackageNames([string[]]$Lines) {
-            return ,@($Lines | ForEach-Object { ($_ -split ' ')[0] } | Sort-Object -Unique)
-          }
-
-          function Measure-OneCleanBuild([string]$SourceRoot, [string]$Label, [int]$Sample) {
-            $targetDirectory = Join-Path $env:RUNNER_TEMP "criv-$Label-build-$Sample"
-            if (Test-Path $targetDirectory) { Remove-Item -Recurse -Force $targetDirectory }
-            $env:CARGO_TARGET_DIR = $targetDirectory
-            Push-Location $SourceRoot
-            try {
-              $timer = [System.Diagnostics.Stopwatch]::StartNew()
-              cargo build --locked --release --target $env:RELEASE_TARGET --package criv --bin criv
-              $timer.Stop()
-              if ($LASTEXITCODE -ne 0) { throw "$Label clean build $Sample failed" }
-            } finally { Pop-Location }
-            if ($Sample -eq 3) {
-              $binary = Join-Path $targetDirectory "$($env:RELEASE_TARGET)/release/criv$($env:EXECUTABLE_SUFFIX)"
-              Copy-Item $binary (Join-Path $output "$Label-criv$($env:EXECUTABLE_SUFFIX)")
-            }
-            Remove-Item -Recurse -Force $targetDirectory
-            return $timer.Elapsed.TotalSeconds
-          }
-
-          $baselineDependencyLines = @(Normal-DependencyLines $env:CRIV_BASELINE_ROOT)
-          $candidateDependencyLines = @(Normal-DependencyLines $env:CANDIDATE_ROOT)
-          $baselineDependencies = $baselineDependencyLines.Count
-          $candidateDependencies = $candidateDependencyLines.Count
-          $baselinePackageNames = @(Normal-PackageNames $baselineDependencyLines)
-          $candidatePackageNames = @(Normal-PackageNames $candidateDependencyLines)
-          $baselineTimes = @()
-          $candidateTimes = @()
-          for ($sample = 1; $sample -le 3; $sample++) {
-            $labels = if ($sample % 2 -eq 0) { @("candidate", "baseline") } else { @("baseline", "candidate") }
-            foreach ($label in $labels) {
-              if ($label -eq "baseline") {
-                $baselineTimes += Measure-OneCleanBuild $env:CRIV_BASELINE_ROOT $label $sample
-              } else {
-                $candidateTimes += Measure-OneCleanBuild $env:CANDIDATE_ROOT $label $sample
-              }
-            }
-          }
-          $baselineBinary = Join-Path $output "baseline-criv$($env:EXECUTABLE_SUFFIX)"
-          $candidateBinary = Join-Path $output "candidate-criv$($env:EXECUTABLE_SUFFIX)"
-          $artifactSchema = if ($env:CRIV_CANDIDATE_CONTRACT -eq "criv.release-evidence.pre-elixir.v1") {
-            "criv.discovery-remote-artifact.v2"
-          } else {
-            "criv.discovery-remote-artifact.v3"
-          }
-          $manifest = [ordered]@{
-            schema = $artifactSchema
-            commit = $env:EXPECTED_COMMIT
-            target = $env:RELEASE_TARGET
-            baseline_revision = $env:CRIV_BASELINE_REVISION
-            baseline_evidence_contract = $env:CRIV_BASELINE_CONTRACT
-            candidate_evidence_contract = $env:CRIV_CANDIDATE_CONTRACT
-            baseline_normal_dependencies = $baselineDependencies
-            candidate_normal_dependencies = $candidateDependencies
-            baseline_normal_package_names = $baselinePackageNames
-            candidate_normal_package_names = $candidatePackageNames
-            baseline_binary = [System.IO.Path]::GetFileName($baselineBinary)
-            baseline_binary_bytes = (Get-Item $baselineBinary).Length
-            baseline_binary_digest = (Get-FileHash -Algorithm SHA256 $baselineBinary).Hash.ToLowerInvariant()
-            baseline_build_seconds = $baselineTimes
-            candidate_binary = [System.IO.Path]::GetFileName($candidateBinary)
-            candidate_binary_bytes = (Get-Item $candidateBinary).Length
-            candidate_binary_sha256 = (Get-FileHash -Algorithm SHA256 $candidateBinary).Hash.ToLowerInvariant()
-            candidate_build_seconds = $candidateTimes
-            clean_builds = $true
-            compiler_cache_disabled = -not [bool]$env:RUSTC_WRAPPER
-            registry_inputs_present = $registryInputsPresent
-          }
-          $manifest | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 (Join-Path $output "artifact.json")
-
-      - name: Prove complete Elixir file coverage
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          if ($env:CRIV_CANDIDATE_CONTRACT -ne "criv.release-evidence.elixir.v1") {
-            Write-Host "Skipping Elixir coverage for $env:CRIV_CANDIDATE_CONTRACT"
-            exit 0
-          }
-          $artifactRoot = Join-Path $env:GITHUB_WORKSPACE "target/release-evidence/evidence/artifacts"
-          $candidate = Join-Path $artifactRoot "candidate-criv${{ matrix.executable_suffix }}"
-          $coverageRoot = Join-Path $env:GITHUB_WORKSPACE "target/release-evidence/elixir-coverage"
-          $repository = Join-Path $coverageRoot "repo"
-          New-Item -ItemType Directory -Force -Path $repository | Out-Null
-          Push-Location $repository
-          try {
-            & $candidate init --no-skills
-            if ($LASTEXITCODE -ne 0) { throw "candidate init failed" }
-            New-Item -ItemType Directory -Force -Path lib, src | Out-Null
-            @(
-              "defmodule Coverage.Ex do",
-              "  def first(), do: :first",
-              "  def last(value), do: value",
-              "end"
-            ) | Set-Content -Encoding utf8 lib/coverage.ex
-            @(
-              "defmodule Coverage.Exs do",
-              "  def first(), do: :first",
-              "  def last(value), do: value",
-              "end"
-            ) | Set-Content -Encoding utf8 src/coverage.exs
-            & $candidate watch --once
-            if ($LASTEXITCODE -ne 0) { throw "candidate Elixir coverage build failed" }
-            $statePath = Join-Path $repository ".criv/state.json"
-            $state = Get-Content -Raw $statePath | ConvertFrom-Json
-            $selectedPaths = @("lib/coverage.ex", "src/coverage.exs")
-            $sourcePaths = @($state.'source-index' | ForEach-Object { $_.path })
-            $nodeIds = @($state.graph.nodes | ForEach-Object { $_.id })
-            $expectedSymbols = [ordered]@{
-              "lib/coverage.ex" = "symbol:lib/coverage.ex#module:Coverage.Ex/fn:last/1"
-              "src/coverage.exs" = "symbol:src/coverage.exs#module:Coverage.Exs/fn:last/1"
-            }
-            $parsedPaths = @()
-            $parsedBytes = 0
-            foreach ($path in $selectedPaths) {
-              if ($sourcePaths -contains $path -and $nodeIds -contains $expectedSymbols[$path]) {
-                $parsedPaths += $path
-                $parsedBytes += (Get-Item $path).Length
-              }
-            }
-            $selectedBytes = (Get-Item $selectedPaths | Measure-Object -Property Length -Sum).Sum
-            $coverage = [ordered]@{
-              selected_paths = $selectedPaths
-              parsed_paths = $parsedPaths
-              selected_bytes = $selectedBytes
-              parsed_bytes = $parsedBytes
-              state_sha256 = (Get-FileHash -Algorithm SHA256 $statePath).Hash.ToLowerInvariant()
-            }
-          } finally {
-            Pop-Location
-          }
-          $manifestPath = Join-Path $artifactRoot "artifact.json"
-          $manifest = Get-Content -Raw $manifestPath | ConvertFrom-Json
-          $manifest | Add-Member -NotePropertyName elixir_coverage -NotePropertyValue $coverage
-          $manifest | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 $manifestPath
-
-      - name: Measure live-watch convergence
-        if: matrix.primary
-        env:
-          EXPECTED_COMMIT: ${{ needs.prepare.outputs.commit }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         shell: bash
         run: |
-          workload=source-10000
-          root="target/release-evidence/workloads/$workload"
-          evidence="target/release-evidence/evidence/live"
-          mkdir -p "$(dirname "$root")" "$evidence/candidate" "$RUNNER_TEMP/criv-live-samples"
-          target/release-evidence/tools/criv-discovery-fixtures \
-            --manifest "fixtures/performance/discovery/$workload.toml" --output "$root"
-          git -C "$root" gc --quiet
-          target/release-evidence/tools/criv-discovery-inventory \
-            --root "$root" --workload-id "$workload" \
-            --output "$evidence/workload-inventory.json" \
-            --summary-output "$evidence/workload-summary.json"
-          target/release-evidence/tools/criv-discovery-commands \
-            --binary target/release-evidence/evidence/artifacts/candidate-criv \
-            --binary-label "candidate-$EXPECTED_COMMIT" \
-            --snapshot-executable target/release-evidence/tools/criv-discovery-snapshot \
-            --workload-root "$root" --workload-inventory "$evidence/workload-inventory.json" \
-            --sample-root "$RUNNER_TEMP/criv-live-samples" \
-            --live-mutation-directory src/generated \
-            --case watch-live-ready --samples 5 \
-            --minimum-free-gib 10 --maximum-snapshot-allocation-gib 5 \
-            --results-root "$evidence/candidate"
-          rm -rf "$root"
+          cargo build --locked --release --target "$RELEASE_TARGET" --package criv --bin criv
+          mkdir -p target/release-build
+          cp "target/$RELEASE_TARGET/release/criv$EXECUTABLE_SUFFIX" \
+            "target/release-build/criv$EXECUTABLE_SUFFIX"
+          test "$("target/release-build/criv$EXECUTABLE_SUFFIX" --version)" = "criv $RELEASE_VERSION"
 
-      - name: Record hosted evidence identity
-        if: always()
-        env:
-          EXPECTED_COMMIT: ${{ needs.prepare.outputs.commit }}
-          RELEASE_TARGET: ${{ matrix.target }}
-        shell: pwsh
-        run: |
-          $evidence = "target/release-evidence/evidence"
-          New-Item -ItemType Directory -Force $evidence | Out-Null
-          $identity = [ordered]@{
-            schema = "criv.discovery-remote-evidence.v2"
-            commit = $env:EXPECTED_COMMIT
-            target = $env:RELEASE_TARGET
-            run_id = "${{ github.run_id }}"
-            run_attempt = "${{ github.run_attempt }}"
-            repository = "${{ github.repository }}"
-          }
-          $identity | ConvertTo-Json | Set-Content -Encoding utf8 "$evidence/remote.json"
-          $adapter = "target/release-evidence/adapter/discovery-adapter.json"
-          if (Test-Path $adapter) {
-            Copy-Item $adapter "$evidence/discovery-adapter.json"
-          }
-
-      - name: Upload raw evidence and measured binary
-        if: always()
+      - name: Upload exact release binary
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: release-evidence-${{ matrix.target }}-${{ needs.prepare.outputs.commit }}
-          path: target/release-evidence/evidence
+          name: release-binary-${{ matrix.target }}-${{ needs.prepare.outputs.commit }}
+          path: target/release-build/criv${{ matrix.executable_suffix }}
           if-no-files-found: error
           retention-days: 90
 
-  aggregate:
-    name: Accept evidence and package release
+  package:
+    name: Package release
     needs:
       - prepare
       - quality
-      - measure
+      - build
     if: needs.prepare.outputs.release == 'true'
     runs-on: ubuntu-24.04
-    permissions:
-      contents: write
 
     steps:
-      - name: Checkout exact release commit
+      - name: Checkout current release tools
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Checkout exact release source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.prepare.outputs.commit }}
-          fetch-depth: 0
+          path: release-source
           persist-credentials: false
 
-      - name: Configure receipt publication credentials
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh auth setup-git
-
-      - name: Download hosted evidence
+      - name: Download exact release binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
-          pattern: release-evidence-*-${{ needs.prepare.outputs.commit }}
-          path: downloaded-evidence
+          pattern: release-binary-*-${{ needs.prepare.outputs.commit }}
+          path: downloaded-binaries
 
-      - name: Arrange evidence by target
+      - name: Arrange exact release binaries
         env:
           COMMIT: ${{ needs.prepare.outputs.commit }}
         shell: bash
         run: |
           mkdir -p bundle
           for target in aarch64-apple-darwin aarch64-unknown-linux-gnu x86_64-pc-windows-msvc x86_64-unknown-linux-gnu; do
-            source="downloaded-evidence/release-evidence-$target-$COMMIT"
-            test -d "$source"
-            mv "$source" "bundle/$target"
+            suffix=""
+            if [ "$target" = x86_64-pc-windows-msvc ]; then
+              suffix=".exe"
+            fi
+            source="downloaded-binaries/release-binary-$target-$COMMIT/criv$suffix"
+            test -f "$source"
+            mkdir -p "bundle/$target"
+            mv "$source" "bundle/$target/criv$suffix"
           done
 
-      - name: Assemble and verify release receipt
-        env:
-          COMMIT: ${{ needs.prepare.outputs.commit }}
-        run: |
-          scripts/performance/assemble-hosted-release-gates.sh bundle "$COMMIT" bundle/gate-input.json
-          cargo run --locked --release -p criv-perf-harness --bin criv-discovery-gate -- \
-            --input bundle/gate-input.json --output bundle/release-gate.json
-          scripts/performance/publish-release-gate-note.sh bundle/release-gate.json "$COMMIT" origin
-
-      - name: Build VS Code package
+      - name: Build VS Code package from exact release source
+        working-directory: release-source
         run: |
           npm ci
           npm --prefix extensions/vscode-criv run package
 
-      - name: Package exact measured binaries
+      - name: Package exact release binaries
         env:
+          COMMIT: ${{ needs.prepare.outputs.commit }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           scripts/package-release-assets.sh \
-            bundle bundle/release-gate.json extensions/vscode-criv/vscode-criv.vsix \
-            "$VERSION" dist
-
-      - name: Upload complete evidence bundle
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: release-evidence-bundle-${{ needs.prepare.outputs.commit }}
-          path: bundle
-          if-no-files-found: error
-          retention-days: 90
+            bundle release-source/extensions/vscode-criv/vscode-criv.vsix \
+            "$VERSION" "$COMMIT" dist
 
       - name: Upload release candidate assets
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -721,7 +330,7 @@ jobs:
     name: Verify ${{ matrix.target }} archive
     needs:
       - prepare
-      - aggregate
+      - package
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -749,7 +358,6 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ needs.prepare.outputs.commit }}
-          fetch-depth: 0
           persist-credentials: false
 
       - name: Download release candidate
@@ -770,7 +378,7 @@ jobs:
           (cd dist && shasum -a 256 --check SHA256SUMS.txt)
           mkdir extracted
           tar -C extracted -xzf "dist/$RELEASE_ARCHIVE"
-          expected="$(jq -r --arg target "$RELEASE_TARGET" '.artifacts[] | select(.target == $target) | .sha256' dist/release-gate.json)"
+          expected="$(jq -r --arg target "$RELEASE_TARGET" '.artifacts[] | select(.target == $target) | .sha256' dist/release-manifest.json)"
           actual="$(shasum -a 256 "extracted/$RELEASE_BINARY" | awk '{print $1}')"
           test "$actual" = "$expected"
           test "$("extracted/$RELEASE_BINARY" --version)" = "criv $RELEASE_VERSION"
@@ -794,11 +402,11 @@ jobs:
             if ($actual -ne $digest) { throw "checksum mismatch: $name" }
           }
           Expand-Archive -Path "dist/$env:RELEASE_ARCHIVE" -DestinationPath extracted
-          $receipt = Get-Content dist/release-gate.json | ConvertFrom-Json
-          $expected = ($receipt.artifacts | Where-Object target -eq $env:RELEASE_TARGET).sha256
+          $manifest = Get-Content dist/release-manifest.json | ConvertFrom-Json
+          $expected = ($manifest.artifacts | Where-Object target -eq $env:RELEASE_TARGET).sha256
           $binary = "extracted/$env:RELEASE_BINARY"
           $actual = (Get-FileHash -Algorithm SHA256 $binary).Hash.ToLowerInvariant()
-          if ($actual -ne $expected) { throw "accepted binary digest mismatch" }
+          if ($actual -ne $expected) { throw "release binary digest mismatch" }
           if ((& $binary --version) -ne "criv $env:RELEASE_VERSION") { throw "release version mismatch" }
           $binary = (Resolve-Path $binary).Path
           & $binary watch --once
@@ -887,7 +495,7 @@ jobs:
             dist/criv-*.tar.gz
             dist/criv-*.zip
             dist/SHA256SUMS.txt
-            dist/release-gate.json
+            dist/release-manifest.json
 
       - name: Verify and publish draft
         if: steps.draft.outputs.published != 'true'
@@ -896,7 +504,7 @@ jobs:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
         shell: bash
         run: |
-          expected='["SHA256SUMS.txt","criv-aarch64-apple-darwin.tar.gz","criv-aarch64-unknown-linux-gnu.tar.gz","criv-x86_64-pc-windows-msvc.zip","criv-x86_64-unknown-linux-gnu.tar.gz","release-gate.json"]'
+          expected='["SHA256SUMS.txt","criv-aarch64-apple-darwin.tar.gz","criv-aarch64-unknown-linux-gnu.tar.gz","criv-x86_64-pc-windows-msvc.zip","criv-x86_64-unknown-linux-gnu.tar.gz","release-manifest.json"]'
           actual="$(gh release view "$RELEASE_TAG" --json assets --jq '[.assets[].name] | sort')"
           test "$actual" = "$expected"
           test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
