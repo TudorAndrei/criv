@@ -934,13 +934,11 @@ fn project_relationship(
         _ => source_graph.relationship_target_label(&symbol.id, relationship),
     };
     let resolved = source_graph.resolve_relationship(&symbol.id, relationship);
-    if let Some(target) = resolved.as_ref().and_then(|target| {
-        source_graph
-            .symbols()
-            .find(|symbol| &symbol.id == target)
-            .map(|symbol| symbol.name.clone())
-    }) {
-        dependencies.call_targets.insert(target);
+    if let Some(target) = resolved
+        .as_ref()
+        .and_then(|target| source_graph.symbol_name(target))
+    {
+        dependencies.call_targets.insert(target.to_string());
     } else if let RelationshipTarget::Callable { name, .. } = &relationship.target {
         dependencies.call_targets.insert(name.clone());
     } else if let RelationshipTarget::Module { module, .. } = &relationship.target {

@@ -70,6 +70,33 @@ pub(crate) struct SourceGraph {
     #[serde(skip)]
     changed_files: Vec<String>,
     symbol_index: BTreeMap<String, Vec<SymbolId>>,
+    #[serde(skip)]
+    relationship_indexes: RelationshipIndexes,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct RelationshipIndexes {
+    modules: BTreeMap<String, IndexedModule>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct IndexedModule {
+    symbols: Vec<SymbolLocation>,
+    callables: Vec<IndexedCallable>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SymbolLocation {
+    path: String,
+    index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct IndexedCallable {
+    name: String,
+    arity: usize,
+    location: SymbolLocation,
+    kind: SymbolKind,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -501,7 +528,8 @@ pub(crate) fn load_cached(root: &Path) -> Option<SourceGraphBuild> {
     let contents = read_optional_to_string_in(root, Path::new(".criv/source-graph.json"))
         .ok()
         .flatten()?;
-    let cache = serde_json::from_str::<GraphCacheFile>(&contents).ok()?;
+    let mut cache = serde_json::from_str::<GraphCacheFile>(&contents).ok()?;
+    cache.graph.rebuild_relationship_indexes();
     (cache.schema == GRAPH_CACHE_SCHEMA).then_some(SourceGraphBuild {
         graph: cache.graph,
         cache: CacheDisposition::Clean,
@@ -710,7 +738,83 @@ impl SourceGraph {
             graph.changed_files.sort();
             graph.changed_files.dedup();
         }
+        graph.rebuild_relationship_indexes();
         Ok(graph)
+    }
+
+    fn rebuild_relationship_indexes(&mut self) {
+        let mut indexes = RelationshipIndexes::default();
+        for (path, file) in &self.files {
+            for (index, symbol) in file.symbols.iter().enumerate() {
+                let Some(SymbolOwner::Module { name: module }) = symbol.owner.as_ref() else {
+                    continue;
+                };
+                let module = indexes.modules.entry(module.clone()).or_default();
+                let location = SymbolLocation {
+                    path: path.clone(),
+                    index,
+                };
+                if symbol.arity.is_none() {
+                    module.symbols.push(location.clone());
+                }
+                if let Some(arity) = symbol.arity
+                    && elixir_callable_identity_matches(symbol, &symbol.name, arity)
+                {
+                    module.callables.push(IndexedCallable {
+                        name: symbol.name.clone(),
+                        arity,
+                        location,
+                        kind: symbol.kind,
+                    });
+                }
+            }
+        }
+        for module in indexes.modules.values_mut() {
+            module.callables.sort_by(|left, right| {
+                (
+                    &left.name,
+                    left.arity,
+                    &left.location.path,
+                    left.location.index,
+                )
+                    .cmp(&(
+                        &right.name,
+                        right.arity,
+                        &right.location.path,
+                        right.location.index,
+                    ))
+            });
+        }
+        self.relationship_indexes = indexes;
+    }
+
+    fn indexed_callables(&self, module: &str, name: &str, arity: usize) -> &[IndexedCallable] {
+        let Some(module) = self.relationship_indexes.modules.get(module) else {
+            return &[];
+        };
+        let start = module.callables.partition_point(|callable| {
+            callable.name.as_str() < name || (callable.name == name && callable.arity < arity)
+        });
+        let count = module.callables[start..]
+            .partition_point(|callable| callable.name == name && callable.arity == arity);
+        &module.callables[start..start + count]
+    }
+
+    fn symbol_at(&self, location: &SymbolLocation) -> Option<&Symbol> {
+        self.files
+            .get(&location.path)
+            .and_then(|file| file.symbols.get(location.index))
+    }
+
+    fn unique_locations<'a>(
+        &self,
+        locations: impl IntoIterator<Item = &'a SymbolLocation>,
+    ) -> Option<SymbolId> {
+        unique_symbol_ids(
+            locations
+                .into_iter()
+                .filter_map(|location| self.symbol_at(location).map(|symbol| &symbol.id)),
+        )
     }
 
     fn resolve_symbol_result(&self, query: &str) -> SymbolResolution {
@@ -886,13 +990,13 @@ impl SourceGraph {
                     relationship.line,
                     relationship.site,
                 );
-                unique_symbol(self.symbols().filter(|symbol| {
-                    symbol.arity.is_none()
-                        && symbol.owner.as_ref().is_some_and(|owner| match owner {
-                            SymbolOwner::Module { name } => name == &module,
-                            SymbolOwner::Implementation { .. } => false,
-                        })
-                }))
+                self.unique_locations(
+                    self.relationship_indexes
+                        .modules
+                        .get(&module)
+                        .into_iter()
+                        .flat_map(|module| &module.symbols),
+                )
             }
             RelationshipTarget::Callable {
                 module,
@@ -907,10 +1011,10 @@ impl SourceGraph {
                         relationship.line,
                         relationship.site,
                     );
-                    return unique_symbol(
-                        self.symbols().filter(|symbol| {
-                            elixir_callable_matches(symbol, &module, name, *arity)
-                        }),
+                    return self.unique_locations(
+                        self.indexed_callables(&module, name, *arity)
+                            .iter()
+                            .map(|callable| &callable.location),
                     );
                 }
 
@@ -939,20 +1043,24 @@ impl SourceGraph {
                     name,
                     *arity,
                 ) {
-                    candidates.extend(self.symbols().filter(|symbol| {
-                        elixir_callable_matches(symbol, &module, name, *arity)
-                            && import_kind_allows(
-                                file,
-                                caller_symbol.owner.as_ref(),
-                                &module,
-                                relationship.line,
-                                relationship.site,
-                                (name, *arity),
-                                symbol.kind,
-                            )
-                    }));
+                    candidates.extend(
+                        self.indexed_callables(&module, name, *arity)
+                            .iter()
+                            .filter(|callable| {
+                                import_kind_allows(
+                                    file,
+                                    caller_symbol.owner.as_ref(),
+                                    &module,
+                                    relationship.line,
+                                    relationship.site,
+                                    (name, *arity),
+                                    callable.kind,
+                                )
+                            })
+                            .map(|callable| &callable.location),
+                    );
                 }
-                unique_symbol(candidates)
+                self.unique_locations(candidates)
             }
         }
     }
@@ -1014,6 +1122,10 @@ impl SourceGraph {
         self.files
             .get(&id.path)
             .and_then(|file| file.symbols.iter().find(|symbol| &symbol.id == id))
+    }
+
+    pub(crate) fn symbol_name(&self, id: &SymbolId) -> Option<&str> {
+        self.symbol(id).map(|symbol| symbol.name.as_str())
     }
 }
 
@@ -1128,11 +1240,8 @@ fn symbol_resolution(mut matches: Vec<SymbolId>) -> SymbolResolution {
     }
 }
 
-fn unique_symbol<'a>(symbols: impl IntoIterator<Item = &'a Symbol>) -> Option<SymbolId> {
-    let mut matches = symbols
-        .into_iter()
-        .map(|symbol| symbol.id.clone())
-        .collect::<Vec<_>>();
+fn unique_symbol_ids<'a>(ids: impl IntoIterator<Item = &'a SymbolId>) -> Option<SymbolId> {
+    let mut matches = ids.into_iter().cloned().collect::<Vec<_>>();
     matches.sort();
     matches.dedup();
     (matches.len() == 1).then(|| matches.remove(0))
@@ -1145,14 +1254,6 @@ fn elixir_callable_identity_matches(symbol: &Symbol, name: &str, arity: usize) -
             symbol.kind,
             SymbolKind::Function | SymbolKind::Macro | SymbolKind::Guard
         )
-}
-
-fn elixir_callable_matches(symbol: &Symbol, module: &str, name: &str, arity: usize) -> bool {
-    elixir_callable_identity_matches(symbol, name, arity)
-        && symbol.owner.as_ref().is_some_and(|owner| match owner {
-            SymbolOwner::Module { name } => name == module,
-            SymbolOwner::Implementation { .. } => false,
-        })
 }
 
 fn directive_is_active(
@@ -2489,6 +2590,7 @@ mod tests {
             }
         }
         graph.files.insert(file.path.clone(), file);
+        graph.rebuild_relationship_indexes();
         graph
     }
 
@@ -3488,6 +3590,64 @@ end
                 "lib/relationships.ex#module:Root.Proto".to_string(),
             ])
         );
+    }
+
+    #[test]
+    fn relationship_indexes_restore_from_cache_and_keep_cross_file_ambiguity() {
+        fn resolved_target(graph: &SourceGraph) -> Option<String> {
+            let caller = graph
+                .resolve_symbol("lib/caller.ex#module:Caller/fn:run/0")
+                .unwrap();
+            let relationship = graph
+                .symbol(&caller)
+                .unwrap()
+                .relationships
+                .first()
+                .unwrap();
+            graph
+                .resolve_relationship(&caller, relationship)
+                .map(|target| target.display())
+        }
+
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("lib")).unwrap();
+        fs::write(
+            root.path().join("lib/caller.ex"),
+            "defmodule Caller do\n  def run(), do: Target.run()\nend\n",
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("lib/target.ex"),
+            "defmodule Target do\n  def run(), do: :ok\nend\n",
+        )
+        .unwrap();
+        let paths = vec!["lib/caller.ex".into(), "lib/target.ex".into()];
+        let built = SourceGraphBuild::build_incremental(root.path(), &paths, None).unwrap();
+        assert_eq!(
+            resolved_target(built.graph()),
+            Some("lib/target.ex#module:Target/fn:run/0".into())
+        );
+
+        built.publish(root.path()).unwrap();
+        let loaded = load_cached(root.path()).unwrap();
+        assert_eq!(
+            resolved_target(loaded.graph()),
+            Some("lib/target.ex#module:Target/fn:run/0".into())
+        );
+
+        fs::write(
+            root.path().join("lib/duplicate.ex"),
+            "defmodule Target do\n  def run(), do: :duplicate\nend\n",
+        )
+        .unwrap();
+        let paths = vec![
+            "lib/caller.ex".into(),
+            "lib/duplicate.ex".into(),
+            "lib/target.ex".into(),
+        ];
+        let ambiguous =
+            SourceGraphBuild::build_incremental(root.path(), &paths, Some(&loaded)).unwrap();
+        assert_eq!(resolved_target(ambiguous.graph()), None);
     }
 
     #[test]
