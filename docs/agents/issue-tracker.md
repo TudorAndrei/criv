@@ -55,6 +55,22 @@ of the defect, then `Evidence` with `file:line` citations, `Impact`, a
 non-trivial. A finding without evidence someone else can check is not ready to
 file.
 
+## Deliver a ticket batch to main
+
+Do not push each completed ticket directly to `main`. Keep one scoped
+Conventional Commit for each ticket on one integration branch. Run the required
+checks for the complete batch, then merge or push the batch to `main` one time.
+
+Each successful CI run for a push to `main` starts the `Automatic release`
+workflow. That workflow permits one active run and one pending run. If a new run
+enters the same concurrency group, GitHub cancels the older pending run and
+keeps the newest pending run. The `cancel-in-progress: false` setting protects
+the active run only.
+
+Do not start another normal delivery to `main` while an automatic release is
+active. Wait for the release to finish. An urgent repair can be an exception,
+but state the reason before the push.
+
 ## Closing an issue
 
 Terminal outcomes are decisions, and decisions in this repository live in
