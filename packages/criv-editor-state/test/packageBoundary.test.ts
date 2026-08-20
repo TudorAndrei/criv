@@ -6,7 +6,13 @@ test("keeps the editor State package free of host and model dependencies", async
   const sourceRoot = new URL("../src/", import.meta.url);
   const source = (await readSourceFiles(sourceRoot)).join("\n");
 
-  for (const forbidden of ["@criv/likec4", "likec4/", 'from "vscode"', 'from "obsidian"', 'from "node:fs']) {
+  for (const forbidden of [
+    "@criv/likec4",
+    "likec4/",
+    'from "vscode"',
+    'from "obsidian"',
+    'from "node:fs',
+  ]) {
     assert.equal(source.includes(forbidden), false, `forbidden shared State import: ${forbidden}`);
   }
 });

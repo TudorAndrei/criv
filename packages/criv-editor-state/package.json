@@ -9,10 +9,15 @@
   },
   "scripts": {
     "check-types": "tsc --noEmit",
+    "format": "oxfmt --write src test",
+    "format:check": "oxfmt --check src test",
+    "lint": "oxlint src test",
     "test": "node --test test/*.test.ts"
   },
   "devDependencies": {
     "@types/node": "26.0.1",
+    "oxfmt": "0.56.0",
+    "oxlint": "1.71.0",
     "typescript": "6.0.3"
   }
 }

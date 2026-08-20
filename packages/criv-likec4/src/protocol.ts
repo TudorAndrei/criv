@@ -28,7 +28,9 @@ export function preferredLikeC4ViewId(
       return false;
     }
     const sourcePath = normalizePath(view.sourcePath);
-    return normalizedDocumentPath === sourcePath || normalizedDocumentPath.endsWith(`/${sourcePath}`);
+    return (
+      normalizedDocumentPath === sourcePath || normalizedDocumentPath.endsWith(`/${sourcePath}`)
+    );
   })?.id;
 }
 

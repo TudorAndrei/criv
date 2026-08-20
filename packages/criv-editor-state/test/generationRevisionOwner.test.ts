@@ -9,13 +9,40 @@ test("orders ready replacement, failure clearing, and recovery by State generati
   const second = new FakeRevision("second");
   const recovered = new FakeRevision("recovered");
 
-  assert.equal((await owner.replace(1, async () => first, (value) => value.name)).kind, "committed");
-  assert.equal((await owner.replace(2, async () => second, (value) => value.name)).kind, "committed");
+  assert.equal(
+    (
+      await owner.replace(
+        1,
+        async () => first,
+        (value) => value.name,
+      )
+    ).kind,
+    "committed",
+  );
+  assert.equal(
+    (
+      await owner.replace(
+        2,
+        async () => second,
+        (value) => value.name,
+      )
+    ).kind,
+    "committed",
+  );
   assert.equal(first.disposals, 1);
 
   assert.equal(owner.clear(3), true);
   assert.equal(second.disposals, 1);
-  assert.equal((await owner.replace(4, async () => recovered, (value) => value.name)).kind, "committed");
+  assert.equal(
+    (
+      await owner.replace(
+        4,
+        async () => recovered,
+        (value) => value.name,
+      )
+    ).kind,
+    "committed",
+  );
   assert.equal(recovered.disposals, 0);
 });
 
@@ -26,13 +53,21 @@ test("disposes late render candidates after a newer status or close", async () =
   const clearedCandidate = new FakeRevision("cleared");
   const closedCandidate = new FakeRevision("closed");
 
-  const clearedResult = owner.replace(1, () => lateAfterClear.promise, (value) => value.name);
+  const clearedResult = owner.replace(
+    1,
+    () => lateAfterClear.promise,
+    (value) => value.name,
+  );
   owner.clear(2);
   lateAfterClear.resolve(clearedCandidate);
   assert.equal((await clearedResult).kind, "superseded");
   assert.equal(clearedCandidate.disposals, 1);
 
-  const closedResult = owner.replace(3, () => lateAfterClose.promise, (value) => value.name);
+  const closedResult = owner.replace(
+    3,
+    () => lateAfterClose.promise,
+    (value) => value.name,
+  );
   owner.dispose();
   owner.dispose();
   lateAfterClose.resolve(closedCandidate);
@@ -43,10 +78,14 @@ test("disposes late render candidates after a newer status or close", async () =
 test("allows a new render in one State generation and rejects older work", async () => {
   const owner = new GenerationRevisionOwner<FakeRevision>();
   let starts = 0;
-  await owner.replace(7, async () => {
-    starts += 1;
-    return new FakeRevision("current");
-  }, (value) => value.name);
+  await owner.replace(
+    7,
+    async () => {
+      starts += 1;
+      return new FakeRevision("current");
+    },
+    (value) => value.name,
+  );
 
   assert.equal(
     (
@@ -70,14 +109,24 @@ test("invalidates document work without consuming the State generation", async (
   const pending = deferred<FakeRevision>();
   const late = new FakeRevision("late-document");
   const current = new FakeRevision("current-document");
-  const lateResult = owner.replace(9, () => pending.promise, (value) => value.name);
+  const lateResult = owner.replace(
+    9,
+    () => pending.promise,
+    (value) => value.name,
+  );
 
   owner.invalidate();
   pending.resolve(late);
   assert.equal((await lateResult).kind, "superseded");
   assert.equal(late.disposals, 1);
   assert.equal(
-    (await owner.replace(9, async () => current, (value) => value.name)).kind,
+    (
+      await owner.replace(
+        9,
+        async () => current,
+        (value) => value.name,
+      )
+    ).kind,
     "committed",
   );
 });

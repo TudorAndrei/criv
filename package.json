@@ -12,7 +12,7 @@
     "node": "26.5.1"
   },
   "scripts": {
-    "check:editor-contracts": "npm --prefix packages/criv-likec4 run check-types && npm --prefix packages/criv-likec4 test && npm --prefix packages/criv-editor-state run check-types && npm --prefix packages/criv-editor-state test && cargo test --locked -p criv-wasm",
+    "check:editor-contracts": "npm --prefix packages/criv-likec4 run lint && npm --prefix packages/criv-likec4 run format:check && npm --prefix packages/criv-likec4 run check-types && npm --prefix packages/criv-likec4 test && npm --prefix packages/criv-editor-state run lint && npm --prefix packages/criv-editor-state run format:check && npm --prefix packages/criv-editor-state run check-types && npm --prefix packages/criv-editor-state test && cargo test --locked -p criv-wasm",
     "build:site": "node scripts/prepare-docs-site.mjs && likec4 build --output site/architecture --base /criv/architecture/ --use-hash-history docs/architecture && mdbook build .site-build/docs-book"
   },
   "devDependencies": {

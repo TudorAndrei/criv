@@ -4,9 +4,7 @@ import type {
   RevisionLoadResult,
 } from "./revisionOwner.js";
 
-export type GenerationRevisionResult<Value> =
-  | RevisionLoadResult<Value>
-  | { kind: "stale" };
+export type GenerationRevisionResult<Value> = RevisionLoadResult<Value> | { kind: "stale" };
 
 export class GenerationRevisionOwner<Revision extends DisposableRevision> {
   private active: Revision | undefined;

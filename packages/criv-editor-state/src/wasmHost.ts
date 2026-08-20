@@ -27,11 +27,7 @@ const stateContractErrorCodes = new Set<CrivStateContractErrorCode>([
 export class CrivStateContractError extends Error {
   readonly code: CrivStateContractErrorCode;
 
-  constructor(
-    code: CrivStateContractErrorCode,
-    message: string,
-    cause: unknown,
-  ) {
+  constructor(code: CrivStateContractErrorCode, message: string, cause: unknown) {
     super(message);
     this.name = "CrivStateContractError";
     this.code = code;
@@ -148,9 +144,11 @@ function requireCrivWasmModule<Projections, LookupResult, Suggestion>(
   return value as CrivWasmModule<Projections, LookupResult, Suggestion>;
 }
 
-class LoadedStateAdapter<Projections, LookupResult, Suggestion>
-  implements CrivLoadedState<Projections, LookupResult, Suggestion>
-{
+class LoadedStateAdapter<Projections, LookupResult, Suggestion> implements CrivLoadedState<
+  Projections,
+  LookupResult,
+  Suggestion
+> {
   private readonly loaded: CrivWasmLoadedState<Projections, LookupResult, Suggestion>;
   private readonly projections: Projections;
   private disposed = false;
