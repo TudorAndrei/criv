@@ -475,10 +475,36 @@ impl SourceGraphBuild {
         source_files: &[String],
         previous: Option<&Self>,
     ) -> Result<Self> {
-        let graph = SourceGraph::build_incremental(
+        Self::build_incremental_with_workers_inner(
+            root,
+            source_files,
+            previous,
+            source_worker_count(source_files.len()),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn build_incremental_with_workers(
+        root: &Path,
+        source_files: &[String],
+        previous: Option<&Self>,
+        workers: usize,
+    ) -> Result<Self> {
+        assert!(workers > 0, "Source test worker count must be positive");
+        Self::build_incremental_with_workers_inner(root, source_files, previous, workers)
+    }
+
+    fn build_incremental_with_workers_inner(
+        root: &Path,
+        source_files: &[String],
+        previous: Option<&Self>,
+        workers: usize,
+    ) -> Result<Self> {
+        let graph = SourceGraph::build_incremental_with_workers(
             root,
             source_files,
             previous.map(SourceGraphBuild::graph),
+            workers,
         )?;
         let can_reuse = previous.is_some_and(|previous| {
             previous.cache == CacheDisposition::Clean && graph.changed_files().is_empty()
@@ -684,13 +710,28 @@ impl InterfaceSignature {
 }
 
 impl SourceGraph {
+    #[cfg(test)]
     fn build_incremental(
         root: &Path,
         source_files: &[String],
         previous: Option<&Self>,
     ) -> Result<Self> {
+        Self::build_incremental_with_workers(
+            root,
+            source_files,
+            previous,
+            source_worker_count(source_files.len()),
+        )
+    }
+
+    fn build_incremental_with_workers(
+        root: &Path,
+        source_files: &[String],
+        previous: Option<&Self>,
+        workers: usize,
+    ) -> Result<Self> {
         let mut graph = Self::default();
-        for processed in process_source_files(root, source_files, previous)? {
+        for processed in process_source_files(root, source_files, previous, workers)? {
             #[cfg(test)]
             record_work(|counts| counts.source_reads += 1);
             let Some(processed) = processed else {
@@ -1141,16 +1182,11 @@ fn process_source_files(
     root: &Path,
     source_files: &[String],
     previous: Option<&SourceGraph>,
+    workers: usize,
 ) -> Result<Vec<Option<ProcessedSource>>> {
     if source_files.is_empty() {
         return Ok(Vec::new());
     }
-    let useful_workers = source_files.len().div_ceil(MIN_FILES_PER_SOURCE_WORKER);
-    let workers = thread::available_parallelism()
-        .map(usize::from)
-        .unwrap_or(1)
-        .min(MAX_SOURCE_WORKERS)
-        .min(useful_workers);
     if workers == 1 {
         return source_files
             .iter()
@@ -1181,6 +1217,15 @@ fn process_source_files(
         }
         Ok(processed)
     })
+}
+
+fn source_worker_count(source_files: usize) -> usize {
+    let useful_workers = source_files.div_ceil(MIN_FILES_PER_SOURCE_WORKER).max(1);
+    thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .min(MAX_SOURCE_WORKERS)
+        .min(useful_workers)
 }
 
 fn process_source_file(
@@ -2642,6 +2687,130 @@ mod tests {
         assert!(
             error.to_string().contains("symlinked vault path component"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn parallel_source_build_matches_serial_graph_order_and_cache() {
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("src")).unwrap();
+        for (path, contents) in [
+            ("src/a.rs", "pub fn rust_symbol() {}\n"),
+            ("src/b.ts", "export function tsSymbol() {}\n"),
+            ("src/c.mjs", "export function jsSymbol() {}\n"),
+            ("src/d.py", "def python_symbol():\n    return 1\n"),
+            ("src/e.go", "package sample\nfunc GoSymbol() {}\n"),
+            (
+                "src/f.ex",
+                "defmodule Sample do\n  def elixir_symbol(), do: :ok\nend\n",
+            ),
+            (
+                "src/g.exs",
+                "defmodule SampleTest do\n  def test_symbol(), do: :ok\nend\n",
+            ),
+        ] {
+            fs::write(root.path().join(path), contents).unwrap();
+        }
+        fs::write(root.path().join("src/h.rs"), b"\0binary").unwrap();
+        let paths = [
+            "src/g.exs",
+            "src/h.rs",
+            "src/a.rs",
+            "src/f.ex",
+            "src/c.mjs",
+            "src/e.go",
+            "src/b.ts",
+            "src/d.py",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+        let serial = SourceGraphBuild::build_incremental_with_workers(root.path(), &paths, None, 1)
+            .unwrap()
+            .publish(root.path())
+            .unwrap();
+        let serial_cache = fs::read(graph_cache_path(root.path())).unwrap();
+        let parallel =
+            SourceGraphBuild::build_incremental_with_workers(root.path(), &paths, None, 4)
+                .unwrap()
+                .publish(root.path())
+                .unwrap();
+        let parallel_cache = fs::read(graph_cache_path(root.path())).unwrap();
+
+        assert_eq!(parallel.graph(), serial.graph());
+        assert_eq!(parallel.paths(), serial.paths());
+        assert_eq!(
+            parallel.paths(),
+            vec![
+                "src/a.rs",
+                "src/b.ts",
+                "src/c.mjs",
+                "src/d.py",
+                "src/e.go",
+                "src/f.ex",
+                "src/g.exs",
+            ]
+        );
+        assert_eq!(
+            parallel.graph().changed_files(),
+            [
+                "src/g.exs",
+                "src/a.rs",
+                "src/f.ex",
+                "src/c.mjs",
+                "src/e.go",
+                "src/b.ts",
+                "src/d.py",
+            ]
+        );
+        assert_eq!(parallel_cache, serial_cache);
+
+        let serial_cached =
+            SourceGraphBuild::build_incremental_with_workers(root.path(), &paths, Some(&serial), 1)
+                .unwrap()
+                .publish(root.path())
+                .unwrap();
+        let parallel_cached = SourceGraphBuild::build_incremental_with_workers(
+            root.path(),
+            &paths,
+            Some(&parallel),
+            4,
+        )
+        .unwrap()
+        .publish(root.path())
+        .unwrap();
+        assert_eq!(parallel_cached.graph(), serial_cached.graph());
+        assert!(parallel_cached.graph().changed_files().is_empty());
+        assert_eq!(
+            fs::read(graph_cache_path(root.path())).unwrap(),
+            serial_cache
+        );
+    }
+
+    #[test]
+    fn parallel_source_build_reports_the_same_selected_read_error_as_serial() {
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("src")).unwrap();
+        fs::write(root.path().join("src/a.rs"), "pub fn present() {}\n").unwrap();
+        fs::write(root.path().join("src/c.ex"), "defmodule Present do\nend\n").unwrap();
+        let paths = vec![
+            "src/a.rs".into(),
+            "src/missing.rs".into(),
+            "src/c.ex".into(),
+        ];
+
+        let serial = SourceGraphBuild::build_incremental_with_workers(root.path(), &paths, None, 1)
+            .unwrap_err();
+        let parallel =
+            SourceGraphBuild::build_incremental_with_workers(root.path(), &paths, None, 3)
+                .unwrap_err();
+
+        assert_eq!(parallel.to_string(), serial.to_string());
+        assert!(
+            parallel
+                .to_string()
+                .contains("failed to read selected file `src/missing.rs`")
         );
     }
 
