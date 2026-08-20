@@ -12,7 +12,7 @@
     "version": "node version-bump.mjs && git add manifest.json versions.json",
     "lint": "oxlint src test scripts esbuild.config.mjs version-bump.mjs",
     "smoke:wasm": "node scripts/wasm-smoke.mjs",
-    "test": "npm run build:wasm && node test/source/model.test.mjs && node test/source/preview.test.mjs && node test/state/wasm.test.mjs && node test/version-bump.test.mjs && node test/main.test.mjs",
+    "test": "npm run build:wasm && node test/source/model.test.mjs && node test/source/preview.test.mjs && node test/source/assets.test.mjs && node test/state/wasm.test.mjs && node test/version-bump.test.mjs && node test/main.test.mjs",
     "format": "oxfmt --write src test scripts esbuild.config.mjs version-bump.mjs",
     "format:check": "oxfmt --check src test scripts esbuild.config.mjs version-bump.mjs"
   },

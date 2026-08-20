@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  diagnosticRange,
-  parseCheckDiagnostics,
-} from "../../../src/diagnostics/model";
+import { diagnosticRange, parseCheckDiagnostics } from "../../../src/diagnostics/model";
 
 test("normalizes criv check JSON diagnostics", () => {
   assert.deepEqual(

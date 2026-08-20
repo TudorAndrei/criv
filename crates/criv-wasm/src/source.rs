@@ -177,13 +177,14 @@ fn source_match_score_prepared(lower_path: &str, basename: &str, query: &str) ->
 impl PreparedState {
     pub(super) fn from_parts(
         summary: StateSummary,
-        sources: Vec<EditorSourceEntry>,
+        inventory: EditorInventory,
         nodes: Vec<EditorGraphNode>,
         registered_patterns: Vec<String>,
         pattern_matches: BTreeMap<String, Vec<PatternMatch>>,
         architecture: Option<EditorLikeC4Model>,
         c4_artifacts: Vec<EditorC4Artifact>,
     ) -> Self {
+        let EditorInventory { sources, assets } = inventory;
         let source_paths = sources
             .iter()
             .map(|source| source.path.as_str())
@@ -237,6 +238,7 @@ impl PreparedState {
         Self {
             summary,
             sources,
+            assets,
             nodes,
             registered_patterns,
             pattern_matches,

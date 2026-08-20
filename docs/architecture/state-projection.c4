@@ -7,7 +7,7 @@ model {
 
       stateDocument = component 'State document' {
         technology 'Rust and serde'
-        description 'Defines the shared State schema identity and serialized wire rows.'
+        description 'Defines the shared State schema identity and serialized Source and documentation asset rows.'
         link ../../crates/criv-state-wire/src/lib.rs 'source'
       }
       sourceIdentity = component 'Source identity' {
@@ -42,6 +42,11 @@ model {
         description 'Ranks safe source selectors from prepared revision data.'
         link ../../crates/criv-wasm/src/source.rs#suggest_selectors 'source'
       }
+      assetProjection = component 'Asset projection' {
+        technology 'Rust and WebAssembly'
+        description 'Filters documentation asset rows by safe path, passive MIME type, size, and stable order.'
+        link ../../crates/criv-wasm/src/asset.rs#take_assets 'source'
+      }
     }
   }
 
@@ -52,6 +57,7 @@ model {
     technology 'Rust crate'
   }
   criv.stateProjection.architectureProjection -> criv.stateProjection.stateDecoder 'Validates the optional architecture value'
+  criv.stateProjection.assetProjection -> criv.stateProjection.stateDecoder 'Reads documentation asset rows'
 }
 
 views {

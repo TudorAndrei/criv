@@ -68,6 +68,10 @@ impl RepositoryFiles {
         self.filesystem.read_with_metadata(source)
     }
 
+    pub(crate) fn read_bounded(&self, source: &Path, max_bytes: u64) -> Result<Option<Vec<u8>>> {
+        self.filesystem.read_bounded(source, max_bytes)
+    }
+
     pub(crate) fn read_string(&self, source: &Path) -> Result<String> {
         self.filesystem.read_string(source)
     }

@@ -234,6 +234,7 @@ model {
 
   // Vault loading.
   criv.cli.vaultModel.rustVault -> criv.cli.architectureService.rustC4 'Loads C4 artifacts and workspaces'
+  criv.cli.vaultModel.rustVault -> criv.cli.sourceIntelligence.rustDiscovery 'Selects Vault documents and assets'
   criv.cli.vaultModel.rustVault -> criv.cli.vaultModel.rustConfig 'Reads the vault configuration'
   criv.cli.vaultModel.rustVault -> criv.cli.diagnosticLocations.rustDiagnostic 'Keeps exact parsed document locations'
   criv.cli.architectureService.rustC4 -> criv.cli.architectureService.rustC4Artifact 'Classifies C4 artifacts'
@@ -302,6 +303,7 @@ model {
 
   // State publication.
   criv.cli.statePublisher.rustState -> criv.cli.vaultModel.rustVault 'Builds the state envelope'
+  criv.cli.statePublisher.rustState -> criv.stateWire.stateDocument 'Builds shared State rows'
   criv.cli.statePublisher.rustState -> criv.cli.architectureService.rustC4 'Serializes C4 artifacts'
   criv.cli.statePublisher.rustState -> criv.cli.sourceIntelligence.rustSource 'Serializes source relations'
   criv.cli.statePublisher.rustState -> criv.cli.sourceIntelligence.rustStructural 'Serializes structural matches'

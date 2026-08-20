@@ -1,4 +1,4 @@
-import type { CrivState, SourceIndexEntry, SourceResolver } from "./source/model";
+import type { AssetIndexEntry, CrivState, SourceIndexEntry, SourceResolver } from "./source/model";
 import type { CrivSelectorSuggestion, CrivStateSummary } from "./state/wasm";
 
 export type ObsidianStateStatus =
@@ -22,6 +22,7 @@ export interface StatePort {
   suggestSourceSelectors(query: string, limit: number): CrivSelectorSuggestion[];
   recordWasmFailure(error: unknown): void;
   sourceEntries(): Promise<SourceIndexEntry[]>;
+  assetEntries(): Promise<AssetIndexEntry[]>;
   patternIds(): Promise<string[]>;
   readState(): Promise<CrivStateSummary | null>;
 }

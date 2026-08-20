@@ -121,6 +121,7 @@ model {
   criv.stateProjection.architectureProjection -> criv.stateProjection.stateDecoder 'Validates the architecture projection'
   criv.stateProjection.selectorProjection -> criv.stateProjection.stateDecoder 'Reads prepared revision data'
   criv.stateProjection.selectorProjection -> criv.stateProjection.graphProjection 'Ranks projected graph nodes'
+  criv.stateProjection.assetProjection -> criv.stateProjection.stateDecoder 'Reads verified documentation asset rows'
 
   // Obsidian components.
   criv.obsidianPlugin.obsidianController -> criv.obsidianPlugin.obsidianStateOwner 'Registers State commands and status publication'
@@ -155,6 +156,7 @@ model {
   criv.vscodeExtension.vscodeController -> criv.vscodeExtension.vscodeDiagnostics 'Publishes check diagnostics'
   criv.vscodeExtension.vscodeController -> criv.vscodeExtension.vscodeCommands 'Registers and runs commands'
   criv.vscodeExtension.vscodeController -> criv.vscodeExtension.vscodeExplorer 'Registers the vault explorer'
+  criv.vscodeExtension.vscodeController -> criv.vscodeExtension.vscodeAssets 'Registers native asset opening'
 
   criv.vscodeExtension.vscodeState -> criv.stateProjection 'Builds safe editor projections' {
     technology 'WebAssembly call'
@@ -169,6 +171,7 @@ model {
   criv.vscodeExtension.vscodePreview -> criv.sharedRenderer.modelContract 'Reads the compiled model contract'
   criv.vscodeExtension.vscodeNavigation -> criv.vscodeExtension.vscodeState 'Resolves source targets and hovers'
   criv.vscodeExtension.vscodeExplorer -> criv.vscodeExtension.vscodeState 'Builds the tree from projected state'
+  criv.vscodeExtension.vscodeAssets -> criv.vscodeExtension.vscodeState 'Authorizes paths from the active asset inventory'
   criv.vscodeExtension.vscodeDiagnostics -> criv.vscodeExtension.vscodeCommands 'Reads bounded check output'
   criv.vscodeExtension.vscodeCommands -> criv.cli 'Starts trusted repository commands' {
     technology 'Child process'

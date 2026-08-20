@@ -117,6 +117,14 @@ model {
     }
   }
 
+  extend criv.vscodeExtension.vscodeAssets {
+    assetModule = module 'criv-vscode::assets' {
+      technology 'TypeScript'
+      description 'Validates a requested asset path against the active projected State inventory.'
+      link ../../extensions/vscode-criv/src/assets.ts 'source'
+    }
+  }
+
   // Extension activation.
   criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodePreview.previewModule 'Registers the custom editor'
   criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodeState.stateStoreModule 'Observes workspace state'
@@ -129,6 +137,7 @@ model {
   criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodeCommands.commandsModule 'Registers command identifiers'
   criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodeCommands.commandRunnerModule 'Runs criv commands'
   criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodeExplorer.treeModule 'Registers the vault tree'
+  criv.vscodeExtension.vscodeController.extensionModule -> criv.vscodeExtension.vscodeAssets.assetModule 'Opens authorized documentation assets'
 
   // Preview editor.
   criv.vscodeExtension.vscodePreview.previewModule -> criv.vscodeExtension.vscodePreview.previewHtmlModule 'Builds preview documents'
@@ -141,6 +150,7 @@ model {
   // Workspace state.
   criv.vscodeExtension.vscodeState.stateStoreModule -> criv.vscodeExtension.vscodeState.stateModelModule 'Builds extension snapshots'
   criv.vscodeExtension.vscodeState.stateStoreModule -> criv.vscodeExtension.vscodeState.wasmModule 'Owns loaded state revisions'
+  criv.vscodeExtension.vscodeState.wasmModule -> criv.stateProjection.assetProjection.rustWasmAsset 'Receives projected asset rows'
   criv.vscodeExtension.vscodeState.configModule -> criv.vscodeExtension.vscodeState.configModelModule 'Validates the settings model'
 
   // Source navigation.
@@ -157,6 +167,7 @@ model {
   // Vault tree.
   criv.vscodeExtension.vscodeExplorer.treeModule -> criv.vscodeExtension.vscodeState.stateStoreModule 'Observes the current state'
   criv.vscodeExtension.vscodeExplorer.treeModule -> criv.vscodeExtension.vscodeState.stateModelModule 'Reads state snapshots'
+  criv.vscodeExtension.vscodeAssets.assetModule -> criv.vscodeExtension.vscodeState.stateModelModule 'Authorizes active asset rows'
 }
 
 views {

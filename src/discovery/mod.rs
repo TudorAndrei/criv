@@ -20,6 +20,7 @@ const COLLECT_FLUSH_ENTRIES: usize = 1_024;
 pub(crate) struct VaultPaths {
     pub(crate) markdown: Vec<String>,
     pub(crate) c4: Vec<String>,
+    pub(crate) assets: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -34,6 +35,7 @@ enum SelectionKind {
     Source,
     VaultMarkdown,
     VaultC4,
+    VaultAsset,
     Markdown,
 }
 
@@ -80,11 +82,7 @@ impl Profile {
     fn candidate_kind(&self, path: &Path) -> Option<SelectionKind> {
         match self {
             Self::Source { .. } => Some(SelectionKind::Source),
-            Self::Vault => match path.extension().and_then(|value| value.to_str()) {
-                Some("md") => Some(SelectionKind::VaultMarkdown),
-                Some("c4") => Some(SelectionKind::VaultC4),
-                _ => None,
-            },
+            Self::Vault => vault_selection_kind(path),
             Self::Markdown { .. } => path
                 .extension()
                 .and_then(|value| value.to_str())
@@ -197,12 +195,14 @@ pub(crate) fn discover_vault(root: &Path, docs_dir: &str) -> Result<VaultPaths> 
         return Ok(VaultPaths {
             markdown: Vec::new(),
             c4: Vec::new(),
+            assets: Vec::new(),
         });
     }
     let Some(kind) = validate_root(root, &docs_relative)? else {
         return Ok(VaultPaths {
             markdown: Vec::new(),
             c4: Vec::new(),
+            assets: Vec::new(),
         });
     };
     if kind != RootKind::Directory {
@@ -219,14 +219,35 @@ pub(crate) fn discover_vault(root: &Path, docs_dir: &str) -> Result<VaultPaths> 
     let selections = finish(walk(root, &mut builder, profile)?)?;
     let mut markdown = Vec::new();
     let mut c4 = Vec::new();
+    let mut assets = Vec::new();
     for selection in selections {
         match selection.kind {
             SelectionKind::VaultMarkdown => markdown.push(selection.path),
             SelectionKind::VaultC4 => c4.push(selection.path),
+            SelectionKind::VaultAsset => assets.push(selection.path),
             SelectionKind::Source | SelectionKind::Markdown => {}
         }
     }
-    Ok(VaultPaths { markdown, c4 })
+    Ok(VaultPaths {
+        markdown,
+        c4,
+        assets,
+    })
+}
+
+fn vault_selection_kind(path: &Path) -> Option<SelectionKind> {
+    let extension = path.extension()?.to_str()?;
+    if extension == "md" {
+        return Some(SelectionKind::VaultMarkdown);
+    }
+    if extension == "c4" {
+        return Some(SelectionKind::VaultC4);
+    }
+    matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "pdf"
+    )
+    .then_some(SelectionKind::VaultAsset)
 }
 
 pub(crate) fn discover_markdown(root: &Path, policy: MarkdownPolicy<'_>) -> Result<Vec<String>> {
@@ -1025,6 +1046,8 @@ mod tests {
         let root = temp.path();
         write(&root.join("docs/note.md"), b"# Note\n");
         write(&root.join("docs/model.c4"), b"specification {}\n");
+        write(&root.join("docs/diagram.PNG"), b"image");
+        write(&root.join("docs/report.pdf"), b"document");
         write(&root.join("docs/upper.MD"), b"# Upper\n");
         write(&root.join("docs/target/skip.md"), b"# Skip\n");
 
@@ -1033,6 +1056,7 @@ mod tests {
             VaultPaths {
                 markdown: vec!["docs/note.md".into()],
                 c4: vec!["docs/model.c4".into()],
+                assets: vec!["docs/diagram.PNG".into(), "docs/report.pdf".into()],
             }
         );
     }
@@ -1050,6 +1074,7 @@ mod tests {
             VaultPaths {
                 markdown: vec!["docs/.hidden.md".into()],
                 c4: vec![],
+                assets: vec![],
             }
         );
         assert_eq!(
@@ -1057,6 +1082,7 @@ mod tests {
             VaultPaths {
                 markdown: vec![],
                 c4: vec![],
+                assets: vec![],
             }
         );
         assert_eq!(
@@ -1064,6 +1090,7 @@ mod tests {
             VaultPaths {
                 markdown: vec![],
                 c4: vec![],
+                assets: vec![],
             }
         );
     }
@@ -1232,6 +1259,7 @@ mod tests {
             VaultPaths {
                 markdown: vec![],
                 c4: vec![],
+                assets: vec![],
             }
         );
 
@@ -1247,6 +1275,23 @@ mod tests {
                 .contains("file link `docs/selected.md`")
         );
         fs::remove_file(root.join("docs/selected.md")).unwrap();
+
+        write(
+            &outside.path().join("diagram.png"),
+            b"\x89PNG\r\n\x1a\npreview",
+        );
+        symlink(
+            outside.path().join("diagram.png"),
+            root.join("docs/selected.png"),
+        )
+        .unwrap();
+        assert!(
+            discover_vault(root, "docs")
+                .unwrap_err()
+                .to_string()
+                .contains("file link `docs/selected.png`")
+        );
+        fs::remove_file(root.join("docs/selected.png")).unwrap();
 
         symlink(outside.path(), root.join("docs/active-link")).unwrap();
         assert!(

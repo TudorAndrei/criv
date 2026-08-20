@@ -62,6 +62,27 @@
   overflow: hidden;
 }
 
+.criv-asset-card {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.criv-asset-preview {
+  background: var(--background-secondary);
+  display: block;
+  max-height: 260px;
+  object-fit: contain;
+  width: 100%;
+}
+
+.criv-asset-document {
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 12px;
+}
+
 .criv-source-card-head,
 .criv-pattern-row {
   align-items: center;

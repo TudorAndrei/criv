@@ -1,0 +1,23 @@
+// End-to-end code view for verified documentation asset previews.
+views {
+  global style architectureTheme
+
+  view codeDocumentationAssets {
+    title 'Code / Verified documentation assets'
+    description 'How the CLI selects and verifies passive documentation assets, publishes State rows, and supplies native editor surfaces.'
+
+    include criv.cli.sourceIntelligence.rustDiscovery
+    include criv.cli.vaultModel.rustVault
+    include criv.cli.repositoryFiles.*
+    include criv.cli.statePublisher.rustState
+    include criv.stateWire.stateDocument
+    include criv.stateProjection.assetProjection.*
+    include criv.obsidianPlugin.obsidianStateOwner.stateOwnerModule
+    include criv.obsidianPlugin.obsidianWasm.wasmModule
+    include criv.obsidianPlugin.obsidianSourcePanel.*
+    include criv.vscodeExtension.vscodeState.stateModelModule
+    include criv.vscodeExtension.vscodeState.wasmModule
+    include criv.vscodeExtension.vscodeExplorer.treeModule
+    include criv.vscodeExtension.vscodeAssets.*
+  }
+}

@@ -1,7 +1,7 @@
 import { Notice } from "obsidian";
 import type { App } from "obsidian";
 import { LoadedRevisionOwner } from "@criv/editor-state";
-import type { CrivState, SourceIndexEntry, SourceResolver } from "../source/model";
+import type { AssetIndexEntry, CrivState, SourceIndexEntry, SourceResolver } from "../source/model";
 import { safeVaultPath } from "../source/model";
 import type { DisposableSubscription, ObsidianStateStatus, StatePort } from "../ports";
 import {
@@ -19,6 +19,7 @@ interface StateFileToken {
 export class ObsidianStateOwner implements StatePort {
   private state: CrivState | null = null;
   private stateSources: SourceIndexEntry[] = [];
+  private stateAssets: AssetIndexEntry[] = [];
   private stateSourcesByPath = new Map<string, SourceIndexEntry>();
   private stateSummary: CrivStateSummary | null = null;
   private readonly revisions = new LoadedRevisionOwner<CrivLoadedState>();
@@ -94,6 +95,7 @@ export class ObsidianStateOwner implements StatePort {
         architecture: result.value.architecture,
       };
       this.stateSources = result.value.sources;
+      this.stateAssets = result.value.assets;
       this.stateSourcesByPath = new Map(
         result.value.sources.map((source) => [source.path, source]),
       );
@@ -198,6 +200,11 @@ export class ObsidianStateOwner implements StatePort {
     return this.stateSources.slice();
   }
 
+  async assetEntries(): Promise<AssetIndexEntry[]> {
+    await this.getState();
+    return this.stateAssets.slice();
+  }
+
   async patternIds(): Promise<string[]> {
     const state = await this.getState();
     return state?.registeredPatterns ?? [];
@@ -216,6 +223,7 @@ export class ObsidianStateOwner implements StatePort {
   private clearCache(): void {
     this.state = null;
     this.stateSources = [];
+    this.stateAssets = [];
     this.stateSourcesByPath.clear();
     this.stateSummary = null;
     this.stateToken = null;

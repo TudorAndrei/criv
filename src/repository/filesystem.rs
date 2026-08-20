@@ -208,6 +208,20 @@ impl FileSystem {
         Ok((contents, file.metadata()?))
     }
 
+    pub(super) fn read_bounded(&self, source: &Path, max_bytes: u64) -> Result<Option<Vec<u8>>> {
+        let mut file = self.for_read(source)?.open_required_regular()?;
+        let size = file.metadata()?.len();
+        if size > max_bytes {
+            return Ok(None);
+        }
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents)?;
+        if contents.len() as u64 > max_bytes {
+            return Ok(None);
+        }
+        Ok(Some(contents))
+    }
+
     pub(super) fn read_string(&self, source: &Path) -> Result<String> {
         self.for_read(source)?
             .read_optional_string()?

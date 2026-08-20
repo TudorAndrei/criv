@@ -18,6 +18,13 @@ export interface SourceIndexEntry {
   mime?: string;
 }
 
+export interface AssetIndexEntry {
+  path: string;
+  mime: string;
+  bytes: number;
+  hash: string;
+}
+
 export interface LinkedSource {
   target: string;
   canonicalTarget: string;

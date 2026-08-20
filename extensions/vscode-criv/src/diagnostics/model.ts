@@ -87,9 +87,7 @@ function positionValue(value: Record<string, unknown>): DiagnosticPosition | und
 }
 
 function nonNegativeInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
-    ? value
-    : undefined;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 function comparePositions(left: DiagnosticPosition, right: DiagnosticPosition): number {

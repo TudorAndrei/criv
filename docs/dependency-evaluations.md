@@ -24,13 +24,15 @@ Reference: <https://docs.rs/miette/latest/miette/struct.SourceSpan.html>
 
 ## infer
 
-Decision: defer until plugin asset previews are implemented.
+Decision: use for the bounded documentation asset inventory.
 
 `infer` detects file types from magic-number signatures and returns MIME and
-extension metadata. The CLI already skips binary source files with
-`content_inspector` and records cheap extension MIME hints with `mime_guess`.
-Magic-number detection becomes useful when the Obsidian plugin previews
-non-source assets from state.
+extension metadata. [[0131-publish-verified-documentation-assets-for-native-previews|ADR-0131]]
+requires the CLI to verify the file signature and the extension before it adds
+an asset to State. `infer` supplies this narrow check. `content_inspector`
+continues to classify Source text, and `mime_guess` continues to supply Source
+MIME hints. The asset inventory does not use either dependency as a security
+check.
 
 Reference: <https://lib.rs/crates/infer>
 

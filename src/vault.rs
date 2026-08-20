@@ -19,6 +19,9 @@ use crate::util::{
     markdown_headings as parse_markdown_headings, strip_prefix,
 };
 
+const MAX_ASSET_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_ASSET_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
+
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub(crate) struct WorkCounts {
@@ -149,6 +152,7 @@ pub(crate) struct Vault {
     pub(crate) notes: Vec<Note>,
     pub(crate) c4_artifacts: Vec<c4::C4Artifact>,
     pub(crate) likec4_workspace: c4::LikeC4Workspace,
+    assets: Vec<DocumentationAsset>,
     note_ids: BTreeMap<String, usize>,
     filenames: BTreeMap<String, usize>,
     titles: BTreeMap<String, usize>,
@@ -156,6 +160,14 @@ pub(crate) struct Vault {
     effective_decisions: BTreeSet<String>,
     patterns: BTreeSet<String>,
     link_resolutions: BTreeMap<String, ResolvedLink>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DocumentationAsset {
+    pub(crate) path: String,
+    pub(crate) mime: String,
+    pub(crate) bytes: u64,
+    pub(crate) hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,6 +240,7 @@ impl Vault {
             .map(|path| root.join(path))
             .map(|path| c4::parse_file_from(files, &docs_path, &path))
             .collect::<Result<Vec<_>>>()?;
+        let assets = load_documentation_assets(files, discovered.assets)?;
         let likec4_workspace = c4::load_workspace(root, &docs_path, &c4_artifacts);
 
         let mut note_ids = BTreeMap::new();
@@ -263,6 +276,7 @@ impl Vault {
             notes,
             c4_artifacts,
             likec4_workspace,
+            assets,
             note_ids,
             filenames,
             titles,
@@ -502,6 +516,10 @@ impl Vault {
         self.source.entries()
     }
 
+    pub(crate) fn documentation_assets(&self) -> &[DocumentationAsset] {
+        &self.assets
+    }
+
     pub(crate) fn patterns(&self) -> &BTreeSet<String> {
         &self.patterns
     }
@@ -579,6 +597,7 @@ impl Vault {
             notes,
             c4_artifacts: Vec::new(),
             likec4_workspace: c4::LikeC4Workspace::default(),
+            assets: Vec::new(),
             note_ids,
             filenames,
             titles,
@@ -589,6 +608,66 @@ impl Vault {
         };
         vault.index_link_resolutions();
         vault
+    }
+}
+
+fn load_documentation_assets(
+    files: &RepositoryFiles,
+    paths: Vec<String>,
+) -> Result<Vec<DocumentationAsset>> {
+    load_documentation_assets_with_limits(files, paths, MAX_ASSET_BYTES, MAX_ASSET_TOTAL_BYTES)
+}
+
+fn load_documentation_assets_with_limits(
+    files: &RepositoryFiles,
+    mut paths: Vec<String>,
+    max_asset_bytes: u64,
+    max_total_bytes: u64,
+) -> Result<Vec<DocumentationAsset>> {
+    paths.sort();
+    let mut total_bytes = 0_u64;
+    let mut assets = Vec::new();
+    for path in paths {
+        let Some(contents) = files.read_bounded(Path::new(&path), max_asset_bytes)? else {
+            continue;
+        };
+        let bytes = contents.len() as u64;
+        if total_bytes.saturating_add(bytes) > max_total_bytes {
+            continue;
+        }
+        let Some(expected_mime) = asset_mime_for_path(&path) else {
+            continue;
+        };
+        let Some(detected) = infer::get(&contents) else {
+            continue;
+        };
+        if detected.mime_type() != expected_mime {
+            continue;
+        }
+        total_bytes += bytes;
+        assets.push(DocumentationAsset {
+            path,
+            mime: expected_mime.to_string(),
+            bytes,
+            hash: blake3::hash(&contents).to_hex().to_string(),
+        });
+    }
+    Ok(assets)
+}
+
+fn asset_mime_for_path(path: &str) -> Option<&'static str> {
+    match Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())?
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "pdf" => Some("application/pdf"),
+        _ => None,
     }
 }
 
@@ -983,6 +1062,103 @@ struct RawPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn documentation_assets_are_verified_bounded_and_separate_from_source() {
+        let root = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(root.path().join("docs/assets")).unwrap();
+        let png = b"\x89PNG\r\n\x1a\npreview";
+        std::fs::write(root.path().join("docs/assets/b.png"), png).unwrap();
+        std::fs::write(root.path().join("docs/assets/a.png"), png).unwrap();
+        std::fs::write(root.path().join("docs/assets/wrong.jpg"), png).unwrap();
+        let oversized = [png.as_slice(), png.as_slice()].concat();
+        std::fs::write(root.path().join("docs/assets/0-oversized.png"), oversized).unwrap();
+        std::fs::write(root.path().join("docs/assets/active.svg"), b"<svg></svg>").unwrap();
+        let files = RepositoryFiles::open(root.path()).unwrap();
+
+        let assets = load_documentation_assets_with_limits(
+            &files,
+            vec![
+                "docs/assets/wrong.jpg".into(),
+                "docs/assets/0-oversized.png".into(),
+                "docs/assets/b.png".into(),
+                "docs/assets/a.png".into(),
+            ],
+            png.len() as u64,
+            png.len() as u64,
+        )
+        .unwrap();
+
+        assert_eq!(assets.len(), 1);
+        assert_eq!(assets[0].path, "docs/assets/a.png");
+        assert_eq!(assets[0].mime, "image/png");
+        assert_eq!(assets[0].bytes, png.len() as u64);
+        assert_eq!(assets[0].hash.len(), 64);
+
+        std::fs::remove_file(root.path().join("docs/assets/0-oversized.png")).unwrap();
+        let vault = Vault::load_docs_only(root.path()).unwrap();
+        assert_eq!(
+            vault
+                .documentation_assets()
+                .iter()
+                .map(|asset| asset.path.as_str())
+                .collect::<Vec<_>>(),
+            ["docs/assets/a.png", "docs/assets/b.png"]
+        );
+        assert!(vault.source_entries().is_empty());
+    }
+
+    #[test]
+    fn documentation_assets_support_the_passive_format_set() {
+        let root = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(root.path().join("docs")).unwrap();
+        for (path, contents) in [
+            ("docs/a.png", b"\x89PNG\r\n\x1a\npreview".as_slice()),
+            (
+                "docs/b.jpg",
+                b"\xff\xd8\xff\xe0\x00\x10JFIF\x00preview".as_slice(),
+            ),
+            ("docs/c.gif", b"GIF89a\x01\x00\x01\x00preview".as_slice()),
+            (
+                "docs/d.webp",
+                b"RIFF\x10\x00\x00\x00WEBPVP8 preview".as_slice(),
+            ),
+            ("docs/e.pdf", b"%PDF-1.7\npreview".as_slice()),
+        ] {
+            std::fs::write(root.path().join(path), contents).unwrap();
+        }
+
+        let vault = Vault::load_docs_only(root.path()).unwrap();
+        assert_eq!(
+            vault
+                .documentation_assets()
+                .iter()
+                .map(|asset| (asset.path.as_str(), asset.mime.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("docs/a.png", "image/png"),
+                ("docs/b.jpg", "image/jpeg"),
+                ("docs/c.gif", "image/gif"),
+                ("docs/d.webp", "image/webp"),
+                ("docs/e.pdf", "application/pdf"),
+            ]
+        );
+    }
+
+    #[test]
+    fn documentation_asset_hash_changes_for_same_size_content() {
+        let root = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(root.path().join("docs")).unwrap();
+        let path = root.path().join("docs/preview.png");
+        std::fs::write(&path, b"\x89PNG\r\n\x1a\na").unwrap();
+        let before = Vault::load_docs_only(root.path()).unwrap();
+        let before_hash = before.documentation_assets()[0].hash.clone();
+
+        std::fs::write(&path, b"\x89PNG\r\n\x1a\nb").unwrap();
+        let after = Vault::load_docs_only(root.path()).unwrap();
+
+        assert_ne!(before_hash, after.documentation_assets()[0].hash);
+    }
 
     #[test]
     fn splits_exact_frontmatter_delimiters_with_lf_and_crlf() {

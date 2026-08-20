@@ -12,7 +12,8 @@ use wasm_bindgen::prelude::*;
 use super::PreparedState;
 #[cfg(not(target_arch = "wasm32"))]
 use super::{
-    EditorC4Artifact, EditorGraphNode, EditorLikeC4Model, EditorSourceEntry, StateSummary,
+    EditorAssetEntry, EditorC4Artifact, EditorGraphNode, EditorLikeC4Model, EditorSourceEntry,
+    StateSummary,
 };
 
 #[cfg(target_arch = "wasm32")]
@@ -27,6 +28,11 @@ pub(super) fn initial_projections_from_js(prepared: &PreparedState) -> Result<Js
         &projections,
         "sources",
         &js_projection_value(&prepared.sources)?,
+    )?;
+    set_js_field(
+        &projections,
+        "assets",
+        &js_projection_value(&prepared.assets)?,
     )?;
     set_js_field(
         &projections,
@@ -87,6 +93,7 @@ fn js_projection_value(value: &impl Serialize) -> Result<JsValue, JsValue> {
 pub(super) struct InitialProjections<'a> {
     summary: &'a StateSummary,
     sources: &'a [EditorSourceEntry],
+    assets: &'a [EditorAssetEntry],
     nodes: &'a [EditorGraphNode],
     #[serde(rename = "registeredPatterns")]
     registered_patterns: &'a [String],
@@ -103,6 +110,7 @@ impl<'a> From<&'a PreparedState> for InitialProjections<'a> {
         Self {
             summary: &prepared.summary,
             sources: &prepared.sources,
+            assets: &prepared.assets,
             nodes: &prepared.nodes,
             registered_patterns: &prepared.registered_patterns,
             pattern_matches: &prepared.pattern_matches,

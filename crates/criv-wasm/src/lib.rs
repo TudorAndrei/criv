@@ -8,6 +8,7 @@ use criv_state_wire::{PatternMatch, StateDocument};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
+mod asset;
 mod decode;
 mod likec4;
 mod projection;
@@ -150,9 +151,11 @@ impl PreparedState {
             mut registered_patterns,
             patterns,
             source_index,
+            asset_index,
         } = state;
         let criv_state_wire::Graph { nodes, edges, .. } = graph;
         let sources = source::take_unique_source_entries(source_index);
+        let assets = asset::take_assets(asset_index);
         let nodes = source::take_editor_graph_nodes(nodes);
         registered_patterns.sort();
         registered_patterns.dedup();
@@ -163,16 +166,18 @@ impl PreparedState {
             node_count: nodes.len(),
             edge_count: edges.len(),
             source_count: sources.len(),
+            asset_count: assets.len(),
             pattern_count: registered_patterns.len(),
             first_node_id: nodes.first().map(|node| node.id.clone()),
             first_edge: edges
                 .first()
                 .map(|edge| format!("{}:{}:{}", edge.from, edge.kind, edge.to)),
             first_source_path: sources.first().map(|source| source.path.clone()),
+            first_asset_path: assets.first().map(|asset| asset.path.clone()),
         };
         Ok(Self::from_parts(
             summary,
-            sources,
+            EditorInventory { sources, assets },
             nodes,
             registered_patterns,
             patterns,
@@ -193,15 +198,18 @@ struct StateSummary {
     node_count: usize,
     edge_count: usize,
     source_count: usize,
+    asset_count: usize,
     pattern_count: usize,
     first_node_id: Option<String>,
     first_edge: Option<String>,
     first_source_path: Option<String>,
+    first_asset_path: Option<String>,
 }
 
 struct PreparedState {
     summary: StateSummary,
     sources: Vec<EditorSourceEntry>,
+    assets: Vec<EditorAssetEntry>,
     nodes: Vec<EditorGraphNode>,
     registered_patterns: Vec<String>,
     pattern_matches: BTreeMap<String, Vec<PatternMatch>>,
@@ -213,10 +221,23 @@ struct PreparedState {
     empty_selector_order: Vec<usize>,
 }
 
+struct EditorInventory {
+    sources: Vec<EditorSourceEntry>,
+    assets: Vec<EditorAssetEntry>,
+}
+
 #[derive(Debug, Serialize)]
 struct EditorSourceEntry {
     path: String,
     mime: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct EditorAssetEntry {
+    path: String,
+    mime: String,
+    bytes: u64,
+    hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -407,6 +428,24 @@ mod tests {
         assert_eq!(projections["registeredPatterns"][0], "ADR-0001/entrypoint");
         assert!(projections["patternMatches"]["ADR-0001/entrypoint"].is_array());
         assert!(loaded.take_initial_projection().is_err());
+    }
+
+    #[test]
+    fn initial_projection_publishes_safe_documentation_assets() {
+        let mut state = editor_state();
+        state.asset_index.push(criv_state_wire::AssetIndexEntry {
+            path: "docs/diagram.png".into(),
+            mime: "image/png".into(),
+            bytes: 128,
+            hash: "a".repeat(64),
+        });
+        let prepared = PreparedState::from_borrowed(&state);
+        let projection =
+            serde_json::to_value(projection::InitialProjections::from(&prepared)).unwrap();
+
+        assert_eq!(projection["summary"]["asset_count"], 1);
+        assert_eq!(projection["assets"][0]["path"], "docs/diagram.png");
+        assert_eq!(projection["assets"][0]["mime"], "image/png");
     }
 
     #[test]

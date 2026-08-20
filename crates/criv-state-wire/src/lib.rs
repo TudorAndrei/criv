@@ -28,6 +28,8 @@ pub struct StateDocument {
     pub patterns: BTreeMap<String, Vec<PatternMatch>>,
     #[serde(default, rename = "source-index")]
     pub source_index: Vec<SourceIndexEntry>,
+    #[serde(default, rename = "asset-index", skip_serializing_if = "Vec::is_empty")]
+    pub asset_index: Vec<AssetIndexEntry>,
 }
 
 impl StateDocument {
@@ -44,6 +46,7 @@ impl StateDocument {
             registered_patterns,
             patterns,
             source_index,
+            asset_index: Vec::new(),
         }
     }
 }
@@ -112,13 +115,21 @@ pub struct SourceIndexEntry {
     pub mime: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AssetIndexEntry {
+    pub path: String,
+    pub mime: String,
+    pub bytes: u64,
+    pub hash: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn document_uses_one_schema_and_wire_row_contract() {
-        let document = StateDocument::new(
+        let mut document = StateDocument::new(
             Graph {
                 root: "root-hash".into(),
                 nodes: vec![Node {
@@ -149,16 +160,24 @@ mod tests {
                 mime: Some("text/rust".into()),
             }],
         );
+        document.asset_index.push(AssetIndexEntry {
+            path: "docs/diagram.png".into(),
+            mime: "image/png".into(),
+            bytes: 128,
+            hash: "asset-hash".into(),
+        });
 
         let value = serde_json::to_value(&document).unwrap();
         assert_eq!(value["schema"], STATE_SCHEMA);
         assert_eq!(value["registered-patterns"][0], "ADR-0001/entrypoint");
         assert_eq!(value["source-index"][0]["path"], "src/lib.rs");
+        assert_eq!(value["asset-index"][0]["path"], "docs/diagram.png");
 
         let decoded: StateDocument = serde_json::from_value(value).unwrap();
         assert!(is_supported_schema(&decoded.schema));
         assert_eq!(decoded.graph.nodes[0].hash, "node-hash");
         assert_eq!(decoded.graph.edges[0].hash, "edge-hash");
+        assert_eq!(decoded.asset_index[0].hash, "asset-hash");
         assert_eq!(
             decoded.patterns["ADR-0001/entrypoint"][0].file,
             "src/lib.rs"
@@ -176,5 +195,14 @@ mod tests {
             serde_json::to_value(entry).unwrap(),
             serde_json::json!({"path": "src/lib.rs", "mime": "text/rust"})
         );
+    }
+
+    #[test]
+    fn empty_asset_index_keeps_the_existing_wire_shape() {
+        let value = serde_json::to_value(StateDocument::default()).unwrap();
+        assert!(value.get("asset-index").is_none());
+
+        let decoded: StateDocument = serde_json::from_str(r#"{"schema":"criv.state.v1"}"#).unwrap();
+        assert!(decoded.asset_index.is_empty());
     }
 }

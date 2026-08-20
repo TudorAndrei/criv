@@ -1,8 +1,14 @@
-import { ItemView } from "obsidian";
+import { ItemView, Notice, TFile } from "obsidian";
 import type { App, WorkspaceLeaf } from "obsidian";
-import type { CrivState, FrontmatterPatternTarget, LinkedSource } from "./model";
-import { frontmatterPatternTargets, linkedSourcesFromMarkdown } from "./model";
+import type { AssetIndexEntry, CrivState, FrontmatterPatternTarget, LinkedSource } from "./model";
+import { frontmatterPatternTargets, linkedSourcesFromMarkdown, safeVaultPath } from "./model";
 import type { StatePort } from "../ports";
+import {
+  assetResourceUrl,
+  isPassiveImage,
+  replaceFailedAssetPreview,
+  resolveActiveAsset,
+} from "./assets";
 import { languageForPath, readSourcePreview, renderPreview, renderPreviewError } from "./preview";
 
 export const SOURCE_PANEL_VIEW_TYPE = "criv-source-panel";
@@ -77,6 +83,32 @@ export class ObsidianSourcePanelOwner {
     return frontmatterPatternTargets(frontmatter, state);
   }
 
+  assetEntries(): Promise<AssetIndexEntry[]> {
+    return this.state.assetEntries();
+  }
+
+  async assetResourcePath(requestedPath: unknown): Promise<string | null> {
+    const asset = resolveActiveAsset(await this.assetEntries(), requestedPath);
+    const path = asset ? safeVaultPath(asset.path) : null;
+    if (!path) {
+      return null;
+    }
+    const file = this.app.vault.getAbstractFileByPath(path);
+    return file instanceof TFile
+      ? assetResourceUrl(this.app.vault.getResourcePath(file), asset.hash)
+      : null;
+  }
+
+  async openAsset(requestedPath: unknown): Promise<void> {
+    const asset = resolveActiveAsset(await this.assetEntries(), requestedPath);
+    const path = asset ? safeVaultPath(asset.path) : null;
+    const file = path ? this.app.vault.getAbstractFileByPath(path) : null;
+    if (!(file instanceof TFile)) {
+      throw new Error(`Could not open ${String(requestedPath)}`);
+    }
+    await this.app.workspace.getLeaf(true).openFile(file);
+  }
+
   openExternal(path: string): void {
     const url = this.externalEditorUrl().replace("{path}", encodeURI(path));
     window.open(url);
@@ -140,6 +172,17 @@ class CrivSourceView extends ItemView {
       await this.renderLinkedSource(container, source);
     }
 
+    const assets = await this.owner.assetEntries();
+    const assetHeader = container.createDiv({ cls: "criv-panel-header" });
+    assetHeader.createEl("h3", { text: "Documentation assets" });
+    assetHeader.createSpan({ text: `${assets.length}` });
+    if (assets.length === 0) {
+      container.createEl("p", { cls: "criv-empty", text: "No previewable assets." });
+    }
+    for (const asset of assets) {
+      await this.renderAsset(container, asset);
+    }
+
     const frontmatterPatterns = this.owner.frontmatterPatternTargets(state);
     container.createEl("h3", { cls: "criv-section-title", text: "Pattern targets" });
     if (frontmatterPatterns.length === 0) {
@@ -201,4 +244,38 @@ class CrivSourceView extends ItemView {
       renderPreviewError(card, source.entry.path);
     }
   }
+
+  private async renderAsset(container: HTMLElement, asset: AssetIndexEntry): Promise<void> {
+    const card = container.createDiv({ cls: "criv-asset-card" });
+    const head = card.createDiv({ cls: "criv-source-card-head" });
+    const openButton = head.createEl("button", { text: asset.path });
+    openButton.onclick = () => {
+      void this.owner.openAsset(asset.path).catch(() => {
+        new Notice(`Could not open ${asset.path}`);
+        replaceFailedAssetPreview(card, () => renderPreviewError(card, asset.path));
+      });
+    };
+    head.createSpan({ text: `${asset.mime} · ${formatBytes(asset.bytes)}` });
+
+    if (!isPassiveImage(asset)) {
+      card.createDiv({ cls: "criv-asset-document", text: "Open the PDF in Obsidian" });
+      return;
+    }
+    const resource = await this.owner.assetResourcePath(asset.path);
+    if (!resource) {
+      renderPreviewError(card, asset.path);
+      return;
+    }
+    const image = card.createEl("img", {
+      cls: "criv-asset-preview",
+      attr: { alt: asset.path, loading: "lazy", src: resource },
+    });
+    image.onerror = () => {
+      replaceFailedAssetPreview(card, () => renderPreviewError(card, asset.path));
+    };
+  }
+}
+
+function formatBytes(bytes: number): string {
+  return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KiB`;
 }

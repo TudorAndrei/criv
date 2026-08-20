@@ -9,8 +9,8 @@ use std::{cell::Cell, thread_local};
 #[cfg(test)]
 use criv_state_wire::STATE_SCHEMA;
 use criv_state_wire::{
-    Edge, Graph, LikeC4ArchitectureState, Node, PatternMatch, SourceIndexEntry, StateDocument,
-    source_identity::SourceIdentity,
+    AssetIndexEntry, Edge, Graph, LikeC4ArchitectureState, Node, PatternMatch, SourceIndexEntry,
+    StateDocument, source_identity::SourceIdentity,
 };
 use serde::{Serialize, Serializer};
 
@@ -218,6 +218,16 @@ impl State {
         }
         let partitions = StatePartitions::build(root, vault, previous, changed_files, policy_plan)?;
         let mut state = Self::from_partitions(partitions);
+        state.wire.asset_index = vault
+            .documentation_assets()
+            .iter()
+            .map(|asset| AssetIndexEntry {
+                path: asset.path.clone(),
+                mime: asset.mime.clone(),
+                bytes: asset.bytes,
+                hash: asset.hash.clone(),
+            })
+            .collect();
         state.wire.architecture = vault.likec4_workspace.model.clone().map(|model| {
             add_likec4_model_to_graph(&mut state.wire.graph, vault, &model);
             LikeC4ArchitectureState {
@@ -1829,6 +1839,25 @@ source = false
                 .iter()
                 .all(|node| node["kind"] != "code")
         );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn state_publishes_verified_documentation_assets() {
+        let root = unique_temp_dir("criv-documentation-asset-state");
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        let contents = b"\x89PNG\r\n\x1a\npreview";
+        std::fs::write(root.join("docs/diagram.png"), contents).unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+        let state = State::build(&root, &vault).unwrap();
+        let json = serde_json::to_value(&state).unwrap();
+
+        assert_eq!(json["asset-index"][0]["path"], "docs/diagram.png");
+        assert_eq!(json["asset-index"][0]["mime"], "image/png");
+        assert_eq!(json["asset-index"][0]["bytes"], contents.len());
+        assert_eq!(json["asset-index"][0]["hash"].as_str().unwrap().len(), 64);
 
         let _ = std::fs::remove_dir_all(root);
     }
