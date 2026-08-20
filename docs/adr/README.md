@@ -142,3 +142,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0129-own-elixir-graph-meaning-in-the-elixir-module|ADR-0129]] - Own Elixir graph meaning in the Elixir module
 - [[0130-share-structured-source-identity-text|ADR-0130]] - Share structured Source identity text
 - [[0131-publish-verified-documentation-assets-for-native-previews|ADR-0131]] - Publish verified documentation assets for native previews
+- [[0132-use-aqua-with-a-mise-alias-and-github-fallback|ADR-0132]] - Use aqua with a mise alias and GitHub fallback
