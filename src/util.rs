@@ -248,6 +248,17 @@ pub(crate) fn write_atomic_with_permissions_in(
         .write_atomic(contents, Some(CapPermissions::from_std(permissions)))
 }
 
+pub(crate) fn write_atomic_bytes_with_permissions_in(
+    root: &Path,
+    allowed_dir: &Path,
+    destination: &Path,
+    contents: &[u8],
+    permissions: fs::Permissions,
+) -> Result<()> {
+    ConfinedFile::for_write(root, allowed_dir, destination)?
+        .write_atomic_bytes(contents, Some(CapPermissions::from_std(permissions)))
+}
+
 /// Like [`write_atomic_in`], but leaves an identical existing file untouched.
 #[cfg(test)]
 pub(crate) fn write_atomic_if_changed_in(
@@ -330,6 +341,23 @@ pub(crate) fn read_file_with_permissions_in(
     file.read_to_end(&mut contents)?;
     let file = file.into_std();
     Ok((contents, permissions.into_std(&file)?))
+}
+
+pub(crate) fn read_optional_file_with_permissions_in(
+    root: &Path,
+    source: &Path,
+) -> Result<Option<(Vec<u8>, fs::Permissions)>> {
+    let Some(target) = ConfinedFile::for_read_optional(root, source)? else {
+        return Ok(None);
+    };
+    let Some(mut file) = target.open_regular(false)? else {
+        return Ok(None);
+    };
+    let permissions = file.metadata()?.permissions();
+    let mut contents = Vec::new();
+    file.read_to_end(&mut contents)?;
+    let file = file.into_std();
+    Ok(Some((contents, permissions.into_std(&file)?)))
 }
 
 pub(crate) fn read_file_with_metadata_in(
@@ -504,6 +532,14 @@ impl ConfinedFile {
     }
 
     fn write_atomic(&self, contents: &str, permissions: Option<CapPermissions>) -> Result<()> {
+        self.write_atomic_bytes(contents.as_bytes(), permissions)
+    }
+
+    fn write_atomic_bytes(
+        &self,
+        contents: &[u8],
+        permissions: Option<CapPermissions>,
+    ) -> Result<()> {
         let inherited_permissions = match permissions {
             Some(permissions) => Some(permissions),
             None => self
@@ -531,7 +567,7 @@ impl ConfinedFile {
                 Err(error) => return Err(error.into()),
             };
             let result = (|| -> std::io::Result<()> {
-                file.write_all(contents.as_bytes())?;
+                file.write_all(contents)?;
                 file.sync_all()?;
                 if let Some(permissions) = inherited_permissions.clone() {
                     file.set_permissions(permissions)?;

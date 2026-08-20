@@ -7,6 +7,10 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 use std::path::Path;
 
+use crate::util::{
+    file_exists_in, read_optional_file_with_permissions_in, remove_file_in,
+    write_atomic_bytes_with_permissions_in,
+};
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -56,6 +60,50 @@ impl ChangedSet {
 /// private so callers cannot depend on backend-specific values.
 pub(crate) struct GitRepository {
     repository: git2::Repository,
+}
+
+pub(crate) struct IndexSnapshot {
+    file: Option<IndexFileSnapshot>,
+}
+
+struct IndexFileSnapshot {
+    contents: Vec<u8>,
+    permissions: std::fs::Permissions,
+}
+
+impl IndexSnapshot {
+    pub(crate) fn capture(root: &Path) -> Result<Self> {
+        let repository = required_repository(root)?;
+        let file = read_optional_file_with_permissions_in(
+            repository.repository.path(),
+            Path::new("index"),
+        )
+        .map_err(|error| CrivError::new(format!("Git index could not be snapshotted: {error}")))?
+        .map(|(contents, permissions)| IndexFileSnapshot {
+            contents,
+            permissions,
+        });
+        Ok(Self { file })
+    }
+
+    pub(crate) fn restore(self, root: &Path) -> Result<()> {
+        let repository = required_repository(root)?;
+        let git_dir = repository.repository.path();
+        match self.file {
+            Some(file) => write_atomic_bytes_with_permissions_in(
+                git_dir,
+                Path::new("."),
+                Path::new("index"),
+                &file.contents,
+                file.permissions,
+            ),
+            None if file_exists_in(git_dir, Path::new("index"))? => {
+                remove_file_in(git_dir, Path::new("."), Path::new("index"))
+            }
+            None => Ok(()),
+        }
+        .map_err(|error| CrivError::new(format!("Git index could not be restored: {error}")))
+    }
 }
 
 pub(crate) enum ChangedSetComparison<'a> {
@@ -760,34 +808,6 @@ pub(crate) fn dirty_paths(root: &Path) -> Result<Vec<String>> {
 
 pub(crate) fn preflight_commit_identity(root: &Path) -> Result<()> {
     commit_signature(&required_repository(root)?).map(|_| ())
-}
-
-pub(crate) fn index_tree(root: &Path) -> Result<String> {
-    let repository = required_repository(root)?;
-    repository
-        .repository
-        .index()
-        .and_then(|mut index| index.write_tree())
-        .map(|oid| oid.to_string())
-        .map_err(|error| CrivError::new(format!("Git index could not be snapshotted: {error}")))
-}
-
-pub(crate) fn restore_index_tree(root: &Path, tree_id: &str) -> Result<()> {
-    let repository = required_repository(root)?;
-    let tree = repository
-        .repository
-        .find_tree(parse_oid(tree_id, "Git index tree ID")?)
-        .map_err(|error| {
-            CrivError::new(format!("Git index tree could not be restored: {error}"))
-        })?;
-    let mut index = repository
-        .repository
-        .index()
-        .map_err(|error| CrivError::new(format!("Git index could not be read: {error}")))?;
-    index
-        .read_tree(&tree)
-        .and_then(|_| index.write())
-        .map_err(|error| CrivError::new(format!("Git index could not be restored: {error}")))
 }
 
 pub(crate) fn stage_paths(root: &Path, paths: &[String]) -> Result<()> {
