@@ -77,7 +77,6 @@ analysis, Mix discovery, macro expansion, BEAM inspection, formatting, or
 linting. It also does not model named type declarations or general module-body
 execution.
 
-The complete behavior is in
-[[0119-first-class-elixir-language-support|ADR-0119]]. Release evidence and the
-default grammar dependency are in
-[[0120-reset-release-baseline-for-default-elixir-support|ADR-0120]].
+The complete behavior and default grammar dependency are in
+[[0119-first-class-elixir-language-support|ADR-0119]]. The current release model
+is in [[0121-separate-performance-evidence-from-automatic-release|ADR-0121]].
