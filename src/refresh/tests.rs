@@ -249,7 +249,7 @@ fn invalid_graph_cache_schema_converges_with_a_cache_free_build() {
 }
 
 #[test]
-fn failed_refresh_retries_from_the_last_successful_state() {
+fn failed_source_refresh_forces_the_next_docs_refresh_to_rescan_source() {
     let _live_test = source::lock_live_test();
     let incremental = incremental_fixture("failed-refresh-incremental");
     let full = incremental_fixture("failed-refresh-full");
@@ -295,7 +295,7 @@ fn failed_refresh_retries_from_the_last_successful_state() {
     let previous = session.previous.as_ref().unwrap().state().clone();
     reset_refresh_work();
     let recovered = session
-        .refresh(incremental.path(), RefreshCause::SourceChanged)
+        .refresh(incremental.path(), RefreshCause::DocsChanged)
         .unwrap();
     assert!(refresh_work().source_graph.parsed_files > 0);
     let recovered = refresh_snapshot(incremental.path(), recovered, Some(&previous));

@@ -26,6 +26,7 @@ pub(crate) struct RefreshResult {
 pub(crate) struct RefreshSession {
     files: RepositoryFiles,
     config: Config,
+    source_refresh_pending: bool,
     previous: Option<RefreshResult>,
 }
 
@@ -41,6 +42,7 @@ impl RefreshSession {
         Ok(Self {
             files: files.clone(),
             config,
+            source_refresh_pending: false,
             previous: None,
         })
     }
@@ -55,6 +57,7 @@ impl RefreshSession {
         Ok(Self {
             files: files.clone(),
             config: config.clone(),
+            source_refresh_pending: false,
             previous: None,
         })
     }
@@ -69,6 +72,9 @@ impl RefreshSession {
         cause: RefreshCause,
         precommit_check: impl FnOnce() -> Result<()>,
     ) -> Result<&RefreshResult> {
+        if cause == RefreshCause::SourceChanged {
+            self.source_refresh_pending = true;
+        }
         let previous_source = self
             .previous
             .as_ref()
@@ -77,8 +83,8 @@ impl RefreshSession {
         let diagnostic_previous_state = matches!(cause, RefreshCause::SourceChanged)
             .then_some(previous_state)
             .flatten();
-        let source = match (cause, previous_source) {
-            (RefreshCause::DocsChanged, Some(source)) => source.reuse_for_docs(),
+        let source = match (cause, previous_source, self.source_refresh_pending) {
+            (RefreshCause::DocsChanged, Some(source), false) => source.reuse_for_docs(),
             _ => SourceState::refresh_from(&self.files, &self.config, previous_source)?,
         };
         let next = execute(
@@ -90,6 +96,7 @@ impl RefreshSession {
             precommit_check,
         )?;
 
+        self.source_refresh_pending = false;
         self.previous = Some(next);
         Ok(self
             .previous
