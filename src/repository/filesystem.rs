@@ -4,6 +4,8 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(not(windows))]
+use cap_fs_ext::OpenOptionsMaybeDirExt;
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::ambient_authority;
 use cap_std::fs::{Dir, OpenOptions as CapOpenOptions, Permissions as CapPermissions};
@@ -774,7 +776,9 @@ fn sync_directory_handle(_directory: &Dir) -> Result<()> {
 
 #[cfg(not(windows))]
 fn sync_directory_handle(directory: &Dir) -> Result<()> {
-    directory.try_clone()?.into_std_file().sync_all()?;
+    let mut options = nofollow_options();
+    options.read(true).maybe_dir(true);
+    directory.open_with(".", &options)?.sync_all()?;
     Ok(())
 }
 
