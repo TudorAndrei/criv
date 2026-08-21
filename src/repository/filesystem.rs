@@ -676,18 +676,25 @@ impl ConfinedFile {
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => return Err(error.into()),
             };
-            let result = (|| -> std::io::Result<()> {
+            let result = (|| -> Result<()> {
                 file.write_all(contents)?;
                 file.sync_all()?;
                 if let Some(permissions) = inherited_permissions.clone() {
                     file.set_permissions(permissions)?;
                 }
-                self.parent.rename(&temp_name, &self.parent, &self.name)?;
+                drop(file);
+                let replaced_permissions = self.prepare_destination_for_replace()?;
+                if let Err(error) = self.parent.rename(&temp_name, &self.parent, &self.name) {
+                    if let Some(permissions) = replaced_permissions {
+                        self.parent.set_permissions(&self.name, permissions)?;
+                    }
+                    return Err(error.into());
+                }
                 Ok(())
             })();
             if let Err(error) = result {
                 let _ = self.parent.remove_file(&temp_name);
-                return Err(error.into());
+                return Err(error);
             }
             sync_directory_handle(&self.parent)?;
             return Ok(());
@@ -697,6 +704,29 @@ impl ConfinedFile {
             "failed to create temporary file for {}",
             self.relative.display()
         )))
+    }
+
+    #[cfg(windows)]
+    fn prepare_destination_for_replace(&self) -> Result<Option<CapPermissions>> {
+        let metadata = match self.parent.symlink_metadata(&self.name) {
+            Ok(metadata) if metadata.is_file() => metadata,
+            Ok(_) => return Ok(None),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let original = metadata.permissions();
+        if !original.readonly() {
+            return Ok(None);
+        }
+        let mut writable = original.clone();
+        writable.set_readonly(false);
+        self.parent.set_permissions(&self.name, writable)?;
+        Ok(Some(original))
+    }
+
+    #[cfg(not(windows))]
+    fn prepare_destination_for_replace(&self) -> Result<Option<CapPermissions>> {
+        Ok(None)
     }
 
     fn restore_with_lock(

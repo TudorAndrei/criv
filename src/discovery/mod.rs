@@ -980,7 +980,7 @@ mod tests {
             ("ascii", b"plain text\n".to_vec(), true),
             ("utf8", "hello é\n".as_bytes().to_vec(), true),
             ("invalid-utf8", vec![0x80, 0x81, b'x'], true),
-            ("nul", vec![b'a', 0, b'b'], false),
+            ("embedded-nul", vec![b'a', 0, b'b'], false),
             ("utf8-bom", vec![0xEF, 0xBB, 0xBF, b'x'], true),
             ("utf16-le-bom", vec![0xFF, 0xFE, b'x', 0], true),
             ("utf16-be-bom", vec![0xFE, 0xFF, 0, b'x'], true),
