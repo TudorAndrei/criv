@@ -5,6 +5,7 @@ import { CrivCheckDiagnostics } from "./diagnostics/publisher";
 import { CHECK_MAX_OUTPUT_BYTES, completeCheckStdout } from "./diagnostics/output";
 import { CheckRunOwner } from "./diagnostics/runs";
 import {
+  COMMAND_OPEN_ASSET,
   COMMAND_OPEN_SOURCE_TARGET,
   COMMAND_OPEN_STATE_JSON,
   COMMAND_PREVIEW_C4,
@@ -14,6 +15,7 @@ import {
   COMMAND_RUN_WATCH_ONCE,
   CRIV_COMMANDS,
 } from "./commands/identifiers";
+import { openActiveAsset } from "./assets";
 import { runProcess, type CommandResult } from "./commands/runner";
 import { crivConfiguration, executablePathError } from "./config/reader";
 import { registerSourceLanguageFeatures } from "./navigation/languageFeatures";
@@ -67,6 +69,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.commands.registerCommand(COMMAND_OPEN_SOURCE_TARGET, async (target?: unknown) => {
       await openSourceTarget(store, target);
+    }),
+    vscode.commands.registerCommand(COMMAND_OPEN_ASSET, async (path?: unknown) => {
+      await openAsset(store, path);
     }),
     vscode.commands.registerCommand(COMMAND_RUN_WATCH_ONCE, async () => {
       await runWatchOnce(store);
@@ -453,6 +458,30 @@ async function openSourceTarget(store: WorkspaceStateStore, target: unknown): Pr
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await vscode.window.showWarningMessage(`Could not open ${parsed.path}: ${message}`);
+  }
+}
+
+async function openAsset(store: WorkspaceStateStore, requestedPath: unknown): Promise<void> {
+  const status = await ensureLoadedState(store);
+  if (status.kind !== "ready") {
+    await vscode.window.showWarningMessage(messageForStatus(status));
+    return;
+  }
+  const result = await openActiveAsset(status.snapshot.assets, requestedPath, async (asset) => {
+    const uri = vscode.Uri.joinPath(status.root, ...asset.path.split("/"));
+    await vscode.commands.executeCommand("vscode.open", uri);
+  });
+  if (result.kind === "invalid") {
+    await vscode.window.showWarningMessage("Choose a valid documentation asset to open.");
+    return;
+  }
+  if (result.kind === "unauthorized") {
+    await vscode.window.showWarningMessage("The active criv State does not contain this asset.");
+    return;
+  }
+  if (result.kind === "failed") {
+    const message = result.error instanceof Error ? result.error.message : String(result.error);
+    await vscode.window.showWarningMessage(`Could not open ${result.asset.path}: ${message}`);
   }
 }
 

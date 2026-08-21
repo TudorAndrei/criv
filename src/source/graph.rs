@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::Path;
 use std::thread;
 
@@ -9,8 +8,10 @@ use std::{cell::Cell, thread_local};
 use serde::{Deserialize, Serialize};
 use tree_sitter::{Node, Parser};
 
+use criv_state_wire::source_identity::{SourceIdentity, SourceSelector};
+
 use super::paths::read_source_bytes;
-use crate::util::write_atomic_in;
+use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
 mod elixir;
@@ -71,6 +72,8 @@ pub(crate) struct SourceGraph {
     #[serde(skip)]
     changed_files: Vec<String>,
     symbol_index: BTreeMap<String, Vec<SymbolId>>,
+    #[serde(skip)]
+    elixir_relationships: elixir::ElixirRelationships,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -201,26 +204,6 @@ pub(crate) enum SymbolOwner {
     Implementation { protocol: String, for_type: String },
 }
 
-impl SymbolOwner {
-    fn selector(&self) -> String {
-        match self {
-            Self::Module { name } => format!("module:{}", selector_value(name)),
-            Self::Implementation { protocol, for_type } => format!(
-                "impl:{}/for:{}",
-                selector_value(protocol),
-                selector_value(for_type)
-            ),
-        }
-    }
-
-    fn qualified_callable_alias(&self, name: &str, arity: usize) -> Option<String> {
-        match self {
-            Self::Module { name: module } => Some(format!("{module}.{name}/{arity}")),
-            Self::Implementation { .. } => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub(crate) struct SymbolId {
     pub(crate) path: String,
@@ -230,7 +213,11 @@ pub(crate) struct SymbolId {
 
 impl SymbolId {
     pub(crate) fn display(&self) -> String {
-        format!("{}#{}", self.path, self.selector)
+        SourceIdentity::symbol(
+            self.path.clone(),
+            SourceSelector::opaque(self.selector.clone()),
+        )
+        .to_string()
     }
 }
 
@@ -250,10 +237,6 @@ pub(crate) enum RelationshipKind {
 }
 
 impl RelationshipKind {
-    fn is_executable_query_edge(self) -> bool {
-        matches!(self, Self::Call | Self::Delegate)
-    }
-
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Call => "calls",
@@ -332,24 +315,6 @@ impl SymbolKind {
             Self::Guard => "guard",
             Self::Callback => "callback",
             Self::MacroCallback => "macro-callback",
-        }
-    }
-
-    fn elixir_selector_prefix(self) -> Option<&'static str> {
-        match self {
-            Self::Function => Some("fn"),
-            Self::Macro => Some("macro"),
-            Self::Guard => Some("guard"),
-            Self::Callback => Some("callback"),
-            Self::MacroCallback => Some("macro-callback"),
-            Self::Method
-            | Self::Class
-            | Self::Module
-            | Self::Protocol
-            | Self::Implementation
-            | Self::Struct
-            | Self::Exception
-            | Self::Behaviour => None,
         }
     }
 }
@@ -438,27 +403,63 @@ enum CacheDisposition {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct SourceGraphBuild {
+pub(super) struct SourceGraphBuild {
     graph: SourceGraph,
     cache: CacheDisposition,
 }
 
 impl SourceGraphBuild {
-    pub(crate) fn build_incremental(
+    #[cfg(test)]
+    fn build_incremental(
         root: &Path,
         source_files: &[String],
         previous: Option<&Self>,
     ) -> Result<Self> {
-        let graph = SourceGraph::build_incremental(
-            root,
+        let files = RepositoryFiles::open(root)?;
+        Self::build_incremental_from(&files, source_files, previous)
+    }
+
+    pub(super) fn build_incremental_from(
+        files: &RepositoryFiles,
+        source_files: &[String],
+        previous: Option<&Self>,
+    ) -> Result<Self> {
+        Self::build_incremental_with_workers_inner(
+            files,
+            source_files,
+            previous,
+            source_worker_count(source_files.len()),
+        )
+    }
+
+    #[cfg(test)]
+    fn build_incremental_with_workers(
+        root: &Path,
+        source_files: &[String],
+        previous: Option<&Self>,
+        workers: usize,
+    ) -> Result<Self> {
+        let files = RepositoryFiles::open(root)?;
+        assert!(workers > 0, "Source test worker count must be positive");
+        Self::build_incremental_with_workers_inner(&files, source_files, previous, workers)
+    }
+
+    fn build_incremental_with_workers_inner(
+        files: &RepositoryFiles,
+        source_files: &[String],
+        previous: Option<&Self>,
+        workers: usize,
+    ) -> Result<Self> {
+        let graph = SourceGraph::build_incremental_with_workers(
+            files,
             source_files,
             previous.map(SourceGraphBuild::graph),
+            workers,
         )?;
-        let cache = if previous.is_some_and(|previous| {
-            previous.cache == CacheDisposition::Clean
-                && graph.changed_files().is_empty()
-                && graph_cache_path(root).is_file()
-        }) {
+        let can_reuse = previous.is_some_and(|previous| {
+            previous.cache == CacheDisposition::Clean && graph.changed_files().is_empty()
+        });
+        let cache = if can_reuse && files.file_exists(Path::new(".criv/source-graph.json"))? {
             CacheDisposition::Clean
         } else {
             CacheDisposition::Dirty
@@ -466,50 +467,65 @@ impl SourceGraphBuild {
         Ok(Self { graph, cache })
     }
 
-    pub(crate) fn disabled() -> Self {
+    pub(super) fn disabled() -> Self {
         Self {
             graph: SourceGraph::default(),
             cache: CacheDisposition::Clean,
         }
     }
 
-    pub(crate) fn reused(&self) -> Self {
+    pub(super) fn reused(&self) -> Self {
         let mut reused = self.clone();
         reused.graph.changed_files.clear();
         reused
     }
 
-    pub(crate) fn graph(&self) -> &SourceGraph {
+    pub(super) fn graph(&self) -> &SourceGraph {
         &self.graph
     }
 
-    pub(crate) fn paths(&self) -> Vec<String> {
+    pub(super) fn paths(&self) -> Vec<String> {
         self.graph.files.keys().cloned().collect()
     }
 
-    pub(crate) fn publish(mut self, root: &Path) -> Result<Self> {
+    #[cfg(test)]
+    fn publish(self, root: &Path) -> Result<Self> {
+        let files = RepositoryFiles::open(root)?;
+        self.publish_from(&files)
+    }
+
+    pub(super) fn publish_from(mut self, files: &RepositoryFiles) -> Result<Self> {
         if self.cache == CacheDisposition::Dirty {
-            store_cached(root, &self.graph)?;
+            store_cached(files, &self.graph)?;
             self.cache = CacheDisposition::Clean;
         }
         Ok(self)
     }
 }
 
-pub(crate) fn load_cached(root: &Path) -> Option<SourceGraphBuild> {
+#[cfg(test)]
+fn load_cached(root: &Path) -> Option<SourceGraphBuild> {
+    let files = RepositoryFiles::open(root).ok()?;
+    load_cached_from(&files)
+}
+
+pub(super) fn load_cached_from(files: &RepositoryFiles) -> Option<SourceGraphBuild> {
     #[cfg(test)]
     record_work(|counts| counts.cache_loads += 1);
 
-    let path = graph_cache_path(root);
-    let contents = fs::read_to_string(path).ok()?;
-    let cache = serde_json::from_str::<GraphCacheFile>(&contents).ok()?;
+    let contents = files
+        .read_optional_string(Path::new(".criv/source-graph.json"))
+        .ok()
+        .flatten()?;
+    let mut cache = serde_json::from_str::<GraphCacheFile>(&contents).ok()?;
+    cache.graph.rebuild_elixir_relationships();
     (cache.schema == GRAPH_CACHE_SCHEMA).then_some(SourceGraphBuild {
         graph: cache.graph,
         cache: CacheDisposition::Clean,
     })
 }
 
-fn store_cached(root: &Path, graph: &SourceGraph) -> Result<()> {
+fn store_cached(files: &RepositoryFiles, graph: &SourceGraph) -> Result<()> {
     let cache = BorrowedGraphCacheFile {
         schema: GRAPH_CACHE_SCHEMA,
         graph,
@@ -519,12 +535,9 @@ fn store_cached(root: &Path, graph: &SourceGraph) -> Result<()> {
     let contents = serde_json::to_string_pretty(&cache)
         .map_err(|err| CrivError::new(format!("failed to serialize source graph cache: {err}")))?;
     let contents = format!("{contents}\n");
-    write_atomic_in(
-        root,
-        Path::new(".criv"),
-        Path::new(".criv/source-graph.json"),
-        &contents,
-    )?;
+    files
+        .write_scope(Path::new(".criv"))?
+        .write_atomic(Path::new(".criv/source-graph.json"), &contents)?;
     #[cfg(test)]
     record_work(|counts| {
         counts.cache_publications += 1;
@@ -533,6 +546,7 @@ fn store_cached(root: &Path, graph: &SourceGraph) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn graph_cache_path(root: &Path) -> std::path::PathBuf {
     root.join(".criv/source-graph.json")
 }
@@ -656,13 +670,29 @@ impl InterfaceSignature {
 }
 
 impl SourceGraph {
+    #[cfg(test)]
     fn build_incremental(
         root: &Path,
         source_files: &[String],
         previous: Option<&Self>,
     ) -> Result<Self> {
+        let files = RepositoryFiles::open(root)?;
+        Self::build_incremental_with_workers(
+            &files,
+            source_files,
+            previous,
+            source_worker_count(source_files.len()),
+        )
+    }
+
+    fn build_incremental_with_workers(
+        files: &RepositoryFiles,
+        source_files: &[String],
+        previous: Option<&Self>,
+        workers: usize,
+    ) -> Result<Self> {
         let mut graph = Self::default();
-        for processed in process_source_files(root, source_files, previous)? {
+        for processed in process_source_files(files, source_files, previous, workers)? {
             #[cfg(test)]
             record_work(|counts| counts.source_reads += 1);
             let Some(processed) = processed else {
@@ -679,13 +709,13 @@ impl SourceGraph {
             for symbol in &processed.parsed.symbols {
                 if let Some(owner) = &symbol.owner {
                     debug_assert_eq!(
-                        elixir_symbol_selector(symbol.kind, owner, &symbol.name, symbol.arity)
+                        elixir::symbol_selector(symbol.kind, owner, &symbol.name, symbol.arity)
                             .as_deref(),
                         Some(symbol.id.selector.as_str()),
                         "structured Source owner and selector must agree"
                     );
                 }
-                for key in symbol_aliases(symbol)
+                for key in elixir::compatibility_aliases(symbol)
                     .into_iter()
                     .chain(std::iter::once(symbol.id.selector.clone()))
                 {
@@ -710,7 +740,12 @@ impl SourceGraph {
             graph.changed_files.sort();
             graph.changed_files.dedup();
         }
+        graph.rebuild_elixir_relationships();
         Ok(graph)
+    }
+
+    fn rebuild_elixir_relationships(&mut self) {
+        self.elixir_relationships = elixir::ElixirRelationships::build(&self.files);
     }
 
     fn resolve_symbol_result(&self, query: &str) -> SymbolResolution {
@@ -731,7 +766,11 @@ impl SourceGraph {
             let aliases = file
                 .symbols
                 .iter()
-                .filter(|symbol| symbol_aliases(symbol).iter().any(|alias| alias == selector))
+                .filter(|symbol| {
+                    elixir::compatibility_aliases(symbol)
+                        .iter()
+                        .any(|alias| alias == selector)
+                })
                 .map(|symbol| symbol.id.clone())
                 .collect::<Vec<_>>();
             return symbol_resolution(aliases);
@@ -766,7 +805,7 @@ impl SourceGraph {
                     symbol
                         .relationships
                         .iter()
-                        .filter(|relationship| relationship.kind.is_executable_query_edge())
+                        .filter(|relationship| elixir::is_executable_query_edge(relationship.kind))
                         .map(|relationship| {
                             self.resolve_relationship(&symbol.id, relationship)
                                 .map_or_else(
@@ -795,7 +834,7 @@ impl SourceGraph {
                         .is_some_and(|target| target == symbol_id)
                         || call.target == symbol_id.name
                 }) || symbol.relationships.iter().any(|relationship| {
-                    relationship.kind.is_executable_query_edge()
+                    elixir::is_executable_query_edge(relationship.kind)
                         && self.resolve_relationship(&symbol.id, relationship).as_ref()
                             == Some(&symbol_id)
                 }) {
@@ -818,7 +857,7 @@ impl SourceGraph {
                     }
                 }
                 for relationship in &symbol.relationships {
-                    if relationship.kind.is_executable_query_edge()
+                    if elixir::is_executable_query_edge(relationship.kind)
                         && let Some(target) = self.resolve_relationship(&symbol.id, relationship)
                     {
                         called.insert(target);
@@ -874,87 +913,8 @@ impl SourceGraph {
         caller: &SymbolId,
         relationship: &Relationship,
     ) -> Option<SymbolId> {
-        let caller_symbol = self.symbol(caller)?;
-        let file = self.files.get(&caller.path)?;
-        match &relationship.target {
-            RelationshipTarget::Dynamic { .. } => None,
-            RelationshipTarget::Module { module, .. } => {
-                let module = resolve_elixir_module(
-                    file,
-                    caller_symbol.owner.as_ref(),
-                    module,
-                    relationship.line,
-                    relationship.site,
-                );
-                unique_symbol(self.symbols().filter(|symbol| {
-                    symbol.arity.is_none()
-                        && symbol.owner.as_ref().is_some_and(|owner| match owner {
-                            SymbolOwner::Module { name } => name == &module,
-                            SymbolOwner::Implementation { .. } => false,
-                        })
-                }))
-            }
-            RelationshipTarget::Callable {
-                module,
-                name,
-                arity,
-            } => {
-                if let Some(module) = module {
-                    let module = resolve_elixir_module(
-                        file,
-                        caller_symbol.owner.as_ref(),
-                        module,
-                        relationship.line,
-                        relationship.site,
-                    );
-                    return unique_symbol(
-                        self.symbols().filter(|symbol| {
-                            elixir_callable_matches(symbol, &module, name, *arity)
-                        }),
-                    );
-                }
-
-                let local = symbol_resolution(
-                    file.symbols
-                        .iter()
-                        .filter(|symbol| {
-                            symbol.owner == caller_symbol.owner
-                                && elixir_callable_identity_matches(symbol, name, *arity)
-                        })
-                        .map(|symbol| symbol.id.clone())
-                        .collect(),
-                );
-                match local {
-                    SymbolResolution::Resolved(id) => return Some(id),
-                    SymbolResolution::Ambiguous(_) => return None,
-                    SymbolResolution::Missing => {}
-                }
-
-                let mut candidates = Vec::new();
-                for module in effective_elixir_imports(
-                    file,
-                    caller_symbol.owner.as_ref(),
-                    relationship.line,
-                    relationship.site,
-                    name,
-                    *arity,
-                ) {
-                    candidates.extend(self.symbols().filter(|symbol| {
-                        elixir_callable_matches(symbol, &module, name, *arity)
-                            && import_kind_allows(
-                                file,
-                                caller_symbol.owner.as_ref(),
-                                &module,
-                                relationship.line,
-                                relationship.site,
-                                (name, *arity),
-                                symbol.kind,
-                            )
-                    }));
-                }
-                unique_symbol(candidates)
-            }
-        }
+        self.elixir_relationships
+            .resolve(&self.files, caller, relationship)
     }
 
     pub(crate) fn relationship_target_label(
@@ -962,41 +922,8 @@ impl SourceGraph {
         caller: &SymbolId,
         relationship: &Relationship,
     ) -> String {
-        let file = self.files.get(&caller.path);
-        let owner = self.symbol(caller).and_then(|symbol| symbol.owner.as_ref());
-        match &relationship.target {
-            RelationshipTarget::Callable {
-                module,
-                name,
-                arity,
-            } => module.as_ref().map_or_else(
-                || format!("{name}/{arity}"),
-                |module| {
-                    let module = file.map_or_else(
-                        || module.clone(),
-                        |file| {
-                            resolve_elixir_module(
-                                file,
-                                owner,
-                                module,
-                                relationship.line,
-                                relationship.site,
-                            )
-                        },
-                    );
-                    format!("{module}.{name}/{arity}")
-                },
-            ),
-            RelationshipTarget::Module { module, .. } => file.map_or_else(
-                || module.clone(),
-                |file| {
-                    resolve_elixir_module(file, owner, module, relationship.line, relationship.site)
-                },
-            ),
-            RelationshipTarget::Dynamic { id, label, .. } => {
-                format!("dynamic:{id}:{label}")
-            }
-        }
+        self.elixir_relationships
+            .target_label(&self.files, caller, relationship)
     }
 
     pub(crate) fn interface_hash(&self, query: &str) -> Option<String> {
@@ -1015,6 +942,10 @@ impl SourceGraph {
             .get(&id.path)
             .and_then(|file| file.symbols.iter().find(|symbol| &symbol.id == id))
     }
+
+    pub(crate) fn symbol_name(&self, id: &SymbolId) -> Option<&str> {
+        self.symbol(id).map(|symbol| symbol.name.as_str())
+    }
 }
 
 #[derive(Debug)]
@@ -1026,23 +957,18 @@ struct ProcessedSource {
 }
 
 fn process_source_files(
-    root: &Path,
+    files: &RepositoryFiles,
     source_files: &[String],
     previous: Option<&SourceGraph>,
+    workers: usize,
 ) -> Result<Vec<Option<ProcessedSource>>> {
     if source_files.is_empty() {
         return Ok(Vec::new());
     }
-    let useful_workers = source_files.len().div_ceil(MIN_FILES_PER_SOURCE_WORKER);
-    let workers = thread::available_parallelism()
-        .map(usize::from)
-        .unwrap_or(1)
-        .min(MAX_SOURCE_WORKERS)
-        .min(useful_workers);
     if workers == 1 {
         return source_files
             .iter()
-            .map(|source_file| process_source_file(root, source_file, previous))
+            .map(|source_file| process_source_file(files, source_file, previous))
             .collect();
     }
 
@@ -1054,7 +980,7 @@ fn process_source_files(
                 scope.spawn(move || {
                     chunk
                         .iter()
-                        .map(|source_file| process_source_file(root, source_file, previous))
+                        .map(|source_file| process_source_file(files, source_file, previous))
                         .collect::<Result<Vec<_>>>()
                 })
             })
@@ -1071,12 +997,21 @@ fn process_source_files(
     })
 }
 
+fn source_worker_count(source_files: usize) -> usize {
+    let useful_workers = source_files.div_ceil(MIN_FILES_PER_SOURCE_WORKER).max(1);
+    thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .min(MAX_SOURCE_WORKERS)
+        .min(useful_workers)
+}
+
 fn process_source_file(
-    root: &Path,
+    files: &RepositoryFiles,
     source_file: &str,
     previous: Option<&SourceGraph>,
 ) -> Result<Option<ProcessedSource>> {
-    let bytes = read_source_bytes(root, source_file).map_err(|error| {
+    let bytes = read_source_bytes(files, source_file).map_err(|error| {
         CrivError::new(format!(
             "failed to read selected file `{source_file}`: {error}"
         ))
@@ -1128,235 +1063,6 @@ fn symbol_resolution(mut matches: Vec<SymbolId>) -> SymbolResolution {
     }
 }
 
-fn unique_symbol<'a>(symbols: impl IntoIterator<Item = &'a Symbol>) -> Option<SymbolId> {
-    let mut matches = symbols
-        .into_iter()
-        .map(|symbol| symbol.id.clone())
-        .collect::<Vec<_>>();
-    matches.sort();
-    matches.dedup();
-    (matches.len() == 1).then(|| matches.remove(0))
-}
-
-fn elixir_callable_identity_matches(symbol: &Symbol, name: &str, arity: usize) -> bool {
-    symbol.name == name
-        && symbol.arity == Some(arity)
-        && matches!(
-            symbol.kind,
-            SymbolKind::Function | SymbolKind::Macro | SymbolKind::Guard
-        )
-}
-
-fn elixir_callable_matches(symbol: &Symbol, module: &str, name: &str, arity: usize) -> bool {
-    elixir_callable_identity_matches(symbol, name, arity)
-        && symbol.owner.as_ref().is_some_and(|owner| match owner {
-            SymbolOwner::Module { name } => name == module,
-            SymbolOwner::Implementation { .. } => false,
-        })
-}
-
-fn directive_is_active(
-    directive: &Import,
-    owner: Option<&SymbolOwner>,
-    line: usize,
-    site: usize,
-) -> bool {
-    directive.owner.as_ref() == owner
-        && (directive.line < line || (directive.line == line && directive.site <= site))
-        && directive
-            .scope
-            .is_none_or(|scope| scope.start_byte <= site && site <= scope.end_byte)
-}
-
-fn resolve_elixir_module(
-    file: &SourceFile,
-    owner: Option<&SymbolOwner>,
-    module: &str,
-    line: usize,
-    site: usize,
-) -> String {
-    resolve_elixir_module_inner(file, owner, module, line, site, 0)
-}
-
-fn resolve_elixir_module_inner(
-    file: &SourceFile,
-    owner: Option<&SymbolOwner>,
-    module: &str,
-    line: usize,
-    site: usize,
-    depth: usize,
-) -> String {
-    if depth >= 16 || module.starts_with(':') {
-        return module.to_string();
-    }
-    if let Some(absolute) = module.strip_prefix("Elixir.") {
-        return absolute.to_string();
-    }
-    let (first, suffix) = module
-        .split_once('.')
-        .map_or((module, ""), |(first, suffix)| (first, suffix));
-    let mapping = file
-        .imports
-        .iter()
-        .filter(|directive| {
-            directive_is_active(directive, owner, line, site)
-                && matches!(
-                    directive.kind,
-                    DirectiveKind::Alias | DirectiveKind::Require
-                )
-                && directive.alias.as_deref() == Some(first)
-        })
-        .max_by_key(|directive| (directive.line, directive.site));
-    let Some(mapping) = mapping else {
-        return module.to_string();
-    };
-    let mapped = if suffix.is_empty() {
-        mapping.module.clone()
-    } else {
-        format!("{}.{suffix}", mapping.module)
-    };
-    if mapping.absolute {
-        return mapped;
-    }
-    resolve_elixir_module_inner(
-        file,
-        owner,
-        &mapped,
-        mapping.line,
-        mapping.site.saturating_sub(1),
-        depth + 1,
-    )
-}
-
-fn effective_elixir_imports(
-    file: &SourceFile,
-    owner: Option<&SymbolOwner>,
-    line: usize,
-    site: usize,
-    _name: &str,
-    _arity: usize,
-) -> Vec<String> {
-    let mut modules = file
-        .imports
-        .iter()
-        .filter(|directive| {
-            directive.kind == DirectiveKind::Import
-                && directive_is_active(directive, owner, line, site)
-        })
-        .map(|directive| resolve_directive_module(file, owner, directive))
-        .collect::<Vec<_>>();
-    modules.sort();
-    modules.dedup();
-    modules
-}
-
-fn import_kind_allows(
-    file: &SourceFile,
-    owner: Option<&SymbolOwner>,
-    module: &str,
-    line: usize,
-    site: usize,
-    callable: (&str, usize),
-    kind: SymbolKind,
-) -> bool {
-    let (name, arity) = callable;
-    let mut directives = file
-        .imports
-        .iter()
-        .filter(|directive| {
-            directive.kind == DirectiveKind::Import
-                && directive_is_active(directive, owner, line, site)
-                && resolve_directive_module(file, owner, directive) == module
-        })
-        .collect::<Vec<_>>();
-    directives.sort_by_key(|directive| (directive.line, directive.site));
-    let mut selection: Option<DirectiveFilter> = None;
-    let mut exclusions = Vec::new();
-    for directive in directives {
-        if let Some(only) = &directive.only {
-            selection = Some(only.clone());
-            exclusions.clear();
-        } else if directive.except.is_empty() {
-            selection = None;
-            exclusions.clear();
-        } else if selection.is_none() && exclusions.is_empty() {
-            selection = None;
-        }
-        exclusions.extend(directive.except.clone());
-    }
-    if exclusions
-        .iter()
-        .any(|filter| filter.name == name && filter.arity == arity)
-    {
-        return false;
-    }
-    selection.is_none_or(|filter| directive_filter_allows(&filter, name, arity, kind))
-}
-
-fn resolve_directive_module(
-    file: &SourceFile,
-    owner: Option<&SymbolOwner>,
-    directive: &Import,
-) -> String {
-    if directive.absolute {
-        directive.module.clone()
-    } else {
-        resolve_elixir_module(
-            file,
-            owner,
-            &directive.module,
-            directive.line,
-            directive.site.saturating_sub(1),
-        )
-    }
-}
-
-fn directive_filter_allows(
-    filter: &DirectiveFilter,
-    name: &str,
-    arity: usize,
-    kind: SymbolKind,
-) -> bool {
-    match filter {
-        DirectiveFilter::Callables(filters) => filters
-            .iter()
-            .any(|filter| filter.name == name && filter.arity == arity),
-        DirectiveFilter::Functions => kind == SymbolKind::Function,
-        DirectiveFilter::Macros => matches!(kind, SymbolKind::Macro | SymbolKind::Guard),
-        DirectiveFilter::Sigils => kind == SymbolKind::Macro && name.starts_with("sigil_"),
-    }
-}
-
-fn symbol_aliases(symbol: &Symbol) -> Vec<String> {
-    let mut aliases = vec![symbol.name.clone()];
-    if let Some(arity) = symbol.arity {
-        aliases.push(format!("{}/{arity}", symbol.name));
-        if let Some(qualified) = symbol
-            .owner
-            .as_ref()
-            .and_then(|owner| owner.qualified_callable_alias(&symbol.name, arity))
-        {
-            aliases.push(qualified);
-        }
-    }
-    aliases.sort();
-    aliases.dedup();
-    aliases
-}
-
-fn selector_value(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-            encoded.push(char::from(byte));
-        } else {
-            use std::fmt::Write as _;
-            write!(&mut encoded, "%{byte:02X}").expect("writing to String cannot fail");
-        }
-    }
-    encoded
-}
-
 fn symbol_selector(kind: SymbolKind, parent: Option<&str>, name: &str) -> String {
     match (kind, parent) {
         (SymbolKind::Function, _) => format!("fn:{name}"),
@@ -1365,32 +1071,6 @@ fn symbol_selector(kind: SymbolKind, parent: Option<&str>, name: &str) -> String
         (SymbolKind::Class, _) => format!("type:{name}"),
         _ => format!("{}:{name}", kind.as_str()),
     }
-}
-
-fn elixir_symbol_selector(
-    kind: SymbolKind,
-    owner: &SymbolOwner,
-    name: &str,
-    arity: Option<usize>,
-) -> Option<String> {
-    let owner_selector = owner.selector();
-    if matches!(
-        kind,
-        SymbolKind::Module
-            | SymbolKind::Protocol
-            | SymbolKind::Implementation
-            | SymbolKind::Struct
-            | SymbolKind::Exception
-            | SymbolKind::Behaviour
-    ) {
-        return Some(owner_selector);
-    }
-    Some(format!(
-        "{owner_selector}/{}:{}/{}",
-        kind.elixir_selector_prefix()?,
-        selector_value(name),
-        arity?
-    ))
 }
 
 fn parse_tree_sitter_file(path: &str, contents: &str) -> Option<SourceFile> {
@@ -2477,7 +2157,7 @@ mod tests {
     fn graph_with_file(file: SourceFile) -> SourceGraph {
         let mut graph = SourceGraph::default();
         for symbol in &file.symbols {
-            for key in symbol_aliases(symbol)
+            for key in elixir::compatibility_aliases(symbol)
                 .into_iter()
                 .chain(std::iter::once(symbol.id.selector.clone()))
             {
@@ -2489,6 +2169,7 @@ mod tests {
             }
         }
         graph.files.insert(file.path.clone(), file);
+        graph.rebuild_elixir_relationships();
         graph
     }
 
@@ -2500,7 +2181,7 @@ mod tests {
         arity: Option<usize>,
         ranges: Vec<SymbolRange>,
     ) -> Symbol {
-        let selector = elixir_symbol_selector(kind, &owner, name, arity).unwrap();
+        let selector = elixir::symbol_selector(kind, &owner, name, arity).unwrap();
         Symbol {
             id: SymbolId {
                 path: path.into(),
@@ -2537,7 +2218,134 @@ mod tests {
         let error = SourceGraph::build_incremental(&root, &["src/secret.rs".into()], None)
             .expect_err("source graph should reject a linked source file");
 
-        assert!(error.to_string().contains("linked source path"));
+        assert!(
+            error.to_string().contains("symlinked vault path component"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn parallel_source_build_matches_serial_graph_order_and_cache() {
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("src")).unwrap();
+        for (path, contents) in [
+            ("src/a.rs", "pub fn rust_symbol() {}\n"),
+            ("src/b.ts", "export function tsSymbol() {}\n"),
+            ("src/c.mjs", "export function jsSymbol() {}\n"),
+            ("src/d.py", "def python_symbol():\n    return 1\n"),
+            ("src/e.go", "package sample\nfunc GoSymbol() {}\n"),
+            (
+                "src/f.ex",
+                "defmodule Sample do\n  def elixir_symbol(), do: :ok\nend\n",
+            ),
+            (
+                "src/g.exs",
+                "defmodule SampleTest do\n  def test_symbol(), do: :ok\nend\n",
+            ),
+        ] {
+            fs::write(root.path().join(path), contents).unwrap();
+        }
+        fs::write(root.path().join("src/h.rs"), b"\0binary").unwrap();
+        let paths = [
+            "src/g.exs",
+            "src/h.rs",
+            "src/a.rs",
+            "src/f.ex",
+            "src/c.mjs",
+            "src/e.go",
+            "src/b.ts",
+            "src/d.py",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+
+        let serial = SourceGraphBuild::build_incremental_with_workers(root.path(), &paths, None, 1)
+            .unwrap()
+            .publish(root.path())
+            .unwrap();
+        let serial_cache = fs::read(graph_cache_path(root.path())).unwrap();
+        let parallel =
+            SourceGraphBuild::build_incremental_with_workers(root.path(), &paths, None, 4)
+                .unwrap()
+                .publish(root.path())
+                .unwrap();
+        let parallel_cache = fs::read(graph_cache_path(root.path())).unwrap();
+
+        assert_eq!(parallel.graph(), serial.graph());
+        assert_eq!(parallel.paths(), serial.paths());
+        assert_eq!(
+            parallel.paths(),
+            vec![
+                "src/a.rs",
+                "src/b.ts",
+                "src/c.mjs",
+                "src/d.py",
+                "src/e.go",
+                "src/f.ex",
+                "src/g.exs",
+            ]
+        );
+        assert_eq!(
+            parallel.graph().changed_files(),
+            [
+                "src/g.exs",
+                "src/a.rs",
+                "src/f.ex",
+                "src/c.mjs",
+                "src/e.go",
+                "src/b.ts",
+                "src/d.py",
+            ]
+        );
+        assert_eq!(parallel_cache, serial_cache);
+
+        let serial_cached =
+            SourceGraphBuild::build_incremental_with_workers(root.path(), &paths, Some(&serial), 1)
+                .unwrap()
+                .publish(root.path())
+                .unwrap();
+        let parallel_cached = SourceGraphBuild::build_incremental_with_workers(
+            root.path(),
+            &paths,
+            Some(&parallel),
+            4,
+        )
+        .unwrap()
+        .publish(root.path())
+        .unwrap();
+        assert_eq!(parallel_cached.graph(), serial_cached.graph());
+        assert!(parallel_cached.graph().changed_files().is_empty());
+        assert_eq!(
+            fs::read(graph_cache_path(root.path())).unwrap(),
+            serial_cache
+        );
+    }
+
+    #[test]
+    fn parallel_source_build_reports_the_same_selected_read_error_as_serial() {
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("src")).unwrap();
+        fs::write(root.path().join("src/a.rs"), "pub fn present() {}\n").unwrap();
+        fs::write(root.path().join("src/c.ex"), "defmodule Present do\nend\n").unwrap();
+        let paths = vec![
+            "src/a.rs".into(),
+            "src/missing.rs".into(),
+            "src/c.ex".into(),
+        ];
+
+        let serial = SourceGraphBuild::build_incremental_with_workers(root.path(), &paths, None, 1)
+            .unwrap_err();
+        let parallel =
+            SourceGraphBuild::build_incremental_with_workers(root.path(), &paths, None, 3)
+                .unwrap_err();
+
+        assert_eq!(parallel.to_string(), serial.to_string());
+        assert!(
+            parallel
+                .to_string()
+                .contains("failed to read selected file `src/missing.rs`")
+        );
     }
 
     #[test]
@@ -2840,40 +2648,6 @@ mod tests {
         )
         .unwrap();
         assert!(load_cached(temp.path()).is_none());
-    }
-
-    #[test]
-    fn elixir_selectors_encode_owner_kind_name_and_arity() {
-        let module = SymbolOwner::Module {
-            name: "My App.Δ".into(),
-        };
-        assert_eq!(
-            elixir_symbol_selector(SymbolKind::Module, &module, "My App.Δ", None).unwrap(),
-            "module:My%20App.%CE%94"
-        );
-        assert_eq!(
-            elixir_symbol_selector(SymbolKind::Function, &module, "+", Some(2)).unwrap(),
-            "module:My%20App.%CE%94/fn:%2B/2"
-        );
-        assert_eq!(
-            elixir_symbol_selector(SymbolKind::MacroCallback, &module, "build!", Some(1)).unwrap(),
-            "module:My%20App.%CE%94/macro-callback:build%21/1"
-        );
-
-        let implementation = SymbolOwner::Implementation {
-            protocol: "Enumerable".into(),
-            for_type: "My App".into(),
-        };
-        assert_eq!(
-            elixir_symbol_selector(
-                SymbolKind::Implementation,
-                &implementation,
-                "Enumerable for My App",
-                None
-            )
-            .unwrap(),
-            "impl:Enumerable/for:My%20App"
-        );
     }
 
     #[test]
@@ -3485,6 +3259,64 @@ end
                 "lib/relationships.ex#module:Root.Proto".to_string(),
             ])
         );
+    }
+
+    #[test]
+    fn elixir_relationships_restore_from_cache_and_keep_cross_file_ambiguity() {
+        fn resolved_target(graph: &SourceGraph) -> Option<String> {
+            let caller = graph
+                .resolve_symbol("lib/caller.ex#module:Caller/fn:run/0")
+                .unwrap();
+            let relationship = graph
+                .symbol(&caller)
+                .unwrap()
+                .relationships
+                .first()
+                .unwrap();
+            graph
+                .resolve_relationship(&caller, relationship)
+                .map(|target| target.display())
+        }
+
+        let root = TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("lib")).unwrap();
+        fs::write(
+            root.path().join("lib/caller.ex"),
+            "defmodule Caller do\n  def run(), do: Target.run()\nend\n",
+        )
+        .unwrap();
+        fs::write(
+            root.path().join("lib/target.ex"),
+            "defmodule Target do\n  def run(), do: :ok\nend\n",
+        )
+        .unwrap();
+        let paths = vec!["lib/caller.ex".into(), "lib/target.ex".into()];
+        let built = SourceGraphBuild::build_incremental(root.path(), &paths, None).unwrap();
+        assert_eq!(
+            resolved_target(built.graph()),
+            Some("lib/target.ex#module:Target/fn:run/0".into())
+        );
+
+        built.publish(root.path()).unwrap();
+        let loaded = load_cached(root.path()).unwrap();
+        assert_eq!(
+            resolved_target(loaded.graph()),
+            Some("lib/target.ex#module:Target/fn:run/0".into())
+        );
+
+        fs::write(
+            root.path().join("lib/duplicate.ex"),
+            "defmodule Target do\n  def run(), do: :duplicate\nend\n",
+        )
+        .unwrap();
+        let paths = vec![
+            "lib/caller.ex".into(),
+            "lib/duplicate.ex".into(),
+            "lib/target.ex".into(),
+        ];
+        let ambiguous =
+            SourceGraphBuild::build_incremental(root.path(), &paths, Some(&loaded)).unwrap();
+        assert_eq!(resolved_target(ambiguous.graph()), None);
     }
 
     #[test]

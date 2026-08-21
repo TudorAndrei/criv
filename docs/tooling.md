@@ -121,10 +121,10 @@ mise run release-auto
 ```
 
 The hosted release workflow calls `release-auto` after CI passes. The command
-uses Cocogitto to prepare and push the version commit. Hosted jobs measure,
-accept, package, verify, attest, and publish that exact commit. Normal local
-development needs only `release-plan`; `release-auto` remains the workflow
-helper and a diagnostic entry point.
+uses Cocogitto to prepare and push the version commit. Hosted jobs build,
+package, verify, attest, and publish that exact commit. Normal local development
+needs only `release-plan`; `release-auto` remains the workflow helper and a
+diagnostic entry point.
 See [[releasing]] for the full sequence.
 
 Pre-commit and pre-push are the automatic local validation boundary. Agents and

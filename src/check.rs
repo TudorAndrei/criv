@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::fs;
 use std::path::Path;
+use std::sync::Arc;
+
+#[cfg(test)]
+use std::fs;
 
 use clap::{Args as ClapArgs, ValueEnum};
 use rumdl_lib::config::Config as RumdlConfig;
@@ -9,13 +12,17 @@ use rumdl_lib::rule::{LintWarning, Rule};
 use rumdl_lib::rules::{all_rules, filter_rules};
 use serde::Serialize;
 
-use crate::discovery::{MarkdownPolicy, discover_markdown, read_selected_text, select_markdown};
+use crate::diagnostic::{LspRange, SourceLocation};
+use crate::discovery::{
+    MarkdownPolicy, discover_markdown, read_selected_text_from, select_markdown,
+};
 #[cfg(test)]
 use crate::git::ChangedEntry;
 use crate::git::{ChangeStatus, ChangedSet};
 use crate::policy_scan::{PolicyDiagnostic, PolicyDiagnosticKind, PolicyScanPlan};
+use crate::repository::RepositoryFiles;
 use crate::state::{self, State};
-use crate::util::{is_adr_id, kebab, write_atomic_in};
+use crate::util::{is_adr_id, kebab};
 use crate::vault::{
     Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault, is_typed_source_target,
     source_target_body,
@@ -49,18 +56,30 @@ pub(crate) enum Severity {
     Warning,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) struct Diagnostic {
     severity: Severity,
     code: &'static str,
     path: String,
     line: Option<usize>,
     message: String,
+    location: Option<SourceLocation>,
+}
+
+#[derive(Serialize)]
+struct JsonDiagnostic<'a> {
+    severity: Severity,
+    code: &'static str,
+    path: &'a str,
+    line: Option<usize>,
+    message: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    range: Option<LspRange>,
 }
 
 #[derive(Clone, Copy)]
 struct MarkdownFixScope<'a> {
-    root: &'a Path,
+    files: &'a RepositoryFiles,
     docs_dir: &'a Path,
 }
 
@@ -79,13 +98,25 @@ impl Diagnostic {
             None => format!("{}: {}", self.path, self.message),
         }
     }
+
+    fn json(&self) -> JsonDiagnostic<'_> {
+        JsonDiagnostic {
+            severity: self.severity,
+            code: self.code,
+            path: &self.path,
+            line: self.line,
+            message: &self.message,
+            range: self.location.as_ref().map(SourceLocation::lsp_range),
+        }
+    }
 }
 
 pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
+    let files = RepositoryFiles::open(root)?;
     let mut diagnostics = if options.changed {
-        validate_changed(root)?
+        validate_changed(&files)?
     } else {
-        validate_all_with_fix(root, options.fix)?
+        validate_all_with_fix(&files, options.fix)?
     };
 
     if let Some(filter) = &options.filter {
@@ -102,7 +133,7 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
             let stale_skills = if options.changed {
                 Vec::new()
             } else {
-                crate::generated_skills::inventory(root).advisory_outdated_paths()
+                crate::install::skill_inventory_from(&files).advisory_outdated_paths()
             };
             if !stale_skills.is_empty() {
                 let subject = if stale_skills.len() == 1 {
@@ -127,17 +158,15 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
     Ok(())
 }
 
-/// Full read-only validation for commands that make a confined write and need
-/// to verify the resulting vault before reporting success.
-pub(crate) fn validate_all(root: &Path) -> Result<Vec<Diagnostic>> {
-    validate_all_with_fix(root, false)
+pub(crate) fn validate_all_from(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
+    validate_all_with_fix(files, false)
 }
 
-fn validate_all_with_fix(root: &Path, fix: bool) -> Result<Vec<Diagnostic>> {
-    let mut diagnostics = validate_markdown_format(root, fix, None)?;
-    let vault = Vault::load(root)?;
+fn validate_all_with_fix(files: &RepositoryFiles, fix: bool) -> Result<Vec<Diagnostic>> {
+    let mut diagnostics = validate_markdown_format(files, fix, None)?;
+    let vault = Vault::load_from(files)?;
     let policy_plan = PolicyScanPlan::new(&vault);
-    let previous_interface_hashes = previous_architecture_interface_hashes(root)?;
+    let previous_interface_hashes = previous_architecture_interface_hashes(files)?;
     diagnostics.extend(validate_with_previous_architecture_interfaces(
         &vault,
         previous_interface_hashes.as_ref(),
@@ -145,13 +174,14 @@ fn validate_all_with_fix(root: &Path, fix: bool) -> Result<Vec<Diagnostic>> {
     ));
     diagnostics.extend(
         policy_plan
-            .scan(root, &vault, None)?
+            .scan(&vault, None)?
             .into_iter()
             .map(|violation| {
-                error(
+                error_with_location(
                     "policy-violation",
                     &violation.path,
                     Some(violation.line),
+                    violation.location,
                     format!(
                         "{} policy `{}` matched `{}`",
                         violation.adr_id, violation.pattern_id, violation.text
@@ -163,25 +193,26 @@ fn validate_all_with_fix(root: &Path, fix: bool) -> Result<Vec<Diagnostic>> {
     Ok(diagnostics)
 }
 
-fn validate_changed(root: &Path) -> Result<Vec<Diagnostic>> {
+fn validate_changed(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
+    let root = files.root();
     let changes = crate::git::staged_changes(root)?;
     if changes.entries.is_empty() {
         return Ok(Vec::new());
     }
 
-    let config = crate::config::Config::load(root)?;
+    let config = crate::config::Config::load_from(files)?;
     if changed_scope_requires_full_check(&changes, &config.docs_dir, &config.adr_dir) {
-        return validate_all_with_fix(root, false);
+        return validate_all_with_fix(files, false);
     }
 
     let changed_paths = changes
         .affected_paths()
         .into_iter()
         .collect::<BTreeSet<_>>();
-    let mut diagnostics = validate_markdown_format(root, false, Some(&changed_paths))?;
-    let vault = Vault::load(root)?;
+    let mut diagnostics = validate_markdown_format(files, false, Some(&changed_paths))?;
+    let vault = Vault::load_from(files)?;
     let policy_plan = PolicyScanPlan::new(&vault);
-    let previous_interface_hashes = previous_architecture_interface_hashes(root)?;
+    let previous_interface_hashes = previous_architecture_interface_hashes(files)?;
     diagnostics.extend(validate_changed_vault(
         &vault,
         previous_interface_hashes.as_ref(),
@@ -190,13 +221,14 @@ fn validate_changed(root: &Path) -> Result<Vec<Diagnostic>> {
     ));
     diagnostics.extend(
         policy_plan
-            .scan(root, &vault, Some(&changed_paths))?
+            .scan(&vault, Some(&changed_paths))?
             .into_iter()
             .map(|violation| {
-                error(
+                error_with_location(
                     "policy-violation",
                     &violation.path,
                     Some(violation.line),
+                    violation.location,
                     format!(
                         "{} policy `{}` matched `{}`",
                         violation.adr_id, violation.pattern_id, violation.text
@@ -230,12 +262,13 @@ fn changed_scope_requires_full_check(changes: &ChangedSet, docs_dir: &str, adr_d
 }
 
 fn validate_markdown_format(
-    root: &Path,
+    repository_files: &RepositoryFiles,
     fix: bool,
     changed_paths: Option<&BTreeSet<String>>,
 ) -> Result<Vec<Diagnostic>> {
+    let root = repository_files.root();
     let config = load_rumdl_config(root)?;
-    let vault_config = crate::config::Config::load(root)?;
+    let vault_config = crate::config::Config::load_from(repository_files)?;
     let policy = MarkdownPolicy {
         include: &config.global.include,
         exclude: &config.global.exclude,
@@ -250,11 +283,11 @@ fn validate_markdown_format(
 
     for rel_path in files {
         let path = root.join(&rel_path);
-        let mut contents = read_selected_text(root, &path)?;
+        let mut contents = read_selected_text_from(repository_files, &path)?;
         if fix {
             apply_markdown_fixes(
                 MarkdownFixScope {
-                    root,
+                    files: repository_files,
                     docs_dir: Path::new(&vault_config.docs_dir),
                 },
                 &path,
@@ -289,10 +322,11 @@ fn validate_markdown_format(
         };
         match result {
             Ok(warnings) => {
+                let source: Arc<str> = Arc::from(contents.as_str());
                 diagnostics.extend(
                     warnings
                         .into_iter()
-                        .map(|warning| markdown_diagnostic(&rel_path, warning)),
+                        .map(|warning| markdown_diagnostic(&rel_path, source.clone(), warning)),
                 );
             }
             Err(err) => diagnostics.push(error(
@@ -352,7 +386,7 @@ fn apply_markdown_fixes(
             .map_err(|err| CrivError::new(format!("rumdl failed to fix {rel_path}: {err}")))?
     };
     if *contents != original {
-        let destination = path.strip_prefix(write_scope.root).map_err(|_| {
+        let destination = path.strip_prefix(write_scope.files.root()).map_err(|_| {
             CrivError::new(format!(
                 "refusing to fix Markdown outside vault root: {}",
                 path.display()
@@ -368,7 +402,10 @@ fn apply_markdown_fixes(
         } else {
             Path::new(".")
         };
-        write_atomic_in(write_scope.root, allowed_dir, destination, contents)?;
+        write_scope
+            .files
+            .write_scope(allowed_dir)?
+            .write_atomic(destination, contents)?;
     }
 
     if !result.converged {
@@ -400,12 +437,20 @@ fn rules_for_ignored_rules(
         .collect()
 }
 
-fn markdown_diagnostic(path: &str, warning: LintWarning) -> Diagnostic {
+fn markdown_diagnostic(path: &str, source: Arc<str>, warning: LintWarning) -> Diagnostic {
     let rule = warning.rule_name.as_deref().unwrap_or("rumdl");
-    error(
+    let location = SourceLocation::from_one_based_character_range(
+        source,
+        warning.line,
+        warning.column,
+        warning.end_line,
+        warning.end_column,
+    );
+    error_with_location(
         "markdown-format",
         path,
         Some(warning.line),
+        location,
         format!("{rule}: {}", warning.message),
     )
 }
@@ -468,10 +513,11 @@ fn validate_with_previous_architecture_interfaces(
 
 fn validate_likec4_workspace(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
     diagnostics.extend(vault.likec4_workspace.diagnostics.iter().map(|diagnostic| {
-        error(
+        error_with_location(
             diagnostic.kind.code(),
             &diagnostic.path,
             diagnostic.line,
+            diagnostic.location.clone(),
             diagnostic.message.clone(),
         )
     }));
@@ -590,12 +636,13 @@ fn policy_diagnostic(diagnostic: &PolicyDiagnostic) -> Diagnostic {
     error(code, &diagnostic.path, Some(diagnostic.line), message)
 }
 
-fn previous_architecture_interface_hashes(root: &Path) -> Result<Option<BTreeMap<String, String>>> {
-    let path = root.join(".criv/state.json");
-    if !path.exists() {
+fn previous_architecture_interface_hashes(
+    files: &RepositoryFiles,
+) -> Result<Option<BTreeMap<String, String>>> {
+    let Some(contents) = files.read_optional_string(Path::new(".criv/state.json"))? else {
         return Ok(None);
-    }
-    let value: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path)?)
+    };
+    let value: serde_json::Value = serde_json::from_str(&contents)
         .map_err(|err| CrivError::new(format!("failed to parse .criv/state.json: {err}")))?;
     let hashes = value
         .pointer("/graph/nodes")
@@ -652,10 +699,11 @@ fn validate_note_local(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if let Some(err) = &note.frontmatter_error {
-        diagnostics.push(error(
+        diagnostics.push(error_with_location(
             "invalid-frontmatter",
             &note.rel_path,
             None,
+            note.frontmatter_error_location.clone(),
             err.to_string(),
         ));
     }
@@ -868,10 +916,11 @@ fn validate_c4_artifacts(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
 
 fn validate_c4_artifact(artifact: &crate::c4::C4Artifact, diagnostics: &mut Vec<Diagnostic>) {
     for artifact_diagnostic in &artifact.diagnostics {
-        diagnostics.push(error(
+        diagnostics.push(error_with_location(
             artifact_diagnostic.code,
             &artifact.rel_path,
             artifact_diagnostic.line,
+            artifact_diagnostic.location.clone(),
             artifact_diagnostic.message.clone(),
         ));
     }
@@ -973,10 +1022,11 @@ fn validate_links(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
 fn validate_note_links(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
     for link in &note.wiki_links {
         match vault.resolve_link(&link.target) {
-            ResolvedLink::Broken => diagnostics.push(error(
+            ResolvedLink::Broken => diagnostics.push(error_with_location(
                 "broken-link",
                 &note.rel_path,
                 Some(link.line),
+                link.location.clone(),
                 format!("wiki-link `[[{}]]` does not resolve", link.raw),
             )),
             ResolvedLink::Source { path, ambiguous } => {
@@ -986,20 +1036,22 @@ fn validate_note_links(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnos
                         format!("; use AST-aware source selector `{target}` for code references")
                     })
                     .unwrap_or_default();
-                diagnostics.push(warning(
+                diagnostics.push(warning_with_location(
                         "source-wikilink",
                         &note.rel_path,
                         Some(link.line),
+                        link.location.clone(),
                         format!(
                             "wiki-link `[[{}]]` targets source `{path}`; Wikilinks are reserved for document references{suggestion}",
                             link.raw
                         ),
                     ));
                 if ambiguous {
-                    diagnostics.push(warning(
+                    diagnostics.push(warning_with_location(
                         "ambiguous-source-link",
                         &note.rel_path,
                         Some(link.line),
+                        link.location.clone(),
                         format!(
                             "wiki-link `[[{}]]` resolves ambiguously; first match is `{path}`",
                             link.raw
@@ -1014,10 +1066,11 @@ fn validate_note_links(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnos
                         .portable_note_target(&link.target)
                         .map(|target| format!("; use `[[{target}]]` instead"))
                         .unwrap_or_default();
-                    diagnostics.push(error(
+                    diagnostics.push(error_with_location(
                             "non-portable-note-link",
                             &note.rel_path,
                             Some(link.line),
+                            link.location.clone(),
                             format!(
                                 "wiki-link `[[{}]]` resolves through note metadata but does not target an existing markdown file{suggestion}",
                                 link.raw
@@ -1169,7 +1222,8 @@ fn print_text(diagnostics: &[Diagnostic]) {
 }
 
 fn print_json(diagnostics: &[Diagnostic]) -> Result<()> {
-    let json = serde_json::to_string_pretty(diagnostics)
+    let diagnostics = diagnostics.iter().map(Diagnostic::json).collect::<Vec<_>>();
+    let json = serde_json::to_string_pretty(&diagnostics)
         .map_err(|err| CrivError::new(format!("failed to serialize check diagnostics: {err}")))?;
     println!("{json}");
     Ok(())
@@ -1186,20 +1240,27 @@ fn github_annotation(diag: &Diagnostic) -> String {
         Severity::Error => "error",
         Severity::Warning => "warning",
     };
-    let mut line = format!(
-        "::{command} file={},title={}::{}",
+    let location = if let Some(location) = &diag.location {
+        let location = location.github_location();
+        match (location.column, location.end_column) {
+            (Some(column), Some(end_column)) => format!(
+                ",line={},col={column},endLine={},endColumn={end_column}",
+                location.line, location.end_line
+            ),
+            _ => format!(",line={},endLine={}", location.line, location.end_line),
+        }
+    } else {
+        diag.line
+            .map(|line| format!(",line={line}"))
+            .unwrap_or_default()
+    };
+    format!(
+        "::{command} file={}{},title={}::{}",
         escape_github_property(&diag.path),
+        location,
         escape_github_property(&format!("criv {}", diag.code)),
         escape_github_message(&diag.message)
-    );
-    if let Some(location) = diag.line {
-        let insertion = format!(",line={location}");
-        let title_start = line
-            .find(",title=")
-            .expect("github annotation includes title");
-        line.insert_str(title_start, &insertion);
-    }
-    line
+    )
 }
 
 fn escape_github_message(value: &str) -> String {
@@ -1221,12 +1282,24 @@ fn error(
     line: Option<usize>,
     message: impl Into<String>,
 ) -> Diagnostic {
+    error_with_location(code, path, line, None, message)
+}
+
+fn error_with_location(
+    code: &'static str,
+    path: &str,
+    line: Option<usize>,
+    location: Option<SourceLocation>,
+    message: impl Into<String>,
+) -> Diagnostic {
+    let line = location.as_ref().map(SourceLocation::line).or(line);
     Diagnostic {
         severity: Severity::Error,
         code,
         path: path.into(),
         line,
         message: message.into(),
+        location,
     }
 }
 
@@ -1236,12 +1309,24 @@ fn warning(
     line: Option<usize>,
     message: impl Into<String>,
 ) -> Diagnostic {
+    warning_with_location(code, path, line, None, message)
+}
+
+fn warning_with_location(
+    code: &'static str,
+    path: &str,
+    line: Option<usize>,
+    location: Option<SourceLocation>,
+    message: impl Into<String>,
+) -> Diagnostic {
+    let line = location.as_ref().map(SourceLocation::line).or(line);
     Diagnostic {
         severity: Severity::Warning,
         code,
         path: path.into(),
         line,
         message: message.into(),
+        location,
     }
 }
 
@@ -1322,6 +1407,7 @@ mod tests {
             path: "docs/a,b:guide.md".into(),
             line: Some(7),
             message: "bad % link\r\ntry again".into(),
+            location: None,
         };
 
         assert_eq!(
@@ -1338,11 +1424,89 @@ mod tests {
             path: "docs/note.md".into(),
             line: None,
             message: "missing id".into(),
+            location: None,
         };
 
         assert_eq!(
             github_annotation(&diag),
             "::warning file=docs/note.md,title=criv missing-id::missing id"
+        );
+        let json = serde_json::to_value(diag.json()).unwrap();
+        assert!(json["line"].is_null());
+        assert!(json.get("range").is_none());
+    }
+
+    #[test]
+    fn exact_diagnostics_serialize_lsp_ranges_and_github_columns() {
+        let diagnostic = markdown_diagnostic(
+            "docs/unicode.md",
+            Arc::from("é😀bad\n"),
+            LintWarning {
+                message: "bad emoji".into(),
+                line: 1,
+                column: 2,
+                end_line: 1,
+                end_column: 3,
+                severity: rumdl_lib::rule::Severity::Warning,
+                fix: None,
+                rule_name: Some("MD999".into()),
+            },
+        );
+
+        let json = serde_json::to_value(diagnostic.json()).unwrap();
+        assert_eq!(
+            json["range"],
+            serde_json::json!({
+                "start": { "line": 0, "character": 1 },
+                "end": { "line": 0, "character": 3 }
+            })
+        );
+        assert_eq!(
+            github_annotation(&diagnostic),
+            "::error file=docs/unicode.md,line=1,col=2,endLine=1,endColumn=2,title=criv markdown-format::MD999: bad emoji"
+        );
+    }
+
+    #[test]
+    fn invalid_exact_locations_keep_the_line_only_shape() {
+        let diagnostic = markdown_diagnostic(
+            "docs/invalid.md",
+            Arc::from("short\n"),
+            LintWarning {
+                message: "invalid range".into(),
+                line: 1,
+                column: 20,
+                end_line: 1,
+                end_column: 21,
+                severity: rumdl_lib::rule::Severity::Warning,
+                fix: None,
+                rule_name: Some("MD999".into()),
+            },
+        );
+
+        let json = serde_json::to_value(diagnostic.json()).unwrap();
+        assert!(json.get("range").is_none());
+        assert_eq!(
+            github_annotation(&diagnostic),
+            "::error file=docs/invalid.md,line=1,title=criv markdown-format::MD999: invalid range"
+        );
+    }
+
+    #[test]
+    fn multiline_github_annotations_use_lines_without_unsupported_columns() {
+        let source: Arc<str> = Arc::from("first\nsecond\n");
+        let location = SourceLocation::new(source, 2..9).unwrap();
+        let diagnostic = error_with_location(
+            "multi-line",
+            "docs/multi.md",
+            None,
+            Some(location),
+            "crosses lines",
+        );
+
+        assert_eq!(
+            github_annotation(&diagnostic),
+            "::error file=docs/multi.md,line=1,endLine=2,title=criv multi-line::crosses lines"
         );
     }
 
@@ -1710,7 +1874,7 @@ pub fn run(input: String) -> usize {
 "#,
         );
         let previous_vault = likec4_interface_vault(&root);
-        let previous_state = State::build(&root, &previous_vault).unwrap();
+        let previous_state = State::build(&previous_vault).unwrap();
         fs::write(
             root.join("src/lib.rs"),
             r#"
@@ -1743,7 +1907,7 @@ pub fn run(input: String) -> usize {
 "#,
         );
         let previous_vault = likec4_interface_vault(&root);
-        let previous_state = State::build(&root, &previous_vault).unwrap();
+        let previous_state = State::build(&previous_vault).unwrap();
         fs::write(
             root.join("src/lib.rs"),
             r#"
@@ -1774,10 +1938,12 @@ pub fn run(input: String, fallback: usize) -> usize {
         let config = RumdlConfig::default();
         let base_rules = base_rules(&config);
         let mut diagnostics = Vec::new();
+        let files = RepositoryFiles::open(root).unwrap();
+        let path = files.root().join("README.md");
 
         apply_markdown_fixes(
             MarkdownFixScope {
-                root,
+                files: &files,
                 docs_dir: Path::new("."),
             },
             &path,
@@ -1837,6 +2003,7 @@ pub fn run(input: String, fallback: usize) -> usize {
             superseded_by: Vec::new(),
             wiki_links: Vec::new(),
             frontmatter_error: None,
+            frontmatter_error_location: None,
         }
     }
 
@@ -1852,6 +2019,7 @@ pub fn run(input: String, fallback: usize) -> usize {
             raw: target.into(),
             target: target.into(),
             line: 1,
+            location: None,
         }
     }
 

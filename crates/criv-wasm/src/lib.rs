@@ -8,6 +8,7 @@ use criv_state_wire::{PatternMatch, StateDocument};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
+mod asset;
 mod decode;
 mod likec4;
 mod projection;
@@ -150,9 +151,11 @@ impl PreparedState {
             mut registered_patterns,
             patterns,
             source_index,
+            asset_index,
         } = state;
         let criv_state_wire::Graph { nodes, edges, .. } = graph;
         let sources = source::take_unique_source_entries(source_index);
+        let assets = asset::take_assets(asset_index);
         let nodes = source::take_editor_graph_nodes(nodes);
         registered_patterns.sort();
         registered_patterns.dedup();
@@ -163,16 +166,18 @@ impl PreparedState {
             node_count: nodes.len(),
             edge_count: edges.len(),
             source_count: sources.len(),
+            asset_count: assets.len(),
             pattern_count: registered_patterns.len(),
             first_node_id: nodes.first().map(|node| node.id.clone()),
             first_edge: edges
                 .first()
                 .map(|edge| format!("{}:{}:{}", edge.from, edge.kind, edge.to)),
             first_source_path: sources.first().map(|source| source.path.clone()),
+            first_asset_path: assets.first().map(|asset| asset.path.clone()),
         };
         Ok(Self::from_parts(
             summary,
-            sources,
+            EditorInventory { sources, assets },
             nodes,
             registered_patterns,
             patterns,
@@ -193,15 +198,18 @@ struct StateSummary {
     node_count: usize,
     edge_count: usize,
     source_count: usize,
+    asset_count: usize,
     pattern_count: usize,
     first_node_id: Option<String>,
     first_edge: Option<String>,
     first_source_path: Option<String>,
+    first_asset_path: Option<String>,
 }
 
 struct PreparedState {
     summary: StateSummary,
     sources: Vec<EditorSourceEntry>,
+    assets: Vec<EditorAssetEntry>,
     nodes: Vec<EditorGraphNode>,
     registered_patterns: Vec<String>,
     pattern_matches: BTreeMap<String, Vec<PatternMatch>>,
@@ -213,10 +221,23 @@ struct PreparedState {
     empty_selector_order: Vec<usize>,
 }
 
+struct EditorInventory {
+    sources: Vec<EditorSourceEntry>,
+    assets: Vec<EditorAssetEntry>,
+}
+
 #[derive(Debug, Serialize)]
 struct EditorSourceEntry {
     path: String,
     mime: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct EditorAssetEntry {
+    path: String,
+    mime: String,
+    bytes: u64,
+    hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -227,6 +248,8 @@ struct EditorGraphNode {
     path: Option<String>,
     source_target: Option<String>,
     line_range: Option<String>,
+    #[serde(skip)]
+    source_identity: Option<Box<criv_state_wire::source_identity::SourceIdentity>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -405,6 +428,24 @@ mod tests {
         assert_eq!(projections["registeredPatterns"][0], "ADR-0001/entrypoint");
         assert!(projections["patternMatches"]["ADR-0001/entrypoint"].is_array());
         assert!(loaded.take_initial_projection().is_err());
+    }
+
+    #[test]
+    fn initial_projection_publishes_safe_documentation_assets() {
+        let mut state = editor_state();
+        state.asset_index.push(criv_state_wire::AssetIndexEntry {
+            path: "docs/diagram.png".into(),
+            mime: "image/png".into(),
+            bytes: 128,
+            hash: "a".repeat(64),
+        });
+        let prepared = PreparedState::from_borrowed(&state);
+        let projection =
+            serde_json::to_value(projection::InitialProjections::from(&prepared)).unwrap();
+
+        assert_eq!(projection["summary"]["asset_count"], 1);
+        assert_eq!(projection["assets"][0]["path"], "docs/diagram.png");
+        assert_eq!(projection["assets"][0]["mime"], "image/png");
     }
 
     #[test]
@@ -621,6 +662,77 @@ mod tests {
 
         assert!(find_editor_graph_node(&state, "src/lib.rs#run").is_none());
         assert!(find_editor_graph_node(&state, "src/lib.rs#fn:run").is_some());
+    }
+
+    #[test]
+    fn shared_source_identity_drives_elixir_compatibility_aliases() {
+        let source_index = ["lib/unicode.ex", "lib/impl.ex", "lib/bad.ex"]
+            .into_iter()
+            .map(|path| criv_state_wire::SourceIndexEntry {
+                path: path.into(),
+                mime: Some("text/x-elixir".into()),
+            })
+            .collect();
+        let nodes = vec![
+            Node {
+                id: "symbol:lib/unicode.ex#module:My.%CE%94/fn:%2B/2".into(),
+                hash: String::new(),
+                kind: "function".into(),
+                label: "+/2".into(),
+                path: Some("lib/unicode.ex#L1-L1".into()),
+            },
+            Node {
+                id: "symbol:lib/impl.ex#impl:Enumerable/for:My.App/fn:reduce/3".into(),
+                hash: String::new(),
+                kind: "function".into(),
+                label: "reduce/3".into(),
+                path: Some("lib/impl.ex#L1-L1".into()),
+            },
+            Node {
+                id: "symbol:lib/bad.ex#module:Bad%2/fn:run/1".into(),
+                hash: String::new(),
+                kind: "function".into(),
+                label: "run/1".into(),
+                path: Some("lib/bad.ex#L1-L1".into()),
+            },
+        ];
+        let state = StateDocument {
+            graph: criv_state_wire::Graph {
+                nodes,
+                ..Default::default()
+            },
+            source_index,
+            ..Default::default()
+        };
+        let prepared = PreparedState::from_borrowed(&state);
+
+        let canonical = |target: &str| match prepared.lookup_source_target(target) {
+            SourceTargetLookupResult::Resolved {
+                canonical_target, ..
+            } => Some(canonical_target),
+            SourceTargetLookupResult::Unresolved | SourceTargetLookupResult::Ambiguous { .. } => {
+                None
+            }
+        };
+
+        assert_eq!(
+            canonical("lib/unicode.ex#My.Δ.+/2").as_deref(),
+            Some("lib/unicode.ex#module:My.%CE%94/fn:%2B/2")
+        );
+        assert_eq!(
+            canonical("lib/unicode.ex#+").as_deref(),
+            Some("lib/unicode.ex#module:My.%CE%94/fn:%2B/2")
+        );
+        assert_eq!(
+            canonical("lib/impl.ex#reduce/3").as_deref(),
+            Some("lib/impl.ex#impl:Enumerable/for:My.App/fn:reduce/3")
+        );
+        assert!(canonical("lib/impl.ex#Enumerable.reduce/3").is_none());
+        assert!(canonical("lib/bad.ex#Bad.run/1").is_none());
+        assert_eq!(
+            canonical("lib/bad.ex#module:Bad%2/fn:run/1").as_deref(),
+            Some("lib/bad.ex#module:Bad%2/fn:run/1")
+        );
     }
 
     #[test]

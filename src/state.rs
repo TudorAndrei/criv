@@ -9,7 +9,8 @@ use std::{cell::Cell, thread_local};
 #[cfg(test)]
 use criv_state_wire::STATE_SCHEMA;
 use criv_state_wire::{
-    Edge, Graph, LikeC4ArchitectureState, Node, PatternMatch, SourceIndexEntry, StateDocument,
+    AssetIndexEntry, Edge, Graph, LikeC4ArchitectureState, Node, PatternMatch, SourceIndexEntry,
+    StateDocument, source_identity::SourceIdentity,
 };
 use serde::{Serialize, Serializer};
 
@@ -189,24 +190,22 @@ pub(crate) struct ArchitectureInterfaceHashRecord {
 
 impl State {
     #[cfg(test)]
-    pub(crate) fn build(root: &Path, vault: &Vault) -> Result<Self> {
+    pub(crate) fn build(vault: &Vault) -> Result<Self> {
         let policy_plan = PolicyScanPlan::new(vault);
-        Self::build_with_policy_plan(root, vault, None, &[], &policy_plan)
+        Self::build_with_policy_plan(vault, None, &[], &policy_plan)
     }
 
     #[cfg(test)]
     fn build_incremental(
-        root: &Path,
         vault: &Vault,
         previous: Option<&State>,
         changed_files: &[String],
     ) -> Result<Self> {
         let policy_plan = PolicyScanPlan::new(vault);
-        Self::build_with_policy_plan(root, vault, previous, changed_files, &policy_plan)
+        Self::build_with_policy_plan(vault, previous, changed_files, &policy_plan)
     }
 
     fn build_with_policy_plan(
-        root: &Path,
         vault: &Vault,
         previous: Option<&State>,
         changed_files: &[String],
@@ -215,8 +214,18 @@ impl State {
         if let Some(error) = policy_plan.state_definition_error() {
             return Err(CrivError::new(error));
         }
-        let partitions = StatePartitions::build(root, vault, previous, changed_files, policy_plan)?;
+        let partitions = StatePartitions::build(vault, previous, changed_files, policy_plan)?;
         let mut state = Self::from_partitions(partitions);
+        state.wire.asset_index = vault
+            .documentation_assets()
+            .iter()
+            .map(|asset| AssetIndexEntry {
+                path: asset.path.clone(),
+                mime: asset.mime.clone(),
+                bytes: asset.bytes,
+                hash: asset.hash.clone(),
+            })
+            .collect();
         state.wire.architecture = vault.likec4_workspace.model.clone().map(|model| {
             add_likec4_model_to_graph(&mut state.wire.graph, vault, &model);
             LikeC4ArchitectureState {
@@ -273,13 +282,13 @@ impl State {
 
     fn publish_snapshot_with_check(
         &self,
-        root: &Path,
+        vault: &Vault,
         serialized: &SerializedState,
         keep: usize,
         precommit_check: impl FnOnce() -> Result<()>,
     ) -> Result<String> {
         publication::publish_with_precommit_check(
-            root,
+            vault.repository_files(),
             &serialized.hash,
             &serialized.published,
             keep,
@@ -452,7 +461,6 @@ impl ReverseDependencies {
 
 impl StatePartitions {
     fn build(
-        root: &Path,
         vault: &Vault,
         previous: Option<&State>,
         changed_files: &[String],
@@ -546,8 +554,7 @@ impl StatePartitions {
                 .insert(entry.path.clone(), partition);
         }
 
-        partitions.policies =
-            build_policy_partitions(root, vault, previous, changed_files, policy_plan)?;
+        partitions.policies = build_policy_partitions(vault, previous, changed_files, policy_plan)?;
         partitions.reverse_dependencies = ReverseDependencies::index(&partitions);
         partitions.note_catalog_fingerprint = note_catalog_fingerprint;
         Ok(partitions)
@@ -934,13 +941,11 @@ fn project_relationship(
         _ => source_graph.relationship_target_label(&symbol.id, relationship),
     };
     let resolved = source_graph.resolve_relationship(&symbol.id, relationship);
-    if let Some(target) = resolved.as_ref().and_then(|target| {
-        source_graph
-            .symbols()
-            .find(|symbol| &symbol.id == target)
-            .map(|symbol| symbol.name.clone())
-    }) {
-        dependencies.call_targets.insert(target);
+    if let Some(target) = resolved
+        .as_ref()
+        .and_then(|target| source_graph.symbol_name(target))
+    {
+        dependencies.call_targets.insert(target.to_string());
     } else if let RelationshipTarget::Callable { name, .. } = &relationship.target {
         dependencies.call_targets.insert(name.clone());
     } else if let RelationshipTarget::Module { module, .. } = &relationship.target {
@@ -1221,7 +1226,6 @@ fn collect_graph_source_dependencies(graph: &Graph, dependencies: &mut Partition
 }
 
 fn build_policy_partitions(
-    root: &Path,
     vault: &Vault,
     previous: Option<&StatePartitions>,
     changed_files: &[String],
@@ -1287,7 +1291,7 @@ fn build_policy_partitions(
             paths: &scan.paths,
         })
         .collect::<Vec<_>>();
-    let rescanned = structural::find_policies_batch(root, vault, &requests)?;
+    let rescanned = structural::find_policies_batch(vault, &requests)?;
     for (key, scan) in pending_policy_scans.into_iter().enumerate() {
         let mut matches = scan.reused;
         matches.extend(
@@ -1334,30 +1338,28 @@ fn policy_fingerprints(policy_plan: &PolicyScanPlan) -> BTreeMap<String, String>
 }
 
 #[cfg(test)]
-fn write_state(root: &Path, vault: &Vault) -> Result<(String, State)> {
+fn write_state(vault: &Vault) -> Result<(String, State)> {
     let policy_plan = PolicyScanPlan::new(vault);
-    write_state_with_policy_plan(root, vault, &policy_plan)
+    write_state_with_policy_plan(vault, &policy_plan)
 }
 
 #[cfg(test)]
 fn write_state_with_policy_plan(
-    root: &Path,
     vault: &Vault,
     policy_plan: &PolicyScanPlan,
 ) -> Result<(String, State)> {
-    write_state_with_policy_plan_and_check(root, vault, policy_plan, || Ok(()))
+    write_state_with_policy_plan_and_check(vault, policy_plan, || Ok(()))
 }
 
 pub(crate) fn write_state_with_policy_plan_and_check(
-    root: &Path,
     vault: &Vault,
     policy_plan: &PolicyScanPlan,
     precommit_check: impl FnOnce() -> Result<()>,
 ) -> Result<(String, State)> {
-    let state = State::build_with_policy_plan(root, vault, None, &[], policy_plan)?;
+    let state = State::build_with_policy_plan(vault, None, &[], policy_plan)?;
     let serialized = state.serialize()?;
     let snapshot = state.publish_snapshot_with_check(
-        root,
+        vault,
         &serialized,
         vault.config.state_keep,
         precommit_check,
@@ -1367,25 +1369,22 @@ pub(crate) fn write_state_with_policy_plan_and_check(
 
 #[cfg(test)]
 fn write_state_incremental(
-    root: &Path,
     vault: &Vault,
     previous: Option<&State>,
     changed_files: &[String],
 ) -> Result<(String, State)> {
     let policy_plan = PolicyScanPlan::new(vault);
-    write_state_incremental_with_policy_plan(root, vault, previous, changed_files, &policy_plan)
+    write_state_incremental_with_policy_plan(vault, previous, changed_files, &policy_plan)
 }
 
 #[cfg(test)]
 fn write_state_incremental_with_policy_plan(
-    root: &Path,
     vault: &Vault,
     previous: Option<&State>,
     changed_files: &[String],
     policy_plan: &PolicyScanPlan,
 ) -> Result<(String, State)> {
     write_state_incremental_with_policy_plan_and_check(
-        root,
         vault,
         previous,
         changed_files,
@@ -1395,17 +1394,16 @@ fn write_state_incremental_with_policy_plan(
 }
 
 pub(crate) fn write_state_incremental_with_policy_plan_and_check(
-    root: &Path,
     vault: &Vault,
     previous: Option<&State>,
     changed_files: &[String],
     policy_plan: &PolicyScanPlan,
     precommit_check: impl FnOnce() -> Result<()>,
 ) -> Result<(String, State)> {
-    let state = State::build_with_policy_plan(root, vault, previous, changed_files, policy_plan)?;
+    let state = State::build_with_policy_plan(vault, previous, changed_files, policy_plan)?;
     let serialized = state.serialize()?;
     let snapshot = state.publish_snapshot_with_check(
-        root,
+        vault,
         &serialized,
         vault.config.state_keep,
         precommit_check,
@@ -1718,7 +1716,7 @@ fn note_node_id(id: &str) -> String {
 }
 
 fn code_node_id(path: &str) -> String {
-    format!("code:{path}")
+    format!("code:{}", SourceIdentity::file(path))
 }
 
 fn pattern_node_id(id: &str) -> String {
@@ -1819,7 +1817,7 @@ source = false
         std::fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
 
         let vault = Vault::load(&root).unwrap();
-        let state = State::build(&root, &vault).unwrap();
+        let state = State::build(&vault).unwrap();
         let json = serde_json::to_value(&state).unwrap();
 
         assert_eq!(json["source-index"].as_array().unwrap().len(), 0);
@@ -1830,6 +1828,25 @@ source = false
                 .iter()
                 .all(|node| node["kind"] != "code")
         );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn state_publishes_verified_documentation_assets() {
+        let root = unique_temp_dir("criv-documentation-asset-state");
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        let contents = b"\x89PNG\r\n\x1a\npreview";
+        std::fs::write(root.join("docs/diagram.png"), contents).unwrap();
+
+        let vault = Vault::load(&root).unwrap();
+        let state = State::build(&vault).unwrap();
+        let json = serde_json::to_value(&state).unwrap();
+
+        assert_eq!(json["asset-index"][0]["path"], "docs/diagram.png");
+        assert_eq!(json["asset-index"][0]["mime"], "image/png");
+        assert_eq!(json["asset-index"][0]["bytes"], contents.len());
+        assert_eq!(json["asset-index"][0]["hash"].as_str().unwrap().len(), 64);
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1891,7 +1908,7 @@ end
         let vault = Vault::load(&root).unwrap();
         let file = vault.source_graph().files.get("lib/sample.ex").unwrap();
         let first_fingerprint = source_input_fingerprint(file);
-        let first = State::build(&root, &vault).unwrap();
+        let first = State::build(&vault).unwrap();
         let decoded: StateDocument = serde_json::from_str(&first.to_json().unwrap()).unwrap();
         assert_eq!(decoded.schema, STATE_SCHEMA);
 
@@ -1983,13 +2000,9 @@ end
         assert_ne!(first_fingerprint, source_input_fingerprint(changed_file));
 
         reset_work_counts();
-        let changed = State::build_incremental(
-            &root,
-            &changed_vault,
-            Some(&first),
-            &["lib/sample.ex".into()],
-        )
-        .unwrap();
+        let changed =
+            State::build_incremental(&changed_vault, Some(&first), &["lib/sample.ex".into()])
+                .unwrap();
         assert_eq!(work_counts().source_partitions_rebuilt, 1);
         assert!(changed.graph.edges.iter().any(|edge| {
             edge.from == run
@@ -2027,7 +2040,7 @@ end
             }]
         }));
 
-        let state = State::build(&root, &vault).unwrap();
+        let state = State::build(&vault).unwrap();
         let json = serde_json::to_value(&state).unwrap();
         let nodes = json["graph"]["nodes"].as_array().unwrap();
         let edges = json["graph"]["edges"].as_array().unwrap();
@@ -2069,7 +2082,7 @@ roots = ["src"]
 
         let vault = Vault::load(&root).unwrap();
         reset_work_counts();
-        let (snapshot, _) = write_state(&root, &vault).unwrap();
+        let (snapshot, _) = write_state(&vault).unwrap();
 
         let state_path = root.join(".criv/state.json");
         let state: serde_json::Value =
@@ -2112,7 +2125,7 @@ roots = ["src"]
         std::fs::write(root.join("criv.toml"), "[source]\nroots = [\"src\"]\n").unwrap();
         std::fs::write(root.join("src/lib.rs"), "pub fn first() {}\n").unwrap();
         let first_vault = Vault::load(&root).unwrap();
-        write_state(&root, &first_vault).unwrap();
+        write_state(&first_vault).unwrap();
         let prior_state = std::fs::read(root.join(".criv/state.json")).unwrap();
 
         let corrupt_hash = "a".repeat(64);
@@ -2125,7 +2138,7 @@ roots = ["src"]
         std::fs::write(root.join("src/lib.rs"), "pub fn second() {}\n").unwrap();
         let second_vault = Vault::load(&root).unwrap();
 
-        let error = write_state(&root, &second_vault).unwrap_err();
+        let error = write_state(&second_vault).unwrap_err();
         assert!(error.to_string().contains("corrupt"));
         assert_eq!(
             std::fs::read(root.join(".criv/state.json")).unwrap(),
@@ -2196,7 +2209,7 @@ policy:
         let vault = Vault::load(&root).unwrap();
         reset_work_counts();
         let actual: serde_json::Value =
-            serde_json::from_str(&State::build(&root, &vault).unwrap().to_json().unwrap()).unwrap();
+            serde_json::from_str(&State::build(&vault).unwrap().to_json().unwrap()).unwrap();
         let expected: serde_json::Value =
             serde_json::from_str(include_str!("../fixtures/state/criv.state.v1.json")).unwrap();
 
@@ -2224,7 +2237,7 @@ policy:
             }
         );
         assert_eq!(
-            State::build(&root, &vault).unwrap().hash().unwrap(),
+            State::build(&vault).unwrap().hash().unwrap(),
             "e726e1970e996838a7c68bf68cee6dc2bdd98ad6657e196f2bf44640dcb040c1"
         );
 
@@ -2378,10 +2391,10 @@ Consequences.
     fn no_op_incremental_build_reuses_partition_allocations() {
         let root = policy_vault("criv-state-partition-allocation-reuse");
         let vault = Vault::load(&root).unwrap();
-        let first = State::build(&root, &vault).unwrap();
+        let first = State::build(&vault).unwrap();
 
         reset_work_counts();
-        let second = State::build_incremental(&root, &vault, Some(&first), &[]).unwrap();
+        let second = State::build_incremental(&vault, Some(&first), &[]).unwrap();
 
         assert_eq!(work_counts().partitions_rebuilt, 0);
         for (path, partition) in &first.partitions.sources {
@@ -2423,7 +2436,7 @@ Consequences.
         .unwrap();
         let vault = Vault::load(&root).unwrap();
         structural::reset_batch_parse_count();
-        let state = State::build(&root, &vault).unwrap();
+        let state = State::build(&vault).unwrap();
 
         assert_eq!(
             structural::batch_parse_count(),
@@ -2442,7 +2455,7 @@ Consequences.
         std::fs::write(root.join("docs/adr/0002-no-debug.md"), DRAFT_POLICY_ADR).unwrap();
 
         let vault = Vault::load(&root).unwrap();
-        let state = State::build(&root, &vault).unwrap();
+        let state = State::build(&vault).unwrap();
 
         assert_eq!(state.registered_patterns, vec![PATTERN_ID.to_string()]);
         assert!(state.patterns.contains_key(PATTERN_ID));
@@ -2460,7 +2473,7 @@ Consequences.
     fn accepted_successor_removes_superseded_policy_state() {
         let root = policy_vault("criv-effective-policy-state");
         let vault = Vault::load(&root).unwrap();
-        let (_, before) = write_state(&root, &vault).unwrap();
+        let (_, before) = write_state(&vault).unwrap();
         assert!(before.patterns.contains_key(PATTERN_ID));
 
         let successor = root.join("docs/adr/0002-successor.md");
@@ -2483,7 +2496,6 @@ governs:
         .unwrap();
         let vault = Vault::load(&root).unwrap();
         let (_, after) = write_state_incremental(
-            &root,
             &vault,
             Some(&before),
             &["docs/adr/0002-successor.md".to_string()],
@@ -2503,7 +2515,7 @@ governs:
         std::fs::write(&policy_path, DRAFT_POLICY_ADR).unwrap();
 
         let vault = Vault::load(&root).unwrap();
-        let (_, before) = write_state(&root, &vault).unwrap();
+        let (_, before) = write_state(&vault).unwrap();
         assert!(!before.patterns.contains_key(DRAFT_PATTERN_ID));
 
         std::fs::write(
@@ -2512,7 +2524,7 @@ governs:
         )
         .unwrap();
         let vault = Vault::load(&root).unwrap();
-        let (_, after) = write_state_incremental(&root, &vault, Some(&before), &[]).unwrap();
+        let (_, after) = write_state_incremental(&vault, Some(&before), &[]).unwrap();
 
         assert_eq!(
             after.patterns[DRAFT_PATTERN_ID]
@@ -2534,13 +2546,12 @@ governs:
         std::fs::write(&policy_path, &accepted).unwrap();
 
         let vault = Vault::load(&root).unwrap();
-        let (_, before) = write_state(&root, &vault).unwrap();
+        let (_, before) = write_state(&vault).unwrap();
         assert!(before.patterns.contains_key(DRAFT_PATTERN_ID));
 
         std::fs::write(&policy_path, DRAFT_POLICY_ADR).unwrap();
         let vault = Vault::load(&root).unwrap();
         let (_, after) = write_state_incremental(
-            &root,
             &vault,
             Some(&before),
             &["docs/adr/0002-no-debug.md".to_string()],
@@ -2562,7 +2573,7 @@ governs:
         let root = policy_vault("criv-incremental-pattern-reuse");
 
         let vault = Vault::load(&root).unwrap();
-        let (_, first) = write_state(&root, &vault).unwrap();
+        let (_, first) = write_state(&vault).unwrap();
         assert_eq!(
             matched_files(&first),
             vec!["src/alpha.rs".to_string(), "src/beta.rs".to_string()],
@@ -2585,7 +2596,6 @@ governs:
 
         let vault = Vault::load(&root).unwrap();
         let (_, second) = write_state_incremental(
-            &root,
             &vault,
             Some(&first),
             std::slice::from_ref(&"src/beta.rs".to_string()),
@@ -2626,14 +2636,13 @@ governs:
         let root = policy_vault("criv-incremental-pattern-scope");
 
         let vault = Vault::load(&root).unwrap();
-        let (_, first) = write_state(&root, &vault).unwrap();
+        let (_, first) = write_state(&vault).unwrap();
         assert_eq!(matched_files(&first).len(), 2);
 
         std::fs::write(root.join("src/alpha.rs"), "fn alpha() {}\n").unwrap();
 
         let vault = Vault::load(&root).unwrap();
         let (_, second) = write_state_incremental(
-            &root,
             &vault,
             Some(&first),
             std::slice::from_ref(&"src/beta.rs".to_string()),
@@ -2659,7 +2668,7 @@ governs:
         std::fs::write(root.join("src/alpha.rs"), "fn alpha() {}\n").unwrap();
 
         let vault = Vault::load(&root).unwrap();
-        let (_, first) = write_state(&root, &vault).unwrap();
+        let (_, first) = write_state(&vault).unwrap();
         assert_eq!(matched_files(&first), vec!["src/beta.rs".to_string()]);
 
         std::fs::write(
@@ -2670,7 +2679,6 @@ governs:
 
         let vault = Vault::load(&root).unwrap();
         let (_, second) = write_state_incremental(
-            &root,
             &vault,
             Some(&first),
             std::slice::from_ref(&"README.md".to_string()),
@@ -2691,14 +2699,13 @@ governs:
         let root = policy_vault("criv-incremental-pattern-delete");
 
         let vault = Vault::load(&root).unwrap();
-        let (_, first) = write_state(&root, &vault).unwrap();
+        let (_, first) = write_state(&vault).unwrap();
         assert_eq!(matched_files(&first).len(), 2);
 
         std::fs::remove_file(root.join("src/beta.rs")).unwrap();
 
         let vault = Vault::load(&root).unwrap();
         let (_, second) = write_state_incremental(
-            &root,
             &vault,
             Some(&first),
             std::slice::from_ref(&"src/beta.rs".to_string()),

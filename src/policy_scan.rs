@@ -1,10 +1,10 @@
 use std::collections::BTreeSet;
-use std::path::Path;
 
 #[cfg(test)]
 use std::{cell::Cell, thread_local};
 
 use crate::Result;
+use crate::diagnostic::SourceLocation;
 use crate::structural::{self, CompiledPolicy, PolicyCompileError, PolicyScanRequest};
 use crate::vault::{NoteKind, Vault};
 
@@ -35,6 +35,7 @@ pub(crate) struct PolicyViolation {
     pub(crate) adr_id: String,
     pub(crate) pattern_id: String,
     pub(crate) text: String,
+    pub(crate) location: Option<SourceLocation>,
 }
 
 pub(crate) struct PolicyScanPlan {
@@ -272,7 +273,6 @@ impl PolicyScanPlan {
 
     pub(crate) fn scan(
         &self,
-        root: &Path,
         vault: &Vault,
         changed_files: Option<&BTreeSet<String>>,
     ) -> Result<Vec<PolicyViolation>> {
@@ -306,7 +306,7 @@ impl PolicyScanPlan {
             }
         }
 
-        let rows_by_key = structural::find_policies_batch(root, vault, &requests)?;
+        let rows_by_key = structural::find_policies_batch(vault, &requests)?;
         let mut violations = Vec::new();
         for (key, (owner, policy)) in records.into_iter().enumerate() {
             if let Some(rows) = rows_by_key.get(&key) {
@@ -316,6 +316,7 @@ impl PolicyScanPlan {
                     adr_id: owner.adr_id.clone(),
                     pattern_id: policy.pattern_id.clone(),
                     text: row.text.clone(),
+                    location: row.location.clone(),
                 }));
             }
         }
@@ -393,7 +394,7 @@ mod tests {
 
     #[test]
     fn owner_scope_and_compiled_policies_are_reused_by_the_batch() {
-        let (temp, vault) = policy_fixture("two-policies");
+        let (_temp, vault) = policy_fixture("two-policies");
         reset_work_counts();
         structural::reset_work_counts();
 
@@ -429,10 +430,13 @@ mod tests {
             "the check diagnostic adapter must reuse compiled plan outcomes"
         );
 
-        let violations = plan.scan(temp.path(), &vault, None).unwrap();
+        let violations = plan.scan(&vault, None).unwrap();
 
         assert_eq!(structural::work_counts().policy_compilations, 2);
         assert_eq!(structural::work_counts().ast_parses, 2);
+        let exact = violations[0].location.as_ref().unwrap().lsp_range();
+        assert_eq!((exact.start.line, exact.start.character), (0, 0));
+        assert_eq!((exact.end.line, exact.end.character), (0, 12));
         assert_eq!(
             violations
                 .iter()
@@ -449,11 +453,11 @@ mod tests {
 
     #[test]
     fn changed_file_filter_preserves_policy_ids_and_limits_paths() {
-        let (temp, vault) = policy_fixture("two-policies");
+        let (_temp, vault) = policy_fixture("two-policies");
         let plan = PolicyScanPlan::new(&vault);
         let changed = BTreeSet::from(["src/right.rs".to_string()]);
 
-        let violations = plan.scan(temp.path(), &vault, Some(&changed)).unwrap();
+        let violations = plan.scan(&vault, Some(&changed)).unwrap();
 
         assert_eq!(
             violations
@@ -485,7 +489,7 @@ mod tests {
         assert!(plan.diagnostics.is_empty());
         assert_eq!(work_counts().definition_compilations, 2);
         assert_eq!(work_counts().adr_scope_resolutions, 0);
-        assert!(plan.scan(temp.path(), &vault, None).unwrap().is_empty());
+        assert!(plan.scan(&vault, None).unwrap().is_empty());
         assert_eq!(structural::work_counts().ast_parses, 0);
     }
 
@@ -516,10 +520,10 @@ mod tests {
 
     #[test]
     fn duplicate_ids_are_diagnosed_without_suppressing_executable_entries() {
-        let (temp, vault) = policy_fixture("duplicate-policies");
+        let (_temp, vault) = policy_fixture("duplicate-policies");
 
         let plan = PolicyScanPlan::new(&vault);
-        let violations = plan.scan(temp.path(), &vault, None).unwrap();
+        let violations = plan.scan(&vault, None).unwrap();
 
         assert_eq!(
             plan.diagnostics

@@ -12,7 +12,10 @@ fn criv(root: &Path) -> Command {
     let install = root.join("install");
     fs::create_dir_all(&install).unwrap();
     let executable = install.join("criv");
-    fs::copy(assert_cmd::cargo::cargo_bin("criv"), &executable).unwrap();
+    let built_executable = assert_cmd::cargo::cargo_bin("criv");
+    if fs::hard_link(&built_executable, &executable).is_err() {
+        fs::copy(built_executable, &executable).unwrap();
+    }
     let mut command = Command::new(executable);
     command.current_dir(root);
     command

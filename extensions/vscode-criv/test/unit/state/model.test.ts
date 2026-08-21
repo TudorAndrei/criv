@@ -11,9 +11,18 @@ test("publishes the canonical Wasm projection without host State parsing", () =>
       node_count: 1,
       edge_count: 0,
       source_count: 1,
+      asset_count: 1,
       pattern_count: 1,
     },
     sources: [{ path: "docs/architecture/systems.c4" }],
+    assets: [
+      {
+        path: "docs/diagram.png",
+        mime: "image/png",
+        bytes: 128,
+        hash: "a".repeat(64),
+      },
+    ],
     nodes: [
       {
         id: "code:docs/architecture/systems.c4",
@@ -45,5 +54,6 @@ test("publishes the canonical Wasm projection without host State parsing", () =>
 
   assert.equal(snapshot.architecture, projections.architecture);
   assert.equal(snapshot.registeredPatterns, projections.registeredPatterns);
+  assert.equal(snapshot.assets, projections.assets);
   assert.equal(snapshot.c4Artifacts, projections.c4Artifacts);
 });

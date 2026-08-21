@@ -22,7 +22,7 @@ model {
       }
       obsidianSourcePanel = component 'Source panel' {
         technology 'TypeScript and Obsidian ItemView'
-        description 'Owns the singleton panel that shows source links and policy matches for the active note.'
+        description 'Owns the singleton panel that shows source links, policy matches, and verified documentation asset previews.'
         link ../../.obsidian/plugins/criv/src/source/panel.ts 'source'
       }
       obsidianSourceReferences = component 'Source reference editor' {

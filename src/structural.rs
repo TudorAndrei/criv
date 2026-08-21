@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::Path;
+use std::sync::Arc;
 
 #[cfg(test)]
 use std::{cell::Cell, thread_local};
@@ -12,7 +12,8 @@ use ast_grep_core::meta_var::MetaVariable;
 use ast_grep_core::{Doc, NodeMatch, Pattern};
 use ast_grep_language::{Language, LanguageExt, SupportLang};
 
-use crate::source::read_source_to_string;
+use crate::diagnostic::SourceLocation;
+use crate::source::read_source_to_string_from;
 use crate::vault::{PolicyPattern, Vault};
 use crate::{CrivError, Result};
 
@@ -29,6 +30,7 @@ pub(crate) struct StructuralMatch {
     pub(crate) range: String,
     pub(crate) text: String,
     pub(crate) captures: BTreeMap<String, String>,
+    pub(crate) location: Option<SourceLocation>,
 }
 
 enum CompiledMatcher {
@@ -146,7 +148,6 @@ pub(crate) fn compile_policy(
 }
 
 pub(crate) fn find_policies_batch(
-    root: &Path,
     vault: &Vault,
     requests: &[PolicyScanRequest<'_>],
 ) -> Result<BTreeMap<usize, Vec<StructuralMatch>>> {
@@ -169,10 +170,13 @@ pub(crate) fn find_policies_batch(
             continue;
         }
 
-        let contents = read_source_to_string(root, source_file)?;
+        let contents: Arc<str> = Arc::from(read_source_to_string_from(
+            vault.repository_files(),
+            source_file,
+        )?);
         #[cfg(test)]
         record_work(|counts| counts.ast_parses += 1);
-        let ast = language.ast_grep(&contents);
+        let ast = language.ast_grep(contents.as_ref());
         let root = ast.root();
         for request in requests {
             let rows = rows_by_key.entry(request.key).or_default();
@@ -180,13 +184,13 @@ pub(crate) fn find_policies_batch(
                 CompiledMatcher::Pattern(pattern) => {
                     rows.extend(
                         root.find_all(pattern)
-                            .map(|matched| row_from_match(source_file, &matched)),
+                            .map(|matched| row_from_match(source_file, &matched, contents.clone())),
                     );
                 }
                 CompiledMatcher::Rule(rule) => {
                     rows.extend(
                         root.find_all(rule)
-                            .map(|matched| row_from_match(source_file, &matched)),
+                            .map(|matched| row_from_match(source_file, &matched, contents.clone())),
                     );
                 }
             }
@@ -271,14 +275,19 @@ fn scan_source<M: Matcher>(
     contents: &str,
     matcher: &M,
 ) -> Vec<StructuralMatch> {
-    let ast = language.ast_grep(contents);
+    let contents: Arc<str> = Arc::from(contents);
+    let ast = language.ast_grep(contents.as_ref());
     ast.root()
         .find_all(matcher)
-        .map(|matched| row_from_match(source_file, &matched))
+        .map(|matched| row_from_match(source_file, &matched, contents.clone()))
         .collect()
 }
 
-fn row_from_match<D: Doc>(source_file: &str, matched: &NodeMatch<'_, D>) -> StructuralMatch {
+fn row_from_match<D: Doc>(
+    source_file: &str,
+    matched: &NodeMatch<'_, D>,
+    source: Arc<str>,
+) -> StructuralMatch {
     let node = matched.get_node();
     let start = node.start_pos();
     let end = node.end_pos();
@@ -295,6 +304,7 @@ fn row_from_match<D: Doc>(source_file: &str, matched: &NodeMatch<'_, D>) -> Stru
         ),
         text: node.text().trim().to_string(),
         captures: capture_map(matched),
+        location: SourceLocation::new(source, node.range()),
     }
 }
 
@@ -363,6 +373,9 @@ mod tests {
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].line, 1);
         assert_eq!(matches[0].range, "L1:C1-L3:C2");
+        let exact = matches[0].location.as_ref().unwrap().lsp_range();
+        assert_eq!((exact.start.line, exact.start.character), (0, 0));
+        assert_eq!((exact.end.line, exact.end.character), (2, 1));
         assert_eq!(
             matches[0].captures.get("NAME").map(String::as_str),
             Some("main")
@@ -404,7 +417,7 @@ all:
 
     #[test]
     fn batch_returns_all_expected_policy_rows() {
-        let (temp, vault) = policy_fixture();
+        let (_temp, vault) = policy_fixture();
         let function_policy = policy("rust", "fn $NAME() { $$$ }");
         let struct_policy = policy("rust", "struct $NAME;");
         let function_compiled = compile_policy(&function_policy).unwrap();
@@ -423,7 +436,7 @@ all:
             },
         ];
 
-        let batch = find_policies_batch(temp.path(), &vault, &requests).unwrap();
+        let batch = find_policies_batch(&vault, &requests).unwrap();
 
         assert_eq!(
             batch
@@ -447,7 +460,7 @@ all:
 
     #[test]
     fn batch_respects_per_pattern_scopes() {
-        let (temp, vault) = policy_fixture();
+        let (_temp, vault) = policy_fixture();
         let function_policy = policy("rust", "fn $NAME() { $$$ }");
         let left_paths = BTreeSet::from(["src/left.rs".to_string()]);
         let right_paths = BTreeSet::from(["src/right.rs".to_string()]);
@@ -466,7 +479,7 @@ all:
             },
         ];
 
-        let batch = find_policies_batch(temp.path(), &vault, &requests).unwrap();
+        let batch = find_policies_batch(&vault, &requests).unwrap();
 
         assert_eq!(
             batch
@@ -498,7 +511,7 @@ all:
 
     #[test]
     fn batch_skips_non_matching_language() {
-        let (temp, vault) = policy_fixture();
+        let (_temp, vault) = policy_fixture();
         let python_policy = policy("python", "def $NAME($$$): $$$");
         let python_compiled = compile_policy(&python_policy).unwrap();
         let paths = BTreeSet::from(["src/left.rs".to_string(), "src/right.rs".to_string()]);
@@ -508,7 +521,7 @@ all:
             paths: &paths,
         }];
 
-        let batch = find_policies_batch(temp.path(), &vault, &requests).unwrap();
+        let batch = find_policies_batch(&vault, &requests).unwrap();
 
         assert!(batch.get(&0).unwrap().is_empty());
     }
@@ -607,7 +620,6 @@ end
         ]);
         reset_work_counts();
         let rows = find_policies_batch(
-            root,
             &vault,
             &[PolicyScanRequest {
                 key: 0,

@@ -25,15 +25,24 @@ export interface CrivStateSummary {
   node_count: number;
   edge_count: number;
   source_count: number;
+  asset_count: number;
   pattern_count: number;
   first_node_id?: string;
   first_edge?: string;
   first_source_path?: string;
+  first_asset_path?: string;
 }
 
 export interface CrivSourceEntry {
   path: string;
   mime?: string;
+}
+
+export interface CrivAssetEntry {
+  path: string;
+  mime: string;
+  bytes: number;
+  hash: string;
 }
 
 export interface CrivGraphNode {
@@ -84,6 +93,7 @@ export interface CrivArtifactEntry {
 export interface CrivInitialProjections {
   summary: CrivStateSummary;
   sources: CrivSourceEntry[];
+  assets: CrivAssetEntry[];
   nodes: CrivGraphNode[];
   registeredPatterns: string[];
   patternMatches: Record<string, CrivPatternMatch[]>;

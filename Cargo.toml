@@ -36,13 +36,15 @@ ast-grep-language = { version = "0.44.0", default-features = false, features = [
   "tree-sitter-typescript",
 ] }
 blake3 = "1"
+cap-fs-ext = "4.0.2"
+cap-std = "4.0.2"
 clap = { version = "4", features = ["derive"] }
 content_inspector = "0.2"
 criv-state-wire = { version = "0.10.1", path = "crates/criv-state-wire" }
 git2 = { version = "0.21.0", default-features = false }
 globset = "0.4"
 ignore = "0.4"
-libc = "0.2"
+infer = "0.22.0"
 mime_guess = "2"
 notify = "8"
 notify-debouncer-mini = "0.7"

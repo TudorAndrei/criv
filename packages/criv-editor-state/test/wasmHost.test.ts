@@ -12,15 +12,18 @@ import {
 } from "../src/wasmHost.ts";
 
 test("normalizes Wasm State failures to a stable code and base message", async () => {
-  const host = createCrivWasmHost(async () => ({
-    LoadedState: class {
-      constructor() {
-        throw new Error(
-          "criv-state-schema-unsupported: unsupported criv state schema: criv.state.v2",
-        );
-      }
-    },
-  }), "runtime unavailable");
+  const host = createCrivWasmHost(
+    async () => ({
+      LoadedState: class {
+        constructor() {
+          throw new Error(
+            "criv-state-schema-unsupported: unsupported criv state schema: criv.state.v2",
+          );
+        }
+      },
+    }),
+    "runtime unavailable",
+  );
 
   await assert.rejects(host.loadState("{}"), (error: unknown) => {
     assert.ok(error instanceof CrivStateContractError);
@@ -111,32 +114,38 @@ test("wraps a missing LoadedState export as a runtime-load error", async () => {
 
 test("keeps State errors distinct and frees failed projection candidates", async () => {
   const stateError = new Error("invalid State");
-  const invalidStateHost = createCrivWasmHost(async () => ({
-    LoadedState: class {
-      constructor() {
-        throw stateError;
-      }
-    },
-  }), "runtime unavailable");
+  const invalidStateHost = createCrivWasmHost(
+    async () => ({
+      LoadedState: class {
+        constructor() {
+          throw stateError;
+        }
+      },
+    }),
+    "runtime unavailable",
+  );
 
   assert.equal(await rejectedError(invalidStateHost.loadState("invalid")), stateError);
 
   let frees = 0;
   const projectionError = new Error("projection failed");
-  const projectionHost = createCrivWasmHost(async () => ({
-    LoadedState: class {
-      initialProjections() {
-        throw projectionError;
-      }
-      lookupSourceTarget() {}
-      suggestSelectors() {
-        return [];
-      }
-      free() {
-        frees += 1;
-      }
-    },
-  }), "runtime unavailable");
+  const projectionHost = createCrivWasmHost(
+    async () => ({
+      LoadedState: class {
+        initialProjections() {
+          throw projectionError;
+        }
+        lookupSourceTarget() {}
+        suggestSelectors() {
+          return [];
+        }
+        free() {
+          frees += 1;
+        }
+      },
+    }),
+    "runtime unavailable",
+  );
 
   assert.equal(await rejectedError(projectionHost.loadState("valid")), projectionError);
   assert.equal(frees, 1);

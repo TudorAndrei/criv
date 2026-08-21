@@ -132,3 +132,15 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0119-first-class-elixir-language-support|ADR-0119]] - First class Elixir language support
 - [[0120-reset-release-baseline-for-default-elixir-support|ADR-0120]] - Reset the release baseline for default Elixir support
 - [[0121-separate-performance-evidence-from-automatic-release|ADR-0121]] - Separate performance evidence from automatic release
+- [[0122-byte-spans-and-lsp-diagnostic-ranges|ADR-0122]] - Use byte spans and LSP diagnostic ranges
+- [[0123-own-reconciliation-under-the-adr-module|ADR-0123]] - Own reconciliation under the ADR module
+- [[0124-own-c4-implementations-under-the-c4-module|ADR-0124]] - Own C4 implementations under the C4 module
+- [[0125-own-installation-implementations-under-the-install-module|ADR-0125]] - Own installation implementations under the Install module
+- [[0126-own-one-source-state-per-refresh|ADR-0126]] - Own one Source state per refresh
+- [[0127-own-repository-files-behind-one-interface|ADR-0127]] - Own repository files behind one interface
+- [[0128-enforce-runtime-paths-through-repository-files|ADR-0128]] - Enforce runtime paths through Repository Files
+- [[0129-own-elixir-graph-meaning-in-the-elixir-module|ADR-0129]] - Own Elixir graph meaning in the Elixir module
+- [[0130-share-structured-source-identity-text|ADR-0130]] - Share structured Source identity text
+- [[0131-publish-verified-documentation-assets-for-native-previews|ADR-0131]] - Publish verified documentation assets for native previews
+- [[0132-use-aqua-with-a-mise-alias-and-github-fallback|ADR-0132]] - Use aqua with a mise alias and GitHub fallback
+- [[0133-use-exact-lowercase-documentation-asset-extensions|ADR-0133]] - Use exact lowercase documentation asset extensions

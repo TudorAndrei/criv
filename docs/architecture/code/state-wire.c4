@@ -1,0 +1,52 @@
+// Code architecture for the shared Rust State and Source identity contract.
+model {
+  extend criv.stateWire.sourceIdentity {
+    rustSourceIdentity = module 'criv-state-wire::source_identity' {
+      technology 'Rust'
+      description 'Parses, structures, encodes, and decodes stable Source identity text.'
+      link ../../crates/criv-state-wire/src/source_identity.rs 'source'
+    }
+  }
+
+  extend criv.stateProjection.selectorProjection {
+    rustWasmSource = module 'criv-wasm::source' {
+      technology 'Rust and WebAssembly'
+      description 'Builds prepared Source lookup and selector indexes from one loaded revision.'
+      link ../../crates/criv-wasm/src/source.rs 'source'
+    }
+  }
+  extend criv.stateProjection.assetProjection {
+    rustWasmAsset = module 'criv-wasm::asset' {
+      technology 'Rust and WebAssembly'
+      description 'Prepares safe, bounded, passive documentation asset rows for editor hosts.'
+      link ../../crates/criv-wasm/src/asset.rs 'source'
+    }
+  }
+
+  criv.cli.sourceIntelligence.rustSourceGraph -> criv.stateWire.sourceIdentity.rustSourceIdentity 'Formats generic Source identities'
+  criv.cli.sourceIntelligence.rustElixirGraph -> criv.stateWire.sourceIdentity.rustSourceIdentity 'Creates canonical Elixir identities'
+  criv.stateProjection.selectorProjection.rustWasmSource -> criv.stateWire.sourceIdentity.rustSourceIdentity 'Parses canonical Source identities'
+  criv.stateProjection.assetProjection.rustWasmAsset -> criv.stateWire.stateDocument 'Validates asset rows'
+}
+
+views {
+  global style architectureTheme
+
+  view codeSourceIdentity of criv.stateWire.sourceIdentity {
+    title 'Code / Shared Source identity'
+    description 'The shared identity implementation and its native producer and Wasm consumer.'
+
+    include *
+    include criv.cli.sourceIntelligence.rustSourceGraph
+    include criv.cli.sourceIntelligence.rustElixirGraph
+    include criv.stateProjection.selectorProjection.rustWasmSource
+  }
+
+  view codeAssetProjection of criv.stateProjection.assetProjection {
+    title 'Code / Documentation asset projection'
+    description 'The Wasm module that prepares verified State asset rows for editor hosts.'
+
+    include *
+    include criv.stateWire.stateDocument
+  }
+}

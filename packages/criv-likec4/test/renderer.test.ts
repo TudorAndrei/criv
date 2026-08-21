@@ -69,7 +69,7 @@ test("requires an existing view and owns synchronous view selection", () => {
   const renderer = new CrivLikeC4Renderer(
     window.document.createElement("div") as unknown as HTMLElement,
     {
-    onSelectView: (viewId) => selected.push(viewId),
+      onSelectView: (viewId) => selected.push(viewId),
     },
   );
 
@@ -90,8 +90,9 @@ test("exports the rendered shadow tree and reports not-ready", () => {
   assert.equal(renderer.exportSvg(), null);
   const host = window.document.createElement("div");
   host.className = "likec4-view";
-  (host as unknown as { getBoundingClientRect: () => { width: number; height: number } })
-    .getBoundingClientRect = () => ({ width: 640.2, height: 479.1 });
+  (
+    host as unknown as { getBoundingClientRect: () => { width: number; height: number } }
+  ).getBoundingClientRect = () => ({ width: 640.2, height: 479.1 });
   host.attachShadow({ mode: "open" }).innerHTML = "<p>Diagram</p>";
   container.appendChild(host as unknown as Node);
 

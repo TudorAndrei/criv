@@ -32,6 +32,11 @@ model {
       description 'Owns the singleton source-panel leaf and its active-note rendering.'
       link ../../.obsidian/plugins/criv/src/source/panel.ts 'source'
     }
+    assetModule = module 'criv-obsidian::source::assets' {
+      technology 'TypeScript and Obsidian resource API'
+      description 'Builds cache-keyed resource paths for verified passive image thumbnails.'
+      link ../../.obsidian/plugins/criv/src/source/assets.ts 'source'
+    }
   }
   extend criv.obsidianPlugin.obsidianSourceReferences {
     sourceReferencesModule = module 'criv-obsidian::source::references' {
@@ -80,6 +85,9 @@ model {
   criv.obsidianPlugin.obsidianC4View.c4ViewModule -> criv.sharedRenderer.diagramRenderer.rendererModule 'Owns a renderer revision'
   criv.obsidianPlugin.obsidianC4View.c4ViewModule -> criv.sharedRenderer.modelContract.protocolModule 'Selects a named view'
   criv.obsidianPlugin.obsidianSourcePanel.sourcePanelModule -> criv.obsidianPlugin.obsidianSourcePreview.sourcePreviewModule 'Renders panel excerpts'
+  criv.obsidianPlugin.obsidianSourcePanel.sourcePanelModule -> criv.obsidianPlugin.obsidianSourcePanel.assetModule 'Renders verified asset thumbnails'
+  criv.obsidianPlugin.obsidianSourcePanel.sourcePanelModule -> criv.obsidianPlugin.obsidianStateOwner.stateOwnerModule 'Reads the active asset inventory'
+  criv.obsidianPlugin.obsidianWasm.wasmModule -> criv.stateProjection.assetProjection.rustWasmAsset 'Receives projected asset rows'
   criv.obsidianPlugin.obsidianSourceReferences.sourceReferencesModule -> criv.obsidianPlugin.obsidianSourcePreview.sourcePreviewModule 'Renders hover excerpts'
 }
 

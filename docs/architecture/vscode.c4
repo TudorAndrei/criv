@@ -37,8 +37,13 @@ model {
       }
       vscodeExplorer = component 'Vault explorer' {
         technology 'TypeScript and VS Code TreeView'
-        description 'Presents documents, decisions, and source references as a navigable tree.'
+        description 'Presents Source data, verified documentation assets, and architecture artifacts as a navigable tree.'
         link ../../extensions/vscode-criv/src/tree.ts 'source'
+      }
+      vscodeAssets = component 'Asset opener' {
+        technology 'TypeScript and VS Code API'
+        description 'Authorizes exact active-State asset paths and opens them with the native editor.'
+        link ../../extensions/vscode-criv/src/assets.ts 'source'
       }
     }
   }

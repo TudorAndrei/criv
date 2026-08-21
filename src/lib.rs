@@ -2,19 +2,17 @@ mod adr;
 mod c4;
 mod check;
 mod config;
+mod diagnostic;
 mod discovery;
 mod enforce;
-mod generated_skills;
 mod git;
 mod init;
-mod install_editor;
-mod likec4;
+mod install;
 mod policy_scan;
 mod query;
-mod reconcile_transaction;
 mod refresh;
+mod repository;
 mod source;
-mod source_reconcile;
 mod state;
 mod structural;
 mod util;
@@ -28,7 +26,7 @@ mod discovery_probe;
 #[cfg(test)]
 fn discovery_probe_source_files(root: &std::path::Path) -> Result<Vec<String>> {
     let config = config::Config::load(root)?;
-    Ok(source::SourceCatalog::discover(root, &config)?
+    Ok(source::SourceState::refresh(root, &config, None)?
         .paths()
         .to_vec())
 }
@@ -96,7 +94,7 @@ struct Cli {
 enum Command {
     Init(init::InitOptions),
     /// Install the optional local viewer into a selected editor.
-    InstallEditor(install_editor::InstallEditorOptions),
+    InstallEditor(install::InstallEditorOptions),
     Adr(adr::AdrOptions),
     Check(check::CheckOptions),
     Query(query::QueryOptions),
@@ -142,7 +140,7 @@ fn run_command(args: Vec<String>, cwd: &std::path::Path) -> Result<()> {
             Ok(())
         }
         Some(Command::Init(options)) => init::run(cwd, options),
-        Some(Command::InstallEditor(options)) => install_editor::run(options),
+        Some(Command::InstallEditor(options)) => install::install_editor(options),
         Some(Command::Adr(options)) => adr::run(cwd, options),
         Some(Command::Check(options)) => check::run(cwd, options),
         Some(Command::Query(options)) => query::run(cwd, options),

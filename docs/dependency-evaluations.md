@@ -13,23 +13,26 @@ the current parser-backed implementation.
 
 Decision: defer.
 
-`miette` is a good fit for future source-span diagnostics because it provides a
-diagnostic protocol, source snippets, labels, related diagnostics, and optional
-fancy reports. `criv` diagnostics currently carry line numbers but not byte
-spans or source snippets, so adopting it now would mostly add dependency weight
-without improving output. Revisit once check diagnostics store source offsets.
+`miette` is a good fit for a future human diagnostic renderer because it
+provides source snippets, labels, related diagnostics, and optional fancy
+reports. [[0122-byte-spans-and-lsp-diagnostic-ranges|ADR-0122]] defines the
+source-span contract, but it keeps renderer selection separate. Revisit
+`miette` after the main diagnostic producers preserve exact spans and a
+renderer change shows enough user value to justify the dependency.
 
-Reference: <https://lib.rs/crates/miette>
+Reference: <https://docs.rs/miette/latest/miette/struct.SourceSpan.html>
 
 ## infer
 
-Decision: defer until plugin asset previews are implemented.
+Decision: use for the bounded documentation asset inventory.
 
 `infer` detects file types from magic-number signatures and returns MIME and
-extension metadata. The CLI already skips binary source files with
-`content_inspector` and records cheap extension MIME hints with `mime_guess`.
-Magic-number detection becomes useful when the Obsidian plugin previews
-non-source assets from state.
+extension metadata. [[0131-publish-verified-documentation-assets-for-native-previews|ADR-0131]]
+requires the CLI to verify the file signature and the extension before it adds
+an asset to State. `infer` supplies this narrow check. `content_inspector`
+continues to classify Source text, and `mime_guess` continues to supply Source
+MIME hints. The asset inventory does not use either dependency as a security
+check.
 
 Reference: <https://lib.rs/crates/infer>
 

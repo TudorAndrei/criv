@@ -20,6 +20,8 @@ pub struct WorkloadManifest {
     pub source_files: usize,
     pub source_bytes: usize,
     pub symbols: usize,
+    #[serde(default)]
+    pub relationships: usize,
     pub note_links: usize,
     pub source_references: usize,
     pub policies: usize,
@@ -123,6 +125,24 @@ impl WorkloadManifest {
                 path.display()
             ));
         }
+        let elixir_files =
+            self.extensions.get("ex").unwrap_or(&0) + self.extensions.get("exs").unwrap_or(&0);
+        let supported_files = self
+            .extensions
+            .iter()
+            .filter(|(extension, _)| {
+                matches!(extension.as_str(), "rs" | "ts" | "mjs" | "ex" | "exs")
+            })
+            .map(|(_, count)| count)
+            .sum::<usize>();
+        if self.relationships > self.symbols
+            || (self.relationships > 0 && elixir_files != supported_files)
+        {
+            return Err(format!(
+                "manifest {} relationships must not exceed symbols and require an Elixir-only code workload",
+                path.display()
+            ));
+        }
         Ok(())
     }
 }
@@ -139,6 +159,7 @@ mod tests {
             "criv-medium.toml",
             "elixir-mixed.toml",
             "elixir-parse-heavy.toml",
+            "elixir-relationships.toml",
         ] {
             LoadedManifest::load(&root.join("fixtures/performance").join(name)).unwrap();
         }

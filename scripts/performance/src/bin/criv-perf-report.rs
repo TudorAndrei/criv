@@ -65,6 +65,8 @@ struct ManifestIdentity {
     observed_revision: String,
     source_files: usize,
     source_bytes: usize,
+    #[serde(default)]
+    relationships: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -88,6 +90,12 @@ struct CaseSummary {
     selected_elixir_bytes: u64,
     parsed_elixir_files: usize,
     parsed_elixir_bytes: u64,
+    #[serde(default)]
+    expected_relationships: usize,
+    #[serde(default)]
+    parsed_relationships: usize,
+    #[serde(default)]
+    published_relationships: Option<usize>,
     elixir_path_digest: Option<String>,
     real_seconds: Option<MetricSummary>,
     user_seconds: Option<MetricSummary>,
@@ -246,6 +254,18 @@ fn load_evidence(result_dir: &Path, note_path: &Path) -> Result<Evidence, String
         {
             return Err("timing summaries have incomplete Elixir parse coverage".into());
         }
+        if complete_source_selected
+            && (case.expected_relationships != manifest.relationships
+                || case.parsed_relationships != manifest.relationships)
+        {
+            return Err("timing summaries do not match the manifest relationship shape".into());
+        }
+        if case
+            .published_relationships
+            .is_some_and(|count| count != manifest.relationships)
+        {
+            return Err("timing summaries have incomplete State relationship coverage".into());
+        }
     }
     let failed_samples = samples
         .iter()
@@ -388,7 +408,7 @@ fn render_html(evidence: &Evidence) -> String {
         );
         let _ = writeln!(
             html,
-            "<div class=\"table-wrap\" role=\"region\" tabindex=\"0\" aria-label=\"Exact timing summary for {}\"><table><thead><tr><th scope=\"col\">Command</th><th scope=\"col\">State</th><th scope=\"col\" class=\"num\">Median</th><th scope=\"col\" class=\"num\">MAD</th><th scope=\"col\" class=\"num\">Min–max</th><th scope=\"col\" class=\"num\">User</th><th scope=\"col\" class=\"num\">System</th><th scope=\"col\" class=\"num\">Peak RSS</th><th scope=\"col\" class=\"num\">Elixir parsed</th><th scope=\"col\" class=\"num\">Samples</th></tr></thead><tbody>",
+            "<div class=\"table-wrap\" role=\"region\" tabindex=\"0\" aria-label=\"Exact timing summary for {}\"><table><thead><tr><th scope=\"col\">Command</th><th scope=\"col\">State</th><th scope=\"col\" class=\"num\">Median</th><th scope=\"col\" class=\"num\">MAD</th><th scope=\"col\" class=\"num\">Min–max</th><th scope=\"col\" class=\"num\">User</th><th scope=\"col\" class=\"num\">System</th><th scope=\"col\" class=\"num\">Peak RSS</th><th scope=\"col\" class=\"num\">Elixir parsed</th><th scope=\"col\" class=\"num\">Relationships</th><th scope=\"col\" class=\"num\">Samples</th></tr></thead><tbody>",
             escape_html(&manifest.id)
         );
         for case in cases {
@@ -396,7 +416,7 @@ fn render_html(evidence: &Evidence) -> String {
             let is_focal = focal == Some((case.workload.as_str(), case.case.as_str()));
             let _ = writeln!(
                 html,
-                "<tr{}><th scope=\"row\"><code>{}</code></th><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}–{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}/{} files<br>{}/{} bytes</td><td class=\"num\">{}/{}</td></tr>",
+                "<tr{}><th scope=\"row\"><code>{}</code></th><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}–{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}/{} files<br>{}/{} bytes</td><td class=\"num\">{}/{} parsed<br>{} published</td><td class=\"num\">{}/{}</td></tr>",
                 if is_focal { " class=\"focal-row\"" } else { "" },
                 escape_html(&case.case),
                 escape_html(&case.cache_state),
@@ -417,6 +437,10 @@ fn render_html(evidence: &Evidence) -> String {
                 case.selected_elixir_files,
                 case.parsed_elixir_bytes,
                 case.selected_elixir_bytes,
+                case.parsed_relationships,
+                case.expected_relationships,
+                case.published_relationships
+                    .map_or_else(|| "n/a".into(), |count| count.to_string()),
                 case.successful_samples,
                 case.successful_samples + case.failed_samples
             );
@@ -446,15 +470,16 @@ fn render_html(evidence: &Evidence) -> String {
             .next()
             .unwrap_or("unavailable"),
     );
-    html.push_str("</dl>\n<h3>Workload provenance</h3>\n<div class=\"table-wrap\" role=\"region\" tabindex=\"0\" aria-label=\"Workload provenance\"><table><thead><tr><th scope=\"col\">Workload</th><th scope=\"col\">Tier</th><th scope=\"col\">Sources</th><th scope=\"col\">Bytes</th><th scope=\"col\">Observed repository</th><th scope=\"col\">Observed revision</th><th scope=\"col\">Manifest digest</th></tr></thead><tbody>\n");
+    html.push_str("</dl>\n<h3>Workload provenance</h3>\n<div class=\"table-wrap\" role=\"region\" tabindex=\"0\" aria-label=\"Workload provenance\"><table><thead><tr><th scope=\"col\">Workload</th><th scope=\"col\">Tier</th><th scope=\"col\">Sources</th><th scope=\"col\">Bytes</th><th scope=\"col\">Relationships</th><th scope=\"col\">Observed repository</th><th scope=\"col\">Observed revision</th><th scope=\"col\">Manifest digest</th></tr></thead><tbody>\n");
     for manifest in &evidence.run.manifests {
         let _ = writeln!(
             html,
-            "<tr><th scope=\"row\">{}</th><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>{}</td><td><code>{}</code></td><td><code>{}</code></td></tr>",
+            "<tr><th scope=\"row\">{}</th><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td>{}</td><td><code>{}</code></td><td><code>{}</code></td></tr>",
             escape_html(&manifest.id),
             escape_html(&manifest.tier),
             manifest.source_files,
             format_bytes(manifest.source_bytes as u64),
+            manifest.relationships,
             escape_html(&manifest.observed_repository),
             escape_html(&manifest.observed_revision),
             escape_html(&manifest.digest)

@@ -55,6 +55,10 @@
         "title": "criv: Open Source Target"
       },
       {
+        "command": "criv.openAsset",
+        "title": "criv: Open Documentation Asset"
+      },
+      {
         "command": "criv.runWatchOnce",
         "title": "criv: Run Watch Once"
       },

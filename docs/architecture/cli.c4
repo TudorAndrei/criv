@@ -2,7 +2,7 @@ model {
   extend criv {
     cli = container 'criv CLI' {
       technology 'Rust'
-      description 'Runs repository initialization, validation, refresh, enforcement, query, and search workflows.'
+      description 'Runs repository initialization, validation, refresh, enforcement, and query workflows.'
       link ../../src/lib.rs 'source'
 
       commandInterface = component 'Command interface' {
@@ -10,10 +10,10 @@ model {
         description 'Parses commands and sends each command to one application workflow.'
         link ../../src/lib.rs 'source'
       }
-      scaffoldInstaller = component 'Scaffold installer' {
+      installation = component 'Installation' {
         technology 'Rust'
-        description 'Installs canonical vault files, configuration, editor files, and agent skills.'
-        link ../../src/init.rs 'source'
+        description 'Installs canonical vault content, generated skills, and the optional local editor viewer through separate command flows.'
+        link ../../src/install.rs 'source'
       }
       vaultModel = component 'Vault model' {
         technology 'Rust'
@@ -25,20 +25,30 @@ model {
         description 'Reads commits, diffs, renames, staged files, and push scopes through one embedded Git boundary.'
         link ../../src/git.rs 'source'
       }
+      repositoryFiles = component 'Repository files' {
+        technology 'Rust and capability file handles'
+        description 'Provides capability-rooted reads and bound write scopes through one repository interface.'
+        link ../../src/repository.rs 'source'
+      }
       sourceIntelligence = component 'Source intelligence' {
-        technology 'Rust, fff, and tree-sitter'
-        description 'Indexes source files and builds module, import, symbol, call, and structural-match data.'
+        technology 'Rust, ignore, tree-sitter, and ast-grep'
+        description 'Owns one Source state while it discovers, reads, parses, caches, resolves, and structurally matches selected source files.'
         link ../../src/source.rs 'source'
       }
-      architectureService = component 'Architecture service' {
+      architectureService = component 'C4 service' {
         technology 'Rust, Node.js, and LikeC4'
-        description 'Compiles and validates the agent-authored LikeC4 workspace.'
-        link ../../src/likec4.rs 'source'
+        description 'Classifies C4 artifacts and compiles and validates the agent-authored LikeC4 workspace.'
+        link ../../src/c4.rs 'source'
       }
       governanceEngine = component 'Governance engine' {
         technology 'Rust and ast-grep'
         description 'Validates vault facts and enforces effective ADR, policy, and change-scope rules.'
         link ../../src/check.rs 'source'
+      }
+      diagnosticLocations = component 'Diagnostic locations' {
+        technology 'Rust'
+        description 'Validates UTF-8 byte spans and converts them to LSP and GitHub coordinates.'
+        link ../../src/diagnostic.rs 'source'
       }
       refreshCoordinator = component 'Refresh coordinator' {
         technology 'Rust and notify'
@@ -64,10 +74,13 @@ model {
     }
   }
 
-  criv.cli.statePublisher -> criv.stateWire 'Builds the shared State document' {
+  criv.cli.statePublisher -> criv.stateWire.stateDocument 'Builds the shared State document' {
     technology 'Rust crate'
   }
-  criv.cli.scaffoldInstaller -> criv.stateWire 'Creates the empty State document' {
+  criv.cli.installation -> criv.stateWire.stateDocument 'Creates the empty State document' {
+    technology 'Rust crate'
+  }
+  criv.cli.sourceIntelligence -> criv.stateWire.sourceIdentity 'Creates stable Source identity text' {
     technology 'Rust crate'
   }
 }
@@ -81,19 +94,36 @@ views {
 
     include *
     include repository
+    include vscode
     include criv.stateStore
     include criv.stateWire
     include
+      criv.cli.repositoryFiles with {
+        navigateTo codeRepositoryFiles
+      }
+    include
       criv.cli.vaultModel with {
         navigateTo codeVaultLoading
+      }
+    include
+      criv.cli.installation with {
+        navigateTo codeInstallation
       }
     include
       criv.cli.refreshCoordinator with {
         navigateTo codeRefreshPipeline
       }
     include
+      criv.cli.sourceIntelligence with {
+        navigateTo codeSourceState
+      }
+    include
       criv.cli.governanceEngine with {
         navigateTo codeValidation
+      }
+    include
+      criv.cli.diagnosticLocations with {
+        navigateTo codeDiagnosticLocations
       }
     include
       criv.cli.knowledgeQueries with {

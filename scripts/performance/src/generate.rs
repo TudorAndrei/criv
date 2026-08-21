@@ -168,6 +168,14 @@ fn source_contents(
                 format!("export function symbol_{symbol:06}(): number {{ return {symbol}; }}\n")
             }
             "mjs" => format!("export function symbol_{symbol:06}() {{ return {symbol}; }}\n"),
+            "ex" | "exs" if symbol < manifest.relationships => {
+                let target = (symbol + 1) % manifest.symbols;
+                let target_path = code_paths[target % code_paths.len()];
+                format!(
+                    "  def symbol_{symbol:06}(), do: {}.symbol_{target:06}()\n",
+                    elixir_module_name(target_path)
+                )
+            }
             "ex" | "exs" => format!("  def symbol_{symbol:06}(), do: {symbol}\n"),
             _ => unreachable!(),
         };
@@ -190,13 +198,16 @@ fn is_elixir_path(path: &Path) -> bool {
 }
 
 fn elixir_module_name(path: &Path) -> String {
-    let suffix = path
+    let mut suffix = path
         .file_stem()
         .and_then(|value| value.to_str())
         .unwrap_or("source")
         .chars()
         .filter(char::is_ascii_alphanumeric)
         .collect::<String>();
+    if let Some(first) = suffix.get_mut(0..1) {
+        first.make_ascii_uppercase();
+    }
     format!("CrivPerformance.{suffix}")
 }
 
@@ -444,6 +455,7 @@ mod tests {
             "criv-medium.toml",
             "elixir-mixed.toml",
             "elixir-parse-heavy.toml",
+            "elixir-relationships.toml",
         ] {
             let loaded =
                 LoadedManifest::load(&repository.join("fixtures/performance").join(name)).unwrap();
@@ -593,5 +605,25 @@ mod tests {
             .map(|path| fs::read_to_string(root.path().join(path)).unwrap())
             .collect::<String>();
         assert!(contents.contains("defmodule CrivPerformance.SnapshotRevision2 do"));
+    }
+
+    #[test]
+    fn elixir_relationship_workload_has_the_declared_call_sites() {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let loaded = LoadedManifest::load(
+            &repository.join("fixtures/performance/elixir-relationships.toml"),
+        )
+        .unwrap();
+        let root = tempfile::TempDir::new().unwrap();
+        let generated = generate(root.path(), &loaded.manifest).unwrap();
+
+        let relationship_sites = generated
+            .source_paths
+            .iter()
+            .map(|path| fs::read_to_string(root.path().join(path)).unwrap())
+            .map(|contents| contents.matches("(), do: CrivPerformance.").count())
+            .sum::<usize>();
+
+        assert_eq!(relationship_sites, loaded.manifest.relationships);
     }
 }

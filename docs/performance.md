@@ -16,15 +16,16 @@ development checkout is useful for exploration but is not project evidence.
 
 ## Canonical workloads
 
-The canonical workload set has two shapes from observed criv vaults and two
+The canonical workload set has two shapes from observed criv vaults and three
 deterministic Elixir acceptance shapes:
 
-| Manifest | Tier | Notes | Source files | Source bytes | Links and references | Policies | C4 artifacts | Changed sources |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `barrs-small.toml` | small | 23 | 12 | 273,948 | 3 | 0 | 0 | 1 of 12 |
-| `criv-medium.toml` | medium | 77 | 119 | 1,291,218 | 212 | 4 | 4 | 1 of 119 |
-| `elixir-mixed.toml` | medium | 12 | 24 | 524,288 | 32 | 1 | 1 | 1 of 24 |
-| `elixir-parse-heavy.toml` | large | 4 | 128 | 4,194,304 | 8 | 0 | 0 | 1 of 128 |
+| Manifest | Tier | Notes | Source files | Source bytes | Relationships | Links and references | Policies | C4 artifacts | Changed sources |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `barrs-small.toml` | small | 23 | 12 | 273,948 | 0 | 3 | 0 | 0 | 1 of 12 |
+| `criv-medium.toml` | medium | 77 | 119 | 1,291,218 | 0 | 212 | 4 | 4 | 1 of 119 |
+| `elixir-mixed.toml` | medium | 12 | 24 | 524,288 | 0 | 32 | 1 | 1 | 1 of 24 |
+| `elixir-parse-heavy.toml` | large | 4 | 128 | 4,194,304 | 0 | 8 | 0 | 0 | 1 of 128 |
+| `elixir-relationships.toml` | large | 4 | 128 | 4,194,304 | 8,192 | 8 | 0 | 0 | 1 of 128 |
 
 The checked-in manifests retain repository revision, note split, language/file
 extension distribution, symbols, link categories, and exact changed fraction.
@@ -36,6 +37,13 @@ The parse-heavy workload contains 96 `.ex` files and 32 `.exs` files with
 8,192 callables. Every successful sample proves that each selected Elixir path
 and byte entered the Elixir source graph. These workloads record cost. They do
 not set an Elixir speed limit.
+
+The relationship workload uses the same file, byte, and callable shape as the
+parse-heavy workload. Each callable makes one static remote call to another
+generated callable. Its manifest declares 8,192 relationships. Every source
+sample proves that the source graph contains this exact count. Every State
+publication sample also proves that State contains this exact count as `calls`
+edges. This evidence stays outside the normal validation gate.
 
 The large representative file-discovery workload is the observed
 `flowcopilot/ouro` checkout. Evidence identifies its exact revision and full
@@ -92,8 +100,9 @@ timing summaries rather than disappearing.
 Each run writes a new result directory. `samples.jsonl` contains one row per
 sample. Each row keeps identity, cache state, exit status, elapsed, user and
 system time, peak resident memory, selected source files and bytes, Elixir
-parse coverage, output digests, generated-state hashes, and snapshot hashes
-when present.
+parse coverage, expected and parsed relationship counts, published State
+relationship counts, output digests, generated-state hashes, and snapshot
+hashes when present.
 `summary.json` groups compatible successful rows and reports sample count,
 minimum, median, maximum, and median absolute deviation without discarding raw
 values. `report.html` is a self-contained derived view with shared-scale timing

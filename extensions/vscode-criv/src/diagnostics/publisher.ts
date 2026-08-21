@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 
-import { parseCheckDiagnostics } from "./model";
+import { diagnosticRange, parseCheckDiagnostics } from "./model";
 import { safeVaultPath } from "../navigation/target";
 
 export class CrivCheckDiagnostics implements vscode.Disposable {
@@ -15,8 +15,14 @@ export class CrivCheckDiagnostics implements vscode.Disposable {
       }
 
       const uri = vscode.Uri.joinPath(root, ...safePath.split("/"));
+      const range = diagnosticRange(item);
       const diagnostic = new vscode.Diagnostic(
-        diagnosticRange(item.line),
+        new vscode.Range(
+          range.start.line,
+          range.start.character,
+          range.end.line,
+          range.end.character,
+        ),
         item.message,
         severityValue(item.severity),
       );
@@ -41,11 +47,6 @@ export class CrivCheckDiagnostics implements vscode.Disposable {
   dispose(): void {
     this.collection.dispose();
   }
-}
-
-function diagnosticRange(line: number | undefined): vscode.Range {
-  const zeroBasedLine = line === undefined ? 0 : Math.max(line - 1, 0);
-  return new vscode.Range(zeroBasedLine, 0, zeroBasedLine, Number.MAX_SAFE_INTEGER);
 }
 
 function severityValue(value: string): vscode.DiagnosticSeverity {

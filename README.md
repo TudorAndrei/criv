@@ -321,8 +321,9 @@ The repository contains a maintained Obsidian companion under
 `.obsidian/plugins/criv/`. `criv init` does not copy it into another repository.
 The plugin is a UI over `.criv/state.json`: it reads the CLI-generated graph
 state, validates the schema version, renders source and pattern context, offers
-source autocomplete, and delegates shared helper logic to the `criv-wasm`
-crate.
+source autocomplete, shows lazy thumbnails for verified documentation images,
+and opens verified images and PDFs with Obsidian. It delegates shared State
+validation and projection logic to the `criv-wasm` crate.
 
 Build the plugin when working on its templates or WASM helper:
 
@@ -342,7 +343,8 @@ validation, policy enforcement, and graph generation remain owned by the CLI.
 The companion extension under `extensions/vscode-criv/` targets VS Code and
 VS Code-derived editors such as Cursor. It reads `.criv/state.json`, shows a
 native state tree and status summary, opens AST-aware source selectors, surfaces
-`criv check --format json` diagnostics, and previews standalone `.c4` artifacts.
+`criv check --format json` diagnostics, previews standalone `.c4` artifacts,
+and opens verified documentation images and PDFs with the native editor.
 
 For local development:
 

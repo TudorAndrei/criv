@@ -49,9 +49,11 @@ class FakeRevision {
         node_count: this.state.graph?.nodes?.length ?? 0,
         edge_count: this.state.graph?.edges?.length ?? 0,
         source_count: this.state["source-index"]?.length ?? 0,
+        asset_count: this.state["asset-index"]?.length ?? 0,
         pattern_count: this.state["registered-patterns"]?.length ?? 0,
       },
       sources: this.state["source-index"] ?? [],
+      assets: this.state["asset-index"] ?? [],
       nodes: [],
       registeredPatterns: this.state["registered-patterns"] ?? [],
       patternMatches: this.state.patterns ?? {},
@@ -133,10 +135,12 @@ class FakeRevision {
     node_count: 1,
     edge_count: 1,
     source_count: 2,
+    asset_count: 0,
     pattern_count: 1,
     first_node_id: "note:README.md",
     first_edge: "note:README.md:mentions:source:src/lib.rs",
     first_source_path: "src/lib.rs",
+    first_asset_path: undefined,
   });
 }
 

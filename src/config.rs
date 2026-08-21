@@ -3,7 +3,7 @@ use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::util::read_to_string;
+use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone)]
@@ -42,9 +42,14 @@ impl Default for Config {
 }
 
 impl Config {
+    #[cfg(test)]
     pub(crate) fn load(root: &Path) -> Result<Self> {
-        let path = root.join("criv.toml");
-        let contents = path.exists().then(|| read_to_string(&path)).transpose()?;
+        let files = RepositoryFiles::open(root)?;
+        Self::load_from(&files)
+    }
+
+    pub(crate) fn load_from(files: &RepositoryFiles) -> Result<Self> {
+        let contents = files.read_optional_string(Path::new("criv.toml"))?;
         Self::parse(contents.as_deref())
     }
 

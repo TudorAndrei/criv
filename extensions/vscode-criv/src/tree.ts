@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 
-import type { CrivArtifactEntry, CrivStateSnapshot } from "./state/model";
+import { assetTreePresentation } from "./assets";
+import type { CrivArtifactEntry, CrivAssetEntry, CrivStateSnapshot } from "./state/model";
 import type { WorkspaceStateStatus } from "./state/store";
 import type { CrivSourceEntry } from "./state/wasm";
 
@@ -49,12 +50,12 @@ export class CrivStateTreeProvider implements vscode.TreeDataProvider<CrivTreeIt
   }
 }
 
-type TreeSection = "summary" | "sources" | "patterns" | "c4";
+type TreeSection = "summary" | "sources" | "assets" | "patterns" | "c4";
 
 class CrivTreeItem extends vscode.TreeItem {
   constructor(
     label: string,
-    readonly kind: "section" | "message" | "source" | "pattern" | "artifact",
+    readonly kind: "section" | "message" | "source" | "asset" | "pattern" | "artifact",
     readonly section?: TreeSection,
   ) {
     super(
@@ -70,6 +71,7 @@ function readyRootItems(snapshot: CrivStateSnapshot): CrivTreeItem[] {
   return [
     sectionItem("Summary", "summary", `${snapshot.summary.node_count} nodes`),
     sectionItem("Source Files", "sources", `${snapshot.sources.length}`),
+    sectionItem("Documentation Assets", "assets", `${snapshot.assets.length}`),
     sectionItem("Registered Patterns", "patterns", `${snapshot.registeredPatterns.length}`),
     sectionItem(".c4 Artifacts", "c4", `${snapshot.c4Artifacts.length}`),
   ];
@@ -81,6 +83,10 @@ function sectionChildren(section: TreeSection, snapshot: CrivStateSnapshot): Cri
       return summaryItems(snapshot);
     case "sources":
       return snapshot.sources.map(sourceItem);
+    case "assets":
+      return snapshot.assets.length > 0
+        ? snapshot.assets.map(assetItem)
+        : [new CrivTreeItem("No previewable assets", "message")];
     case "patterns":
       return snapshot.registeredPatterns.length > 0
         ? snapshot.registeredPatterns.map(patternItem)
@@ -98,6 +104,7 @@ function summaryItems(snapshot: CrivStateSnapshot): CrivTreeItem[] {
     new CrivTreeItem(`Nodes: ${snapshot.summary.node_count}`, "message"),
     new CrivTreeItem(`Edges: ${snapshot.summary.edge_count}`, "message"),
     new CrivTreeItem(`Sources: ${snapshot.summary.source_count}`, "message"),
+    new CrivTreeItem(`Assets: ${snapshot.summary.asset_count}`, "message"),
     new CrivTreeItem(`Patterns: ${snapshot.summary.pattern_count}`, "message"),
   ];
 }
@@ -115,6 +122,18 @@ function sourceItem(source: CrivSourceEntry): CrivTreeItem {
     command: "criv.openSourceTarget",
     title: "Open Source Target",
     arguments: [source.path],
+  };
+  return item;
+}
+
+function assetItem(asset: CrivAssetEntry): CrivTreeItem {
+  const row = assetTreePresentation(asset);
+  const item = new CrivTreeItem(row.label, "asset");
+  item.description = row.description;
+  item.command = {
+    command: row.command,
+    title: "Open Documentation Asset",
+    arguments: row.arguments,
   };
   return item;
 }

@@ -6,6 +6,7 @@ import {
 } from "@criv/editor-state";
 import type {
   CrivNode,
+  AssetIndexEntry,
   CrivSourceTargetLookupResult,
   CrivState,
   SourceIndexEntry,
@@ -30,10 +31,12 @@ export interface CrivStateSummary {
   node_count: number;
   edge_count: number;
   source_count: number;
+  asset_count: number;
   pattern_count: number;
   first_node_id?: string;
   first_edge?: string;
   first_source_path?: string;
+  first_asset_path?: string;
 }
 
 export interface CrivSelectorSuggestion {
@@ -47,6 +50,7 @@ export interface CrivSelectorSuggestion {
 export interface CrivInitialProjections {
   summary: CrivStateSummary;
   sources: SourceIndexEntry[];
+  assets: AssetIndexEntry[];
   nodes: CrivNode[];
   registeredPatterns: CrivState["registeredPatterns"];
   patternMatches: CrivState["patternMatches"];

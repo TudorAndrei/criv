@@ -4,7 +4,8 @@ kind: doc
 title: LikeC4 Integration
 targets:
   symbols:
-    - src/likec4.rs
+    - src/c4.rs
+    - src/c4/likec4.rs
     - assets/likec4-bridge.mjs
     - packages/criv-likec4/src/protocol.ts
     - packages/criv-likec4/src/renderer.ts
@@ -86,7 +87,7 @@ External package imports do not create placeholder nodes.
 
 ## CLI validation flow
 
-When the vault has at least one `.c4` file, `src/likec4.rs` starts the embedded
+When the vault has at least one `.c4` file, `src/c4/likec4.rs` starts the embedded
 `assets/likec4-bridge.mjs` program with the local Node.js command. The bridge
 resolves the local `likec4` package. It does not use a global LikeC4 command and
 does not download a package.
@@ -122,7 +123,7 @@ or LikeC4.
 A LikeC4 element can have one criv source anchor:
 
 ```likec4
-link ../../src/likec4.rs 'source'
+link ../../src/c4/likec4.rs 'source'
 ```
 
 The `source` label is case-insensitive. The target is relative to the LikeC4

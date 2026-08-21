@@ -1,3 +1,6 @@
+mod reconcile_transaction;
+mod source_reconcile;
+
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -8,12 +11,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::git;
-use crate::reconcile_transaction::Snapshot;
-use crate::util::{
-    file_permissions_in, remove_file_in, write_atomic_in, write_atomic_with_permissions_in,
-};
+use crate::repository::RepositoryFiles;
 use crate::vault::Vault;
 use crate::{CrivError, Result};
+
+use self::reconcile_transaction::Snapshot;
+
+pub(crate) use source_reconcile::{
+    allows_history_change as source_history_change_is_allowed,
+    receipt_allows_transaction as source_receipt_allows_transaction,
+    receipt_is_current as source_receipt_is_current,
+};
 
 const RECEIPT_SCHEMA: &str = "criv.adr-reconcile/3";
 const RECEIPT_PATH: &str = ".criv/adr-reconcile.json";
@@ -30,7 +38,7 @@ enum AdrCommand {
     /// Reconcile provisional ADR IDs against an integration target.
     Reconcile(ReconcileOptions),
     #[command(about = "Reconcile exact governed source renames against an integration target")]
-    ReconcileSources(crate::source_reconcile::Options),
+    ReconcileSources(source_reconcile::Options),
 }
 
 #[derive(Debug, ClapArgs)]
@@ -108,7 +116,7 @@ struct ReceiptSource {
 pub(crate) fn run(root: &Path, options: AdrOptions) -> Result<()> {
     match options.command {
         AdrCommand::Reconcile(options) => reconcile(root, options),
-        AdrCommand::ReconcileSources(options) => crate::source_reconcile::run(root, options),
+        AdrCommand::ReconcileSources(options) => source_reconcile::run(root, options),
     }
 }
 
@@ -312,6 +320,7 @@ fn receipt_paths_match(receipt: &Receipt, entries: &[git::ChangedEntry]) -> bool
 }
 
 fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
+    let files = RepositoryFiles::open(root)?;
     if !git::is_repository(root)? {
         return Err(CrivError::new(
             "`criv adr reconcile` requires a Git worktree",
@@ -319,7 +328,7 @@ fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
     }
     let target_sha = git::resolve_commit(root, &options.base)?;
     let materialized = current_materialized_receipt(root)?;
-    let plan = build_plan(root, &options.base, &target_sha)?;
+    let plan = build_plan_from(&files, &options.base, &target_sha)?;
     println!("ADR reconciliation target: {}", plan.target_sha);
     if plan.mappings.is_empty() {
         println!("ADR allocation is current; no reconciliation is required");
@@ -352,9 +361,9 @@ fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
         .cloned()
         .chain(std::iter::once(RECEIPT_PATH.to_string()))
         .collect::<Vec<_>>();
-    let snapshot = Snapshot::capture(root, &rollback_paths)?;
+    let snapshot = Snapshot::capture_from(&files, &rollback_paths)?;
     let commit = (|| {
-        apply_plan(root, &plan)?;
+        apply_plan(&files, &plan)?;
         if !git::ref_is_stable(root, &options.base, &plan.target_sha)? {
             return Err(CrivError::new(format!(
                 "target ref `{}` moved during reconciliation; retry against its new SHA",
@@ -384,7 +393,7 @@ fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
     let commit = match commit {
         Ok(commit) => commit,
         Err(error) => {
-            let rollback_errors = snapshot.rollback(root);
+            let rollback_errors = snapshot.rollback();
             return Err(if rollback_errors.is_empty() {
                 error
             } else {
@@ -399,8 +408,13 @@ fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
     Ok(())
 }
 
-fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<ReconcilePlan> {
-    let vault = Vault::load(root)?;
+fn build_plan_from(
+    files: &RepositoryFiles,
+    base_ref: &str,
+    target_sha: &str,
+) -> Result<ReconcilePlan> {
+    let root = files.root();
+    let vault = Vault::load_from(files)?;
     let current_config = &vault.config;
     let target_config = if git::tree_paths(root, target_sha, "criv.toml")?
         .iter()
@@ -484,7 +498,7 @@ fn build_plan(root: &Path, base_ref: &str, target_sha: &str) -> Result<Reconcile
         .iter()
         .filter(|entry| is_adr_path(&adr_prefix, &entry.path))
         .filter(|entry| {
-            !crate::source_reconcile::allows_history_change(root, &history_changes, entry)
+            !source_reconcile::allows_history_change(root, &history_changes, entry)
         })
         .map(|entry| match entry.status {
             git::ChangeStatus::Added => {
@@ -672,7 +686,14 @@ fn plausible_carried_content(first: &str, second: &str) -> bool {
     if first.body == second.body && !first.body.is_empty() {
         return first.body.len() > 1 || first.body.iter().any(|line| line.len() >= 24);
     }
-    shared_body.len() > 1 || shared_body.iter().map(|line| line.len()).sum::<usize>() >= 80
+    let shared_chars = shared_body.iter().map(|line| line.len()).sum::<usize>();
+    let smaller_body_chars = first
+        .body
+        .iter()
+        .map(|line| line.len())
+        .sum::<usize>()
+        .min(second.body.iter().map(|line| line.len()).sum::<usize>());
+    shared_chars >= 80 && shared_chars.saturating_mul(2) >= smaller_body_chars
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -683,10 +704,18 @@ struct AdrSemanticContent {
 
 fn adr_semantic_content(contents: &str) -> AdrSemanticContent {
     let mut in_frontmatter = false;
+    let mut in_code_fence = false;
     let mut title = None;
     let mut body = BTreeSet::new();
     for line in contents.lines() {
         let line = line.trim();
+        if !in_frontmatter && (line.starts_with("```") || line.starts_with("~~~")) {
+            in_code_fence = !in_code_fence;
+            continue;
+        }
+        if in_code_fence {
+            continue;
+        }
         if line == "---" {
             in_frontmatter = !in_frontmatter;
             continue;
@@ -699,8 +728,6 @@ fn adr_semantic_content(contents: &str) -> AdrSemanticContent {
         }
         if line.is_empty()
             || line.starts_with("# ")
-            || line.starts_with("```")
-            || line.starts_with("~~~")
             || line
                 .strip_prefix("## ")
                 .is_some_and(is_standard_adr_heading)
@@ -719,6 +746,7 @@ fn is_standard_adr_heading(heading: &str) -> bool {
             | "status"
             | "decision"
             | "consequences"
+            | "alternatives considered"
             | "decision drivers"
             | "considered options"
             | "pros and cons of the options"
@@ -879,7 +907,8 @@ fn receipt_paths(receipt: &Receipt) -> Vec<String> {
         .collect()
 }
 
-fn apply_plan(root: &Path, plan: &ReconcilePlan) -> Result<()> {
+fn apply_plan(files: &RepositoryFiles, plan: &ReconcilePlan) -> Result<()> {
+    let root = files.root();
     let rewrite_paths = rewrite_candidates(root, plan)?;
     // Capture every source before publishing any destination. A destination
     // may be another mapping's source, so reading permissions inside the write
@@ -890,22 +919,20 @@ fn apply_plan(root: &Path, plan: &ReconcilePlan) -> Result<()> {
         .map(|mapping| {
             Ok((
                 mapping.new_path.clone(),
-                file_permissions_in(root, Path::new(&mapping.old_path))?,
+                files.permissions(Path::new(&mapping.old_path))?,
             ))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;
     let mut receipt_files = Vec::new();
     for (path, contents) in &rewrite_paths {
         if let Some(permissions) = destination_permissions.get(path) {
-            write_atomic_with_permissions_in(
-                root,
-                Path::new("."),
-                Path::new(path),
-                contents,
-                permissions.clone(),
-            )?;
+            files
+                .write_scope(Path::new("."))?
+                .write_atomic_with_permissions(Path::new(path), contents, permissions.clone())?;
         } else {
-            write_atomic_in(root, Path::new("."), Path::new(path), contents)?;
+            files
+                .write_scope(Path::new("."))?
+                .write_atomic(Path::new(path), contents)?;
         }
         receipt_files.push(ReceiptFile {
             path: path.clone(),
@@ -928,11 +955,13 @@ fn apply_plan(root: &Path, plan: &ReconcilePlan) -> Result<()> {
     for path in physical_deletions {
         // A retry expresses its final transaction against the original HEAD;
         // an earlier materialized receipt may already have removed this path.
-        if root.join(path).exists() {
-            remove_file_in(root, Path::new("."), Path::new(path))?;
+        if files.file_exists(Path::new(path))? {
+            files
+                .write_scope(Path::new("."))?
+                .remove_file(Path::new(path))?;
         }
     }
-    let errors = crate::check::validate_all(root)?
+    let errors = crate::check::validate_all_from(files)?
         .into_iter()
         .filter(|diagnostic| diagnostic.is_error())
         .collect::<Vec<_>>();
@@ -972,12 +1001,9 @@ fn apply_plan(root: &Path, plan: &ReconcilePlan) -> Result<()> {
     let contents = serde_json::to_string_pretty(&receipt).map_err(|error| {
         CrivError::new(format!("cannot serialize reconciliation receipt: {error}"))
     })? + "\n";
-    write_atomic_in(
-        root,
-        Path::new(".criv"),
-        Path::new(".criv/adr-reconcile.json"),
-        &contents,
-    )
+    files
+        .write_scope(Path::new(".criv"))?
+        .write_atomic(Path::new(".criv/adr-reconcile.json"), &contents)
 }
 
 /// A generated reconcile operation is safe to re-plan before it is staged or
@@ -1587,6 +1613,22 @@ mod tests {
             "---\nid: ADR-0002\nkind: decision\ntitle: Topic\nstatus: accepted\n---\n\n# Topic\n\n## Context\n\nA new topic.\n\n## Decision\n\nChoose topic.\n\n## Consequences\n\nTopic follows.\n",
             "---\nid: ADR-0001\nkind: decision\ntitle: Base\nstatus: accepted\n---\n\n# Base\n\n## Context\n\nAn existing base.\n\n## Decision\n\nChoose base.\n\n## Consequences\n\nBase follows.\n",
         ));
+        assert!(!plausible_carried_content(
+            "---\nid: ADR-0002\nkind: decision\ntitle: Topic\nstatus: accepted\n---\n\n# Topic\n\n## Alternatives Considered\n\nA new option.\n\nRejected. Keep the current path text.\n",
+            "---\nid: ADR-0001\nkind: decision\ntitle: Base\nstatus: accepted\n---\n\n# Base\n\n## Alternatives Considered\n\nAn old option.\n\nRejected. Keep the old path text.\n",
+        ));
+        assert!(!plausible_carried_content(
+            "---\nid: ADR-0002\nkind: decision\ntitle: Topic\nstatus: accepted\n---\n\n# Topic\n\nA new decision about\npath text.\n\npaths.\n",
+            "---\nid: ADR-0001\nkind: decision\ntitle: Base\nstatus: accepted\n---\n\n# Base\n\nAn old decision has different\npath text.\n\npaths.\n",
+        ));
+        assert!(!plausible_carried_content(
+            "---\nid: ADR-0002\nkind: decision\ntitle: Topic\nstatus: accepted\n---\n\n# Topic\n\nShared runtime behavior remains available through the stable public command.\nShared output behavior remains available through the stable public format.\nThe new decision has enough distinct material to show independent authorship and a different purpose.\nA second new paragraph adds more distinct context, constraints, and consequences for this decision.\n",
+            "---\nid: ADR-0001\nkind: decision\ntitle: Base\nstatus: accepted\n---\n\n# Base\n\nShared runtime behavior remains available through the stable public command.\nShared output behavior remains available through the stable public format.\nThe old decision has enough distinct material to show independent authorship and a different purpose.\nA second old paragraph adds more distinct context, constraints, and consequences for this decision.\n",
+        ));
+        assert!(plausible_carried_content(
+            "---\nid: ADR-0002\nkind: decision\ntitle: Topic\nstatus: accepted\n---\n\n# Topic\n\nThis distinctive published requirement is long enough to identify the earlier decision and remains unchanged.\nNew material attempts to make the copied decision look independent.\n",
+            "---\nid: ADR-0001\nkind: decision\ntitle: Base\nstatus: accepted\n---\n\n# Base\n\nThis distinctive published requirement is long enough to identify the earlier decision and remains unchanged.\nOriginal context.\n",
+        ));
         assert!(plausible_carried_content(
             "---\nid: ADR-0002\nkind: decision\ntitle: Shared\nstatus: accepted\n---\n\n# Shared\n\n## Context\n\nThe same substantive context is retained.\n\n## Decision\n\nA changed conclusion.\n",
             "---\nid: ADR-0001\nkind: decision\ntitle: Shared\nstatus: accepted\n---\n\n# Shared\n\n## Context\n\nThe same substantive context is retained.\n\n## Decision\n\nThe original conclusion.\n",
@@ -1597,7 +1639,7 @@ mod tests {
     fn ignores_markdown_code_fences_when_comparing_adr_content() {
         assert!(!plausible_carried_content(
             "---\nid: ADR-0002\nkind: decision\ntitle: Local Viewer\nstatus: accepted\n---\n\n# Local Viewer\n\n## Decision\n\n```sh\ncriv install-editor --editor code\n```\n",
-            "---\nid: ADR-0001\nkind: decision\ntitle: Offline Check\nstatus: accepted\n---\n\n# Offline Check\n\n## Decision\n\n```sh\nzizmor --offline --strict-collection .\n```\n",
+            "---\nid: ADR-0001\nkind: decision\ntitle: Offline Check\nstatus: accepted\n---\n\n# Offline Check\n\n## Decision\n\n```sh\ncriv install-editor --editor code\n```\n",
         ));
     }
 

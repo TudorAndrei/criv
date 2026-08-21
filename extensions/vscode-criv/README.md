@@ -6,7 +6,9 @@ for VS Code API-compatible desktop editors, including VS Code and Cursor.
 ## Features
 
 - Loads `.criv/state.json` for the current workspace and shows source,
-  pattern, and `.c4` artifact state.
+  documentation asset, pattern, and `.c4` artifact state.
+- Opens verified documentation images and PDFs from the active State asset
+  inventory with the native editor.
 - Provides source selector links, hovers, completions, and lightweight
   diagnostics for Markdown and `.c4` files.
 - Runs trusted workspace commands for `criv watch --once`, `criv check

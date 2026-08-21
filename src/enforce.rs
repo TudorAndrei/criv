@@ -72,7 +72,7 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
         .as_ref()
         .map(|paths| paths.iter().cloned().collect::<BTreeSet<_>>());
     let violations = policy_plan
-        .scan(root, &vault, changed_policy_files.as_ref())?
+        .scan(&vault, changed_policy_files.as_ref())?
         .into_iter()
         .map(|violation| {
             format!(
@@ -91,10 +91,10 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
         && changed_entries
             .as_ref()
             .is_some_and(|changes| crate::adr::receipt_allows_transaction(root, &changes.entries));
-    let source_receipt_is_current = crate::source_reconcile::receipt_is_current(root);
+    let source_receipt_is_current = crate::adr::source_receipt_is_current(root);
     let source_receipt_allows_transaction = options.stage == Stage::Commit
         && changed_entries.as_ref().is_some_and(|changes| {
-            crate::source_reconcile::receipt_allows_transaction(root, &changes.entries)
+            crate::adr::source_receipt_allows_transaction(root, &changes.entries)
         });
     let mut adr_violations = adr_immutability_violations(
         &vault.config.docs_dir,
@@ -424,7 +424,7 @@ fn adr_immutability_violations(
 
 fn is_allowed_adr_change(root: &Path, changes: Option<&ChangedSet>, entry: &ChangedEntry) -> bool {
     if changes
-        .is_some_and(|changes| crate::source_reconcile::allows_history_change(root, changes, entry))
+        .is_some_and(|changes| crate::adr::source_history_change_is_allowed(root, changes, entry))
     {
         return true;
     }

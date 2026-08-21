@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[cfg(test)]
 use std::{cell::Cell, thread_local};
@@ -9,12 +10,17 @@ use serde::Deserialize;
 use crate::Result;
 use crate::c4;
 use crate::config::Config;
-use crate::discovery::{discover_vault, read_selected_text};
-use crate::source::{IndexedSource, SourceBuild, SourceCatalog, SourceGraph, SourceGraphBuild};
+use crate::diagnostic::SourceLocation;
+use crate::discovery::{discover_vault, read_selected_text_from};
+use crate::repository::RepositoryFiles;
+use crate::source::{IndexedSource, SourceGraph, SourceState};
 use crate::util::{
     GlobMatcher, find_wiki_links_with_lines, is_adr_id, kebab,
     markdown_headings as parse_markdown_headings, strip_prefix,
 };
+
+const MAX_ASSET_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_ASSET_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
@@ -94,6 +100,7 @@ pub(crate) struct WikiLink {
     pub(crate) raw: String,
     pub(crate) target: String,
     pub(crate) line: usize,
+    pub(crate) location: Option<SourceLocation>,
 }
 
 #[derive(Debug, Clone)]
@@ -123,6 +130,7 @@ pub(crate) struct Note {
     pub(crate) superseded_by: Vec<String>,
     pub(crate) wiki_links: Vec<WikiLink>,
     pub(crate) frontmatter_error: Option<String>,
+    pub(crate) frontmatter_error_location: Option<SourceLocation>,
 }
 
 impl Note {
@@ -139,18 +147,27 @@ impl Note {
 
 #[derive(Debug)]
 pub(crate) struct Vault {
+    files: RepositoryFiles,
     pub(crate) config: Config,
     pub(crate) notes: Vec<Note>,
     pub(crate) c4_artifacts: Vec<c4::C4Artifact>,
-    pub(crate) likec4_workspace: crate::likec4::LikeC4Workspace,
+    pub(crate) likec4_workspace: c4::LikeC4Workspace,
+    assets: Vec<DocumentationAsset>,
     note_ids: BTreeMap<String, usize>,
     filenames: BTreeMap<String, usize>,
     titles: BTreeMap<String, usize>,
-    source_catalog: SourceCatalog,
-    source_graph: SourceGraphBuild,
+    source: SourceState,
     effective_decisions: BTreeSet<String>,
     patterns: BTreeSet<String>,
     link_resolutions: BTreeMap<String, ResolvedLink>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DocumentationAsset {
+    pub(crate) path: String,
+    pub(crate) mime: String,
+    pub(crate) bytes: u64,
+    pub(crate) hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,61 +187,61 @@ pub(crate) enum SourceTargetResolution {
 
 impl Vault {
     pub(crate) fn load(root: &Path) -> Result<Self> {
-        let cached = crate::source::load_cached(root);
-        Self::load_with_source_facilities(root, cached.as_ref(), None, true, None)
+        let files = RepositoryFiles::open(root)?;
+        Self::load_from(&files)
+    }
+
+    pub(crate) fn load_from(files: &RepositoryFiles) -> Result<Self> {
+        Self::load_with_source_facilities(files, None, true, None)
     }
 
     pub(crate) fn load_docs_only(root: &Path) -> Result<Self> {
-        Self::load_with_source_facilities(root, None, None, false, None)
+        let files = RepositoryFiles::open(root)?;
+        Self::load_docs_only_from(&files)
+    }
+
+    fn load_docs_only_from(files: &RepositoryFiles) -> Result<Self> {
+        Self::load_with_source_facilities(files, None, false, None)
     }
 
     #[cfg(test)]
-    fn load_incremental_with_source_build(root: &Path, source_build: SourceBuild) -> Result<Self> {
-        Self::load_with_source_facilities(root, None, Some(source_build), true, None)
+    fn load_incremental_with_source_state(root: &Path, source: SourceState) -> Result<Self> {
+        let files = RepositoryFiles::open(root)?;
+        Self::load_with_source_facilities(&files, Some(source), true, None)
     }
 
-    pub(crate) fn load_incremental_with_config_and_source_build(
-        root: &Path,
+    pub(crate) fn load_incremental_with_config_and_source_state(
+        files: &RepositoryFiles,
         config: &Config,
-        source_build: SourceBuild,
+        source: SourceState,
     ) -> Result<Self> {
-        Self::load_with_source_facilities(
-            root,
-            None,
-            Some(source_build),
-            true,
-            Some(config.clone()),
-        )
+        Self::load_with_source_facilities(files, Some(source), true, Some(config.clone()))
     }
 
     fn load_with_source_facilities(
-        root: &Path,
-        previous_graph: Option<&SourceGraphBuild>,
-        source_build: Option<SourceBuild>,
+        files: &RepositoryFiles,
+        source: Option<SourceState>,
         load_sources: bool,
         config: Option<Config>,
     ) -> Result<Self> {
-        let config = config.map_or_else(|| Config::load(root), Ok)?;
+        let root = files.root();
+        let config = config.map_or_else(|| Config::load_from(files), Ok)?;
         let docs_path = config.docs_path(root);
         let discovered = discover_vault(root, &config.docs_dir)?;
         let notes = discovered
             .markdown
             .into_iter()
             .map(|path| root.join(path))
-            .map(|path| parse_note(root, &docs_path, &path))
+            .map(|path| parse_note(files, &docs_path, &path))
             .collect::<Result<Vec<_>>>()?;
         let c4_artifacts = discovered
             .c4
             .into_iter()
             .map(|path| root.join(path))
-            .map(|path| c4::parse_file(root, &docs_path, &path))
+            .map(|path| c4::parse_file_from(files, &docs_path, &path))
             .collect::<Result<Vec<_>>>()?;
-        let likec4_sources = c4_artifacts
-            .iter()
-            .filter(|artifact| artifact.format == Some(c4::C4ArtifactFormat::LikeC4))
-            .map(|artifact| artifact.path.clone())
-            .collect::<Vec<_>>();
-        let likec4_workspace = crate::likec4::load(root, &docs_path, &likec4_sources);
+        let assets = load_documentation_assets(files, discovered.assets)?;
+        let likec4_workspace = c4::load_workspace(root, &docs_path, &c4_artifacts);
 
         let mut note_ids = BTreeMap::new();
         let mut filenames = BTreeMap::new();
@@ -244,27 +261,26 @@ impl Vault {
         let effective_decisions = effective_accepted_decision_ids(&notes);
         let patterns = registered_policy_patterns(&notes, &effective_decisions);
 
-        let source_build = if load_sources {
-            match source_build {
-                Some(source_build) => source_build,
-                None => SourceBuild::build_incremental(root, &config, previous_graph)?,
+        let source = if load_sources {
+            match source {
+                Some(source) => source,
+                None => SourceState::refresh_from(files, &config, None)?,
             }
-            .publish(root)?
         } else {
-            SourceBuild::disabled()
+            SourceState::disabled()
         };
-        let (source_catalog, source_graph) = source_build.into_parts();
 
         let mut vault = Self {
+            files: files.clone(),
             config,
             notes,
             c4_artifacts,
             likec4_workspace,
+            assets,
             note_ids,
             filenames,
             titles,
-            source_catalog,
-            source_graph,
+            source,
             effective_decisions,
             patterns,
             link_resolutions: BTreeMap::new(),
@@ -280,6 +296,10 @@ impl Vault {
             .or_else(|| self.filenames.get(&key))
             .or_else(|| self.titles.get(&key))
             .and_then(|index| self.notes.get(*index))
+    }
+
+    pub(crate) fn repository_files(&self) -> &RepositoryFiles {
+        &self.files
     }
 
     pub(crate) fn is_file_backed_note_target(&self, target: &str) -> bool {
@@ -390,7 +410,7 @@ impl Vault {
     }
 
     pub(crate) fn resolve_source_path(&self, path: &str) -> Option<(String, bool)> {
-        self.source_catalog.resolve_partial_path(path)
+        self.source.resolve_partial_path(path)
     }
 
     pub(crate) fn resolve_source_target(&self, target: &str) -> SourceTargetResolution {
@@ -406,7 +426,7 @@ impl Vault {
         };
 
         if self
-            .source_graph
+            .source
             .graph()
             .resolve_symbol(&format!("{path}#{fragment}"))
             .is_some()
@@ -432,7 +452,7 @@ impl Vault {
         let Some(fragment) = source_fragment_name(target) else {
             return Some(path.to_string());
         };
-        self.source_graph
+        self.source
             .graph()
             .canonical_symbol_target(&format!("{path}#{fragment}"))
     }
@@ -441,7 +461,7 @@ impl Vault {
         let matcher = GlobMatcher::from_valid_patterns(patterns);
         let mut matches_by_pattern = vec![Vec::new(); patterns.len()];
         let mut indices = Vec::new();
-        for source_file in self.source_catalog.paths() {
+        for source_file in self.source.paths() {
             matcher.matching_pattern_indices_into(source_file, &mut indices);
             for index in &indices {
                 matches_by_pattern[*index].push(source_file.clone());
@@ -465,7 +485,7 @@ impl Vault {
         let matcher = GlobMatcher::from_valid_patterns(patterns);
         let mut matched = vec![false; patterns.len()];
         let mut indices = Vec::new();
-        for source_file in self.source_catalog.paths() {
+        for source_file in self.source.paths() {
             matcher.matching_pattern_indices_into(source_file, &mut indices);
             for index in &indices {
                 matched[*index] = true;
@@ -481,23 +501,23 @@ impl Vault {
     }
 
     pub(crate) fn source_files(&self) -> &[String] {
-        self.source_catalog.paths()
+        self.source.paths()
     }
 
     pub(crate) fn source_graph(&self) -> &SourceGraph {
-        self.source_graph.graph()
+        self.source.graph()
     }
 
-    pub(crate) fn source_graph_build(&self) -> &SourceGraphBuild {
-        &self.source_graph
-    }
-
-    pub(crate) fn source_build(&self) -> SourceBuild {
-        SourceBuild::from_parts(self.source_catalog.clone(), self.source_graph.clone())
+    pub(crate) fn source_state(&self) -> &SourceState {
+        &self.source
     }
 
     pub(crate) fn source_entries(&self) -> &[IndexedSource] {
-        self.source_catalog.entries()
+        self.source.entries()
+    }
+
+    pub(crate) fn documentation_assets(&self) -> &[DocumentationAsset] {
+        &self.assets
     }
 
     pub(crate) fn patterns(&self) -> &BTreeSet<String> {
@@ -568,23 +588,84 @@ impl Vault {
         }
         let effective_decisions = effective_accepted_decision_ids(&notes);
         let patterns = registered_policy_patterns(&notes, &effective_decisions);
+        let files = RepositoryFiles::open(Path::new("."))
+            .expect("test vault repository root must be available");
 
         let mut vault = Self {
+            files,
             config: Config::default(),
             notes,
             c4_artifacts: Vec::new(),
-            likec4_workspace: crate::likec4::LikeC4Workspace::default(),
+            likec4_workspace: c4::LikeC4Workspace::default(),
+            assets: Vec::new(),
             note_ids,
             filenames,
             titles,
-            source_catalog: SourceCatalog::disabled(),
-            source_graph: SourceGraphBuild::disabled(),
+            source: SourceState::disabled(),
             effective_decisions,
             patterns,
             link_resolutions: BTreeMap::new(),
         };
         vault.index_link_resolutions();
         vault
+    }
+}
+
+fn load_documentation_assets(
+    files: &RepositoryFiles,
+    paths: Vec<String>,
+) -> Result<Vec<DocumentationAsset>> {
+    load_documentation_assets_with_limits(files, paths, MAX_ASSET_BYTES, MAX_ASSET_TOTAL_BYTES)
+}
+
+fn load_documentation_assets_with_limits(
+    files: &RepositoryFiles,
+    mut paths: Vec<String>,
+    max_asset_bytes: u64,
+    max_total_bytes: u64,
+) -> Result<Vec<DocumentationAsset>> {
+    paths.sort();
+    let mut total_bytes = 0_u64;
+    let mut assets = Vec::new();
+    for path in paths {
+        let Some(contents) = files.read_bounded(Path::new(&path), max_asset_bytes)? else {
+            continue;
+        };
+        let bytes = contents.len() as u64;
+        if total_bytes.saturating_add(bytes) > max_total_bytes {
+            break;
+        }
+        let Some(expected_mime) = asset_mime_for_path(&path) else {
+            continue;
+        };
+        let Some(detected) = infer::get(&contents) else {
+            continue;
+        };
+        if detected.mime_type() != expected_mime {
+            continue;
+        }
+        total_bytes += bytes;
+        assets.push(DocumentationAsset {
+            path,
+            mime: expected_mime.to_string(),
+            bytes,
+            hash: blake3::hash(&contents).to_hex().to_string(),
+        });
+    }
+    Ok(assets)
+}
+
+fn asset_mime_for_path(path: &str) -> Option<&'static str> {
+    match Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())?
+    {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "pdf" => Some("application/pdf"),
+        _ => None,
     }
 }
 
@@ -641,10 +722,13 @@ fn effective_accepted_decision_ids(notes: &[Note]) -> BTreeSet<String> {
     accepted.difference(&superseded).cloned().collect()
 }
 
-fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
-    let contents = read_selected_text(root, path)?;
+fn parse_note(files: &RepositoryFiles, docs_path: &Path, path: &Path) -> Result<Note> {
+    let root = files.root();
+    let contents = read_selected_text_from(files, path)?;
+    let source: Arc<str> = Arc::from(contents.as_str());
     let rel_path = strip_prefix(path, root);
-    let (frontmatter, body, frontmatter_lines) = split_frontmatter(&contents);
+    let (frontmatter, body, frontmatter_lines, frontmatter_start, body_start) =
+        split_frontmatter(&contents);
     let doc_rel_path = strip_prefix(path, docs_path);
     // Positions are file-relative (ADR-0045). The frontmatter offset applies to
     // the parsed-note body only; the error branch below keeps the whole file as
@@ -670,7 +754,11 @@ fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
             supersedes: Vec::new(),
             superseded_by: Vec::new(),
             wiki_links: Vec::new(),
-            frontmatter_error: Some(err),
+            frontmatter_error_location: err.offset.and_then(|offset| {
+                let offset = frontmatter_start + offset;
+                SourceLocation::new(source.clone(), offset..offset)
+            }),
+            frontmatter_error: Some(err.message),
         },
     };
     if note.frontmatter_error.is_some() {
@@ -678,10 +766,14 @@ fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
     }
     note.wiki_links = find_wiki_links_with_lines(&note.body)
         .into_iter()
-        .map(|(line, raw)| WikiLink {
+        .map(|(line, raw, span)| WikiLink {
             target: raw.split('|').next().unwrap_or(&raw).trim().to_string(),
             raw,
             line: line + line_offset,
+            location: SourceLocation::new(
+                source.clone(),
+                body_start + span.start..body_start + span.end,
+            ),
         })
         .collect();
     note.headings = parse_markdown_headings(&note.body)
@@ -700,12 +792,12 @@ fn parse_note(root: &Path, docs_path: &Path, path: &Path) -> Result<Note> {
 /// lines the frontmatter consumed — both `---` delimiters included. Callers add
 /// that count back to body-relative positions so every line they report is
 /// file-relative (see ADR-0045).
-fn split_frontmatter(contents: &str) -> (&str, String, usize) {
+fn split_frontmatter(contents: &str) -> (&str, String, usize, usize, usize) {
     let Some((opening, frontmatter_start)) = delimiter_line(contents, 0) else {
-        return ("", contents.to_string(), 0);
+        return ("", contents.to_string(), 0, 0, 0);
     };
     if opening != "---" {
-        return ("", contents.to_string(), 0);
+        return ("", contents.to_string(), 0, 0, 0);
     }
 
     let mut cursor = frontmatter_start;
@@ -716,12 +808,14 @@ fn split_frontmatter(contents: &str) -> (&str, String, usize) {
                 &contents[frontmatter_start..cursor],
                 contents[next..].to_string(),
                 consumed,
+                frontmatter_start,
+                next,
             );
         }
         cursor = next;
     }
 
-    ("", contents.to_string(), 0)
+    ("", contents.to_string(), 0, 0, 0)
 }
 
 /// Returns the line without its LF/CRLF terminator plus the next byte offset.
@@ -739,12 +833,16 @@ fn parse_frontmatter(
     path: PathBuf,
     rel_path: String,
     body: String,
-) -> std::result::Result<Note, String> {
+) -> std::result::Result<Note, FrontmatterParseError> {
     let raw = if frontmatter.trim().is_empty() {
         RawFrontmatter::default()
     } else {
-        serde_norway::from_str::<RawFrontmatter>(frontmatter)
-            .map_err(|err| format!("failed to parse YAML frontmatter: {err}"))?
+        serde_norway::from_str::<RawFrontmatter>(frontmatter).map_err(|error| {
+            FrontmatterParseError {
+                offset: error.location().map(|location| location.index()),
+                message: format!("failed to parse YAML frontmatter: {error}"),
+            }
+        })?
     };
 
     let kind = match raw.kind.as_deref() {
@@ -817,7 +915,14 @@ fn parse_frontmatter(
         superseded_by: raw.superseded_by,
         wiki_links: Vec::new(),
         frontmatter_error: None,
+        frontmatter_error_location: None,
     })
+}
+
+#[derive(Debug)]
+struct FrontmatterParseError {
+    message: String,
+    offset: Option<usize>,
 }
 
 fn pattern_link_id(target: &str) -> Option<&str> {
@@ -957,13 +1062,146 @@ mod tests {
     use super::*;
 
     #[test]
+    fn documentation_assets_are_verified_bounded_and_separate_from_source() {
+        let root = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(root.path().join("docs/assets")).unwrap();
+        let png = b"\x89PNG\r\n\x1a\npreview";
+        std::fs::write(root.path().join("docs/assets/b.png"), png).unwrap();
+        std::fs::write(root.path().join("docs/assets/a.png"), png).unwrap();
+        std::fs::write(root.path().join("docs/assets/wrong.jpg"), png).unwrap();
+        let oversized = [png.as_slice(), png.as_slice()].concat();
+        std::fs::write(root.path().join("docs/assets/0-oversized.png"), oversized).unwrap();
+        std::fs::write(root.path().join("docs/assets/active.svg"), b"<svg></svg>").unwrap();
+        let files = RepositoryFiles::open(root.path()).unwrap();
+
+        let assets = load_documentation_assets_with_limits(
+            &files,
+            vec![
+                "docs/assets/wrong.jpg".into(),
+                "docs/assets/0-oversized.png".into(),
+                "docs/assets/b.png".into(),
+                "docs/assets/a.png".into(),
+            ],
+            png.len() as u64,
+            png.len() as u64,
+        )
+        .unwrap();
+
+        assert_eq!(assets.len(), 1);
+        assert_eq!(assets[0].path, "docs/assets/a.png");
+        assert_eq!(assets[0].mime, "image/png");
+        assert_eq!(assets[0].bytes, png.len() as u64);
+        assert_eq!(assets[0].hash.len(), 64);
+
+        std::fs::remove_file(root.path().join("docs/assets/0-oversized.png")).unwrap();
+        let vault = Vault::load_docs_only(root.path()).unwrap();
+        assert_eq!(
+            vault
+                .documentation_assets()
+                .iter()
+                .map(|asset| asset.path.as_str())
+                .collect::<Vec<_>>(),
+            ["docs/assets/a.png", "docs/assets/b.png"]
+        );
+        assert!(vault.source_entries().is_empty());
+    }
+
+    #[test]
+    fn documentation_asset_total_bound_stops_at_the_first_overflow() {
+        let root = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(root.path().join("docs/assets")).unwrap();
+        let ten_byte_png = b"\x89PNG\r\n\x1a\nAA";
+        let eight_byte_png = b"\x89PNG\r\n\x1a\n";
+        for (path, contents) in [
+            ("docs/assets/a.png", ten_byte_png.as_slice()),
+            ("docs/assets/b.png", ten_byte_png.as_slice()),
+            ("docs/assets/c.png", eight_byte_png.as_slice()),
+        ] {
+            std::fs::write(root.path().join(path), contents).unwrap();
+        }
+        let files = RepositoryFiles::open(root.path()).unwrap();
+
+        let assets = load_documentation_assets_with_limits(
+            &files,
+            vec![
+                "docs/assets/c.png".into(),
+                "docs/assets/b.png".into(),
+                "docs/assets/a.png".into(),
+            ],
+            ten_byte_png.len() as u64,
+            18,
+        )
+        .unwrap();
+
+        assert_eq!(
+            assets
+                .iter()
+                .map(|asset| asset.path.as_str())
+                .collect::<Vec<_>>(),
+            ["docs/assets/a.png"]
+        );
+    }
+
+    #[test]
+    fn documentation_assets_support_the_passive_format_set() {
+        let root = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(root.path().join("docs")).unwrap();
+        for (path, contents) in [
+            ("docs/a.png", b"\x89PNG\r\n\x1a\npreview".as_slice()),
+            (
+                "docs/b.jpg",
+                b"\xff\xd8\xff\xe0\x00\x10JFIF\x00preview".as_slice(),
+            ),
+            ("docs/c.gif", b"GIF89a\x01\x00\x01\x00preview".as_slice()),
+            (
+                "docs/d.webp",
+                b"RIFF\x10\x00\x00\x00WEBPVP8 preview".as_slice(),
+            ),
+            ("docs/e.pdf", b"%PDF-1.7\npreview".as_slice()),
+        ] {
+            std::fs::write(root.path().join(path), contents).unwrap();
+        }
+
+        let vault = Vault::load_docs_only(root.path()).unwrap();
+        assert_eq!(
+            vault
+                .documentation_assets()
+                .iter()
+                .map(|asset| (asset.path.as_str(), asset.mime.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("docs/a.png", "image/png"),
+                ("docs/b.jpg", "image/jpeg"),
+                ("docs/c.gif", "image/gif"),
+                ("docs/d.webp", "image/webp"),
+                ("docs/e.pdf", "application/pdf"),
+            ]
+        );
+    }
+
+    #[test]
+    fn documentation_asset_hash_changes_for_same_size_content() {
+        let root = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(root.path().join("docs")).unwrap();
+        let path = root.path().join("docs/preview.png");
+        std::fs::write(&path, b"\x89PNG\r\n\x1a\na").unwrap();
+        let before = Vault::load_docs_only(root.path()).unwrap();
+        let before_hash = before.documentation_assets()[0].hash.clone();
+
+        std::fs::write(&path, b"\x89PNG\r\n\x1a\nb").unwrap();
+        let after = Vault::load_docs_only(root.path()).unwrap();
+
+        assert_ne!(before_hash, after.documentation_assets()[0].hash);
+    }
+
+    #[test]
     fn splits_exact_frontmatter_delimiters_with_lf_and_crlf() {
         for contents in [
             "---\nid: doc\n---\n# Body\n",
             "---\r\nid: doc\r\n---\r\n# Body\r\n",
             "---\r\nid: doc\n---\r\n# Body\n",
         ] {
-            let (frontmatter, body, frontmatter_lines) = split_frontmatter(contents);
+            let (frontmatter, body, frontmatter_lines, _, _) = split_frontmatter(contents);
             assert!(frontmatter.contains("id: doc"));
             assert!(body.starts_with("# Body"));
             assert_eq!(frontmatter_lines, 3, "both delimiters and the field line");
@@ -977,7 +1215,10 @@ mod tests {
             "---\nid: doc\n# Body\n",
             "\u{feff}---\nid: doc\n---\n# Body\n",
         ] {
-            assert_eq!(split_frontmatter(contents), ("", contents.to_string(), 0));
+            assert_eq!(
+                split_frontmatter(contents),
+                ("", contents.to_string(), 0, 0, 0)
+            );
         }
     }
 
@@ -985,7 +1226,7 @@ mod tests {
     fn supports_empty_frontmatter() {
         assert_eq!(
             split_frontmatter("---\n---\nbody\n"),
-            ("", "body\n".into(), 2)
+            ("", "body\n".into(), 2, 4, 8)
         );
     }
 
@@ -1303,7 +1544,7 @@ See [[lib.rs]], [[match:ADR-0001/no-block-on]], [[helper.rs#help]],
         assert_eq!(work_counts().link_source_resolutions, 2);
 
         let _ = crate::check::validate_with_previous_state(&vault, None);
-        let state = crate::state::State::build(&root, &vault).unwrap();
+        let state = crate::state::State::build(&vault).unwrap();
         assert_eq!(work_counts().link_source_resolutions, 2);
         let state = serde_json::to_value(state).unwrap();
         let edges = state["graph"]["edges"].as_array().unwrap();
@@ -1394,7 +1635,7 @@ source = false
     }
 
     #[test]
-    fn vault_uses_the_injected_single_read_source_build() {
+    fn vault_uses_the_injected_source_state() {
         let root = unique_temp_dir("criv-injected-source-index");
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(
@@ -1408,9 +1649,9 @@ roots = ["src"]
         std::fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
 
         let config = Config::load(&root).unwrap();
-        let source_build = SourceBuild::build_incremental(&root, &config, None).unwrap();
-        let expected = source_build.catalog().paths().to_vec();
-        let vault = Vault::load_incremental_with_source_build(&root, source_build).unwrap();
+        let source = SourceState::refresh(&root, &config, None).unwrap();
+        let expected = source.paths().to_vec();
+        let vault = Vault::load_incremental_with_source_state(&root, source).unwrap();
 
         assert_eq!(vault.source_files(), expected);
         assert!(vault.source_graph().files.contains_key("src/lib.rs"));
@@ -1480,7 +1721,10 @@ roots = ["src"]
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("note.md");
         std::fs::write(&path, contents).unwrap();
-        let note = parse_note(&root, &root, &path).unwrap();
+        let files = RepositoryFiles::open(&root).unwrap();
+        let canonical_root = files.root().to_path_buf();
+        let canonical_path = canonical_root.join("note.md");
+        let note = parse_note(&files, &canonical_root, &canonical_path).unwrap();
         let _ = std::fs::remove_dir_all(&root);
         note
     }
@@ -1496,6 +1740,13 @@ roots = ["src"]
             note.wiki_links[0].line,
             real_line(contents, "See [[other-note]].")
         );
+        let exact = note.wiki_links[0]
+            .location
+            .as_ref()
+            .expect("parsed wiki-link has an exact location")
+            .lsp_range();
+        assert_eq!((exact.start.line, exact.start.character), (8, 4));
+        assert_eq!((exact.end.line, exact.end.character), (8, 18));
     }
 
     #[test]
@@ -1518,6 +1769,7 @@ roots = ["src"]
         let note = parsed_note("criv-note-lines-bad-frontmatter", contents);
 
         assert!(note.frontmatter_error.is_some());
+        assert!(note.frontmatter_error_location.is_some());
         // The unparsed frontmatter stays in the body, so its closing `---` also
         // reads as a setext heading here; pick the real ATX heading by text.
         let heading = note
