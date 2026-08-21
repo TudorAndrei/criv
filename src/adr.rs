@@ -686,7 +686,7 @@ fn plausible_carried_content(first: &str, second: &str) -> bool {
     if first.body == second.body && !first.body.is_empty() {
         return first.body.len() > 1 || first.body.iter().any(|line| line.len() >= 24);
     }
-    shared_body.len() > 1 || shared_body.iter().map(|line| line.len()).sum::<usize>() >= 80
+    shared_body.iter().map(|line| line.len()).sum::<usize>() >= 80
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -697,10 +697,18 @@ struct AdrSemanticContent {
 
 fn adr_semantic_content(contents: &str) -> AdrSemanticContent {
     let mut in_frontmatter = false;
+    let mut in_code_fence = false;
     let mut title = None;
     let mut body = BTreeSet::new();
     for line in contents.lines() {
         let line = line.trim();
+        if !in_frontmatter && (line.starts_with("```") || line.starts_with("~~~")) {
+            in_code_fence = !in_code_fence;
+            continue;
+        }
+        if in_code_fence {
+            continue;
+        }
         if line == "---" {
             in_frontmatter = !in_frontmatter;
             continue;
@@ -713,8 +721,6 @@ fn adr_semantic_content(contents: &str) -> AdrSemanticContent {
         }
         if line.is_empty()
             || line.starts_with("# ")
-            || line.starts_with("```")
-            || line.starts_with("~~~")
             || line
                 .strip_prefix("## ")
                 .is_some_and(is_standard_adr_heading)
@@ -733,6 +739,7 @@ fn is_standard_adr_heading(heading: &str) -> bool {
             | "status"
             | "decision"
             | "consequences"
+            | "alternatives considered"
             | "decision drivers"
             | "considered options"
             | "pros and cons of the options"
@@ -1599,6 +1606,14 @@ mod tests {
             "---\nid: ADR-0002\nkind: decision\ntitle: Topic\nstatus: accepted\n---\n\n# Topic\n\n## Context\n\nA new topic.\n\n## Decision\n\nChoose topic.\n\n## Consequences\n\nTopic follows.\n",
             "---\nid: ADR-0001\nkind: decision\ntitle: Base\nstatus: accepted\n---\n\n# Base\n\n## Context\n\nAn existing base.\n\n## Decision\n\nChoose base.\n\n## Consequences\n\nBase follows.\n",
         ));
+        assert!(!plausible_carried_content(
+            "---\nid: ADR-0002\nkind: decision\ntitle: Topic\nstatus: accepted\n---\n\n# Topic\n\n## Alternatives Considered\n\nA new option.\n\nRejected. Keep the current path text.\n",
+            "---\nid: ADR-0001\nkind: decision\ntitle: Base\nstatus: accepted\n---\n\n# Base\n\n## Alternatives Considered\n\nAn old option.\n\nRejected. Keep the old path text.\n",
+        ));
+        assert!(!plausible_carried_content(
+            "---\nid: ADR-0002\nkind: decision\ntitle: Topic\nstatus: accepted\n---\n\n# Topic\n\nA new decision about\npath text.\n\npaths.\n",
+            "---\nid: ADR-0001\nkind: decision\ntitle: Base\nstatus: accepted\n---\n\n# Base\n\nAn old decision has different\npath text.\n\npaths.\n",
+        ));
         assert!(plausible_carried_content(
             "---\nid: ADR-0002\nkind: decision\ntitle: Shared\nstatus: accepted\n---\n\n# Shared\n\n## Context\n\nThe same substantive context is retained.\n\n## Decision\n\nA changed conclusion.\n",
             "---\nid: ADR-0001\nkind: decision\ntitle: Shared\nstatus: accepted\n---\n\n# Shared\n\n## Context\n\nThe same substantive context is retained.\n\n## Decision\n\nThe original conclusion.\n",
@@ -1609,7 +1624,7 @@ mod tests {
     fn ignores_markdown_code_fences_when_comparing_adr_content() {
         assert!(!plausible_carried_content(
             "---\nid: ADR-0002\nkind: decision\ntitle: Local Viewer\nstatus: accepted\n---\n\n# Local Viewer\n\n## Decision\n\n```sh\ncriv install-editor --editor code\n```\n",
-            "---\nid: ADR-0001\nkind: decision\ntitle: Offline Check\nstatus: accepted\n---\n\n# Offline Check\n\n## Decision\n\n```sh\nzizmor --offline --strict-collection .\n```\n",
+            "---\nid: ADR-0001\nkind: decision\ntitle: Offline Check\nstatus: accepted\n---\n\n# Offline Check\n\n## Decision\n\n```sh\ncriv install-editor --editor code\n```\n",
         ));
     }
 
