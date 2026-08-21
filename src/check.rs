@@ -163,7 +163,6 @@ pub(crate) fn validate_all_from(files: &RepositoryFiles) -> Result<Vec<Diagnosti
 }
 
 fn validate_all_with_fix(files: &RepositoryFiles, fix: bool) -> Result<Vec<Diagnostic>> {
-    let root = files.root();
     let mut diagnostics = validate_markdown_format(files, fix, None)?;
     let vault = Vault::load_from(files)?;
     let policy_plan = PolicyScanPlan::new(&vault);
@@ -175,7 +174,7 @@ fn validate_all_with_fix(files: &RepositoryFiles, fix: bool) -> Result<Vec<Diagn
     ));
     diagnostics.extend(
         policy_plan
-            .scan(root, &vault, None)?
+            .scan(&vault, None)?
             .into_iter()
             .map(|violation| {
                 error_with_location(
@@ -222,7 +221,7 @@ fn validate_changed(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
     ));
     diagnostics.extend(
         policy_plan
-            .scan(root, &vault, Some(&changed_paths))?
+            .scan(&vault, Some(&changed_paths))?
             .into_iter()
             .map(|violation| {
                 error_with_location(
@@ -1875,7 +1874,7 @@ pub fn run(input: String) -> usize {
 "#,
         );
         let previous_vault = likec4_interface_vault(&root);
-        let previous_state = State::build(&root, &previous_vault).unwrap();
+        let previous_state = State::build(&previous_vault).unwrap();
         fs::write(
             root.join("src/lib.rs"),
             r#"
@@ -1908,7 +1907,7 @@ pub fn run(input: String) -> usize {
 "#,
         );
         let previous_vault = likec4_interface_vault(&root);
-        let previous_state = State::build(&root, &previous_vault).unwrap();
+        let previous_state = State::build(&previous_vault).unwrap();
         fs::write(
             root.join("src/lib.rs"),
             r#"

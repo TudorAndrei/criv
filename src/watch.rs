@@ -383,7 +383,7 @@ impl ActiveWatchGeneration {
         let mut refresh =
             RefreshSession::live_from(files, &config).map_err(CandidateFailure::candidate)?;
         refresh
-            .refresh(root, RefreshCause::Initial)
+            .refresh(RefreshCause::Initial)
             .map_err(CandidateFailure::candidate)?;
         Ok(Self {
             config,
@@ -454,19 +454,17 @@ impl LiveWatchSession {
         let source_changed = self.source_changed(&signal);
         if let WatchDecision::Rebuild { cause } = watch_decision(docs_changed, source_changed) {
             let expected_config_source = self.active.config_source.clone();
-            let root = self.root.clone();
-            let result = self
-                .active
-                .refresh
-                .refresh_with_precommit_check(&root, cause, || {
-                    match read_config_source(&self.files) {
+            let result =
+                self.active.refresh.refresh_with_precommit_check(
+                    cause,
+                    || match read_config_source(&self.files) {
                         Ok(source) if source == expected_config_source => Ok(()),
                         Ok(_) => Err(CrivError::new(
                             "watch configuration changed before State publication",
                         )),
                         Err(err) => Err(err),
-                    }
-                });
+                    },
+                );
             if read_config_source(&self.files).ok() != Some(self.active.config_source.clone()) {
                 self.reconfigure();
                 return Ok(());
@@ -668,7 +666,7 @@ fn is_junction(_path: &Path) -> bool {
 /// cache left behind by the previous run.
 fn run_once(files: &RepositoryFiles) -> Result<()> {
     let mut refresh = RefreshSession::one_shot_from(files)?;
-    refresh.refresh(files.root(), RefreshCause::Initial)?;
+    refresh.refresh(RefreshCause::Initial)?;
     Ok(())
 }
 

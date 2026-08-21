@@ -35,7 +35,7 @@ impl Snapshot {
         })
     }
 
-    pub(crate) fn rollback(self, _root: &Path) -> Vec<String> {
+    pub(crate) fn rollback(self) -> Vec<String> {
         let mut errors = Vec::new();
         if let Err(error) = self.index.restore() {
             errors.push(error.to_string());
@@ -118,7 +118,7 @@ mod tests {
         fs::write(root.join(&receipt), "new receipt\n").unwrap();
         git(root, &["add", "-A"]);
 
-        assert!(snapshot.rollback(root).is_empty());
+        assert!(snapshot.rollback().is_empty());
         assert_eq!(fs::read_to_string(root.join(existing)).unwrap(), "staged\n");
         assert!(!root.join(receipt).exists());
         assert_eq!(git_output(root, &["ls-files", "--stage"]), index_before);
@@ -142,7 +142,7 @@ mod tests {
         fs::create_dir(root.join(&blocked)).unwrap();
         fs::write(root.join(&later), "later changed\n").unwrap();
 
-        let errors = snapshot.rollback(root);
+        let errors = snapshot.rollback();
 
         assert!(!errors.is_empty());
         assert!(root.join(blocked).is_dir());
@@ -179,7 +179,7 @@ mod tests {
             flags_before
         );
 
-        assert!(snapshot.rollback(root).is_empty());
+        assert!(snapshot.rollback().is_empty());
         assert_eq!(
             git_output(root, &["ls-files", "-v", "--", "assume.txt", "skip.txt"]),
             flags_before
@@ -210,7 +210,7 @@ mod tests {
         )
         .unwrap();
 
-        let errors = snapshot.rollback(root);
+        let errors = snapshot.rollback();
 
         assert!(
             errors.iter().any(|error| error.contains("index.lock")),
@@ -254,7 +254,7 @@ mod tests {
         git(root, &["reset", "--mixed", "HEAD"]);
         assert!(git_output(root, &["ls-files", "--stage", "--", "conflict.txt"]).is_empty());
 
-        assert!(snapshot.rollback(root).is_empty());
+        assert!(snapshot.rollback().is_empty());
         assert_eq!(
             git_output(root, &["ls-files", "--stage", "--", "conflict.txt"]),
             stages_before

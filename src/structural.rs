@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::Path;
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -149,7 +148,6 @@ pub(crate) fn compile_policy(
 }
 
 pub(crate) fn find_policies_batch(
-    _root: &Path,
     vault: &Vault,
     requests: &[PolicyScanRequest<'_>],
 ) -> Result<BTreeMap<usize, Vec<StructuralMatch>>> {
@@ -419,7 +417,7 @@ all:
 
     #[test]
     fn batch_returns_all_expected_policy_rows() {
-        let (temp, vault) = policy_fixture();
+        let (_temp, vault) = policy_fixture();
         let function_policy = policy("rust", "fn $NAME() { $$$ }");
         let struct_policy = policy("rust", "struct $NAME;");
         let function_compiled = compile_policy(&function_policy).unwrap();
@@ -438,7 +436,7 @@ all:
             },
         ];
 
-        let batch = find_policies_batch(temp.path(), &vault, &requests).unwrap();
+        let batch = find_policies_batch(&vault, &requests).unwrap();
 
         assert_eq!(
             batch
@@ -462,7 +460,7 @@ all:
 
     #[test]
     fn batch_respects_per_pattern_scopes() {
-        let (temp, vault) = policy_fixture();
+        let (_temp, vault) = policy_fixture();
         let function_policy = policy("rust", "fn $NAME() { $$$ }");
         let left_paths = BTreeSet::from(["src/left.rs".to_string()]);
         let right_paths = BTreeSet::from(["src/right.rs".to_string()]);
@@ -481,7 +479,7 @@ all:
             },
         ];
 
-        let batch = find_policies_batch(temp.path(), &vault, &requests).unwrap();
+        let batch = find_policies_batch(&vault, &requests).unwrap();
 
         assert_eq!(
             batch
@@ -513,7 +511,7 @@ all:
 
     #[test]
     fn batch_skips_non_matching_language() {
-        let (temp, vault) = policy_fixture();
+        let (_temp, vault) = policy_fixture();
         let python_policy = policy("python", "def $NAME($$$): $$$");
         let python_compiled = compile_policy(&python_policy).unwrap();
         let paths = BTreeSet::from(["src/left.rs".to_string(), "src/right.rs".to_string()]);
@@ -523,7 +521,7 @@ all:
             paths: &paths,
         }];
 
-        let batch = find_policies_batch(temp.path(), &vault, &requests).unwrap();
+        let batch = find_policies_batch(&vault, &requests).unwrap();
 
         assert!(batch.get(&0).unwrap().is_empty());
     }
@@ -622,7 +620,6 @@ end
         ]);
         reset_work_counts();
         let rows = find_policies_batch(
-            root,
             &vault,
             &[PolicyScanRequest {
                 key: 0,

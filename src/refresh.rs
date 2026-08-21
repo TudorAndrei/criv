@@ -1,3 +1,4 @@
+#[cfg(test)]
 use std::path::Path;
 
 use crate::check;
@@ -62,13 +63,12 @@ impl RefreshSession {
         })
     }
 
-    pub(crate) fn refresh(&mut self, root: &Path, cause: RefreshCause) -> Result<&RefreshResult> {
-        self.refresh_with_precommit_check(root, cause, || Ok(()))
+    pub(crate) fn refresh(&mut self, cause: RefreshCause) -> Result<&RefreshResult> {
+        self.refresh_with_precommit_check(cause, || Ok(()))
     }
 
     pub(crate) fn refresh_with_precommit_check(
         &mut self,
-        _root: &Path,
         cause: RefreshCause,
         precommit_check: impl FnOnce() -> Result<()>,
     ) -> Result<&RefreshResult> {
@@ -112,7 +112,6 @@ fn execute(
     source: SourceState,
     precommit_check: impl FnOnce() -> Result<()>,
 ) -> Result<RefreshResult> {
-    let root = files.root();
     let vault = Vault::load_incremental_with_config_and_source_state(files, config, source)?;
     let blockers = check::publication_blocking_diagnostics(&vault);
     if !blockers.is_empty() {
@@ -135,19 +134,15 @@ fn execute(
     );
     let (snapshot, state) = match previous_state {
         Some(previous_state) => state::write_state_incremental_with_policy_plan_and_check(
-            root,
             &vault,
             Some(previous_state),
             &changed_files,
             &policy_plan,
             precommit_check,
         )?,
-        None => state::write_state_with_policy_plan_and_check(
-            root,
-            &vault,
-            &policy_plan,
-            precommit_check,
-        )?,
+        None => {
+            state::write_state_with_policy_plan_and_check(&vault, &policy_plan, precommit_check)?
+        }
     };
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();

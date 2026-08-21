@@ -393,7 +393,7 @@ fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
     let commit = match commit {
         Ok(commit) => commit,
         Err(error) => {
-            let rollback_errors = snapshot.rollback(root);
+            let rollback_errors = snapshot.rollback();
             return Err(if rollback_errors.is_empty() {
                 error
             } else {

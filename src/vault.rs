@@ -1544,7 +1544,7 @@ See [[lib.rs]], [[match:ADR-0001/no-block-on]], [[helper.rs#help]],
         assert_eq!(work_counts().link_source_resolutions, 2);
 
         let _ = crate::check::validate_with_previous_state(&vault, None);
-        let state = crate::state::State::build(&root, &vault).unwrap();
+        let state = crate::state::State::build(&vault).unwrap();
         assert_eq!(work_counts().link_source_resolutions, 2);
         let state = serde_json::to_value(state).unwrap();
         let edges = state["graph"]["edges"].as_array().unwrap();

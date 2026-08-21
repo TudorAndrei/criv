@@ -141,7 +141,7 @@ pub(crate) fn run(root: &Path, options: Options) -> Result<()> {
     let commit = match result {
         Ok(commit) => commit,
         Err(error) => {
-            let rollback_errors = snapshot.rollback(root);
+            let rollback_errors = snapshot.rollback();
             return Err(if rollback_errors.is_empty() {
                 error
             } else {

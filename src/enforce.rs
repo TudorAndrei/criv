@@ -72,7 +72,7 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
         .as_ref()
         .map(|paths| paths.iter().cloned().collect::<BTreeSet<_>>());
     let violations = policy_plan
-        .scan(root, &vault, changed_policy_files.as_ref())?
+        .scan(&vault, changed_policy_files.as_ref())?
         .into_iter()
         .map(|violation| {
             format!(
