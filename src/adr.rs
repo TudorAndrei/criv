@@ -686,7 +686,14 @@ fn plausible_carried_content(first: &str, second: &str) -> bool {
     if first.body == second.body && !first.body.is_empty() {
         return first.body.len() > 1 || first.body.iter().any(|line| line.len() >= 24);
     }
-    shared_body.iter().map(|line| line.len()).sum::<usize>() >= 80
+    let shared_chars = shared_body.iter().map(|line| line.len()).sum::<usize>();
+    let smaller_body_chars = first
+        .body
+        .iter()
+        .map(|line| line.len())
+        .sum::<usize>()
+        .min(second.body.iter().map(|line| line.len()).sum::<usize>());
+    shared_chars >= 80 && shared_chars.saturating_mul(2) >= smaller_body_chars
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1613,6 +1620,14 @@ mod tests {
         assert!(!plausible_carried_content(
             "---\nid: ADR-0002\nkind: decision\ntitle: Topic\nstatus: accepted\n---\n\n# Topic\n\nA new decision about\npath text.\n\npaths.\n",
             "---\nid: ADR-0001\nkind: decision\ntitle: Base\nstatus: accepted\n---\n\n# Base\n\nAn old decision has different\npath text.\n\npaths.\n",
+        ));
+        assert!(!plausible_carried_content(
+            "---\nid: ADR-0002\nkind: decision\ntitle: Topic\nstatus: accepted\n---\n\n# Topic\n\nShared runtime behavior remains available through the stable public command.\nShared output behavior remains available through the stable public format.\nThe new decision has enough distinct material to show independent authorship and a different purpose.\nA second new paragraph adds more distinct context, constraints, and consequences for this decision.\n",
+            "---\nid: ADR-0001\nkind: decision\ntitle: Base\nstatus: accepted\n---\n\n# Base\n\nShared runtime behavior remains available through the stable public command.\nShared output behavior remains available through the stable public format.\nThe old decision has enough distinct material to show independent authorship and a different purpose.\nA second old paragraph adds more distinct context, constraints, and consequences for this decision.\n",
+        ));
+        assert!(plausible_carried_content(
+            "---\nid: ADR-0002\nkind: decision\ntitle: Topic\nstatus: accepted\n---\n\n# Topic\n\nThis distinctive published requirement is long enough to identify the earlier decision and remains unchanged.\nNew material attempts to make the copied decision look independent.\n",
+            "---\nid: ADR-0001\nkind: decision\ntitle: Base\nstatus: accepted\n---\n\n# Base\n\nThis distinctive published requirement is long enough to identify the earlier decision and remains unchanged.\nOriginal context.\n",
         ));
         assert!(plausible_carried_content(
             "---\nid: ADR-0002\nkind: decision\ntitle: Shared\nstatus: accepted\n---\n\n# Shared\n\n## Context\n\nThe same substantive context is retained.\n\n## Decision\n\nA changed conclusion.\n",
