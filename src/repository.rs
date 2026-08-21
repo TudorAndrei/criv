@@ -57,6 +57,10 @@ impl RepositoryFiles {
         self.filesystem.read_with_permissions(source)
     }
 
+    pub(crate) fn permissions(&self, source: &Path) -> Result<fs::Permissions> {
+        self.filesystem.permissions(source)
+    }
+
     pub(crate) fn read_optional_with_permissions(
         &self,
         source: &Path,
@@ -330,6 +334,10 @@ mod tests {
         let (contents, permissions) = files.read_with_permissions(Path::new("script")).unwrap();
 
         assert_eq!(contents, b"old\n");
+        assert_eq!(
+            files.permissions(Path::new("script")).unwrap().readonly(),
+            permissions.readonly()
+        );
         files
             .write_scope(Path::new("."))
             .unwrap()
@@ -452,5 +460,19 @@ mod tests {
             files.read_string(Path::new("docs/file.md")).unwrap(),
             "inside\n"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn interface_rejects_junctioned_path_components() {
+        let repository = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        std::fs::write(outside.path().join("source.rs"), "pub fn source() {}\n").unwrap();
+        junction::create(outside.path(), repository.path().join("src")).unwrap();
+        let files = RepositoryFiles::open(repository.path()).unwrap();
+
+        let error = files.read(Path::new("src/source.rs")).unwrap_err();
+
+        assert!(error.to_string().contains("symlinked vault path component"));
     }
 }

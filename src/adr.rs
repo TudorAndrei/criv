@@ -905,7 +905,7 @@ fn apply_plan(files: &RepositoryFiles, plan: &ReconcilePlan) -> Result<()> {
         .map(|mapping| {
             Ok((
                 mapping.new_path.clone(),
-                files.read_with_permissions(Path::new(&mapping.old_path))?.1,
+                files.permissions(Path::new(&mapping.old_path))?,
             ))
         })
         .collect::<Result<BTreeMap<_, _>>>()?;

@@ -8,6 +8,9 @@ use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::ambient_authority;
 use cap_std::fs::{Dir, OpenOptions as CapOpenOptions, Permissions as CapPermissions};
 
+#[cfg(windows)]
+use std::os::windows::fs::MetadataExt;
+
 use super::{LinkLayout, LinkOutcome};
 use crate::{CrivError, Result};
 
@@ -184,6 +187,13 @@ impl FileSystem {
         file.read_to_end(&mut contents)?;
         let file = file.into_std();
         Ok((contents, permissions.into_std(&file)?))
+    }
+
+    pub(super) fn permissions(&self, source: &Path) -> Result<fs::Permissions> {
+        let file = self.for_read(source)?.open_required_regular()?;
+        let permissions = file.metadata()?.permissions();
+        let file = file.into_std();
+        Ok(permissions.into_std(&file)?)
     }
 
     pub(super) fn read_optional_with_permissions(
@@ -512,7 +522,6 @@ impl FileSystem {
         relative: &Path,
         create_parents: bool,
     ) -> Result<Option<ConfinedFile>> {
-        reject_symlink_components(&self.root_path, relative)?;
         let parent = relative.parent().unwrap_or_else(|| Path::new("."));
         let Some(directory) = self.open_dir_optional(parent, create_parents)? else {
             return Ok(None);
@@ -778,7 +787,9 @@ fn reject_symlink_components(root: &Path, destination: &Path) -> Result<()> {
     for (index, component) in components.iter().enumerate() {
         current.push(component);
         match fs::symlink_metadata(&current) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
+            Ok(metadata)
+                if metadata.file_type().is_symlink() || is_junction(&current, &metadata) =>
+            {
                 return Err(CrivError::new(format!(
                     "refusing to write through symlinked vault path component {}",
                     current.display()
@@ -796,6 +807,19 @@ fn reject_symlink_components(root: &Path, destination: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn is_junction(path: &Path, metadata: &fs::Metadata) -> bool {
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+        && junction::exists(path).unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn is_junction(_path: &Path, _metadata: &fs::Metadata) -> bool {
+    false
 }
 
 fn relative_link_target(destination: &Path, target: &Path) -> PathBuf {
