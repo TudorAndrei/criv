@@ -89,7 +89,10 @@ export class ObsidianSourcePanelOwner {
 
   async assetResourcePath(requestedPath: unknown): Promise<string | null> {
     const asset = resolveActiveAsset(await this.assetEntries(), requestedPath);
-    const path = asset ? safeVaultPath(asset.path) : null;
+    if (!asset) {
+      return null;
+    }
+    const path = safeVaultPath(asset.path);
     if (!path) {
       return null;
     }
