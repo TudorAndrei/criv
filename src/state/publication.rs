@@ -189,7 +189,7 @@ fn publish_with_check(
 
 fn reject_orphan_transaction_workspace(files: &RepositoryFiles) -> Result<()> {
     for relative in [STAGE_DIR, QUARANTINE_DIR] {
-        if files.directory_exists(Path::new(relative))? {
+        if files.entry_exists(Path::new(relative))? {
             return Err(CrivError::new(format!(
                 "State transaction workspace `{relative}` exists without a transaction record"
             )));
@@ -716,5 +716,23 @@ mod tests {
         );
         assert!(!root.path().join(".criv/state.json").exists());
         assert!(root.path().join(QUARANTINE_DIR).exists());
+    }
+
+    #[test]
+    fn orphan_workspace_file_uses_the_transaction_recovery_error() {
+        let root = tempfile::tempdir().unwrap();
+        fs::create_dir_all(root.path().join(".criv")).unwrap();
+        fs::write(root.path().join(STAGE_DIR), "stale workspace marker\n").unwrap();
+        let candidate = state("candidate");
+
+        let error = publish(root.path(), &candidate.0, &candidate.1, 20).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("exists without a transaction record")
+        );
+        assert!(!root.path().join(".criv/state.json").exists());
+        assert!(root.path().join(STAGE_DIR).is_file());
     }
 }

@@ -6,8 +6,8 @@
 
 use std::path::Path;
 
-use crate::Result;
 use crate::repository::{LinkLayout, LinkOutcome, RepositoryFiles, RepositoryWriteScope};
+use crate::{CrivError, Result};
 
 const AGENT_SKILLS_DIR: &str = ".agents/skills";
 const CLAUDE_SKILLS_DIR: &str = ".claude/skills";
@@ -195,6 +195,7 @@ fn install_with_linker(
     mode: InstallMode,
     linker: impl FnOnce(&RepositoryWriteScope<'_>, bool) -> Result<LinkOutcome>,
 ) -> Result<InstallReport> {
+    let initial_claude_layout = installable_claude_layout(files)?;
     let scope = files.write_scope(Path::new("."))?;
     let mut skills = Vec::with_capacity(SKILLS.len());
     for skill in SKILLS {
@@ -208,7 +209,7 @@ fn install_with_linker(
     }
 
     let replace = mode == InstallMode::Refresh;
-    let link_outcome = if claude_layout(files) == ClaudeLayout::Linked {
+    let link_outcome = if initial_claude_layout == ClaudeLayout::Linked {
         LinkOutcome::Unchanged
     } else {
         linker(&scope, replace)?
@@ -263,10 +264,28 @@ fn installed_status(files: &RepositoryFiles, skill: &SkillTemplate) -> Installed
 
 fn claude_layout(files: &RepositoryFiles) -> ClaudeLayout {
     match files.link_layout(Path::new(CLAUDE_SKILLS_DIR), Path::new(AGENT_SKILLS_DIR)) {
-        Ok(LinkLayout::Missing) => ClaudeLayout::Missing,
-        Ok(LinkLayout::Expected) => ClaudeLayout::Linked,
-        Ok(LinkLayout::Directory) => ClaudeLayout::Copied,
-        Ok(LinkLayout::Other) | Err(_) => ClaudeLayout::Other,
+        Ok(layout) => map_claude_layout(layout),
+        Err(_) => ClaudeLayout::Other,
+    }
+}
+
+fn installable_claude_layout(files: &RepositoryFiles) -> Result<ClaudeLayout> {
+    files
+        .link_layout(Path::new(CLAUDE_SKILLS_DIR), Path::new(AGENT_SKILLS_DIR))
+        .map(map_claude_layout)
+        .map_err(|error| {
+            CrivError::new(format!(
+                "cannot install Claude skills because `.claude` must be a real repository directory: {error}"
+            ))
+        })
+}
+
+fn map_claude_layout(layout: LinkLayout) -> ClaudeLayout {
+    match layout {
+        LinkLayout::Missing => ClaudeLayout::Missing,
+        LinkLayout::Expected => ClaudeLayout::Linked,
+        LinkLayout::Directory => ClaudeLayout::Copied,
+        LinkLayout::Other => ClaudeLayout::Other,
     }
 }
 
@@ -557,6 +576,27 @@ mod tests {
         assert_eq!(inventory(&root).claude, ClaudeLayout::Linked);
 
         remove_root(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_claude_parent_is_rejected_before_skill_publication() {
+        let root = temp_root("linked-claude-parent");
+        let outside = temp_root("linked-claude-parent-outside");
+        std::os::unix::fs::symlink(&outside, root.join(".claude")).unwrap();
+
+        let error = install(&root, InstallMode::CreateOnly).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("`.claude` must be a real repository directory")
+        );
+        assert!(!root.join(AGENT_SKILLS_DIR).exists());
+
+        fs::remove_file(root.join(".claude")).unwrap();
+        remove_root(root);
+        remove_root(outside);
     }
 
     #[test]

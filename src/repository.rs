@@ -92,6 +92,10 @@ impl RepositoryFiles {
         self.filesystem.directory_exists(source)
     }
 
+    pub(crate) fn entry_exists(&self, source: &Path) -> Result<bool> {
+        self.filesystem.entry_exists(source)
+    }
+
     pub(crate) fn read_dir_names(&self, source: &Path) -> Result<Option<Vec<OsString>>> {
         self.filesystem.read_dir_names(source)
     }

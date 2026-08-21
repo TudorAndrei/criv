@@ -260,6 +260,25 @@ impl FileSystem {
         Ok(self.open_dir_optional(source, false)?.is_some())
     }
 
+    pub(super) fn entry_exists(&self, source: &Path) -> Result<bool> {
+        validate_relative_path("entry source", source)?;
+        let parent = source.parent().unwrap_or_else(|| Path::new("."));
+        let Some(directory) = self.open_dir_optional(parent, false)? else {
+            return Ok(false);
+        };
+        let name = source.file_name().ok_or_else(|| {
+            CrivError::new(format!(
+                "repository entry path {} has no name",
+                source.display()
+            ))
+        })?;
+        match directory.symlink_metadata(name) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     pub(super) fn read_dir_names(&self, source: &Path) -> Result<Option<Vec<OsString>>> {
         validate_relative_path("directory source", source)?;
         let Some(directory) = self.open_dir_optional(source, false)? else {
@@ -591,7 +610,13 @@ impl ConfinedFile {
                 self.relative.display()
             ))),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(error.into()),
+            Err(error) => match self.parent.symlink_metadata(&self.name) {
+                Ok(metadata) if metadata.file_type().is_symlink() => Err(CrivError::new(format!(
+                    "refusing to write through symlinked vault path component {}",
+                    self.relative.display()
+                ))),
+                _ => Err(error.into()),
+            },
         }
     }
 
