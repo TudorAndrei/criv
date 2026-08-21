@@ -24,20 +24,21 @@ pub(super) fn take_assets(entries: Vec<AssetIndexEntry>) -> Vec<EditorAssetEntry
         .collect::<Vec<_>>();
     candidates.sort_by(|left, right| left.path.cmp(&right.path));
 
+    let mut assets = Vec::new();
     let mut seen = BTreeSet::new();
     let mut total_bytes = 0_u64;
-    candidates
-        .into_iter()
-        .filter(|entry| seen.insert(entry.path.clone()))
-        .filter(|entry| {
-            let next = total_bytes.saturating_add(entry.bytes);
-            if next > MAX_ASSET_TOTAL_BYTES {
-                return false;
-            }
-            total_bytes = next;
-            true
-        })
-        .collect()
+    for entry in candidates {
+        if !seen.insert(entry.path.clone()) {
+            continue;
+        }
+        let next = total_bytes.saturating_add(entry.bytes);
+        if next > MAX_ASSET_TOTAL_BYTES {
+            break;
+        }
+        total_bytes = next;
+        assets.push(entry);
+    }
+    assets
 }
 
 fn valid_asset(entry: &AssetIndexEntry, path: &str) -> bool {
@@ -48,7 +49,7 @@ fn valid_asset(entry: &AssetIndexEntry, path: &str) -> bool {
 }
 
 fn expected_mime(path: &str) -> Option<&'static str> {
-    match path.rsplit_once('.')?.1.to_ascii_lowercase().as_str() {
+    match path.rsplit_once('.')?.1 {
         "png" => Some("image/png"),
         "jpg" | "jpeg" => Some("image/jpeg"),
         "gif" => Some("image/gif"),
@@ -79,6 +80,7 @@ mod tests {
             entry("docs/a.png", "image/png", 3),
             entry("docs/a.png", "image/png", 3),
             entry("docs/wrong.png", "image/jpeg", 3),
+            entry("docs/upper.PNG", "image/png", 3),
             entry("docs/too-large.png", "image/png", MAX_ASSET_BYTES + 1),
             AssetIndexEntry {
                 hash: "bad".into(),
@@ -97,10 +99,20 @@ mod tests {
 
     #[test]
     fn keeps_the_total_size_bound_in_lexical_order() {
-        let mut entries = (0..8)
+        let mut entries = (0..7)
             .map(|index| entry(&format!("docs/{index}.png"), "image/png", MAX_ASSET_BYTES))
             .collect::<Vec<_>>();
-        entries.push(entry("docs/overflow.pdf", "application/pdf", 1));
+        entries.push(entry("docs/7.png", "image/png", MAX_ASSET_BYTES / 2));
+        entries.push(entry(
+            "docs/overflow.pdf",
+            "application/pdf",
+            MAX_ASSET_BYTES,
+        ));
+        entries.push(entry(
+            "docs/z-after-overflow.png",
+            "image/png",
+            MAX_ASSET_BYTES / 2,
+        ));
         let assets = take_assets(entries);
 
         assert_eq!(assets.len(), 8);

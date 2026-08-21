@@ -143,3 +143,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0130-share-structured-source-identity-text|ADR-0130]] - Share structured Source identity text
 - [[0131-publish-verified-documentation-assets-for-native-previews|ADR-0131]] - Publish verified documentation assets for native previews
 - [[0132-use-aqua-with-a-mise-alias-and-github-fallback|ADR-0132]] - Use aqua with a mise alias and GitHub fallback
+- [[0133-use-exact-lowercase-documentation-asset-extensions|ADR-0133]] - Use exact lowercase documentation asset extensions

@@ -633,7 +633,7 @@ fn load_documentation_assets_with_limits(
         };
         let bytes = contents.len() as u64;
         if total_bytes.saturating_add(bytes) > max_total_bytes {
-            continue;
+            break;
         }
         let Some(expected_mime) = asset_mime_for_path(&path) else {
             continue;
@@ -659,8 +659,6 @@ fn asset_mime_for_path(path: &str) -> Option<&'static str> {
     match Path::new(path)
         .extension()
         .and_then(|extension| extension.to_str())?
-        .to_ascii_lowercase()
-        .as_str()
     {
         "png" => Some("image/png"),
         "jpg" | "jpeg" => Some("image/jpeg"),
@@ -1106,6 +1104,42 @@ mod tests {
             ["docs/assets/a.png", "docs/assets/b.png"]
         );
         assert!(vault.source_entries().is_empty());
+    }
+
+    #[test]
+    fn documentation_asset_total_bound_stops_at_the_first_overflow() {
+        let root = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(root.path().join("docs/assets")).unwrap();
+        let ten_byte_png = b"\x89PNG\r\n\x1a\nAA";
+        let eight_byte_png = b"\x89PNG\r\n\x1a\n";
+        for (path, contents) in [
+            ("docs/assets/a.png", ten_byte_png.as_slice()),
+            ("docs/assets/b.png", ten_byte_png.as_slice()),
+            ("docs/assets/c.png", eight_byte_png.as_slice()),
+        ] {
+            std::fs::write(root.path().join(path), contents).unwrap();
+        }
+        let files = RepositoryFiles::open(root.path()).unwrap();
+
+        let assets = load_documentation_assets_with_limits(
+            &files,
+            vec![
+                "docs/assets/c.png".into(),
+                "docs/assets/b.png".into(),
+                "docs/assets/a.png".into(),
+            ],
+            ten_byte_png.len() as u64,
+            18,
+        )
+        .unwrap();
+
+        assert_eq!(
+            assets
+                .iter()
+                .map(|asset| asset.path.as_str())
+                .collect::<Vec<_>>(),
+            ["docs/assets/a.png"]
+        );
     }
 
     #[test]

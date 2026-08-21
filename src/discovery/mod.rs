@@ -243,11 +243,8 @@ fn vault_selection_kind(path: &Path) -> Option<SelectionKind> {
     if extension == "c4" {
         return Some(SelectionKind::VaultC4);
     }
-    matches!(
-        extension.to_ascii_lowercase().as_str(),
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "pdf"
-    )
-    .then_some(SelectionKind::VaultAsset)
+    matches!(extension, "png" | "jpg" | "jpeg" | "gif" | "webp" | "pdf")
+        .then_some(SelectionKind::VaultAsset)
 }
 
 pub(crate) fn discover_markdown(root: &Path, policy: MarkdownPolicy<'_>) -> Result<Vec<String>> {
@@ -1056,7 +1053,7 @@ mod tests {
             VaultPaths {
                 markdown: vec!["docs/note.md".into()],
                 c4: vec!["docs/model.c4".into()],
-                assets: vec!["docs/diagram.PNG".into(), "docs/report.pdf".into()],
+                assets: vec!["docs/report.pdf".into()],
             }
         );
     }
