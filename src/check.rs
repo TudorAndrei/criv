@@ -182,7 +182,7 @@ fn validate_all_with_fix(files: &RepositoryFiles, fix: bool) -> Result<Vec<Diagn
                     "policy-violation",
                     &violation.path,
                     Some(violation.line),
-                    Some(violation.location),
+                    violation.location,
                     format!(
                         "{} policy `{}` matched `{}`",
                         violation.adr_id, violation.pattern_id, violation.text
@@ -229,7 +229,7 @@ fn validate_changed(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
                     "policy-violation",
                     &violation.path,
                     Some(violation.line),
-                    Some(violation.location),
+                    violation.location,
                     format!(
                         "{} policy `{}` matched `{}`",
                         violation.adr_id, violation.pattern_id, violation.text

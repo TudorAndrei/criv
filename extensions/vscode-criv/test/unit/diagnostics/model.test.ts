@@ -86,3 +86,24 @@ test("uses the complete-line fallback for old or invalid ranges", () => {
     end: { line: 6, character: Number.MAX_SAFE_INTEGER },
   });
 });
+
+test("widens an empty exact range for a visible diagnostic", () => {
+  const [diagnostic] = parseCheckDiagnostics(
+    JSON.stringify([
+      {
+        path: "docs/empty.md",
+        line: 3,
+        message: "empty exact range",
+        range: {
+          start: { line: 2, character: 4 },
+          end: { line: 2, character: 4 },
+        },
+      },
+    ]),
+  );
+
+  assert.deepEqual(diagnosticRange(diagnostic!), {
+    start: { line: 2, character: 4 },
+    end: { line: 2, character: 5 },
+  });
+});

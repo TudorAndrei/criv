@@ -47,6 +47,21 @@ export function parseCheckDiagnostics(raw: string): NormalizedCheckDiagnostic[] 
 
 export function diagnosticRange(diagnostic: NormalizedCheckDiagnostic): DiagnosticRange {
   if (diagnostic.range) {
+    if (comparePositions(diagnostic.range.start, diagnostic.range.end) === 0) {
+      if (diagnostic.range.end.character < Number.MAX_SAFE_INTEGER) {
+        return {
+          start: diagnostic.range.start,
+          end: {
+            line: diagnostic.range.end.line,
+            character: diagnostic.range.end.character + 1,
+          },
+        };
+      }
+      return {
+        start: { line: diagnostic.range.start.line, character: 0 },
+        end: { line: diagnostic.range.end.line, character: Number.MAX_SAFE_INTEGER },
+      };
+    }
     return diagnostic.range;
   }
   const line = diagnostic.line === undefined ? 0 : Math.max(diagnostic.line - 1, 0);

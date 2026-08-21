@@ -31,7 +31,7 @@ pub(crate) struct StructuralMatch {
     pub(crate) range: String,
     pub(crate) text: String,
     pub(crate) captures: BTreeMap<String, String>,
-    pub(crate) location: SourceLocation,
+    pub(crate) location: Option<SourceLocation>,
 }
 
 enum CompiledMatcher {
@@ -306,8 +306,7 @@ fn row_from_match<D: Doc>(
         ),
         text: node.text().trim().to_string(),
         captures: capture_map(matched),
-        location: SourceLocation::new(source, node.range())
-            .expect("ast-grep node ranges use UTF-8 byte boundaries"),
+        location: SourceLocation::new(source, node.range()),
     }
 }
 
@@ -376,7 +375,7 @@ mod tests {
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].line, 1);
         assert_eq!(matches[0].range, "L1:C1-L3:C2");
-        let exact = matches[0].location.lsp_range();
+        let exact = matches[0].location.as_ref().unwrap().lsp_range();
         assert_eq!((exact.start.line, exact.start.character), (0, 0));
         assert_eq!((exact.end.line, exact.end.character), (2, 1));
         assert_eq!(

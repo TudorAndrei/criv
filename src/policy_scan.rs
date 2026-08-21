@@ -36,7 +36,7 @@ pub(crate) struct PolicyViolation {
     pub(crate) adr_id: String,
     pub(crate) pattern_id: String,
     pub(crate) text: String,
-    pub(crate) location: SourceLocation,
+    pub(crate) location: Option<SourceLocation>,
 }
 
 pub(crate) struct PolicyScanPlan {
@@ -436,7 +436,7 @@ mod tests {
 
         assert_eq!(structural::work_counts().policy_compilations, 2);
         assert_eq!(structural::work_counts().ast_parses, 2);
-        let exact = violations[0].location.lsp_range();
+        let exact = violations[0].location.as_ref().unwrap().lsp_range();
         assert_eq!((exact.start.line, exact.start.character), (0, 0));
         assert_eq!((exact.end.line, exact.end.character), (0, 12));
         assert_eq!(
