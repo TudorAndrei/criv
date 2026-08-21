@@ -410,7 +410,7 @@ pub(super) struct SourceGraphBuild {
 
 impl SourceGraphBuild {
     #[cfg(test)]
-    pub(super) fn build_incremental(
+    fn build_incremental(
         root: &Path,
         source_files: &[String],
         previous: Option<&Self>,
@@ -433,7 +433,7 @@ impl SourceGraphBuild {
     }
 
     #[cfg(test)]
-    pub(crate) fn build_incremental_with_workers(
+    fn build_incremental_with_workers(
         root: &Path,
         source_files: &[String],
         previous: Option<&Self>,
@@ -489,7 +489,7 @@ impl SourceGraphBuild {
     }
 
     #[cfg(test)]
-    pub(super) fn publish(self, root: &Path) -> Result<Self> {
+    fn publish(self, root: &Path) -> Result<Self> {
         let files = RepositoryFiles::open(root)?;
         self.publish_from(&files)
     }
@@ -504,7 +504,7 @@ impl SourceGraphBuild {
 }
 
 #[cfg(test)]
-pub(super) fn load_cached(root: &Path) -> Option<SourceGraphBuild> {
+fn load_cached(root: &Path) -> Option<SourceGraphBuild> {
     let files = RepositoryFiles::open(root).ok()?;
     load_cached_from(&files)
 }

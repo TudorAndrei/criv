@@ -37,7 +37,8 @@ impl SourceIdentity {
     }
 
     /// Return the repository-relative source path.
-    pub fn path(&self) -> &str {
+    #[cfg(test)]
+    fn path(&self) -> &str {
         &self.path
     }
 
@@ -78,7 +79,7 @@ impl SourceSelector {
     }
 
     /// Parse one selector, falling back to exact opaque text.
-    pub fn parse(text: &str) -> Self {
+    fn parse(text: &str) -> Self {
         parse_elixir_selector(text)
             .map(Self::Elixir)
             .unwrap_or_else(|| Self::Opaque(text.to_string()))
@@ -153,7 +154,8 @@ impl ElixirSelector {
     }
 
     /// Return the decoded callable name when this selector names a callable.
-    pub fn callable_name(&self) -> Option<&str> {
+    #[cfg(test)]
+    fn callable_name(&self) -> Option<&str> {
         match self {
             Self::Owner(_) => None,
             Self::Callable { name, .. } => Some(name),
@@ -161,7 +163,8 @@ impl ElixirSelector {
     }
 
     /// Return the source arity when this selector names a callable.
-    pub fn callable_arity(&self) -> Option<usize> {
+    #[cfg(test)]
+    fn callable_arity(&self) -> Option<usize> {
         match self {
             Self::Owner(_) => None,
             Self::Callable { arity, .. } => Some(*arity),
@@ -220,7 +223,8 @@ impl ElixirOwner {
     }
 
     /// Return the protocol and type for an implementation owner.
-    pub fn implementation_parts(&self) -> Option<(&str, &str)> {
+    #[cfg(test)]
+    fn implementation_parts(&self) -> Option<(&str, &str)> {
         match self {
             Self::Module { .. } => None,
             Self::Implementation { protocol, for_type } => Some((protocol, for_type)),

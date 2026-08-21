@@ -200,7 +200,7 @@ impl Vault {
         Self::load_docs_only_from(&files)
     }
 
-    pub(crate) fn load_docs_only_from(files: &RepositoryFiles) -> Result<Self> {
+    fn load_docs_only_from(files: &RepositoryFiles) -> Result<Self> {
         Self::load_with_source_facilities(files, None, false, None)
     }
 

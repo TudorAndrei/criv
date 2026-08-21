@@ -12,7 +12,7 @@ pub(crate) struct ByteSpan {
 }
 
 impl ByteSpan {
-    pub(crate) fn new(source: &str, range: Range<usize>) -> Option<Self> {
+    fn new(source: &str, range: Range<usize>) -> Option<Self> {
         (range.start <= range.end
             && range.end <= source.len()
             && source.is_char_boundary(range.start)

@@ -138,7 +138,7 @@ impl SkillInventory {
 
 /// Install all generated skills through one create-only or refresh operation.
 #[cfg(test)]
-pub(crate) fn install(root: &Path, mode: InstallMode) -> Result<InstallReport> {
+fn install(root: &Path, mode: InstallMode) -> Result<InstallReport> {
     let files = RepositoryFiles::open(root)?;
     install_from(&files, mode)
 }

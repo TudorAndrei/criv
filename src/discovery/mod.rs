@@ -266,7 +266,7 @@ pub(crate) fn discover_markdown(root: &Path, policy: MarkdownPolicy<'_>) -> Resu
 }
 
 #[cfg(test)]
-pub(crate) fn read_selected_text(root: &Path, path: &Path) -> Result<String> {
+fn read_selected_text(root: &Path, path: &Path) -> Result<String> {
     let relative = relative_utf8(root, path)?;
     let files = RepositoryFiles::open(root)?;
     let canonical_path = files.root().join(relative);

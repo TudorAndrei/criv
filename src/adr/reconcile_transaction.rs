@@ -19,7 +19,7 @@ struct CapturedPath {
 
 impl Snapshot {
     #[cfg(test)]
-    pub(crate) fn capture(root: &Path, paths: &[String]) -> Result<Self> {
+    fn capture(root: &Path, paths: &[String]) -> Result<Self> {
         let files = RepositoryFiles::open(root)?;
         Self::capture_from(&files, paths)
     }

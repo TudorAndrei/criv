@@ -31,7 +31,7 @@ pub(crate) struct RefreshSession {
 
 impl RefreshSession {
     #[cfg(test)]
-    pub(crate) fn one_shot(root: &Path) -> Result<Self> {
+    fn one_shot(root: &Path) -> Result<Self> {
         let files = RepositoryFiles::open(root)?;
         Self::one_shot_from(&files)
     }
@@ -46,7 +46,7 @@ impl RefreshSession {
     }
 
     #[cfg(test)]
-    pub(crate) fn live(root: &Path, config: &Config) -> Result<Self> {
+    fn live(root: &Path, config: &Config) -> Result<Self> {
         let files = RepositoryFiles::open(root)?;
         Self::live_from(&files, config)
     }
