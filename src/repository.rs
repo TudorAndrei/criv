@@ -151,18 +151,15 @@ impl RepositoryWriteScope<'_> {
         )
     }
 
-    pub(crate) fn write_atomic_bytes_with_permissions(
+    pub(crate) fn restore_with_lock(
         &self,
         destination: &Path,
-        contents: &[u8],
-        permissions: fs::Permissions,
+        lock: &Path,
+        contents: Option<(&[u8], fs::Permissions)>,
     ) -> Result<()> {
-        self.files.filesystem.write_atomic_bytes_with_permissions(
-            &self.allowed_dir,
-            destination,
-            contents,
-            permissions,
-        )
+        self.files
+            .filesystem
+            .restore_with_lock(&self.allowed_dir, destination, lock, contents)
     }
 
     #[cfg(test)]

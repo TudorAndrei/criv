@@ -197,6 +197,30 @@ mod tests {
     }
 
     #[test]
+    fn rollback_refuses_to_replace_an_index_with_an_active_git_lock() {
+        let temp = repository();
+        let root = temp.path();
+        let snapshot = Snapshot::capture(root, &[]).unwrap();
+        fs::write(root.join("new.txt"), "new\n").unwrap();
+        git(root, &["add", "new.txt"]);
+        let changed_index = fs::read(root.join(".git/index")).unwrap();
+        fs::write(
+            root.join(".git/index.lock"),
+            "held by another Git process\n",
+        )
+        .unwrap();
+
+        let errors = snapshot.rollback(root);
+
+        assert!(
+            errors.iter().any(|error| error.contains("index.lock")),
+            "rollback must report the active Git lock: {errors:?}"
+        );
+        assert_eq!(fs::read(root.join(".git/index")).unwrap(), changed_index);
+        assert!(root.join(".git/index.lock").exists());
+    }
+
+    #[test]
     fn rollback_restores_conflict_stages() {
         let temp = repository();
         let root = temp.path();

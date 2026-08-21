@@ -88,15 +88,12 @@ impl IndexSnapshot {
     pub(crate) fn restore(self) -> Result<()> {
         let scope = self.git_files.write_scope(Path::new("."))?;
         match self.file {
-            Some(file) => scope.write_atomic_bytes_with_permissions(
+            Some(file) => scope.restore_with_lock(
                 Path::new("index"),
-                &file.contents,
-                file.permissions,
+                Path::new("index.lock"),
+                Some((&file.contents, file.permissions)),
             ),
-            None if self.git_files.file_exists(Path::new("index"))? => {
-                scope.remove_file(Path::new("index"))
-            }
-            None => Ok(()),
+            None => scope.restore_with_lock(Path::new("index"), Path::new("index.lock"), None),
         }
         .map_err(|error| CrivError::new(format!("Git index could not be restored: {error}")))
     }

@@ -96,15 +96,18 @@ impl FileSystem {
             .write_atomic(contents, Some(CapPermissions::from_std(permissions)))
     }
 
-    pub(super) fn write_atomic_bytes_with_permissions(
+    pub(super) fn restore_with_lock(
         &self,
         allowed_dir: &Path,
         destination: &Path,
-        contents: &[u8],
-        permissions: fs::Permissions,
+        lock: &Path,
+        contents: Option<(&[u8], fs::Permissions)>,
     ) -> Result<()> {
-        self.for_write(allowed_dir, destination)?
-            .write_atomic_bytes(contents, Some(CapPermissions::from_std(permissions)))
+        let destination = self.for_write(allowed_dir, destination)?;
+        let lock = self.for_write(allowed_dir, lock)?;
+        let contents = contents
+            .map(|(contents, permissions)| (contents, CapPermissions::from_std(permissions)));
+        destination.restore_with_lock(&lock, contents)
     }
 
     #[cfg(test)]
@@ -658,6 +661,55 @@ impl ConfinedFile {
             "failed to create temporary file for {}",
             self.relative.display()
         )))
+    }
+
+    fn restore_with_lock(
+        &self,
+        lock: &Self,
+        contents: Option<(&[u8], CapPermissions)>,
+    ) -> Result<()> {
+        if self.relative.parent() != lock.relative.parent() {
+            return Err(CrivError::new(format!(
+                "lock {} must be beside file {}",
+                lock.relative.display(),
+                self.relative.display()
+            )));
+        }
+
+        let mut options = nofollow_options();
+        options.write(true).create_new(true);
+        let mut lock_file = lock
+            .parent
+            .open_with(&lock.name, &options)
+            .map_err(|error| {
+                CrivError::new(format!(
+                    "cannot acquire lock {}: {error}",
+                    lock.relative.display()
+                ))
+            })?;
+        let result = (|| -> Result<()> {
+            match contents {
+                Some((contents, permissions)) => {
+                    lock_file.write_all(contents)?;
+                    lock_file.set_permissions(permissions)?;
+                    lock_file.sync_all()?;
+                    lock.parent.rename(&lock.name, &self.parent, &self.name)?;
+                }
+                None => {
+                    lock_file.sync_all()?;
+                    drop(lock_file);
+                    if self.open_regular(false)?.is_some() {
+                        self.parent.remove_file(&self.name)?;
+                    }
+                    lock.parent.remove_file(&lock.name)?;
+                }
+            }
+            sync_directory_handle(&self.parent)
+        })();
+        if result.is_err() {
+            let _ = lock.parent.remove_file(&lock.name);
+        }
+        result
     }
 
     fn remove(&self) -> Result<()> {
