@@ -1,0 +1,16 @@
+# PROTOTYPE. Throwaway. Answers wayfinder ticket #189. Not migration code.
+[workspace]
+
+[package]
+name = "usage-rs-command-tree-prototype"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.97.1"
+publish = false
+
+[dependencies]
+usage = { package = "usage-rs", version = "6" }
+
+[[bin]]
+name = "criv-proto"
+path = "src/main.rs"
