@@ -1093,15 +1093,12 @@ fn parse_tree_sitter_file(path: &str, contents: &str) -> Option<SourceFile> {
         modules: Vec::new(),
         symbols: Vec::new(),
     };
-    collect_tree_sitter_nodes(
-        tree.root_node(),
+    TreeSitterWalk {
         contents,
         path,
         language,
-        None,
-        None,
-        &mut file,
-    );
+    }
+    .collect(tree.root_node(), None, None, &mut file, 0);
     Some(file)
 }
 
@@ -1117,71 +1114,86 @@ fn tree_sitter_language(language: Language) -> Option<tree_sitter::Language> {
     }
 }
 
-fn collect_tree_sitter_nodes(
-    node: Node<'_>,
-    contents: &str,
-    path: &str,
-    language: Language,
-    parent: Option<String>,
-    module_parent: Option<String>,
-    file: &mut SourceFile,
-) {
-    for import in tree_sitter_imports(node, contents, language) {
-        file.imports
-            .push(Import::legacy(import, node.start_position().row + 1));
-    }
-    let child_module_parent = if let Some(name) = tree_sitter_module(node, contents, language) {
-        let name = module_parent
-            .as_deref()
-            .map_or_else(|| name.clone(), |parent| format!("{parent}::{name}"));
-        file.modules.push(ModuleDecl {
-            name: name.clone(),
-            line: node.start_position().row + 1,
-        });
-        Some(name)
-    } else {
-        module_parent.clone()
-    };
+pub(crate) const MAX_AST_DEPTH: usize = 512;
 
-    if let Some(symbol) = tree_sitter_symbol(node, contents, path, language, parent.as_deref()) {
-        let symbol_parent = if symbol.kind == SymbolKind::Class {
-            Some(symbol.name.clone())
+struct TreeSitterWalk<'a> {
+    contents: &'a str,
+    path: &'a str,
+    language: Language,
+}
+
+impl TreeSitterWalk<'_> {
+    fn collect(
+        &self,
+        node: Node<'_>,
+        parent: Option<String>,
+        module_parent: Option<String>,
+        file: &mut SourceFile,
+        depth: usize,
+    ) {
+        if depth >= MAX_AST_DEPTH {
+            return;
+        }
+        for import in tree_sitter_imports(node, self.contents, self.language) {
+            file.imports
+                .push(Import::legacy(import, node.start_position().row + 1));
+        }
+        let child_module_parent =
+            if let Some(name) = tree_sitter_module(node, self.contents, self.language) {
+                let name = module_parent
+                    .as_deref()
+                    .map_or_else(|| name.clone(), |parent| format!("{parent}::{name}"));
+                file.modules.push(ModuleDecl {
+                    name: name.clone(),
+                    line: node.start_position().row + 1,
+                });
+                Some(name)
+            } else {
+                module_parent.clone()
+            };
+
+        if let Some(symbol) = tree_sitter_symbol(
+            node,
+            self.contents,
+            self.path,
+            self.language,
+            parent.as_deref(),
+        ) {
+            let symbol_parent = if symbol.kind == SymbolKind::Class {
+                Some(symbol.name.clone())
+            } else {
+                parent.clone()
+            };
+            file.symbols.push(symbol);
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                self.collect(
+                    child,
+                    symbol_parent.clone(),
+                    child_module_parent.clone(),
+                    file,
+                    depth + 1,
+                );
+            }
+            return;
+        }
+
+        let impl_parent = if self.language == Language::Rust && node.kind() == "impl_item" {
+            node_text(node, self.contents).and_then(|text| parse_rust_impl_target(&text))
         } else {
-            parent.clone()
+            parent
         };
-        file.symbols.push(symbol);
+
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            collect_tree_sitter_nodes(
+            self.collect(
                 child,
-                contents,
-                path,
-                language,
-                symbol_parent.clone(),
+                impl_parent.clone(),
                 child_module_parent.clone(),
                 file,
+                depth + 1,
             );
         }
-        return;
-    }
-
-    let impl_parent = if language == Language::Rust && node.kind() == "impl_item" {
-        node_text(node, contents).and_then(|text| parse_rust_impl_target(&text))
-    } else {
-        parent
-    };
-
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_tree_sitter_nodes(
-            child,
-            contents,
-            path,
-            language,
-            impl_parent.clone(),
-            child_module_parent.clone(),
-            file,
-        );
     }
 }
 

@@ -121,7 +121,8 @@ pub(super) fn load(root: &Path, docs_path: &Path, sources: &[LikeC4Source]) -> L
     }
 
     let bridge_source = bridge_source();
-    let mut child = match Command::new("node")
+    let node = resolve_node();
+    let mut child = match Command::new(node)
         .args([
             "--input-type=module",
             "--eval",
@@ -316,6 +317,26 @@ fn bridge_source() -> String {
     )
 }
 
+#[cfg(windows)]
+const NODE_CANDIDATES: [&str; 3] = ["node.exe", "node.cmd", "node.bat"];
+#[cfg(not(windows))]
+const NODE_CANDIDATES: [&str; 1] = ["node"];
+
+fn resolve_node() -> std::path::PathBuf {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    for directory in
+        std::env::split_paths(&path).filter(|directory| !directory.as_os_str().is_empty())
+    {
+        for candidate in NODE_CANDIDATES {
+            let executable = directory.join(candidate);
+            if executable.is_file() {
+                return executable;
+            }
+        }
+    }
+    std::path::PathBuf::from(NODE_CANDIDATES[0])
+}
+
 fn read_capped(mut reader: impl std::io::Read) -> std::io::Result<Vec<u8>> {
     let mut stored = Vec::new();
     let mut buffer = [0_u8; 8192];
@@ -326,6 +347,9 @@ fn read_capped(mut reader: impl std::io::Read) -> std::io::Result<Vec<u8>> {
         }
         let remaining = (MAX_BRIDGE_OUTPUT + 1).saturating_sub(stored.len());
         stored.extend_from_slice(&buffer[..read.min(remaining)]);
+        if stored.len() > MAX_BRIDGE_OUTPUT {
+            return Ok(stored);
+        }
     }
 }
 

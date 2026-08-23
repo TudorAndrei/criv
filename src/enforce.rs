@@ -227,7 +227,7 @@ fn enforce_failure(
         return Some(EnforceFailure {
             code: "policy-violation",
             message: format!("{} policy violation(s) found", violations.len()),
-            fix: "Change the code, or write a successor ADR that retires the policy.",
+            fix: check::fix_for("policy-violation").expect("policy-violation carries a repair"),
             violations,
         });
     }

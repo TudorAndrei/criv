@@ -2,7 +2,7 @@
 name: checking-drift
 description: Use when a criv command fails or prints a diagnostic, when reading a criv error code, fix line, or next command, or when validating that documents, ADR metadata, wiki-links, source references, and generated state still match the code.
 metadata:
-  criv-template: blake3:a1a8161ab266a003
+  criv-template: blake3:8ff4ef1799ece080
 ---
 
 # Checking drift
@@ -27,8 +27,8 @@ Repeat until a run that included your change comes back green.
 
 ## Reading a diagnostic
 
-A diagnostic names a severity, a code, a file, and a message. Most carry a
-`fix:` line under them:
+A diagnostic names a severity, a code, a file, and a message, and it carries a
+`fix:` line under it:
 
 ```text
 error[unresolved-governs] docs/adr/0007-example.md: governs glob `src/old.rs` matches no source files
@@ -50,15 +50,16 @@ side of that fix.
 
 ## Reading a failure
 
-A failure that is not a diagnostic prints its code in brackets first, and often
-a `fix:` line:
+Some failures that are not diagnostics also carry a code and a repair. Not all
+of them do: a failure with no defined recovery reports prose only. When a code
+is present it looks like this:
 
 ```text
 criv: [not-a-vault] not a criv vault: no criv.toml in /work/other-repo
 fix: criv init
 ```
 
-Key recovery on the code, never on the prose. These codes matter most:
+Key recovery on the code when there is one. These are the coded failures:
 
 | Code | Meaning |
 | --- | --- |
@@ -67,6 +68,9 @@ Key recovery on the code, never on the prose. These codes matter most:
 | `policy-violation` | An ADR policy pattern matched. Change the code, or supersede the ADR. |
 | `import-policy-violation` | An import broke a rule in `criv.toml`. |
 | `adr-immutability-violation` | An accepted ADR changed. Restore it and write a successor. |
+| `enforcement-failed` | Validation errors blocked the stage. Run `criv check`. |
+| `vault-outside-git-root` | The vault is not the root of the Git worktree. Run criv from the worktree root. |
+| `adr-id-exhausted` | No free four-digit ADR id remains. |
 
 Exit codes are the fast signal: `0` succeeded, `1` the command failed, `2` the
 command line was wrong.

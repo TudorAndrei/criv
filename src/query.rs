@@ -350,7 +350,7 @@ pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
         .reverse_index_scope()
         .map(|scope| QueryReverseIndex::build(&vault, scope));
     let (rows, output) = match options.command {
-        QueryCommand::NextAdrId(output) => (vec![next_adr_id(&vault)], output),
+        QueryCommand::NextAdrId(output) => (vec![next_adr_id(&vault)?], output),
         QueryCommand::Callers(options) => {
             let rows = vault.source_graph().callers(&options.symbol);
             (rows, options.output)
@@ -431,17 +431,28 @@ fn load_query_vault(root: &Path, command: &QueryCommand) -> Result<Vault> {
     }
 }
 
-fn next_adr_id(vault: &Vault) -> String {
-    let next = vault
+const MAX_ADR_NUMBER: u32 = 9999;
+
+fn next_adr_id(vault: &Vault) -> Result<String> {
+    let highest = vault
         .notes
         .iter()
         .filter_map(|note| note.id.as_deref())
         .filter_map(|id| id.strip_prefix("ADR-"))
         .filter_map(|digits| digits.parse::<u32>().ok())
         .max()
-        .unwrap_or(0)
-        + 1;
-    format!("ADR-{next:04}")
+        .unwrap_or(0);
+    let next = highest
+        .checked_add(1)
+        .filter(|next| *next <= MAX_ADR_NUMBER);
+    match next {
+        Some(next) => Ok(format!("ADR-{next:04}")),
+        None => Err(CrivError::coded_fix(
+            "adr-id-exhausted",
+            format!("no free ADR id after ADR-{highest:04}; ids are four digits"),
+            "Retire or renumber the highest ADR ids, or widen the id format in a new ADR.",
+        )),
+    }
 }
 
 fn targets(vault: &Vault, id: &str) -> Result<Vec<String>> {

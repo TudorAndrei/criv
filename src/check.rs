@@ -79,7 +79,7 @@ struct JsonDiagnostic<'a> {
     fix: Option<&'static str>,
 }
 
-fn fix_for(code: &str) -> Option<&'static str> {
+pub(crate) fn fix_for(code: &str) -> Option<&'static str> {
     let fix = match code {
         "adr-dir-non-decision" => {
             "Set `kind: decision` in the frontmatter, or move the file out of the ADR directory."
@@ -103,6 +103,18 @@ fn fix_for(code: &str) -> Option<&'static str> {
         "invalid-frontmatter" => "Correct the YAML frontmatter block.",
         "invalid-kind" => "Set `kind` to `doc` or to `decision`.",
         "invalid-likec4-source" => "Correct the LikeC4 source, then run `criv watch --once`.",
+        "missing-policy-pattern-id" => "Give the policy pattern an `id`.",
+        "empty-policy-pattern" => "Give the policy pattern a body, or remove it.",
+        "duplicate-policy-pattern" => "Give each policy pattern in the ADR a unique `id`.",
+        "missing-policy-pattern-definition" => {
+            "Declare the pattern in an ADR `policy.patterns` entry."
+        }
+        "missing-policy-pattern-language" => "Set `language` on the policy pattern.",
+        "ambiguous-policy-pattern-body" => {
+            "Give the pattern either `pattern` or `rule`, and not both."
+        }
+        "missing-policy-pattern-body" => "Give the pattern a `pattern` or a `rule`.",
+        "invalid-policy-pattern" => "Correct the ast-grep pattern or rule syntax.",
         "legacy-source-target" | "source-wikilink" => {
             "Rewrite the target as an AST-aware selector, as in `src/main.rs#fn:run`."
         }
@@ -295,6 +307,16 @@ fn validate_changed(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
     Ok(diagnostics)
 }
 
+const SCOPE_INVALIDATING_CONFIG_FILES: [&str; 7] = [
+    "criv.toml",
+    ".rumdl.toml",
+    "rumdl.toml",
+    ".config/rumdl.toml",
+    "pyproject.toml",
+    ".markdownlint.json",
+    ".markdownlint.yaml",
+];
+
 fn changed_scope_requires_full_check(changes: &ChangedSet, docs_dir: &str, adr_dir: &str) -> bool {
     let adr_prefix = format!(
         "{}/{}/",
@@ -310,7 +332,10 @@ fn changed_scope_requires_full_check(changes: &ChangedSet, docs_dir: &str, adr_d
             entry.previous_path.as_ref().unwrap_or(&entry.path),
         ]
         .into_iter()
-        .any(|path| path == "criv.toml" || path == ".rumdl.toml" || path.starts_with(&adr_prefix))
+        .any(|path| {
+            SCOPE_INVALIDATING_CONFIG_FILES.contains(&path.as_str())
+                || path.starts_with(&adr_prefix)
+        })
     })
 }
 
@@ -1406,6 +1431,86 @@ fn warning_with_location(
 mod tests {
     use super::*;
     use crate::vault::WikiLink;
+
+    /// Every code this module emits, so the repair table cannot silently miss one.
+    const EMITTED_CODES: [&str; 35] = [
+        "adr-dir-non-decision",
+        "adr-filename",
+        "ambiguous-policy-pattern-body",
+        "ambiguous-source-link",
+        "architecture-interface-drift",
+        "broken-link",
+        "decision-location",
+        "duplicate-doc-pattern",
+        "duplicate-id",
+        "duplicate-pattern-id",
+        "duplicate-policy-pattern",
+        "empty-policy-pattern",
+        "empty-target-scope",
+        "inconsistent-supersession",
+        "invalid-adr-id",
+        "invalid-frontmatter",
+        "invalid-kind",
+        "invalid-likec4-source",
+        "invalid-policy-pattern",
+        "legacy-source-target",
+        "markdown-format",
+        "missing-id",
+        "missing-policy-pattern-body",
+        "missing-policy-pattern-definition",
+        "missing-policy-pattern-id",
+        "missing-policy-pattern-language",
+        "non-portable-note-link",
+        "policy-violation",
+        "source-wikilink",
+        "supersession-cycle",
+        "unknown-superseded-by",
+        "unknown-supersedes",
+        "unresolved-governs",
+        "unresolved-pattern",
+        "unresolved-target",
+    ];
+
+    #[test]
+    fn every_emitted_code_carries_a_repair() {
+        for code in EMITTED_CODES {
+            assert!(
+                fix_for(code).is_some(),
+                "diagnostic code `{code}` reaches a caller with no repair"
+            );
+        }
+    }
+
+    #[test]
+    fn every_emitted_code_is_reachable_from_the_source() {
+        let source = include_str!("check.rs");
+        for code in EMITTED_CODES {
+            assert!(
+                source.contains(&format!("\"{code}\"")),
+                "`{code}` is listed as emitted but appears nowhere in this module"
+            );
+        }
+    }
+
+    #[test]
+    fn next_command_names_the_repair_criv_can_run() {
+        let markdown = vec![error("markdown-format", "docs/a.md", None, "bad")];
+        let stale = vec![error("unresolved-target", "docs/a.md", None, "stale")];
+        let other = vec![error("broken-link", "docs/a.md", None, "missing")];
+
+        assert_eq!(next_command(&markdown), "criv check --fix");
+        assert_eq!(next_command(&stale), "criv watch --once");
+        assert!(next_command(&other).contains("criv check"));
+    }
+
+    #[test]
+    fn json_diagnostics_carry_the_repair() {
+        let diagnostic = error("markdown-format", "docs/a.md", None, "bad");
+        let json = serde_json::to_value(diagnostic.json()).expect("serialize");
+
+        assert_eq!(json["code"], "markdown-format");
+        assert_eq!(json["fix"], "Run `criv check --fix`.");
+    }
 
     fn changed_set_fixture(entries: Vec<ChangedEntry>) -> ChangedSet {
         ChangedSet {
