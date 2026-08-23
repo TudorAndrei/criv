@@ -376,7 +376,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::util::copy_fixture_tree;
+    use crate::identity::copy_fixture_tree;
 
     #[test]
     fn policy_free_accepted_adrs_resolve_no_policy_scopes() {

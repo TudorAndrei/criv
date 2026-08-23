@@ -597,7 +597,7 @@ fn portable_adr_link_alias(body: &str) -> Option<&str> {
     let (target, alias) = body.split_once('|')?;
     let alias = alias.trim();
     let alias_base = alias.split('#').next().unwrap_or(alias);
-    if !crate::util::is_adr_id(alias_base) {
+    if !crate::identity::is_adr_id(alias_base) {
         return None;
     }
     let target_fragment = target.split_once('#').map(|(_, fragment)| fragment);

@@ -142,11 +142,6 @@ pub(crate) fn discover_source_candidates(root: &Path, config: &Config) -> Result
     })
 }
 
-/// Answers whether a watch event touches the Source scope.
-///
-/// Built once per watch generation: the normalized roots and the compiled
-/// exclude and prune matchers depend only on configuration, so a debounced
-/// batch of paths reuses one build.
 #[derive(Debug)]
 pub(crate) struct SourceEventFilter {
     root: PathBuf,
@@ -218,7 +213,7 @@ fn source_event_scope(config: &Config) -> Option<SourceEventScope> {
 }
 
 #[cfg(test)]
-pub(crate) fn source_event_relevant(root: &Path, config: &Config, event: &Path) -> bool {
+fn source_event_relevant(root: &Path, config: &Config, event: &Path) -> bool {
     SourceEventFilter::new(root, config).relevant(event)
 }
 

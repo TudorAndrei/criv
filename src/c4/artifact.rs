@@ -4,8 +4,8 @@ use std::sync::Arc;
 use crate::Result;
 use crate::diagnostic::SourceLocation;
 use crate::discovery::read_selected_text_from;
+use crate::identity::strip_prefix;
 use crate::repository::RepositoryFiles;
-use crate::util::strip_prefix;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum C4ArtifactFormat {

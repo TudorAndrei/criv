@@ -1060,7 +1060,7 @@ fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
     }
 
     for heading in &note.headings {
-        let heading_id = format!("{note_id}#{}", crate::util::kebab(&heading.text));
+        let heading_id = format!("{note_id}#{}", crate::identity::kebab(&heading.text));
         add_node(
             &mut graph,
             &mut seen_nodes,

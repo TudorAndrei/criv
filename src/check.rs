@@ -19,10 +19,10 @@ use crate::discovery::{
 #[cfg(test)]
 use crate::git::ChangedEntry;
 use crate::git::{ChangeStatus, ChangedSet};
+use crate::identity::{is_adr_id, kebab};
 use crate::policy_scan::{PolicyDiagnostic, PolicyDiagnosticKind, PolicyScanPlan};
 use crate::repository::RepositoryFiles;
 use crate::state::{self, State};
-use crate::util::{is_adr_id, kebab};
 use crate::vault::{
     Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault, is_typed_source_target,
     source_target_body,
@@ -1417,7 +1417,6 @@ mod tests {
     use super::*;
     use crate::vault::WikiLink;
 
-    /// Every code this module emits, so the repair table cannot silently miss one.
     const EMITTED_CODES: [&str; 35] = [
         "adr-dir-non-decision",
         "adr-filename",
