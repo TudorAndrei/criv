@@ -7,6 +7,7 @@ use serde::Serialize;
 use usage::{Args as UsageArgs, ValueEnum};
 
 use crate::check;
+use crate::config::Config;
 use crate::diagnostic;
 use crate::git::{
     self, ChangeStatus, ChangedEntry, ChangedSet, ChangedSetComparison, GitRepository,
@@ -131,6 +132,11 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
             "source reconciliation receipt does not prove the complete staged transaction".into(),
         );
     }
+    adr_violations.extend(config_scope_violations(
+        root,
+        changed_entries.as_ref(),
+        &vault.config,
+    ));
     let changed_count = changed_files.as_ref().map_or(0, Vec::len);
     let basis = changed_entries
         .as_ref()
@@ -616,6 +622,52 @@ fn portable_adr_link_alias(body: &str) -> Option<&str> {
     (basename == number || basename.starts_with(&format!("{number}-"))).then_some(alias)
 }
 
+fn config_scope_violations(
+    root: &Path,
+    changes: Option<&ChangedSet>,
+    current: &Config,
+) -> Vec<String> {
+    let Some(changes) = changes else {
+        return Vec::new();
+    };
+    let paths = || {
+        changes
+            .entries
+            .iter()
+            .flat_map(|entry| [Some(entry.path.as_str()), entry.previous_path.as_deref()])
+            .flatten()
+    };
+    if !paths().any(|path| path == "criv.toml") {
+        return Vec::new();
+    }
+    if !paths().any(looks_like_decision) {
+        return Vec::new();
+    }
+    let Some(old_ref) = changes.old_ref.as_deref() else {
+        return Vec::new();
+    };
+    let Ok(previous) =
+        git::blob(root, old_ref, "criv.toml").and_then(|contents| Config::parse(Some(&contents)))
+    else {
+        return Vec::new();
+    };
+    if previous.docs_dir == current.docs_dir && previous.adr_dir == current.adr_dir {
+        return Vec::new();
+    }
+    vec![format!(
+        "criv.toml moves the decision scope from `{}/{}` to `{}/{}` in the same transaction as a decision change; the immutability gate would read the new scope",
+        previous.docs_dir, previous.adr_dir, current.docs_dir, current.adr_dir
+    )]
+}
+
+fn looks_like_decision(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .is_some_and(|extension| extension == "md")
+        && path.split('/').any(|component| component == "adr")
+        && !path.ends_with("/README.md")
+}
+
 fn is_adr_file(docs_dir: &str, adr_dir: &str, path: &str) -> bool {
     let adr_prefix = format!("{docs_dir}/{adr_dir}/");
     path.starts_with(&adr_prefix)
@@ -647,6 +699,15 @@ impl Stage {
 mod tests {
     use super::*;
     use std::process::Command;
+
+    #[test]
+    fn only_a_decision_file_looks_like_a_decision() {
+        assert!(looks_like_decision("docs/adr/0001-example.md"));
+        assert!(looks_like_decision("documentation/adr/0002-other.md"));
+        assert!(!looks_like_decision("docs/adr/README.md"));
+        assert!(!looks_like_decision("docs/guide.md"));
+        assert!(!looks_like_decision("src/adr.rs"));
+    }
 
     #[test]
     fn import_patterns_match_exact_prefix_and_glob_forms() {
