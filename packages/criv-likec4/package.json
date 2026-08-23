@@ -13,7 +13,7 @@
     "format": "oxfmt --write src test",
     "format:check": "oxfmt --check src test",
     "lint": "oxlint src test",
-    "test": "node --test test/*.test.ts"
+    "test": "node --test \"test/**/*.test.ts\""
   },
   "dependencies": {
     "likec4": "1.59.2",

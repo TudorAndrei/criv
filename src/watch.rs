@@ -13,7 +13,7 @@ use serde::Serialize;
 use usage::{Args as UsageArgs, ValueEnum};
 
 use crate::config::Config;
-use crate::discovery::source_event_relevant;
+use crate::discovery::SourceEventFilter;
 use crate::refresh::{RefreshCause, RefreshSession};
 use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
@@ -348,6 +348,7 @@ struct ActiveWatchGeneration {
     docs_path: PathBuf,
     topology: WatchTopology,
     watcher: WatchBinding,
+    source_filter: SourceEventFilter,
 }
 
 #[derive(Debug)]
@@ -398,6 +399,7 @@ impl ActiveWatchGeneration {
             .map_err(CandidateFailure::candidate)?
             .text_summary();
         println!("{summary}");
+        let source_filter = SourceEventFilter::new(root, &config);
         Ok(Self {
             config,
             config_source,
@@ -405,6 +407,7 @@ impl ActiveWatchGeneration {
             docs_path,
             topology,
             watcher,
+            source_filter,
         })
     }
 }
@@ -524,7 +527,7 @@ impl LiveWatchSession {
 
     fn source_changed(&self, signal: &WatchSignal) -> bool {
         matches!(signal, WatchSignal::Paths(paths) if paths.iter().any(|path| {
-            source_event_relevant(&self.root, &self.active.config, path)
+            self.active.source_filter.relevant(path)
         }))
     }
 

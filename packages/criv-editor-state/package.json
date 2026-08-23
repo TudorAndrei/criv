@@ -12,7 +12,7 @@
     "format": "oxfmt --write src test",
     "format:check": "oxfmt --check src test",
     "lint": "oxlint src test",
-    "test": "node --test test/*.test.ts"
+    "test": "node --test \"test/**/*.test.ts\""
   },
   "devDependencies": {
     "@types/node": "26.0.1",

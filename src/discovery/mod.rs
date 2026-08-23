@@ -142,50 +142,84 @@ pub(crate) fn discover_source_candidates(root: &Path, config: &Config) -> Result
     })
 }
 
-pub(crate) fn source_event_relevant(root: &Path, config: &Config, event: &Path) -> bool {
-    if !config.source_index {
-        return false;
+/// Answers whether a watch event touches the Source scope.
+///
+/// Built once per watch generation: the normalized roots and the compiled
+/// exclude and prune matchers depend only on configuration, so a debounced
+/// batch of paths reuses one build.
+#[derive(Debug)]
+pub(crate) struct SourceEventFilter {
+    root: PathBuf,
+    enabled: bool,
+    scope: Option<SourceEventScope>,
+}
+
+#[derive(Debug)]
+struct SourceEventScope {
+    roots: Vec<String>,
+    profile: Profile,
+}
+
+impl SourceEventFilter {
+    pub(crate) fn new(root: &Path, config: &Config) -> Self {
+        let scope = source_event_scope(config);
+        Self {
+            root: root.to_path_buf(),
+            enabled: config.source_index,
+            scope,
+        }
     }
-    let Ok(relative) = event.strip_prefix(root) else {
-        return false;
-    };
-    let Ok(relative) = relative_utf8(root, &root.join(relative)) else {
-        return true;
-    };
-    if relative
-        .split('/')
-        .any(|component| matches!(component, ".git" | ".criv"))
-    {
-        return false;
+
+    pub(crate) fn relevant(&self, event: &Path) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        let Ok(relative) = event.strip_prefix(&self.root) else {
+            return false;
+        };
+        let Ok(relative) = relative_utf8(&self.root, &self.root.join(relative)) else {
+            return true;
+        };
+        if relative
+            .split('/')
+            .any(|component| matches!(component, ".git" | ".criv"))
+        {
+            return false;
+        }
+        let Some(scope) = &self.scope else {
+            return true;
+        };
+        let intersects_root = scope.roots.iter().any(|source_root| {
+            path_contains(source_root, &relative) || path_contains(&relative, source_root)
+        });
+        if !intersects_root {
+            return false;
+        }
+        if profile_prunes_path(&scope.profile, &relative) {
+            return false;
+        }
+        scope.profile.selects(&relative)
     }
-    let roots = match config
+}
+
+fn source_event_scope(config: &Config) -> Option<SourceEventScope> {
+    let roots = config
         .source_roots
         .iter()
         .map(|value| normalize_relative("source.roots", value))
         .collect::<Result<Vec<_>>>()
-    {
-        Ok(roots) => roots,
-        Err(_) => return true,
-    };
-    let intersects_root = roots.iter().any(|source_root| {
-        path_contains(source_root, &relative) || path_contains(&relative, source_root)
-    });
-    if !intersects_root {
-        return false;
-    }
-    let exclude = match GlobMatcher::new(&config.source_exclude) {
-        Ok(exclude) => exclude,
-        Err(_) => return true,
-    };
-    let prune = match subtree_prune_matcher(&config.source_exclude) {
-        Ok(prune) => prune,
-        Err(_) => return true,
-    };
-    let profile = Profile::Source { exclude, prune };
-    if profile_prunes_path(&profile, &relative) {
-        return false;
-    }
-    profile.selects(&relative)
+        .ok()?;
+    let exclude = GlobMatcher::new(&config.source_exclude).ok()?;
+    let prune = subtree_prune_matcher(&config.source_exclude).ok()?;
+    Some(SourceEventScope {
+        roots,
+        profile: Profile::Source { exclude, prune },
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn source_event_relevant(root: &Path, config: &Config, event: &Path) -> bool {
+    SourceEventFilter::new(root, config).relevant(event)
 }
 
 pub(crate) fn discover_vault(root: &Path, docs_dir: &str) -> Result<VaultPaths> {

@@ -167,6 +167,17 @@ confined to the repository root and never follow symlinks, per
 object per diagnostic for editors and scripts, and `github` emits workflow
 annotation commands so diagnostics appear inline on a pull request.
 
+Every diagnostic carries the command or edit that repairs it, printed as a `fix:`
+line in text and as a `fix` field in JSON. A failed run ends with one `next:`
+command. Failures with a defined recovery also carry a bracketed code, such as
+`[not-a-vault]`, so a script or an agent can key on the code rather than the
+prose.
+
+criv refuses to run outside a vault. `criv check`, `criv query`, `criv watch`,
+`criv enforce`, and `criv adr` require a `criv.toml` in the working directory,
+and report `[not-a-vault]` with `fix: criv init` when there is none. Only
+`criv init` and `criv install-editor` run without one.
+
 `--filter` keeps only diagnostics whose text contains the given substring. It
 narrows the exit status as well as the output: `criv check --filter broken-link`
 exits zero when the only errors in the vault are of some other kind. Use it for
@@ -233,13 +244,25 @@ Run `criv query --help` for every `criv query` subcommand, positional argument,
 and flag. The CLI is the reference, so an agent working in your repository has
 the same information you do.
 
+Every query takes `--format text`, `--format json`, or `--format ndjson`, and
+`--limit <N>` to bound the answer before it is printed. `criv --usage-json`
+prints the whole command tree, with every flag, choice, and default.
+
 Run the same enforcement path used by hooks and CI:
 
 ```sh
 criv enforce --stage commit
 criv enforce --stage push
 criv enforce --stage ci
+criv enforce --stage ci --format json
 ```
+
+`--format json` reports the stage, the counts, the comparison basis, the
+violations, and the failure code with its repair, instead of prose.
+`criv watch --once --format json` does the same for a refresh.
+
+`criv.toml` configures which stages run, and the import policies that
+`criv enforce` gates on. See [docs/configuration.md](docs/configuration.md).
 
 ## Reconciling branch-local ADR IDs
 
