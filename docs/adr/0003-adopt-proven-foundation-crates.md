@@ -7,7 +7,7 @@ date: 2026-05-12
 governs:
   - src/lib.rs
   - src/config.rs
-  - src/glob.rs
+  - src/util.rs
   - src/vault.rs
   - src/state.rs
   - src/watch.rs
