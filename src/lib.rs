@@ -97,13 +97,6 @@ impl CrivError {
         }
     }
 
-    pub fn code(&self) -> Option<&'static str> {
-        match self {
-            Self::Coded { code, .. } => Some(code),
-            _ => None,
-        }
-    }
-
     fn usage(message: impl Into<String>) -> Self {
         Self::Usage(message.into())
     }

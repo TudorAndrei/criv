@@ -37,7 +37,7 @@ impl RepositoryFiles {
         Ok(files)
     }
 
-    pub(crate) fn require_vault(&self) -> Result<()> {
+    fn require_vault(&self) -> Result<()> {
         if self.read_optional_string(Path::new("criv.toml"))?.is_some() {
             return Ok(());
         }

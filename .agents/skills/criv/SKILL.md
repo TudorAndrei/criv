@@ -2,7 +2,7 @@
 name: criv
 description: Use when working in a criv vault, refreshing criv state, looking for undocumented code, or choosing which criv skill covers a task.
 metadata:
-  criv-template: blake3:4002497cee99b324
+  criv-template: blake3:39798021d4ed4768
 ---
 
 # criv
@@ -28,15 +28,13 @@ The `checking-drift` skill owns the flags and the failure paths.
 
 ## Reading a failure
 
-- Every failure prints `[code]` first. Key recovery on the code, not on the prose.
-- A `fix:` line names the repair. Run it instead of inventing a command.
-- A `next:` line names the command to run after the repair.
-- `criv check --format json` and `criv enforce --format json` carry the same
-  `code` and `fix` fields as data.
-- `[not-a-vault]` means the working directory holds no `criv.toml`. Check the
-  directory before you run `criv init`.
-- `criv --usage-json` prints the whole command tree, with every flag, choice,
-  and default.
+Every failure prints its code in brackets first, and often a `fix:` line that
+names the repair. Run that command instead of inventing one. The
+`checking-drift` skill holds the codes, the machine-readable formats, and the
+recovery paths.
+
+Never guess a flag: read it from `criv <command> --help`, or from
+`criv --usage-json` for the whole command tree.
 
 ## Which skill covers the task
 

@@ -2,7 +2,7 @@
 name: writing-decisions
 description: Use when creating or superseding a criv ADR under docs/adr, setting its governs scopes, or adding an inline policy pattern.
 metadata:
-  criv-template: blake3:c32cb797754d1673
+  criv-template: blake3:6e8c9bc91bcf932f
 ---
 
 # Writing decisions
@@ -38,9 +38,10 @@ rule, addressed as `ADR-NNNN/local-id`.
 
 Inspect policy diagnostics before accepting the decision:
 
-- `criv check --filter ADR-NNNN` — text diagnostics for one decision.
-- `criv check --format json --filter ADR-NNNN` — machine-readable diagnostics.
-- `criv enforce --stage ci` — the complete policy gate.
+- `criv check --filter ADR-NNNN` — text diagnostics for one decision, each with its `fix:` line.
+- `criv check --format json --filter ADR-NNNN` — the same diagnostics with `code` and `fix` as fields.
+- `criv enforce --stage ci` — the complete policy gate. Add `--format json` for
+  the counts, the violations, and the failure code.
 
 ## Immutability
 
