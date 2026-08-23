@@ -1,6 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::ops::Deref;
-use std::path::Path;
 use std::sync::Arc;
 
 #[cfg(test)]
@@ -18,7 +16,7 @@ use crate::c4::C4Artifact;
 use crate::policy_scan::PolicyScanPlan;
 use crate::source::{
     DirectiveKind, Import, Language, ModuleRelationshipRole, Relationship, RelationshipKind,
-    RelationshipTarget, SourceFile, Symbol, SymbolKind,
+    RelationshipTarget, SourceFile, Symbol,
 };
 use crate::structural;
 use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
@@ -299,14 +297,6 @@ impl State {
             counts.published_bytes += serialized.published.len() * 2 + serialized.hash.len() + 1;
         });
         Ok(serialized.hash.clone())
-    }
-}
-
-impl Deref for State {
-    type Target = StateDocument;
-
-    fn deref(&self) -> &Self::Target {
-        &self.wire
     }
 }
 
@@ -640,7 +630,7 @@ fn partition_meta(
 fn source_input_fingerprint(file: &SourceFile) -> String {
     let mut hasher = blake3::Hasher::new();
     fingerprint_str(&mut hasher, &file.path);
-    fingerprint_str(&mut hasher, language_name(file.language));
+    fingerprint_str(&mut hasher, file.language.as_str());
     for import in &file.imports {
         fingerprint_str(&mut hasher, &import.module);
         fingerprint_usize(&mut hasher, import.line);
@@ -656,7 +646,7 @@ fn source_input_fingerprint(file: &SourceFile) -> String {
     for symbol in &file.symbols {
         fingerprint_str(&mut hasher, &symbol.id.display());
         fingerprint_str(&mut hasher, &symbol.name);
-        fingerprint_str(&mut hasher, symbol_kind(symbol.kind));
+        fingerprint_str(&mut hasher, symbol.kind.as_str());
         fingerprint_option_str(&mut hasher, symbol.parent.as_deref());
         fingerprint_str(&mut hasher, &format!("{:?}", symbol.owner));
         fingerprint_option_usize(&mut hasher, symbol.arity);
@@ -829,7 +819,7 @@ fn build_source_partition(vault: &Vault, file: &SourceFile) -> SourcePartition {
             Node {
                 id: symbol_id.clone(),
                 hash: String::new(),
-                kind: symbol_kind(symbol.kind).into(),
+                kind: symbol.kind.as_str().into(),
                 label: symbol_label(symbol),
                 path: Some(format!(
                     "{}#L{}-L{}",
@@ -919,7 +909,7 @@ fn build_source_partition(vault: &Vault, file: &SourceFile) -> SourcePartition {
             id: file_id,
             hash: String::new(),
             kind: "code".into(),
-            label: format!("{} ({})", file.path, language_name(file.language)),
+            label: format!("{} ({})", file.path, file.language.as_str()),
             path: Some(file.path.clone()),
         },
         rows: graph_rows(graph),
@@ -1340,15 +1330,7 @@ fn policy_fingerprints(policy_plan: &PolicyScanPlan) -> BTreeMap<String, String>
 #[cfg(test)]
 fn write_state(vault: &Vault) -> Result<(String, State)> {
     let policy_plan = PolicyScanPlan::new(vault);
-    write_state_with_policy_plan(vault, &policy_plan)
-}
-
-#[cfg(test)]
-fn write_state_with_policy_plan(
-    vault: &Vault,
-    policy_plan: &PolicyScanPlan,
-) -> Result<(String, State)> {
-    write_state_with_policy_plan_and_check(vault, policy_plan, || Ok(()))
+    write_state_with_policy_plan_and_check(vault, &policy_plan, || Ok(()))
 }
 
 pub(crate) fn write_state_with_policy_plan_and_check(
@@ -1374,21 +1356,11 @@ fn write_state_incremental(
     changed_files: &[String],
 ) -> Result<(String, State)> {
     let policy_plan = PolicyScanPlan::new(vault);
-    write_state_incremental_with_policy_plan(vault, previous, changed_files, &policy_plan)
-}
-
-#[cfg(test)]
-fn write_state_incremental_with_policy_plan(
-    vault: &Vault,
-    previous: Option<&State>,
-    changed_files: &[String],
-    policy_plan: &PolicyScanPlan,
-) -> Result<(String, State)> {
     write_state_incremental_with_policy_plan_and_check(
         vault,
         previous,
         changed_files,
-        policy_plan,
+        &policy_plan,
         || Ok(()),
     )
 }
@@ -1474,7 +1446,8 @@ pub(crate) fn architecture_interface_hash_records(
 
 impl State {
     pub(crate) fn architecture_interface_hashes(&self) -> BTreeMap<String, String> {
-        self.graph
+        self.wire
+            .graph
             .nodes
             .iter()
             .filter(|node| node.kind == "architecture-interface")
@@ -1756,10 +1729,6 @@ fn c4_artifact_node_id(path: &str) -> String {
     format!("architecture-source:{path}")
 }
 
-fn symbol_kind(kind: SymbolKind) -> &'static str {
-    kind.as_str()
-}
-
 fn symbol_label(symbol: &Symbol) -> String {
     symbol.arity.map_or_else(
         || symbol.name.clone(),
@@ -1768,27 +1737,10 @@ fn symbol_label(symbol: &Symbol) -> String {
 }
 
 fn source_mime(path: &str) -> Option<String> {
-    if matches!(
-        Path::new(path)
-            .extension()
-            .and_then(|extension| extension.to_str()),
-        Some("ex" | "exs")
-    ) {
-        return Some("text/x-elixir".into());
+    if let Some(mime) = Language::from_path(path).mime() {
+        return Some(mime.into());
     }
     mime_guess::from_path(path).first_raw().map(str::to_string)
-}
-
-fn language_name(language: Language) -> &'static str {
-    match language {
-        Language::Rust => "rust",
-        Language::TypeScript => "typescript",
-        Language::JavaScript => "javascript",
-        Language::Python => "python",
-        Language::Go => "go",
-        Language::Elixir => "elixir",
-        Language::Unknown => "unknown",
-    }
 }
 
 #[cfg(test)]
@@ -1933,7 +1885,7 @@ end
             "external-module",
         ] {
             assert!(
-                first.graph.nodes.iter().any(|node| node.kind == kind),
+                first.wire.graph.nodes.iter().any(|node| node.kind == kind),
                 "missing State node kind {kind}"
             );
         }
@@ -1945,7 +1897,12 @@ end
             "delegated/1",
         ] {
             assert!(
-                first.graph.nodes.iter().any(|node| node.label == label),
+                first
+                    .wire
+                    .graph
+                    .nodes
+                    .iter()
+                    .any(|node| node.label == label),
                 "missing State label {label}"
             );
         }
@@ -1960,7 +1917,7 @@ end
             "implements-behaviour",
         ] {
             assert!(
-                first.graph.edges.iter().any(|edge| edge.kind == kind),
+                first.wire.graph.edges.iter().any(|edge| edge.kind == kind),
                 "missing State edge kind {kind}"
             );
         }
@@ -1968,16 +1925,32 @@ end
         let run = "symbol:lib/sample.ex#module:Demo.App/fn:run/1";
         assert!(
             first
+                .wire
                 .graph
                 .edges
                 .iter()
                 .any(|edge| { edge.from == app && edge.to == run && edge.kind == "contains" })
         );
-        assert!(first.graph.nodes.iter().all(|node| !node.hash.is_empty()));
-        assert!(first.graph.edges.iter().all(|edge| !edge.hash.is_empty()));
+        assert!(
+            first
+                .wire
+                .graph
+                .nodes
+                .iter()
+                .all(|node| !node.hash.is_empty())
+        );
+        assert!(
+            first
+                .wire
+                .graph
+                .edges
+                .iter()
+                .all(|edge| !edge.hash.is_empty())
+        );
         for path in ["lib/sample.ex", "lib/mix.exs"] {
             assert_eq!(
                 first
+                    .wire
                     .source_index
                     .iter()
                     .find(|entry| entry.path == path)
@@ -2004,7 +1977,7 @@ end
             State::build_incremental(&changed_vault, Some(&first), &["lib/sample.ex".into()])
                 .unwrap();
         assert_eq!(work_counts().source_partitions_rebuilt, 1);
-        assert!(changed.graph.edges.iter().any(|edge| {
+        assert!(changed.wire.graph.edges.iter().any(|edge| {
             edge.from == run
                 && edge.to == "symbol:lib/sample.ex#module:Demo.Target/fn:other/1"
                 && edge.kind == "calls"
@@ -2381,6 +2354,7 @@ Consequences.
 
     fn matched_files(state: &State) -> Vec<String> {
         state
+            .wire
             .patterns
             .get(PATTERN_ID)
             .map(|matches| matches.iter().map(|matched| matched.file.clone()).collect())
@@ -2444,7 +2418,10 @@ Consequences.
             "each eligible source file is parsed once for both overlapping ADR policies"
         );
         assert_eq!(matched_files(&state).len(), 2);
-        assert_eq!(state.patterns.get(FUNCTION_PATTERN_ID).unwrap().len(), 2);
+        assert_eq!(
+            state.wire.patterns.get(FUNCTION_PATTERN_ID).unwrap().len(),
+            2
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2457,14 +2434,15 @@ Consequences.
         let vault = Vault::load(&root).unwrap();
         let state = State::build(&vault).unwrap();
 
-        assert_eq!(state.registered_patterns, vec![PATTERN_ID.to_string()]);
-        assert!(state.patterns.contains_key(PATTERN_ID));
+        assert_eq!(state.wire.registered_patterns, vec![PATTERN_ID.to_string()]);
+        assert!(state.wire.patterns.contains_key(PATTERN_ID));
         assert!(
             !state
+                .wire
                 .registered_patterns
                 .contains(&DRAFT_PATTERN_ID.to_string())
         );
-        assert!(!state.patterns.contains_key(DRAFT_PATTERN_ID));
+        assert!(!state.wire.patterns.contains_key(DRAFT_PATTERN_ID));
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2474,7 +2452,7 @@ Consequences.
         let root = policy_vault("criv-effective-policy-state");
         let vault = Vault::load(&root).unwrap();
         let (_, before) = write_state(&vault).unwrap();
-        assert!(before.patterns.contains_key(PATTERN_ID));
+        assert!(before.wire.patterns.contains_key(PATTERN_ID));
 
         let successor = root.join("docs/adr/0002-successor.md");
         std::fs::write(
@@ -2502,8 +2480,13 @@ governs:
         )
         .unwrap();
 
-        assert!(!after.registered_patterns.contains(&PATTERN_ID.to_string()));
-        assert!(!after.patterns.contains_key(PATTERN_ID));
+        assert!(
+            !after
+                .wire
+                .registered_patterns
+                .contains(&PATTERN_ID.to_string())
+        );
+        assert!(!after.wire.patterns.contains_key(PATTERN_ID));
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2516,7 +2499,7 @@ governs:
 
         let vault = Vault::load(&root).unwrap();
         let (_, before) = write_state(&vault).unwrap();
-        assert!(!before.patterns.contains_key(DRAFT_PATTERN_ID));
+        assert!(!before.wire.patterns.contains_key(DRAFT_PATTERN_ID));
 
         std::fs::write(
             &policy_path,
@@ -2527,7 +2510,7 @@ governs:
         let (_, after) = write_state_incremental(&vault, Some(&before), &[]).unwrap();
 
         assert_eq!(
-            after.patterns[DRAFT_PATTERN_ID]
+            after.wire.patterns[DRAFT_PATTERN_ID]
                 .iter()
                 .map(|matched| matched.file.as_str())
                 .collect::<Vec<_>>(),
@@ -2547,7 +2530,7 @@ governs:
 
         let vault = Vault::load(&root).unwrap();
         let (_, before) = write_state(&vault).unwrap();
-        assert!(before.patterns.contains_key(DRAFT_PATTERN_ID));
+        assert!(before.wire.patterns.contains_key(DRAFT_PATTERN_ID));
 
         std::fs::write(&policy_path, DRAFT_POLICY_ADR).unwrap();
         let vault = Vault::load(&root).unwrap();
@@ -2560,10 +2543,11 @@ governs:
 
         assert!(
             !after
+                .wire
                 .registered_patterns
                 .contains(&DRAFT_PATTERN_ID.to_string())
         );
-        assert!(!after.patterns.contains_key(DRAFT_PATTERN_ID));
+        assert!(!after.wire.patterns.contains_key(DRAFT_PATTERN_ID));
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -2580,6 +2564,7 @@ governs:
             "both governed files should match before the edit"
         );
         let alpha_before = first
+            .wire
             .patterns
             .get(PATTERN_ID)
             .unwrap()
@@ -2602,9 +2587,12 @@ governs:
         )
         .unwrap();
 
-        assert_eq!(second.registered_patterns, vec![PATTERN_ID.to_string()]);
+        assert_eq!(
+            second.wire.registered_patterns,
+            vec![PATTERN_ID.to_string()]
+        );
 
-        let second_matches = second.patterns.get(PATTERN_ID).unwrap();
+        let second_matches = second.wire.patterns.get(PATTERN_ID).unwrap();
         let alpha_after = second_matches
             .iter()
             .find(|matched| matched.file == "src/alpha.rs")

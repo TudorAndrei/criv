@@ -534,28 +534,13 @@ fn markdown_diagnostic(path: &str, source: Arc<str>, warning: LintWarning) -> Di
 }
 
 #[cfg(test)]
+#[cfg(test)]
 fn validate(vault: &Vault) -> Vec<Diagnostic> {
     let policy_plan = PolicyScanPlan::new(vault);
-    validate_with_previous_architecture_interfaces(vault, None, &policy_plan)
+    validate_vault(vault, None, &policy_plan)
 }
 
-pub(crate) fn validate_with_policy_plan(
-    vault: &Vault,
-    policy_plan: &PolicyScanPlan,
-) -> Vec<Diagnostic> {
-    validate_with_previous_architecture_interfaces(vault, None, policy_plan)
-}
-
-#[cfg(test)]
-pub(crate) fn validate_with_previous_state(
-    vault: &Vault,
-    previous: Option<&State>,
-) -> Vec<Diagnostic> {
-    let policy_plan = PolicyScanPlan::new(vault);
-    validate_with_previous_state_and_policy_plan(vault, previous, &policy_plan)
-}
-
-pub(crate) fn validate_with_previous_state_and_policy_plan(
+pub(crate) fn validate_vault(
     vault: &Vault,
     previous: Option<&State>,
     policy_plan: &PolicyScanPlan,
@@ -2064,7 +2049,8 @@ pub fn run(input: String) -> usize {
         .unwrap();
 
         let vault = likec4_interface_vault(&root);
-        let diagnostics = validate_with_previous_state(&vault, Some(&previous_state));
+        let diagnostics =
+            validate_vault(&vault, Some(&previous_state), &PolicyScanPlan::new(&vault));
 
         assert!(
             diagnostics
@@ -2096,7 +2082,8 @@ pub fn run(input: String, fallback: usize) -> usize {
         .unwrap();
 
         let vault = likec4_interface_vault(&root);
-        let diagnostics = validate_with_previous_state(&vault, Some(&previous_state));
+        let diagnostics =
+            validate_vault(&vault, Some(&previous_state), &PolicyScanPlan::new(&vault));
 
         assert!(diagnostics.iter().any(|diag| {
             diag.code == "architecture-interface-drift"

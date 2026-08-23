@@ -339,7 +339,7 @@ pub(crate) enum Language {
 }
 
 impl Language {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Rust => "rust",
             Self::TypeScript => "typescript",
@@ -348,6 +348,13 @@ impl Language {
             Self::Go => "go",
             Self::Elixir => "elixir",
             Self::Unknown => "unknown",
+        }
+    }
+
+    pub(crate) fn mime(self) -> Option<&'static str> {
+        match self {
+            Self::Elixir => Some("text/x-elixir"),
+            _ => None,
         }
     }
 }
@@ -2147,7 +2154,7 @@ fn is_exported_symbol(line: &str, language: Language) -> bool {
 }
 
 impl Language {
-    fn from_path(path: &str) -> Self {
+    pub(crate) fn from_path(path: &str) -> Self {
         match Path::new(path).extension().and_then(|ext| ext.to_str()) {
             Some("rs") => Self::Rust,
             Some("ts") | Some("tsx") => Self::TypeScript,

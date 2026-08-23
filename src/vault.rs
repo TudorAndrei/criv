@@ -1543,7 +1543,11 @@ See [[lib.rs]], [[match:ADR-0001/no-block-on]], [[helper.rs#help]],
         let vault = Vault::load(&root).unwrap();
         assert_eq!(work_counts().link_source_resolutions, 2);
 
-        let _ = crate::check::validate_with_previous_state(&vault, None);
+        let _ = crate::check::validate_vault(
+            &vault,
+            None,
+            &crate::policy_scan::PolicyScanPlan::new(&vault),
+        );
         let state = crate::state::State::build(&vault).unwrap();
         assert_eq!(work_counts().link_source_resolutions, 2);
         let state = serde_json::to_value(state).unwrap();

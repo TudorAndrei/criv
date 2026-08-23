@@ -69,7 +69,7 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
         crate::adr::check_base(root, &base_ref)?;
     }
 
-    let diagnostics = check::validate_with_policy_plan(&vault, &policy_plan);
+    let diagnostics = check::validate_vault(&vault, None, &policy_plan);
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();
 

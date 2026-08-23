@@ -130,11 +130,7 @@ fn execute(
     let changed_files = vault.source_state().changed_files().to_vec();
 
     let policy_plan = PolicyScanPlan::new(&vault);
-    let diagnostics = check::validate_with_previous_state_and_policy_plan(
-        &vault,
-        diagnostic_previous_state,
-        &policy_plan,
-    );
+    let diagnostics = check::validate_vault(&vault, diagnostic_previous_state, &policy_plan);
     let (snapshot, state) = match previous_state {
         Some(previous_state) => state::write_state_incremental_with_policy_plan_and_check(
             &vault,

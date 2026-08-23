@@ -473,7 +473,11 @@ fn refresh_snapshot(
         state_hash: result.state().hash().unwrap(),
         latest,
         snapshot_json,
-        diagnostics: check::validate_with_previous_state(result.vault(), previous_state),
+        diagnostics: check::validate_vault(
+            result.vault(),
+            previous_state,
+            &crate::policy_scan::PolicyScanPlan::new(result.vault()),
+        ),
     }
 }
 
