@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use ignore::{DirEntry, Error as WalkError, ParallelVisitor, ParallelVisitorBuilder, WalkBuilder};
 
 use crate::config::Config;
-use crate::repository::RepositoryFiles;
 use crate::glob::GlobMatcher;
+use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
 const VAULT_WALK_THREADS: usize = 8;

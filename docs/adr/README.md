@@ -146,6 +146,7 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0133-use-exact-lowercase-documentation-asset-extensions|ADR-0133]] - Use exact lowercase documentation asset extensions
 - [[0134-parse-the-cli-with-usage|ADR-0134]] - Parse the CLI with Usage
 - [[0135-answer-agents-with-codes-fixes-and-next-commands|ADR-0135]] - Answer agents with codes, fixes, and next commands
-- [[0136-retire-the-util-module|ADR-0136]] - Give util one concern
+- [[0136-retire-the-util-module|ADR-0136]] - Retire the util module
 - [[0137-link-creation-guard-follows-the-helper|ADR-0137]] - Link creation guard follows the helper
 - [[0138-confine-repository-reads|ADR-0138]] - Confine repository reads
+- [[0139-name-the-glob-module-for-what-it-holds|ADR-0139]] - Name the glob module for what it holds

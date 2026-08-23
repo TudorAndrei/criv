@@ -12,11 +12,11 @@ use crate::c4;
 use crate::config::Config;
 use crate::diagnostic::SourceLocation;
 use crate::discovery::{discover_vault, read_selected_text_from};
+use crate::glob::GlobMatcher;
 use crate::identity::{is_adr_id, kebab, strip_prefix};
 use crate::markdown::{find_wiki_links_with_lines, markdown_headings as parse_markdown_headings};
 use crate::repository::RepositoryFiles;
 use crate::source::{IndexedSource, SourceGraph, SourceState};
-use crate::glob::GlobMatcher;
 
 const MAX_ASSET_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_ASSET_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
