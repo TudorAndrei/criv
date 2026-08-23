@@ -677,7 +677,7 @@ fn is_adr_file(docs_dir: &str, adr_dir: &str, path: &str) -> bool {
             .is_some_and(|extension| extension == "md")
 }
 
-fn import_matches(pattern: &str, matcher: Option<&crate::util::GlobMatcher>, module: &str) -> bool {
+fn import_matches(pattern: &str, matcher: Option<&crate::glob::GlobMatcher>, module: &str) -> bool {
     if let Some(matcher) = matcher {
         let normalized = module.replace("::", "/");
         return matcher.is_match(&normalized);
@@ -712,7 +712,7 @@ mod tests {
     #[test]
     fn import_patterns_match_exact_prefix_and_glob_forms() {
         assert!(import_matches("crate::infra", None, "crate::infra::db"));
-        let glob = crate::util::GlobMatcher::new(&["crate/infra/*".into()]).unwrap();
+        let glob = crate::glob::GlobMatcher::new(&["crate/infra/*".into()]).unwrap();
         assert!(import_matches(
             "crate::infra::*",
             Some(&glob),

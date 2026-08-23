@@ -9,7 +9,7 @@ use ignore::{DirEntry, Error as WalkError, ParallelVisitor, ParallelVisitorBuild
 
 use crate::config::Config;
 use crate::repository::RepositoryFiles;
-use crate::util::GlobMatcher;
+use crate::glob::GlobMatcher;
 use crate::{CrivError, Result};
 
 const VAULT_WALK_THREADS: usize = 8;

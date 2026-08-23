@@ -1428,7 +1428,7 @@ fn sort_and_dedup_pattern_matches(matches: &mut Vec<PatternMatch>) {
 }
 
 fn changed_paths_in_scopes(paths: &[String], scopes: &[String]) -> Vec<String> {
-    let matcher = crate::util::GlobMatcher::from_valid_patterns(scopes);
+    let matcher = crate::glob::GlobMatcher::from_valid_patterns(scopes);
     paths
         .iter()
         .filter(|path| matcher.is_match(path))

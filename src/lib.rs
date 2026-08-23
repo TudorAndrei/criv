@@ -6,6 +6,7 @@ mod diagnostic;
 mod discovery;
 mod enforce;
 mod git;
+mod glob;
 mod identity;
 mod init;
 mod install;
@@ -17,7 +18,6 @@ mod repository;
 mod source;
 mod state;
 mod structural;
-mod util;
 mod vault;
 mod watch;
 
