@@ -6,7 +6,7 @@ status: accepted
 date: 2026-08-21
 governs:
   - src/lib.rs
-  - src/util.rs
+  - src/glob.rs
   - src/config.rs
   - src/check.rs
   - src/discovery/mod.rs

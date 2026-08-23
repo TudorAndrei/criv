@@ -6,7 +6,7 @@ status: accepted
 date: 2026-08-11
 governs:
   - src/watch.rs
-  - src/util.rs
+  - src/glob.rs
   - .github/workflows/ci.yml
 ---
 
