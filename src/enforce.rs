@@ -7,6 +7,7 @@ use serde::Serialize;
 use usage::{Args as UsageArgs, ValueEnum};
 
 use crate::check;
+use crate::diagnostic;
 use crate::git::{
     self, ChangeStatus, ChangedEntry, ChangedSet, ChangedSetComparison, GitRepository,
 };
@@ -223,45 +224,45 @@ fn enforce_failure(
     adr_violations: Vec<String>,
     errors: usize,
 ) -> Option<EnforceFailure> {
-    if !violations.is_empty() {
-        return Some(EnforceFailure {
-            code: "policy-violation",
-            message: format!("{} policy violation(s) found", violations.len()),
-            fix: check::fix_for("policy-violation").expect("policy-violation carries a repair"),
+    let (code, message, violations) = if !violations.is_empty() {
+        (
+            "policy-violation",
+            format!("{} policy violation(s) found", violations.len()),
             violations,
-        });
-    }
-    if !import_violations.is_empty() {
-        return Some(EnforceFailure {
-            code: "import-policy-violation",
-            message: format!(
+        )
+    } else if !import_violations.is_empty() {
+        (
+            "import-policy-violation",
+            format!(
                 "{} import policy violation(s) found",
                 import_violations.len()
             ),
-            fix: "Remove the import, or widen the import policy in criv.toml.",
-            violations: import_violations,
-        });
-    }
-    if !adr_violations.is_empty() {
-        return Some(EnforceFailure {
-            code: "adr-immutability-violation",
-            message: format!(
+            import_violations,
+        )
+    } else if !adr_violations.is_empty() {
+        (
+            "adr-immutability-violation",
+            format!(
                 "{} ADR immutability violation(s) found",
                 adr_violations.len()
             ),
-            fix: "Restore the accepted ADR, and record the change in a new ADR with `supersedes:`.",
-            violations: adr_violations,
-        });
-    }
-    if errors > 0 {
-        return Some(EnforceFailure {
-            code: "enforcement-failed",
-            message: "enforcement failed".into(),
-            fix: "Run `criv check` for the diagnostics, then repair them.",
-            violations: Vec::new(),
-        });
-    }
-    None
+            adr_violations,
+        )
+    } else if errors > 0 {
+        (
+            "enforcement-failed",
+            "enforcement failed".into(),
+            Vec::new(),
+        )
+    } else {
+        return None;
+    };
+    Some(EnforceFailure {
+        code,
+        message,
+        fix: diagnostic::fix_for(code).expect("every enforcement code carries a repair"),
+        violations,
+    })
 }
 
 fn import_policy_violations(vault: &Vault, changed_files: Option<&Vec<String>>) -> Vec<String> {

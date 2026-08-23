@@ -47,7 +47,7 @@ impl RepositoryFiles {
                 "not a criv vault: no criv.toml in {}",
                 self.root().display()
             ),
-            "criv init",
+            crate::diagnostic::fix_for("not-a-vault").expect("not-a-vault carries a repair"),
         ))
     }
 

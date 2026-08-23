@@ -83,14 +83,6 @@ impl CrivError {
         Self::Message(message.into())
     }
 
-    fn coded(code: &'static str, message: impl Into<String>) -> Self {
-        Self::Coded {
-            code,
-            message: message.into(),
-            fix: None,
-        }
-    }
-
     fn coded_fix(code: &'static str, message: impl Into<String>, fix: impl Into<String>) -> Self {
         Self::Coded {
             code,

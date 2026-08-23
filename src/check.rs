@@ -12,7 +12,7 @@ use rumdl_lib::rules::{all_rules, filter_rules};
 use serde::Serialize;
 use usage::{Args as UsageArgs, ValueEnum};
 
-use crate::diagnostic::{LspRange, SourceLocation};
+use crate::diagnostic::{LspRange, SourceLocation, fix_for};
 use crate::discovery::{
     MarkdownPolicy, discover_markdown, read_selected_text_from, select_markdown,
 };
@@ -77,65 +77,6 @@ struct JsonDiagnostic<'a> {
     range: Option<LspRange>,
     #[serde(skip_serializing_if = "Option::is_none")]
     fix: Option<&'static str>,
-}
-
-pub(crate) fn fix_for(code: &str) -> Option<&'static str> {
-    let fix = match code {
-        "adr-dir-non-decision" => {
-            "Set `kind: decision` in the frontmatter, or move the file out of the ADR directory."
-        }
-        "adr-filename" => "Rename the file to `NNNN-kebab-title.md`.",
-        "ambiguous-source-link" => {
-            "Name the file in the link, as in `[[src/lib.rs#fn:run]]`, so one source resolves."
-        }
-        "architecture-interface-drift" => {
-            "Run `criv watch --once`, then correct the C4 element so it matches the source."
-        }
-        "broken-link" => "Correct the link target, or add the note it names.",
-        "decision-location" => "Move the decision into the ADR directory.",
-        "duplicate-doc-pattern" | "duplicate-pattern-id" => "Give each pattern a unique `id`.",
-        "duplicate-id" => "Give the note an `id` no other note uses.",
-        "empty-target-scope" => "Name at least one path or symbol under `targets`.",
-        "inconsistent-supersession" => {
-            "Make `supersedes` and `superseded_by` agree in both decisions."
-        }
-        "invalid-adr-id" => "Take a free id from `criv query next-adr-id`.",
-        "invalid-frontmatter" => "Correct the YAML frontmatter block.",
-        "invalid-kind" => "Set `kind` to `doc` or to `decision`.",
-        "invalid-likec4-source" => "Correct the LikeC4 source, then run `criv watch --once`.",
-        "missing-policy-pattern-id" => "Give the policy pattern an `id`.",
-        "empty-policy-pattern" => "Give the policy pattern a body, or remove it.",
-        "duplicate-policy-pattern" => "Give each policy pattern in the ADR a unique `id`.",
-        "missing-policy-pattern-definition" => {
-            "Declare the pattern in an ADR `policy.patterns` entry."
-        }
-        "missing-policy-pattern-language" => "Set `language` on the policy pattern.",
-        "ambiguous-policy-pattern-body" => {
-            "Give the pattern either `pattern` or `rule`, and not both."
-        }
-        "missing-policy-pattern-body" => "Give the pattern a `pattern` or a `rule`.",
-        "invalid-policy-pattern" => "Correct the ast-grep pattern or rule syntax.",
-        "legacy-source-target" | "source-wikilink" => {
-            "Rewrite the target as an AST-aware selector, as in `src/main.rs#fn:run`."
-        }
-        "markdown-format" => "Run `criv check --fix`.",
-        "missing-id" => "Add an `id` to the note frontmatter.",
-        "non-portable-note-link" => "Use the portable link form `[[note-id|Text]]`.",
-        "policy-violation" => "Change the code, or write a successor ADR that retires the policy.",
-        "supersession-cycle" => "Break the cycle: a decision cannot supersede its own ancestor.",
-        "unknown-superseded-by" | "unknown-supersedes" => {
-            "Name a decision that exists, or add the missing ADR."
-        }
-        "unresolved-governs" => {
-            "Run `criv adr reconcile-sources --base <ref>` for a rename, or add a successor ADR for a deletion."
-        }
-        "unresolved-pattern" => "Correct the pattern reference, or declare the pattern.",
-        "unresolved-target" => {
-            "Correct the target, or run `criv watch --once` to refresh the state."
-        }
-        _ => return None,
-    };
-    Some(fix)
 }
 
 #[derive(Clone, Copy)]
@@ -217,7 +158,11 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
         if options.format == Format::Text {
             println!("next: {}", next_command(&diagnostics));
         }
-        return Err(CrivError::coded("check-failed", "check failed"));
+        return Err(CrivError::coded_fix(
+            "check-failed",
+            "check failed",
+            fix_for("check-failed").expect("check-failed carries a repair"),
+        ));
     }
 
     Ok(())
@@ -1461,6 +1406,19 @@ mod tests {
             assert!(
                 fix_for(code).is_some(),
                 "diagnostic code `{code}` reaches a caller with no repair"
+            );
+        }
+        for code in [
+            "not-a-vault",
+            "check-failed",
+            "policy-violation",
+            "import-policy-violation",
+            "adr-immutability-violation",
+            "enforcement-failed",
+        ] {
+            assert!(
+                fix_for(code).is_some(),
+                "failure code `{code}` reaches a caller with no repair"
             );
         }
     }
