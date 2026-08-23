@@ -55,19 +55,53 @@ pub type Result<T> = std::result::Result<T, CrivError>;
 pub enum CrivError {
     #[error("{0}")]
     Message(String),
+    #[error("[{code}] {message}{}", fix_suffix(.fix))]
+    Coded {
+        code: &'static str,
+        message: String,
+        fix: Option<String>,
+    },
     #[error("{0}")]
     Usage(String),
-    /// A usage failure whose page the CLI has already written to standard
-    /// error. It carries no message, because a help page must not be prefixed.
     #[error("")]
     UsageReported,
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
 
+fn fix_suffix(fix: &Option<String>) -> String {
+    match fix {
+        Some(fix) => format!("\nfix: {fix}"),
+        None => String::new(),
+    }
+}
+
 impl CrivError {
     fn new(message: impl Into<String>) -> Self {
         Self::Message(message.into())
+    }
+
+    fn coded(code: &'static str, message: impl Into<String>) -> Self {
+        Self::Coded {
+            code,
+            message: message.into(),
+            fix: None,
+        }
+    }
+
+    fn coded_fix(code: &'static str, message: impl Into<String>, fix: impl Into<String>) -> Self {
+        Self::Coded {
+            code,
+            message: message.into(),
+            fix: Some(fix.into()),
+        }
+    }
+
+    pub fn code(&self) -> Option<&'static str> {
+        match self {
+            Self::Coded { code, .. } => Some(code),
+            _ => None,
+        }
     }
 
     fn usage(message: impl Into<String>) -> Self {
@@ -77,11 +111,10 @@ impl CrivError {
     pub fn exit_code(&self) -> i32 {
         match self {
             Self::Usage(_) | Self::UsageReported => 2,
-            Self::Message(_) | Self::Io(_) => 1,
+            Self::Message(_) | Self::Coded { .. } | Self::Io(_) => 1,
         }
     }
 
-    /// Whether the CLI has already written this failure to standard error.
     pub fn is_reported(&self) -> bool {
         matches!(self, Self::UsageReported)
     }
@@ -93,6 +126,8 @@ impl CrivError {
 struct CrivCli {
     #[usage(long = "usage", hide)]
     usage: bool,
+    #[usage(long = "usage-json", hide)]
+    usage_json: bool,
     #[usage(subcommand)]
     command: Option<Command>,
 }
@@ -120,8 +155,6 @@ fn run_command(args: Vec<String>, cwd: &std::path::Path) -> Result<()> {
 
     let cli = match CrivCli::parse_from(&argv) {
         Ok(cli) => cli,
-        // A help or version request is not a parse failure. usage reports both
-        // as errors because neither produces a command to run.
         Err(Error::Help { cmd, long }) => {
             print!("{}", render_help(cmd, long));
             return Ok(());
@@ -130,9 +163,6 @@ fn run_command(args: Vec<String>, cwd: &std::path::Path) -> Result<()> {
             println!("criv {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
-        // A command that needs a subcommand answers with its own page. The
-        // page carries the failure, so it is written here rather than returned
-        // as a message that would be prefixed with the program name.
         Err(err @ (Error::MissingSubcommand | Error::MissingArgsHelp { .. })) => {
             eprint!("{}", usage::render_failure(CrivCli::spec(), &argv, &err));
             return Err(CrivError::UsageReported);
@@ -151,8 +181,12 @@ fn run_command(args: Vec<String>, cwd: &std::path::Path) -> Result<()> {
         return Ok(());
     }
 
+    if cli.usage_json {
+        write_usage_json(&mut std::io::stdout().lock());
+        return Ok(());
+    }
+
     match cli.command {
-        // A bare `criv` prints the short page and succeeds.
         None => {
             print!("{}", render_help(CrivCli::command(), false));
             Ok(())
@@ -175,18 +209,114 @@ fn write_usage_spec(writer: &mut dyn Write) {
     write!(writer, "{}", CrivCli::to_kdl()).expect("write usage spec");
 }
 
+#[derive(serde::Serialize)]
+struct JsonCommand<'a> {
+    name: &'a str,
+    path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    about: Option<&'a str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    args: Vec<JsonArg<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    flags: Vec<JsonFlag<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    subcommands: Vec<JsonCommand<'a>>,
+}
+
+#[derive(serde::Serialize)]
+struct JsonFlag<'a> {
+    name: &'a str,
+    long: &'a [&'a str],
+    required: bool,
+    takes_value: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    help: Option<&'a str>,
+    #[serde(skip_serializing_if = "<[&str]>::is_empty")]
+    choices: &'a [&'a str],
+    #[serde(skip_serializing_if = "<[&str]>::is_empty")]
+    default: &'a [&'a str],
+    #[serde(skip_serializing_if = "<[&str]>::is_empty")]
+    conflicts: &'a [&'a str],
+    #[serde(skip_serializing_if = "<[&str]>::is_empty")]
+    requires: &'a [&'a str],
+}
+
+#[derive(serde::Serialize)]
+struct JsonArg<'a> {
+    name: &'a str,
+    required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    help: Option<&'a str>,
+    #[serde(skip_serializing_if = "<[&str]>::is_empty")]
+    choices: &'a [&'a str],
+    #[serde(skip_serializing_if = "<[&str]>::is_empty")]
+    default: &'a [&'a str],
+}
+
+fn json_command<'a>(meta: &'a usage::spec::CommandMeta<'a>, parent: &str) -> JsonCommand<'a> {
+    let path = if parent.is_empty() {
+        meta.cmd.name.to_string()
+    } else {
+        format!("{parent} {}", meta.cmd.name)
+    };
+    JsonCommand {
+        name: meta.cmd.name,
+        about: meta.about,
+        args: meta
+            .args
+            .iter()
+            .filter(|arg| !arg.hide)
+            .map(|arg| JsonArg {
+                name: arg.arg.name,
+                required: arg.required,
+                help: arg.help,
+                choices: arg.choices,
+                default: arg.default,
+            })
+            .collect(),
+        flags: meta
+            .flags
+            .iter()
+            .filter(|flag| !flag.hide)
+            .map(|flag| JsonFlag {
+                name: flag.flag.name,
+                long: flag.flag.longs,
+                required: flag.required,
+                takes_value: flag.flag.takes_value,
+                help: flag.help,
+                choices: flag.choices,
+                default: flag.default,
+                conflicts: flag.conflicts,
+                requires: flag.requires,
+            })
+            .collect(),
+        subcommands: meta
+            .subcommands
+            .iter()
+            .filter(|child| !child.hide)
+            .map(|child| json_command(child, &path))
+            .collect(),
+        path,
+    }
+}
+
+fn write_usage_json(writer: &mut dyn Write) {
+    let spec = CrivCli::spec();
+    let tree = json_command(spec.root, "");
+    let json = serde_json::to_string_pretty(&tree).expect("serialize command tree");
+    writeln!(writer, "{json}").expect("write command tree");
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::{OsStr, OsString};
 
     use super::{CrivCli, Error, render_help, write_usage_spec};
 
-    /// Renders the page the CLI would print for these words.
     fn help_for(args: &[&str]) -> String {
         let owned: Vec<OsString> = args.iter().map(OsString::from).collect();
         let argv: Vec<&OsStr> = owned.iter().map(OsString::as_os_str).collect();
         match CrivCli::parse_from(&argv) {
-            // A bare `criv` parses, and the command prints the short page.
             Ok(_) => render_help(CrivCli::command(), false),
             Err(Error::Help { cmd, long }) => render_help(cmd, long),
             Err(error) => panic!("expected a help request, got {error:?}"),
@@ -228,8 +358,6 @@ mod tests {
         assert!(spec.contains("cmd enforce"));
         assert!(spec.contains("cmd reconcile-sources"));
 
-        // The consumer named in `README.md` reads the emitted document, so the
-        // spec is parsed back with `usage-lib` rather than inspected as text.
         let spec: usage_parser::Spec = CrivCli::to_kdl()
             .parse()
             .expect("emitted spec should parse with the usage consumer");
@@ -256,14 +384,12 @@ mod tests {
 
         assert!(root.contains("Usage: criv"));
         assert!(root.contains("Commands:"));
-        // The spec export flag is hidden, and the renderer drops hidden entries.
         assert!(!root.contains("--usage"));
         assert!(query.contains("Usage: criv query"));
         assert!(query.contains("<SUBCOMMAND>"));
         for name in QUERY_SUBCOMMANDS {
             assert!(query.contains(&format!("query {name}")));
         }
-        // Each query command owns its own flags; none of them are shared.
         assert!(coverage.contains("--by <BY>"));
         assert!(!coverage.contains("--kind"));
         assert!(nodes.contains("--kind <KIND>"));
@@ -295,7 +421,6 @@ mod tests {
 
         assert!(check.contains("Usage: criv check [FLAGS]"));
         assert!(check.contains("Flags:"));
-        // usage puts angle brackets on a required flag on purpose.
         assert!(enforce.contains("Usage: criv enforce <--stage <STAGE>>"));
     }
 }

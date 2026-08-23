@@ -21,6 +21,9 @@ pub(crate) enum RefreshCause {
 pub(crate) struct RefreshResult {
     vault: Vault,
     state: State,
+    snapshot: String,
+    errors: usize,
+    warnings: usize,
 }
 
 #[derive(Debug)]
@@ -146,9 +149,14 @@ fn execute(
     };
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();
-    println!("state updated: snapshot {snapshot}, {errors} errors, {warnings} warnings");
 
-    Ok(RefreshResult { vault, state })
+    Ok(RefreshResult {
+        vault,
+        state,
+        snapshot,
+        errors,
+        warnings,
+    })
 }
 
 #[cfg(test)]
@@ -159,6 +167,27 @@ impl RefreshResult {
 
     fn state(&self) -> &State {
         &self.state
+    }
+}
+
+impl RefreshResult {
+    pub(crate) fn snapshot(&self) -> &str {
+        &self.snapshot
+    }
+
+    pub(crate) fn errors(&self) -> usize {
+        self.errors
+    }
+
+    pub(crate) fn warnings(&self) -> usize {
+        self.warnings
+    }
+
+    pub(crate) fn text_summary(&self) -> String {
+        format!(
+            "state updated: snapshot {}, {} errors, {} warnings",
+            self.snapshot, self.errors, self.warnings
+        )
     }
 }
 

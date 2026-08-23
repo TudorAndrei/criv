@@ -277,6 +277,7 @@ fn doc(id: &str, title: &str, body: &str) -> String {
 #[test]
 fn changed_check_fails_closed_outside_a_git_worktree() {
     let temp = TempDir::new().unwrap();
+    init(temp.path());
 
     criv(temp.path())
         .args(["check", "--changed"])
@@ -286,9 +287,29 @@ fn changed_check_fails_closed_outside_a_git_worktree() {
 }
 
 #[test]
+fn commands_fail_closed_outside_a_vault() {
+    let temp = TempDir::new().unwrap();
+
+    for args in [
+        vec!["check"],
+        vec!["query", "next-adr-id"],
+        vec!["watch", "--once"],
+        vec!["enforce", "--stage", "ci"],
+    ] {
+        criv(temp.path())
+            .args(&args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("[not-a-vault]"))
+            .stderr(predicate::str::contains("fix: criv init"));
+    }
+}
+
+#[test]
 fn changed_check_with_no_staged_changes_skips_vault_loading_in_all_formats() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
+    init(root);
     git(root, &["init", "-b", "main"]);
 
     criv(root)
@@ -1476,8 +1497,6 @@ fn query_usage_errors_are_reported() {
         .failure()
         .code(2)
         .stderr(predicate::str::contains("unrecognized subcommand 'bogus'"));
-    // `criv query` with no subcommand answers with its own page, which lists
-    // every query the command tree holds.
     let listed = criv(root).args(["query"]).assert().failure().code(2);
     let stderr = String::from_utf8(listed.get_output().stderr.clone()).unwrap();
     for name in [

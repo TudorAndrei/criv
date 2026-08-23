@@ -145,3 +145,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0132-use-aqua-with-a-mise-alias-and-github-fallback|ADR-0132]] - Use aqua with a mise alias and GitHub fallback
 - [[0133-use-exact-lowercase-documentation-asset-extensions|ADR-0133]] - Use exact lowercase documentation asset extensions
 - [[0134-parse-the-cli-with-usage|ADR-0134]] - Parse the CLI with Usage
+- [[0135-answer-agents-with-codes-fixes-and-next-commands|ADR-0135]] - Answer agents with codes, fixes, and next commands

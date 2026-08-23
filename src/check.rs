@@ -75,6 +75,55 @@ struct JsonDiagnostic<'a> {
     message: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     range: Option<LspRange>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fix: Option<&'static str>,
+}
+
+fn fix_for(code: &str) -> Option<&'static str> {
+    let fix = match code {
+        "adr-dir-non-decision" => {
+            "Set `kind: decision` in the frontmatter, or move the file out of the ADR directory."
+        }
+        "adr-filename" => "Rename the file to `NNNN-kebab-title.md`.",
+        "ambiguous-source-link" => {
+            "Name the file in the link, as in `[[src/lib.rs#fn:run]]`, so one source resolves."
+        }
+        "architecture-interface-drift" => {
+            "Run `criv watch --once`, then correct the C4 element so it matches the source."
+        }
+        "broken-link" => "Correct the link target, or add the note it names.",
+        "decision-location" => "Move the decision into the ADR directory.",
+        "duplicate-doc-pattern" | "duplicate-pattern-id" => "Give each pattern a unique `id`.",
+        "duplicate-id" => "Give the note an `id` no other note uses.",
+        "empty-target-scope" => "Name at least one path or symbol under `targets`.",
+        "inconsistent-supersession" => {
+            "Make `supersedes` and `superseded_by` agree in both decisions."
+        }
+        "invalid-adr-id" => "Take a free id from `criv query next-adr-id`.",
+        "invalid-frontmatter" => "Correct the YAML frontmatter block.",
+        "invalid-kind" => "Set `kind` to `doc` or to `decision`.",
+        "invalid-likec4-source" => "Correct the LikeC4 source, then run `criv watch --once`.",
+        "legacy-source-target" | "source-wikilink" => {
+            "Rewrite the target as an AST-aware selector, as in `src/main.rs#fn:run`."
+        }
+        "markdown-format" => "Run `criv check --fix`.",
+        "missing-id" => "Add an `id` to the note frontmatter.",
+        "non-portable-note-link" => "Use the portable link form `[[note-id|Text]]`.",
+        "policy-violation" => "Change the code, or write a successor ADR that retires the policy.",
+        "supersession-cycle" => "Break the cycle: a decision cannot supersede its own ancestor.",
+        "unknown-superseded-by" | "unknown-supersedes" => {
+            "Name a decision that exists, or add the missing ADR."
+        }
+        "unresolved-governs" => {
+            "Run `criv adr reconcile-sources --base <ref>` for a rename, or add a successor ADR for a deletion."
+        }
+        "unresolved-pattern" => "Correct the pattern reference, or declare the pattern.",
+        "unresolved-target" => {
+            "Correct the target, or run `criv watch --once` to refresh the state."
+        }
+        _ => return None,
+    };
+    Some(fix)
 }
 
 #[derive(Clone, Copy)]
@@ -107,12 +156,13 @@ impl Diagnostic {
             line: self.line,
             message: &self.message,
             range: self.location.as_ref().map(SourceLocation::lsp_range),
+            fix: fix_for(self.code),
         }
     }
 }
 
 pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
-    let files = RepositoryFiles::open(root)?;
+    let files = RepositoryFiles::open_vault(root)?;
     let mut diagnostics = if options.changed {
         validate_changed(&files)?
     } else {
@@ -152,7 +202,10 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
     }
 
     if diagnostics.iter().any(Diagnostic::is_error) {
-        return Err(CrivError::new("check failed"));
+        if options.format == Format::Text {
+            println!("next: {}", next_command(&diagnostics));
+        }
+        return Err(CrivError::coded("check-failed", "check failed"));
     }
 
     Ok(())
@@ -1199,6 +1252,22 @@ fn visit_supersession(
     stack.pop();
 }
 
+fn next_command(diagnostics: &[Diagnostic]) -> &'static str {
+    if diagnostics
+        .iter()
+        .any(|diag| diag.is_error() && diag.code == "markdown-format")
+    {
+        return "criv check --fix";
+    }
+    if diagnostics
+        .iter()
+        .any(|diag| diag.is_error() && diag.code == "unresolved-target")
+    {
+        return "criv watch --once";
+    }
+    "apply the fixes above, then run `criv check`"
+}
+
 fn print_text(diagnostics: &[Diagnostic]) {
     if diagnostics.is_empty() {
         println!("criv check: ok");
@@ -1217,6 +1286,9 @@ fn print_text(diagnostics: &[Diagnostic]) {
             );
         } else {
             println!("{severity}[{}] {}: {}", diag.code, diag.path, diag.message);
+        }
+        if let Some(fix) = fix_for(diag.code) {
+            println!("  fix: {fix}");
         }
     }
 }

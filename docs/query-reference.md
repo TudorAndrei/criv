@@ -20,6 +20,9 @@ The help pages hold every subcommand, positional argument, flag, choice, and
 default. They come from the command tree in `src/query.rs`, so they cannot
 drift from the code.
 
+Every query takes `--format text`, `--format json`, or `--format ndjson`, and
+`--limit <N>` to bound the answer before it is printed.
+
 ## Why the CLI and not this file
 
 criv runs in other people's repositories. An agent working there has the

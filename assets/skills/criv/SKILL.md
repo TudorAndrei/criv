@@ -21,7 +21,20 @@ The `checking-drift` skill owns the flags and the failure paths.
 
 - `criv query nodes --kind code --without-docs` lists code that no document claims.
 - `criv query coverage --by module` and `criv query coverage --by adr` report coverage.
-- `docs/query-reference.md` holds the full query surface.
+- `criv query --help` holds the full query surface. Add `--limit <N>` to bound a
+  large answer, and `--format ndjson` to read one row per line.
+
+## Reading a failure
+
+- Every failure prints `[code]` first. Key recovery on the code, not on the prose.
+- A `fix:` line names the repair. Run it instead of inventing a command.
+- A `next:` line names the command to run after the repair.
+- `criv check --format json` and `criv enforce --format json` carry the same
+  `code` and `fix` fields as data.
+- `[not-a-vault]` means the working directory holds no `criv.toml`. Check the
+  directory before you run `criv init`.
+- `criv --usage-json` prints the whole command tree, with every flag, choice,
+  and default.
 
 ## Which skill covers the task
 
