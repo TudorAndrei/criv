@@ -511,7 +511,7 @@ fn build_plan_from(
                     candidates.next().is_none().then_some(candidate)
                 });
                 let current_path = current_path.as_deref().unwrap_or(&entry.path);
-                let contents = fs::read_to_string(root.join(current_path)).map_err(|error| {
+                let contents = files.read_string(Path::new(current_path)).map_err(|error| {
                     CrivError::new(format!(
                         "cannot read branch-created ADR `{current_path}` while proving ownership: {error}"
                     ))
@@ -554,7 +554,7 @@ fn build_plan_from(
         }
         match entry.status {
             git::ChangeStatus::Added if branch_paths.insert(entry.path.clone()) => {
-                let contents = fs::read_to_string(root.join(&entry.path))?;
+                let contents = files.read_string(Path::new(&entry.path))?;
                 ensure_proven_new_adr(
                     root,
                     &entry.path,
@@ -1116,20 +1116,20 @@ fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<Stri
             paths.push(adr.path.clone());
         }
     }
+    let files = RepositoryFiles::open(root)?;
     let mut rewrites = BTreeMap::new();
     let mut inherited_references = None;
     for path in paths {
         if path == ".criv/adr-reconcile.json" || path.starts_with(".git/") {
             continue;
         }
-        let file = root.join(&path);
-        if !file.is_file() {
+        if !files.file_exists(Path::new(&path))? {
             continue;
         }
-        let contents = match fs::read_to_string(&file) {
+        let contents = match files.read_string(Path::new(&path)) {
             Ok(contents) => contents,
             Err(_) => {
-                let bytes = fs::read(&file)?;
+                let bytes = files.read(Path::new(&path))?;
                 if contains_reference(&bytes, &plan.mappings) {
                     return Err(CrivError::new(format!(
                         "refusing to reconcile binary or non-UTF-8 file `{path}` containing an ADR reference"
@@ -1503,10 +1503,9 @@ fn worktree_file_mode(root: &Path, path: &str) -> Result<String> {
 }
 
 fn read_receipt(root: &Path) -> Result<Receipt> {
-    let receipt: Receipt = serde_json::from_str(&fs::read_to_string(
-        root.join(".criv/adr-reconcile.json"),
-    )?)
-    .map_err(|_| {
+    let files = RepositoryFiles::open(root)?;
+    let receipt: Receipt =
+        serde_json::from_str(&files.read_string(Path::new(RECEIPT_PATH))?).map_err(|_| {
         CrivError::new(
             "ADR reconciliation receipt is malformed; remove it only after recovering the worktree",
         )
