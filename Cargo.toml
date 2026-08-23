@@ -10,12 +10,8 @@ homepage = "https://github.com/TudorAndrei/criv"
 documentation = "https://docs.rs/criv"
 
 [workspace]
-members = [
-  "crates/criv-state-wire",
-  "crates/criv-wasm",
-  "scripts/performance",
-  "scripts/performance/state-store-prototype",
-]
+members = ["crates/criv-state-wire", "crates/criv-wasm", "scripts/performance"]
+exclude = ["scripts/performance/state-store-prototype"]
 
 [profile.release]
 strip = true

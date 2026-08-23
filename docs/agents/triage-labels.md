@@ -20,15 +20,20 @@ roles to the label strings used in this repo's GitHub Issues.
 When a skill mentions a role (e.g. "apply the AFK-ready triage label"), use the
 corresponding label string from this table.
 
-Only `wontfix` exists in the repository today; the other four are the GitHub
-defaults' gap and must be created before first use:
+All five labels exist in the repository. Create none of them; `gh label create`
+fails on a label that is already there.
 
-```sh
-gh label create needs-triage --description "Maintainer needs to evaluate this issue"
-gh label create needs-info --description "Waiting on reporter for more information"
-gh label create ready-for-agent --description "Fully specified, ready for an AFK agent"
-gh label create ready-for-human --description "Requires human implementation"
-```
+## The rest of the taxonomy
+
+Two more label families are in use, and a new issue should carry one from each.
+
+| Family     | Labels                                                                  |
+| ---------- | ----------------------------------------------------------------------- |
+| `priority:` | `priority:high`, `priority:medium`, `priority:low`, `priority:very-low` |
+| `scope:`    | `scope:adr`, `scope:ci`, `scope:cli`, `scope:init`, `scope:obsidian`, `scope:performance`, `scope:policy`, `scope:source`, `scope:state`, `scope:testing`, `scope:tooling`, `scope:vscode` |
+
+Read the live list with `gh label list` before applying one, because the
+families grow.
 
 ## Terminal states are decisions
 

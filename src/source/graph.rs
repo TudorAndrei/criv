@@ -1114,7 +1114,7 @@ fn tree_sitter_language(language: Language) -> Option<tree_sitter::Language> {
     }
 }
 
-pub(crate) const MAX_AST_DEPTH: usize = 512;
+const MAX_AST_DEPTH: usize = 512;
 
 struct TreeSitterWalk<'a> {
     contents: &'a str,

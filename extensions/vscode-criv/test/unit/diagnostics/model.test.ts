@@ -28,6 +28,32 @@ test("normalizes criv check JSON diagnostics", () => {
   );
 });
 
+test("carries the repair criv reports with a diagnostic", () => {
+  assert.deepEqual(
+    parseCheckDiagnostics(
+      JSON.stringify([
+        {
+          severity: "error",
+          code: "markdown-format",
+          path: "docs/index.md",
+          message: "bad heading",
+          fix: "Run `criv check --fix`.",
+        },
+      ]),
+    ),
+    [
+      {
+        severity: "error",
+        code: "markdown-format",
+        path: "docs/index.md",
+        line: undefined,
+        message: "bad heading",
+        fix: "Run `criv check --fix`.",
+      },
+    ],
+  );
+});
+
 test("rejects non-array criv check JSON", () => {
   assert.throws(() => parseCheckDiagnostics("{}"), /Expected criv check JSON output/);
 });

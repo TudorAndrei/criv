@@ -71,6 +71,11 @@ local actionlint = new Step {
   check = "actionlint"
 }
 
+local shellcheck = new Step {
+  glob = List("**/*.sh")
+  check = "shellcheck {{files}}"
+}
+
 local zizmor = new Step {
   glob = List(
     ".github/workflows/*.yml",
@@ -109,6 +114,7 @@ hooks {
       ["cargo-fmt"] = cargo_fmt
       ["toml-fmt"] = toml_fmt
       ["actionlint"] = actionlint
+      ["shellcheck"] = shellcheck
       ["zizmor"] = zizmor
       ["criv-check"] = staged_docs
       ["criv-enforce"] = enforce_commit
@@ -130,6 +136,7 @@ hooks {
       ["toml-fmt"] = toml_fmt
       ["cargo-clippy"] = ci_cargo_clippy
       ["actionlint"] = actionlint
+      ["shellcheck"] = shellcheck
       ["zizmor"] = zizmor
       ["cargo-test"] = cargo_test
       ["hawk"] = hawk

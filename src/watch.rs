@@ -532,14 +532,16 @@ impl LiveWatchSession {
         if self.suspended {
             return !matches!(signal, WatchSignal::Idle) || Instant::now() >= self.next_retry;
         }
+        if !matches!(signal, WatchSignal::Paths(_)) {
+            return false;
+        }
         let config_changed = match read_config_source(&self.files) {
             Ok(source) => source != self.active.config_source,
             Err(_) => true,
         };
-        matches!(signal, WatchSignal::Paths(_))
-            && (config_changed
-                || WatchTopology::observe(&self.root, &self.active.config) != self.active.topology
-                || WatchSet::active(&self.root, &self.active.config) != self.active.watcher.set)
+        config_changed
+            || WatchTopology::observe(&self.root, &self.active.config) != self.active.topology
+            || WatchSet::active(&self.root, &self.active.config) != self.active.watcher.set
     }
 
     fn reconfigure(&mut self) {

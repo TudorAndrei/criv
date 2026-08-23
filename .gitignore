@@ -1,5 +1,6 @@
 /target
 /scripts/performance/container-test/target/
+/scripts/performance/state-store-prototype/target/
 /node_modules/
 packages/*/node_modules/
 .criv/
@@ -20,6 +21,7 @@ site/docs/
 hk.local.pkl
 .config/hk.local.pkl
 .claude/settings.local.json
+.claude/worktrees/
 !/.vscode/
 !/.vscode/extensions.json
 !/.vscode/settings.json

@@ -23,7 +23,7 @@ export class CrivCheckDiagnostics implements vscode.Disposable {
           range.end.line,
           range.end.character,
         ),
-        item.message,
+        item.fix ? `${item.message}\nfix: ${item.fix}` : item.message,
         severityValue(item.severity),
       );
       diagnostic.source = "criv";

@@ -72,6 +72,15 @@ packaged Wasm adapter then measure storage, publication, native operations, and
 editor projections through public process boundaries. See
 `state-store-prototype/README.md` for the exact commands.
 
+The prototype sits outside the criv workspace, so `cargo test --workspace` and
+`cargo clippy --workspace` never compile its candidate serialization stack. Lint
+or test it with an explicit manifest path:
+
+```sh
+cargo clippy --manifest-path scripts/performance/state-store-prototype/Cargo.toml --all-targets
+cargo test --manifest-path scripts/performance/state-store-prototype/Cargo.toml
+```
+
 ## File discovery baseline
 
 File-discovery evidence has seven separate tools:
