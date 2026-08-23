@@ -1,3 +1,5 @@
+[workspace]
+
 [package]
 name = "criv-state-store-prototype"
 version = "0.11.0"

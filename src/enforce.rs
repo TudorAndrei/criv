@@ -3,9 +3,12 @@ use std::env;
 use std::io::Read;
 use std::path::Path;
 
-use clap::{Args as ClapArgs, ValueEnum};
+use serde::Serialize;
+use usage::{Args as UsageArgs, ValueEnum};
 
 use crate::check;
+use crate::config::Config;
+use crate::diagnostic;
 use crate::git::{
     self, ChangeStatus, ChangedEntry, ChangedSet, ChangedSetComparison, GitRepository,
 };
@@ -20,16 +23,25 @@ enum Stage {
     Ci,
 }
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum Format {
+    Text,
+    Json,
+}
+
+#[derive(Debug, UsageArgs)]
 pub(crate) struct EnforceOptions {
-    #[arg(long, value_enum)]
+    #[usage(long, value_enum)]
     stage: Stage,
+    /// Select the human report or a JSON enforcement report.
+    #[usage(long, value_enum, default = "text")]
+    format: Format,
     /// Consume Git's pre-push ref-update records from standard input.
-    #[arg(long, hide = true)]
+    #[usage(long, hide)]
     pre_push: bool,
-    #[arg(long, hide = true, requires = "pre_push")]
+    #[usage(long, hide, requires = "pre_push")]
     remote_name: Option<String>,
-    #[arg(long, hide = true, requires = "pre_push")]
+    #[usage(long, hide, requires = "pre_push")]
     remote_url: Option<String>,
 }
 
@@ -39,6 +51,7 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
             "--pre-push is only valid with --stage push",
         ));
     }
+    crate::repository::RepositoryFiles::open_vault(root)?;
     let vault = Vault::load(root)?;
     let policy_plan = PolicyScanPlan::new(&vault);
     if !vault
@@ -58,7 +71,7 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
         crate::adr::check_base(root, &base_ref)?;
     }
 
-    let diagnostics = check::validate_with_policy_plan(&vault, &policy_plan);
+    let diagnostics = check::validate_vault(&vault, None, &policy_plan);
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();
 
@@ -119,68 +132,143 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
             "source reconciliation receipt does not prove the complete staged transaction".into(),
         );
     }
+    adr_violations.extend(config_scope_violations(
+        root,
+        changed_entries.as_ref(),
+        &vault.config,
+    ));
+    let changed_count = changed_files.as_ref().map_or(0, Vec::len);
+    let basis = changed_entries
+        .as_ref()
+        .map_or("no comparison", |changes| changes.basis.as_str());
+    let failure = enforce_failure(violations, import_violations, adr_violations, errors);
+
+    if options.format == Format::Json {
+        let report = EnforceReport {
+            stage: options.stage.as_str(),
+            ok: failure.is_none(),
+            errors,
+            warnings,
+            changed_files: changed_count,
+            basis,
+            violations: failure
+                .as_ref()
+                .map_or(&[][..], |failure| &failure.violations),
+            code: failure.as_ref().map(|failure| failure.code),
+            fix: failure.as_ref().map(|failure| failure.fix),
+        };
+        let json = serde_json::to_string_pretty(&report).map_err(|err| {
+            CrivError::new(format!("failed to serialize enforcement report: {err}"))
+        })?;
+        println!("{json}");
+        return match failure {
+            Some(failure) => Err(CrivError::coded_fix(
+                failure.code,
+                failure.message,
+                failure.fix,
+            )),
+            None => Ok(()),
+        };
+    }
+
     match options.stage {
         Stage::Commit => {
             println!(
-                "commit enforcement: {errors} validation errors, {warnings} warnings, {} staged files ({})",
-                changed_files.as_ref().map_or(0, Vec::len),
-                changed_entries
-                    .as_ref()
-                    .map_or("no comparison", |changes| &changes.basis)
+                "commit enforcement: {errors} validation errors, {warnings} warnings, {changed_count} staged files ({basis})"
             );
         }
         Stage::Push => {
             println!(
-                "push enforcement: {errors} validation errors, {warnings} warnings, {} changed files ({})",
-                changed_files.as_ref().map_or(0, Vec::len),
-                changed_entries
-                    .as_ref()
-                    .map_or("no comparison", |changes| &changes.basis)
+                "push enforcement: {errors} validation errors, {warnings} warnings, {changed_count} changed files ({basis})"
             );
         }
         Stage::Ci => {
-            println!(
-                "ci enforcement: {errors} validation errors, {warnings} warnings ({})",
-                changed_entries
-                    .as_ref()
-                    .map_or("no comparison", |changes| &changes.basis)
-            );
+            println!("ci enforcement: {errors} validation errors, {warnings} warnings ({basis})");
         }
     }
 
-    if !violations.is_empty() {
-        for violation in &violations {
+    if let Some(failure) = failure {
+        for violation in &failure.violations {
             println!("{violation}");
         }
-        return Err(CrivError::new(format!(
-            "{} policy violation(s) found",
-            violations.len()
-        )));
-    }
-    if !import_violations.is_empty() {
-        for violation in &import_violations {
-            println!("{violation}");
-        }
-        return Err(CrivError::new(format!(
-            "{} import policy violation(s) found",
-            import_violations.len()
-        )));
-    }
-    if !adr_violations.is_empty() {
-        for violation in &adr_violations {
-            println!("{violation}");
-        }
-        return Err(CrivError::new(format!(
-            "{} ADR immutability violation(s) found",
-            adr_violations.len()
-        )));
+        return Err(CrivError::coded_fix(
+            failure.code,
+            failure.message,
+            failure.fix,
+        ));
     }
 
-    if errors > 0 {
-        return Err(CrivError::new("enforcement failed"));
-    }
     println!("enforcement passed");
     Ok(())
+}
+
+struct EnforceFailure {
+    code: &'static str,
+    message: String,
+    fix: &'static str,
+    violations: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct EnforceReport<'a> {
+    stage: &'a str,
+    ok: bool,
+    errors: usize,
+    warnings: usize,
+    changed_files: usize,
+    basis: &'a str,
+    violations: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fix: Option<&'static str>,
+}
+
+fn enforce_failure(
+    violations: Vec<String>,
+    import_violations: Vec<String>,
+    adr_violations: Vec<String>,
+    errors: usize,
+) -> Option<EnforceFailure> {
+    let (code, message, violations) = if !violations.is_empty() {
+        (
+            "policy-violation",
+            format!("{} policy violation(s) found", violations.len()),
+            violations,
+        )
+    } else if !import_violations.is_empty() {
+        (
+            "import-policy-violation",
+            format!(
+                "{} import policy violation(s) found",
+                import_violations.len()
+            ),
+            import_violations,
+        )
+    } else if !adr_violations.is_empty() {
+        (
+            "adr-immutability-violation",
+            format!(
+                "{} ADR immutability violation(s) found",
+                adr_violations.len()
+            ),
+            adr_violations,
+        )
+    } else if errors > 0 {
+        (
+            "enforcement-failed",
+            "enforcement failed".into(),
+            Vec::new(),
+        )
+    } else {
+        return None;
+    };
+    Some(EnforceFailure {
+        code,
+        message,
+        fix: diagnostic::fix_for(code).expect("every enforcement code carries a repair"),
+        violations,
+    })
 }
 
 fn import_policy_violations(vault: &Vault, changed_files: Option<&Vec<String>>) -> Vec<String> {
@@ -516,7 +604,7 @@ fn portable_adr_link_alias(body: &str) -> Option<&str> {
     let (target, alias) = body.split_once('|')?;
     let alias = alias.trim();
     let alias_base = alias.split('#').next().unwrap_or(alias);
-    if !crate::util::is_adr_id(alias_base) {
+    if !crate::identity::is_adr_id(alias_base) {
         return None;
     }
     let target_fragment = target.split_once('#').map(|(_, fragment)| fragment);
@@ -534,6 +622,52 @@ fn portable_adr_link_alias(body: &str) -> Option<&str> {
     (basename == number || basename.starts_with(&format!("{number}-"))).then_some(alias)
 }
 
+fn config_scope_violations(
+    root: &Path,
+    changes: Option<&ChangedSet>,
+    current: &Config,
+) -> Vec<String> {
+    let Some(changes) = changes else {
+        return Vec::new();
+    };
+    let paths = || {
+        changes
+            .entries
+            .iter()
+            .flat_map(|entry| [Some(entry.path.as_str()), entry.previous_path.as_deref()])
+            .flatten()
+    };
+    if !paths().any(|path| path == "criv.toml") {
+        return Vec::new();
+    }
+    if !paths().any(looks_like_decision) {
+        return Vec::new();
+    }
+    let Some(old_ref) = changes.old_ref.as_deref() else {
+        return Vec::new();
+    };
+    let Ok(previous) =
+        git::blob(root, old_ref, "criv.toml").and_then(|contents| Config::parse(Some(&contents)))
+    else {
+        return Vec::new();
+    };
+    if previous.docs_dir == current.docs_dir && previous.adr_dir == current.adr_dir {
+        return Vec::new();
+    }
+    vec![format!(
+        "criv.toml moves the decision scope from `{}/{}` to `{}/{}` in the same transaction as a decision change; the immutability gate would read the new scope",
+        previous.docs_dir, previous.adr_dir, current.docs_dir, current.adr_dir
+    )]
+}
+
+fn looks_like_decision(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .is_some_and(|extension| extension == "md")
+        && path.split('/').any(|component| component == "adr")
+        && !path.ends_with("/README.md")
+}
+
 fn is_adr_file(docs_dir: &str, adr_dir: &str, path: &str) -> bool {
     let adr_prefix = format!("{docs_dir}/{adr_dir}/");
     path.starts_with(&adr_prefix)
@@ -543,7 +677,7 @@ fn is_adr_file(docs_dir: &str, adr_dir: &str, path: &str) -> bool {
             .is_some_and(|extension| extension == "md")
 }
 
-fn import_matches(pattern: &str, matcher: Option<&crate::util::GlobMatcher>, module: &str) -> bool {
+fn import_matches(pattern: &str, matcher: Option<&crate::glob::GlobMatcher>, module: &str) -> bool {
     if let Some(matcher) = matcher {
         let normalized = module.replace("::", "/");
         return matcher.is_match(&normalized);
@@ -567,9 +701,18 @@ mod tests {
     use std::process::Command;
 
     #[test]
+    fn only_a_decision_file_looks_like_a_decision() {
+        assert!(looks_like_decision("docs/adr/0001-example.md"));
+        assert!(looks_like_decision("documentation/adr/0002-other.md"));
+        assert!(!looks_like_decision("docs/adr/README.md"));
+        assert!(!looks_like_decision("docs/guide.md"));
+        assert!(!looks_like_decision("src/adr.rs"));
+    }
+
+    #[test]
     fn import_patterns_match_exact_prefix_and_glob_forms() {
         assert!(import_matches("crate::infra", None, "crate::infra::db"));
-        let glob = crate::util::GlobMatcher::new(&["crate/infra/*".into()]).unwrap();
+        let glob = crate::glob::GlobMatcher::new(&["crate/infra/*".into()]).unwrap();
         assert!(import_matches(
             "crate::infra::*",
             Some(&glob),
@@ -698,6 +841,7 @@ mod tests {
 
         let options = EnforceOptions {
             stage: Stage::Push,
+            format: Format::Text,
             pre_push: false,
             remote_name: None,
             remote_url: None,

@@ -693,10 +693,22 @@ fn create_snapshot(
     ))
 }
 
+fn harness_git(root: &Path) -> Command {
+    let mut command = Command::new("git");
+    command.current_dir(root);
+    command.env_remove("GIT_DIR");
+    command.env_remove("GIT_WORK_TREE");
+    command.env_remove("GIT_INDEX_FILE");
+    command.env_remove("GIT_COMMON_DIR");
+    command.env_remove("GIT_PREFIX");
+    command.env_remove("GIT_OBJECT_DIRECTORY");
+    command.env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES");
+    command
+}
+
 fn restore_snapshot(args: &Args, root: &Path) -> Result<(), String> {
-    let reset = Command::new("git")
+    let reset = harness_git(root)
         .args(["reset", "--hard", "HEAD"])
-        .current_dir(root)
         .output()
         .map_err(display_error)?;
     if !reset.status.success() {
@@ -765,11 +777,10 @@ fn stage_mutation(root: &Path, relative: &Path, suffix: &str) -> Result<(), Stri
     let mut contents = fs::read(&path).map_err(display_error)?;
     contents.extend_from_slice(suffix.as_bytes());
     fs::write(&path, contents).map_err(display_error)?;
-    let output = Command::new("git")
+    let output = harness_git(root)
         .arg("add")
         .arg("--")
         .arg(relative)
-        .current_dir(root)
         .output()
         .map_err(display_error)?;
     if output.status.success() {
@@ -1780,6 +1791,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn harness_git_clears_inherited_repository_redirection() {
+        let command = harness_git(Path::new("/tmp"));
+        let cleared = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        for name in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_COMMON_DIR",
+            "GIT_PREFIX",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        ] {
+            assert!(
+                cleared.iter().any(|cleared| cleared == name),
+                "{name} must be cleared so a spawned git never targets the checkout that started the run"
+            );
+        }
+    }
+
+    #[test]
     fn mutation_paths_must_be_normalized_and_relative() {
         assert!(validate_relative_path(Path::new("src/file.rs")).is_ok());
         assert!(validate_relative_path(Path::new("../file.rs")).is_err());
@@ -1800,9 +1836,8 @@ mod tests {
             &["commit", "--quiet", "-m", "fixture"][..],
         ] {
             assert!(
-                Command::new("git")
+                harness_git(root.path())
                     .args(command)
-                    .current_dir(root.path())
                     .status()
                     .unwrap()
                     .success()
@@ -1811,9 +1846,8 @@ mod tests {
         let original = fs::read(root.path().join("src/file.rs")).unwrap();
         fs::write(root.path().join("src/file.rs"), "changed\n").unwrap();
         assert!(
-            Command::new("git")
+            harness_git(root.path())
                 .args(["add", "--all"])
-                .current_dir(root.path())
                 .status()
                 .unwrap()
                 .success()

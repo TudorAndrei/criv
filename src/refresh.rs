@@ -21,6 +21,9 @@ pub(crate) enum RefreshCause {
 pub(crate) struct RefreshResult {
     vault: Vault,
     state: State,
+    snapshot: String,
+    errors: usize,
+    warnings: usize,
 }
 
 #[derive(Debug)]
@@ -127,11 +130,7 @@ fn execute(
     let changed_files = vault.source_state().changed_files().to_vec();
 
     let policy_plan = PolicyScanPlan::new(&vault);
-    let diagnostics = check::validate_with_previous_state_and_policy_plan(
-        &vault,
-        diagnostic_previous_state,
-        &policy_plan,
-    );
+    let diagnostics = check::validate_vault(&vault, diagnostic_previous_state, &policy_plan);
     let (snapshot, state) = match previous_state {
         Some(previous_state) => state::write_state_incremental_with_policy_plan_and_check(
             &vault,
@@ -146,9 +145,14 @@ fn execute(
     };
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();
-    println!("state updated: snapshot {snapshot}, {errors} errors, {warnings} warnings");
 
-    Ok(RefreshResult { vault, state })
+    Ok(RefreshResult {
+        vault,
+        state,
+        snapshot,
+        errors,
+        warnings,
+    })
 }
 
 #[cfg(test)]
@@ -159,6 +163,27 @@ impl RefreshResult {
 
     fn state(&self) -> &State {
         &self.state
+    }
+}
+
+impl RefreshResult {
+    pub(crate) fn snapshot(&self) -> &str {
+        &self.snapshot
+    }
+
+    pub(crate) fn errors(&self) -> usize {
+        self.errors
+    }
+
+    pub(crate) fn warnings(&self) -> usize {
+        self.warnings
+    }
+
+    pub(crate) fn text_summary(&self) -> String {
+        format!(
+            "state updated: snapshot {}, {} errors, {} warnings",
+            self.snapshot, self.errors, self.warnings
+        )
     }
 }
 

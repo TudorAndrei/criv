@@ -13,8 +13,8 @@ exploring the codebase. This is a single-context repo.
 
 - **`CONTEXT.md`** at the repo root, if it exists.
 - **`docs/adr/`** — read ADRs that touch the area you are about to work in.
-  There are 47 of them and they are the primary record of how criv behaves and
-  why.
+  They are the primary record of how criv behaves and why. There are too many to
+  read linearly; use the queries below to find the ones that govern your files.
 - **`AGENTS.md`** at the repo root — verification commands and repo conventions.
 
 If `CONTEXT.md` doesn't exist, **proceed silently**. Don't flag its absence and
@@ -27,7 +27,7 @@ when terms actually get resolved.
 /
 ├── AGENTS.md
 ├── docs/
-│   ├── adr/                ← 47 decisions, criv-governed
+│   ├── adr/                ← decisions, criv-governed
 │   ├── agents/             ← this configuration
 │   ├── architecture/       ← agent-authored LikeC4 workspace
 │   └── query-reference.md

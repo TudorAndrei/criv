@@ -5,6 +5,7 @@ export interface CrivCheckDiagnosticJson {
   line?: unknown;
   message?: unknown;
   range?: unknown;
+  fix?: unknown;
 }
 
 export interface DiagnosticPosition {
@@ -24,6 +25,7 @@ export interface NormalizedCheckDiagnostic {
   line?: number;
   message: string;
   range?: DiagnosticRange;
+  fix?: string;
 }
 
 export function parseCheckDiagnostics(raw: string): NormalizedCheckDiagnostic[] {
@@ -34,6 +36,7 @@ export function parseCheckDiagnostics(raw: string): NormalizedCheckDiagnostic[] 
 
   return parsed.filter(isDiagnosticRecord).map((diagnostic) => {
     const range = rangeValue(diagnostic.range);
+    const fix = stringValue(diagnostic.fix);
     return {
       severity: diagnostic.severity === "error" ? "error" : "warning",
       code: stringValue(diagnostic.code),
@@ -41,6 +44,7 @@ export function parseCheckDiagnostics(raw: string): NormalizedCheckDiagnostic[] 
       line: numberValue(diagnostic.line),
       message: stringValue(diagnostic.message) || "criv check diagnostic",
       ...(range ? { range } : {}),
+      ...(fix ? { fix } : {}),
     };
   });
 }

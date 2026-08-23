@@ -580,7 +580,7 @@ pub(super) fn parse_file(path: &str, contents: &str, root: Node<'_>) -> SourceFi
         modules: Vec::new(),
         symbols: Vec::new(),
     };
-    collect_modules(root, contents, path, None, &mut file);
+    collect_modules(root, contents, path, None, &mut file, 0);
     file
 }
 
@@ -590,7 +590,11 @@ fn collect_modules(
     path: &str,
     parent_module: Option<&str>,
     file: &mut SourceFile,
+    depth: usize,
 ) {
+    if depth >= super::MAX_AST_DEPTH {
+        return;
+    }
     if declaration_target(node, contents)
         .as_deref()
         .is_some_and(is_module_declaration)
@@ -600,7 +604,7 @@ fn collect_modules(
     }
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        collect_modules(child, contents, path, parent_module, file);
+        collect_modules(child, contents, path, parent_module, file, depth + 1);
     }
 }
 
@@ -723,15 +727,13 @@ fn parse_module(
             lexical_scope(do_block),
             file,
         );
-        collect_module_body(
-            do_block,
+        ModuleBodyWalk {
             contents,
             path,
-            &display_name,
-            initial_kind == SymbolKind::Protocol,
-            file,
-            &mut body,
-        );
+            module_name: &display_name,
+            allow_bodyless_function: initial_kind == SymbolKind::Protocol,
+        }
+        .collect(do_block, file, &mut body, 0);
     }
 
     let final_kind = if initial_kind == SymbolKind::Protocol {
@@ -762,90 +764,90 @@ fn parse_module(
     emit_callbacks(path, &display_name, &owner, &body, file);
 }
 
-fn collect_module_body(
-    node: Node<'_>,
-    contents: &str,
-    path: &str,
-    module_name: &str,
+struct ModuleBodyWalk<'a> {
+    contents: &'a str,
+    path: &'a str,
+    module_name: &'a str,
     allow_bodyless_function: bool,
-    file: &mut SourceFile,
-    body: &mut ModuleBody,
-) {
-    if declaration_target(node, contents)
-        .as_deref()
-        .is_some_and(is_module_declaration)
-    {
-        parse_module(node, contents, path, Some(module_name), file);
-        return;
-    }
-    if let Some(target) = declaration_target(node, contents) {
-        match target.as_str() {
-            "def" | "defp" | "defmacro" | "defmacrop" | "defguard" | "defguardp"
-            | "defdelegate" => {
-                if !unsafe_subtree(node)
-                    && let Some(clause) =
-                        callable_clause(node, contents, path, module_name, &target)
-                {
-                    if !clause.has_body
-                        && clause.defaults.is_empty()
-                        && matches!(clause.kind, SymbolKind::Function | SymbolKind::Macro)
-                        && !allow_bodyless_function
-                    {
-                        return;
-                    } else if !clause.has_body && !clause.defaults.is_empty() {
-                        body.default_heads.push(DefaultHead {
-                            kind: clause.kind,
-                            name: clause.name,
-                            full_arity: clause.arity,
-                            default_count: clause.defaults.len(),
-                            params: clause.params,
-                            defaults: clause.defaults,
-                            exported: clause.exported,
-                            default_relationships: clause.default_relationships,
-                        });
-                    } else {
-                        body.callables.push(clause);
-                    }
-                }
-                return;
-            }
-            "defstruct" => {
-                if !unsafe_subtree(node) {
-                    body.has_struct = true;
-                    body.fields.extend(struct_fields(node, contents));
-                }
-                return;
-            }
-            "defexception" => {
-                if !unsafe_subtree(node) {
-                    body.has_exception = true;
-                    body.fields.extend(struct_fields(node, contents));
-                }
-                return;
-            }
-            _ => {}
+}
+
+impl ModuleBodyWalk<'_> {
+    fn collect(&self, node: Node<'_>, file: &mut SourceFile, body: &mut ModuleBody, depth: usize) {
+        let contents = self.contents;
+        let path = self.path;
+        let module_name = self.module_name;
+        let allow_bodyless_function = self.allow_bodyless_function;
+        if depth >= super::MAX_AST_DEPTH {
+            return;
         }
-    }
+        if declaration_target(node, contents)
+            .as_deref()
+            .is_some_and(is_module_declaration)
+        {
+            parse_module(node, contents, path, Some(module_name), file);
+            return;
+        }
+        if let Some(target) = declaration_target(node, contents) {
+            match target.as_str() {
+                "def" | "defp" | "defmacro" | "defmacrop" | "defguard" | "defguardp"
+                | "defdelegate" => {
+                    if !unsafe_subtree(node)
+                        && let Some(clause) =
+                            callable_clause(node, contents, path, module_name, &target)
+                    {
+                        if !clause.has_body
+                            && clause.defaults.is_empty()
+                            && matches!(clause.kind, SymbolKind::Function | SymbolKind::Macro)
+                            && !allow_bodyless_function
+                        {
+                            return;
+                        } else if !clause.has_body && !clause.defaults.is_empty() {
+                            body.default_heads.push(DefaultHead {
+                                kind: clause.kind,
+                                name: clause.name,
+                                full_arity: clause.arity,
+                                default_count: clause.defaults.len(),
+                                params: clause.params,
+                                defaults: clause.defaults,
+                                exported: clause.exported,
+                                default_relationships: clause.default_relationships,
+                            });
+                        } else {
+                            body.callables.push(clause);
+                        }
+                    }
+                    return;
+                }
+                "defstruct" => {
+                    if !unsafe_subtree(node) {
+                        body.has_struct = true;
+                        body.fields.extend(struct_fields(node, contents));
+                    }
+                    return;
+                }
+                "defexception" => {
+                    if !unsafe_subtree(node) {
+                        body.has_exception = true;
+                        body.fields.extend(struct_fields(node, contents));
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
 
-    if node.kind() == "unary_operator"
-        && operator_text(node, contents).as_deref() == Some("@")
-        && !unsafe_subtree(node)
-    {
-        collect_attribute(node, contents, module_name, body);
-        return;
-    }
+        if node.kind() == "unary_operator"
+            && operator_text(node, contents).as_deref() == Some("@")
+            && !unsafe_subtree(node)
+        {
+            collect_attribute(node, contents, module_name, body);
+            return;
+        }
 
-    let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
-        collect_module_body(
-            child,
-            contents,
-            path,
-            module_name,
-            allow_bodyless_function,
-            file,
-            body,
-        );
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            self.collect(child, file, body, depth + 1);
+        }
     }
 }
 
@@ -1263,6 +1265,20 @@ fn collect_expression_relationships(
     module_name: &str,
     relationships: &mut Vec<Relationship>,
 ) {
+    collect_expression_relationships_depth(node, contents, path, module_name, relationships, 0);
+}
+
+fn collect_expression_relationships_depth(
+    node: Node<'_>,
+    contents: &str,
+    path: &str,
+    module_name: &str,
+    relationships: &mut Vec<Relationship>,
+    depth: usize,
+) {
+    if depth >= super::MAX_AST_DEPTH {
+        return;
+    }
     if node.kind() == "unary_operator"
         && operator_text(node, contents).as_deref() == Some("&")
         && let Some(capture) = capture_relationship(node, contents, path, module_name)
@@ -1273,13 +1289,27 @@ fn collect_expression_relationships(
 
     if node.kind() == "binary_operator" && operator_text(node, contents).as_deref() == Some("|>") {
         if let Some(left) = node.child_by_field_name("left") {
-            collect_expression_relationships(left, contents, path, module_name, relationships);
+            collect_expression_relationships_depth(
+                left,
+                contents,
+                path,
+                module_name,
+                relationships,
+                depth + 1,
+            );
         }
         if let Some(right) = node.child_by_field_name("right") {
             if right.kind() == "call" {
                 collect_call_relationship(right, contents, path, module_name, 1, relationships);
             } else {
-                collect_expression_relationships(right, contents, path, module_name, relationships);
+                collect_expression_relationships_depth(
+                    right,
+                    contents,
+                    path,
+                    module_name,
+                    relationships,
+                    depth + 1,
+                );
             }
         }
         return;
@@ -1301,7 +1331,14 @@ fn collect_expression_relationships(
         });
         for field in ["left", "right"] {
             if let Some(child) = node.child_by_field_name(field) {
-                collect_expression_relationships(child, contents, path, module_name, relationships);
+                collect_expression_relationships_depth(
+                    child,
+                    contents,
+                    path,
+                    module_name,
+                    relationships,
+                    depth + 1,
+                );
             }
         }
         return;
@@ -1325,7 +1362,14 @@ fn collect_expression_relationships(
             .child_by_field_name("operand")
             .or_else(|| first_named_child(node))
         {
-            collect_expression_relationships(operand, contents, path, module_name, relationships);
+            collect_expression_relationships_depth(
+                operand,
+                contents,
+                path,
+                module_name,
+                relationships,
+                depth + 1,
+            );
         }
         return;
     }
@@ -1337,7 +1381,14 @@ fn collect_expression_relationships(
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        collect_expression_relationships(child, contents, path, module_name, relationships);
+        collect_expression_relationships_depth(
+            child,
+            contents,
+            path,
+            module_name,
+            relationships,
+            depth + 1,
+        );
     }
 }
 

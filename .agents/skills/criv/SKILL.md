@@ -2,7 +2,7 @@
 name: criv
 description: Use when working in a criv vault, refreshing criv state, looking for undocumented code, or choosing which criv skill covers a task.
 metadata:
-  criv-template: blake3:815b1e9708351b32
+  criv-template: blake3:cf236582e48e27cf
 ---
 
 # criv
@@ -23,7 +23,19 @@ The `checking-drift` skill owns the flags and the failure paths.
 
 - `criv query nodes --kind code --without-docs` lists code that no document claims.
 - `criv query coverage --by module` and `criv query coverage --by adr` report coverage.
-- `docs/query-reference.md` holds the full query surface.
+- `criv query --help` holds the full query surface. Add `--limit <N>` to bound a
+  large answer, and `--format ndjson` to read one row per line.
+
+## Reading a failure
+
+A `criv check` diagnostic always names a code and a repair. Other failures name
+a code only when criv has a defined recovery for them; the rest report prose.
+When a `[code]` or a `fix:` line is present, use it and run the command it
+names. The `checking-drift` skill holds the codes, the machine-readable
+formats, and the recovery paths.
+
+Never guess a flag: read it from `criv <command> --help`, or from
+`criv --usage-json` for the whole command tree.
 
 ## Which skill covers the task
 

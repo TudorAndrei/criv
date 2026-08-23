@@ -277,6 +277,7 @@ fn doc(id: &str, title: &str, body: &str) -> String {
 #[test]
 fn changed_check_fails_closed_outside_a_git_worktree() {
     let temp = TempDir::new().unwrap();
+    init(temp.path());
 
     criv(temp.path())
         .args(["check", "--changed"])
@@ -286,9 +287,29 @@ fn changed_check_fails_closed_outside_a_git_worktree() {
 }
 
 #[test]
+fn commands_fail_closed_outside_a_vault() {
+    let temp = TempDir::new().unwrap();
+
+    for args in [
+        vec!["check"],
+        vec!["query", "next-adr-id"],
+        vec!["watch", "--once"],
+        vec!["enforce", "--stage", "ci"],
+    ] {
+        criv(temp.path())
+            .args(&args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("[not-a-vault]"))
+            .stderr(predicate::str::contains("fix: criv init"));
+    }
+}
+
+#[test]
 fn changed_check_with_no_staged_changes_skips_vault_loading_in_all_formats() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
+    init(root);
     git(root, &["init", "-b", "main"]);
 
     criv(root)
@@ -1470,15 +1491,14 @@ fn query_usage_errors_are_reported() {
         .code(2)
         .stderr(predicate::str::contains("required arguments"))
         .stderr(predicate::str::contains("<SYMBOL>"));
-    let invalid = criv(root)
+    criv(root)
         .args(["query", "bogus"])
         .assert()
         .failure()
         .code(2)
-        .stderr(predicate::str::contains("unrecognized subcommand 'bogus'"))
-        .stderr(predicate::str::contains("Valid query subcommands:"))
-        .stderr(predicate::str::contains("MVP").not());
-    let stderr = String::from_utf8(invalid.get_output().stderr.clone()).unwrap();
+        .stderr(predicate::str::contains("unrecognized subcommand 'bogus'"));
+    let listed = criv(root).args(["query"]).assert().failure().code(2);
+    let stderr = String::from_utf8(listed.get_output().stderr.clone()).unwrap();
     for name in [
         "next-adr-id",
         "callers",

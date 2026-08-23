@@ -21,9 +21,9 @@ pub(crate) struct Config {
 #[derive(Debug, Clone)]
 pub(crate) struct ImportPolicy {
     pub(crate) id: String,
-    pub(crate) scope_matcher: crate::util::GlobMatcher,
+    pub(crate) scope_matcher: crate::glob::GlobMatcher,
     pub(crate) deny: Vec<String>,
-    pub(crate) deny_matchers: Vec<Option<crate::util::GlobMatcher>>,
+    pub(crate) deny_matchers: Vec<Option<crate::glob::GlobMatcher>>,
 }
 
 impl Default for Config {
@@ -242,7 +242,7 @@ impl RawImportPolicy {
         } else {
             self.scope
         };
-        let scope_matcher = crate::util::GlobMatcher::new(&scope).map_err(|err| {
+        let scope_matcher = crate::glob::GlobMatcher::new(&scope).map_err(|err| {
             CrivError::new(format!(
                 "invalid enforce.imports scope for policy `{id}`: {err}"
             ))
@@ -253,7 +253,7 @@ impl RawImportPolicy {
             .map(|deny| {
                 (deny.contains('*') || deny.contains('?') || deny.contains('['))
                     .then(|| {
-                        crate::util::GlobMatcher::new(&[deny.replace("::", "/")]).map_err(|err| {
+                        crate::glob::GlobMatcher::new(&[deny.replace("::", "/")]).map_err(|err| {
                             CrivError::new(format!(
                                 "invalid enforce.imports deny glob for policy `{id}`: {err}"
                             ))

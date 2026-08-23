@@ -5,8 +5,8 @@ use std::path::Path;
 #[cfg(test)]
 use std::fs;
 
-use clap::Args as ClapArgs;
 use serde::{Deserialize, Serialize};
+use usage::Args as UsageArgs;
 
 use super::reconcile_transaction::Snapshot;
 use crate::git::{self, ChangeStatus, ChangedEntry, ChangedSet};
@@ -18,11 +18,11 @@ const RECEIPT_SCHEMA: &str = "criv.source-reconcile/1";
 const RECEIPT_PATH: &str = ".criv/source-reconcile.json";
 const COMMIT_MESSAGE: &str = "docs(adr): reconcile renamed source scopes";
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, UsageArgs)]
 pub(crate) struct Options {
-    #[arg(long, help = "Target branch or commit to compare with")]
+    #[usage(long, help = "Target branch or commit to compare with")]
     base: String,
-    #[arg(
+    #[usage(
         long,
         help = "Report a required reconciliation without modifying the worktree"
     )]

@@ -162,7 +162,7 @@
     "lint": "oxlint src test scripts esbuild.config.mjs",
     "package": "vsce package --no-dependencies --out vscode-criv.vsix",
     "smoke:wasm": "node scripts/wasm-smoke.mjs",
-    "test": "npm run build:wasm && npm run compile && npm run compile:unit-tests && node --test dist-test/unit/*.test.js dist-test/unit/*/*.test.js",
+    "test": "npm run build:wasm && npm run compile && npm run compile:unit-tests && node --test \"dist-test/unit/**/*.test.js\"",
     "test:integration": "npm run compile && npm run compile:integration-tests && node test/run-integration.mjs",
     "vscode:prepublish": "npm run build",
     "watch": "node esbuild.config.mjs --watch"

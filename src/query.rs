@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use clap::{Args as ClapArgs, Subcommand, ValueEnum};
+use usage::{Args as UsageArgs, Subcommands, ValueEnum};
 
+use crate::repository::RepositoryFiles;
 use crate::source::SymbolKind;
 use crate::vault::{
     NoteKind, ResolvedLink, SourceTargetResolution, Vault, source_fragment_name,
@@ -14,15 +15,20 @@ use crate::{CrivError, Result};
 enum Format {
     Text,
     Json,
+    Ndjson,
 }
 
-#[derive(Debug, ClapArgs)]
+/// Ask the loaded vault graph a focused question.
+///
+/// Each query prints one row per result. Add `--format json` to any query for a
+/// JSON array of rows, as in `criv query nodes --kind decision --format json`.
+#[derive(Debug, UsageArgs)]
 pub(crate) struct QueryOptions {
-    #[command(subcommand)]
+    #[usage(subcommand)]
     command: QueryCommand,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Subcommands)]
 enum QueryCommand {
     /// Print the next ADR id after the highest existing ADR id.
     NextAdrId(OutputOptions),
@@ -51,6 +57,11 @@ enum QueryCommand {
     /// List source, note, or decision nodes.
     Nodes(NodesOptions),
     /// Compare two state snapshots or git refs.
+    ///
+    /// `diff` resolves `latest` through `.criv/latest`, hex-like values through
+    /// `.criv/snapshots/<hash>.json`, and any other value through an embedded
+    /// lookup of `.criv/state.json` in the requested repository ref. It does
+    /// not invoke the `git` executable.
     Diff(DiffOptions),
 }
 
@@ -214,34 +225,37 @@ fn sorted_note_ids(vault: &Vault, note_indexes: Option<&[usize]>) -> Vec<String>
     rows
 }
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, Clone, Copy, UsageArgs)]
 struct OutputOptions {
-    /// Select text rows or a JSON array of rows.
-    #[arg(long, value_enum, default_value_t = Format::Text)]
+    /// Select text rows, a JSON array of rows, or one JSON row per line.
+    #[usage(long, value_enum, default = "text")]
     format: Format,
+    /// Print at most this many rows, so a large graph cannot flood a caller.
+    #[usage(long)]
+    limit: Option<usize>,
 }
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, UsageArgs)]
 struct SymbolOptions {
     /// Source path or symbol selector.
     symbol: String,
-    #[command(flatten)]
+    #[usage(flatten)]
     output: OutputOptions,
 }
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, UsageArgs)]
 struct NoteOptions {
     /// Note id or unique note name.
     note_id: String,
-    #[command(flatten)]
+    #[usage(flatten)]
     output: OutputOptions,
 }
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, UsageArgs)]
 struct DecisionOptions {
     /// ADR id.
     adr_id: String,
-    #[command(flatten)]
+    #[usage(flatten)]
     output: OutputOptions,
 }
 
@@ -251,12 +265,12 @@ enum CoverageBy {
     Adr,
 }
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, UsageArgs)]
 struct CoverageOptions {
     /// Group coverage rows by module or ADR.
-    #[arg(long, value_enum)]
+    #[usage(long, value_enum)]
     by: Option<CoverageBy>,
-    #[command(flatten)]
+    #[usage(flatten)]
     output: OutputOptions,
 }
 
@@ -301,32 +315,33 @@ impl NodeKind {
     }
 }
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, UsageArgs)]
 struct NodesOptions {
     /// Restrict nodes to code, a source symbol kind, documentation, or decisions.
-    #[arg(long, value_enum)]
+    #[usage(long, value_enum)]
     kind: Option<NodeKind>,
     /// Restrict code nodes to symbols that no note references.
-    #[arg(long)]
+    #[usage(long)]
     without_docs: bool,
-    #[command(flatten)]
+    #[usage(flatten)]
     output: OutputOptions,
 }
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, UsageArgs)]
 struct DiffOptions {
     /// Left snapshot hash, `latest`, or git ref.
     ref_a: String,
     /// Right snapshot hash, `latest`, or git ref.
     ref_b: String,
-    #[command(flatten)]
+    #[usage(flatten)]
     output: OutputOptions,
 }
 
 pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
+    RepositoryFiles::open_vault(root)?;
     if let QueryCommand::Diff(options) = &options.command {
         let rows = diff(root, &options.ref_a, &options.ref_b)?;
-        return print_rows(&rows, options.output.format);
+        return print_rows(&rows, options.output);
     }
 
     let vault = load_query_vault(root, &options.command)?;
@@ -334,26 +349,24 @@ pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
         .command
         .reverse_index_scope()
         .map(|scope| QueryReverseIndex::build(&vault, scope));
-    let (rows, format) = match options.command {
-        QueryCommand::NextAdrId(output) => (vec![next_adr_id(&vault)], output.format),
+    let (rows, output) = match options.command {
+        QueryCommand::NextAdrId(output) => (vec![next_adr_id(&vault)?], output),
         QueryCommand::Callers(options) => {
             let rows = vault.source_graph().callers(&options.symbol);
-            (rows, options.output.format)
+            (rows, options.output)
         }
         QueryCommand::Callees(options) => {
             let rows = vault.source_graph().callees(&options.symbol);
-            (rows, options.output.format)
+            (rows, options.output)
         }
-        QueryCommand::AttackSurface(output) => {
-            (vault.source_graph().attack_surface(), output.format)
-        }
+        QueryCommand::AttackSurface(output) => (vault.source_graph().attack_surface(), output),
         QueryCommand::Targets(options) => {
             let rows = targets(&vault, &options.note_id)?;
-            (rows, options.output.format)
+            (rows, options.output)
         }
         QueryCommand::Cites(options) => {
             let rows = cites(&vault, &options.note_id, false)?;
-            (rows, options.output.format)
+            (rows, options.output)
         }
         QueryCommand::CitedBy(options) => {
             let rows = cited_by(
@@ -363,7 +376,7 @@ pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
                     .expect("cited-by declares a reverse index"),
                 &options.note_id,
             )?;
-            (rows, options.output.format)
+            (rows, options.output)
         }
         QueryCommand::OrphanDocs(output) => (
             orphan_docs(
@@ -372,26 +385,26 @@ pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
                     .as_ref()
                     .expect("orphan-docs declares a reverse index"),
             ),
-            output.format,
+            output,
         ),
         QueryCommand::References(options) => {
             let rows = reverse_index
                 .as_ref()
                 .expect("references declares a reverse index")
                 .references(&vault, &options.symbol);
-            (rows, options.output.format)
+            (rows, options.output)
         }
         QueryCommand::Governs(options) => {
             let rows = governs(&vault, &options.adr_id)?;
-            (rows, options.output.format)
+            (rows, options.output)
         }
         QueryCommand::Governing(options) => {
             let rows = governing(&vault, &options.symbol);
-            (rows, options.output.format)
+            (rows, options.output)
         }
         QueryCommand::Coverage(options) => {
             let rows = coverage(&vault, options.by);
-            (rows, options.output.format)
+            (rows, options.output)
         }
         QueryCommand::Nodes(options) => {
             let rows = nodes(
@@ -400,12 +413,12 @@ pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
                 options.kind,
                 options.without_docs,
             );
-            (rows, options.output.format)
+            (rows, options.output)
         }
         QueryCommand::Diff(_) => unreachable!("snapshot queries return before vault loading"),
     };
 
-    print_rows(&rows, format)
+    print_rows(&rows, output)
 }
 
 fn load_query_vault(root: &Path, command: &QueryCommand) -> Result<Vault> {
@@ -418,17 +431,28 @@ fn load_query_vault(root: &Path, command: &QueryCommand) -> Result<Vault> {
     }
 }
 
-fn next_adr_id(vault: &Vault) -> String {
-    let next = vault
+const MAX_ADR_NUMBER: u32 = 9999;
+
+fn next_adr_id(vault: &Vault) -> Result<String> {
+    let highest = vault
         .notes
         .iter()
         .filter_map(|note| note.id.as_deref())
         .filter_map(|id| id.strip_prefix("ADR-"))
         .filter_map(|digits| digits.parse::<u32>().ok())
         .max()
-        .unwrap_or(0)
-        + 1;
-    format!("ADR-{next:04}")
+        .unwrap_or(0);
+    let next = highest
+        .checked_add(1)
+        .filter(|next| *next <= MAX_ADR_NUMBER);
+    match next {
+        Some(next) => Ok(format!("ADR-{next:04}")),
+        None => Err(CrivError::coded_fix(
+            "adr-id-exhausted",
+            format!("no free ADR id after ADR-{highest:04}; ids are four digits"),
+            "Retire or renumber the highest ADR ids, or widen the id format in a new ADR.",
+        )),
+    }
 }
 
 fn targets(vault: &Vault, id: &str) -> Result<Vec<String>> {
@@ -739,8 +763,12 @@ fn json_edge_set(value: &serde_json::Value) -> BTreeSet<String> {
         .collect()
 }
 
-fn print_rows(rows: &[String], format: Format) -> Result<()> {
-    match format {
+fn print_rows(rows: &[String], output: OutputOptions) -> Result<()> {
+    let rows = match output.limit {
+        Some(limit) => &rows[..rows.len().min(limit)],
+        None => rows,
+    };
+    match output.format {
         Format::Text => {
             for row in rows {
                 println!("{row}");
@@ -751,6 +779,15 @@ fn print_rows(rows: &[String], format: Format) -> Result<()> {
             let json = serde_json::to_string_pretty(rows)
                 .map_err(|err| CrivError::new(format!("failed to serialize query rows: {err}")))?;
             println!("{json}");
+            Ok(())
+        }
+        Format::Ndjson => {
+            for row in rows {
+                let json = serde_json::to_string(row).map_err(|err| {
+                    CrivError::new(format!("failed to serialize query row: {err}"))
+                })?;
+                println!("{json}");
+            }
             Ok(())
         }
     }
@@ -1005,6 +1042,7 @@ mod tests {
     fn query_output_options() -> OutputOptions {
         OutputOptions {
             format: Format::Text,
+            limit: None,
         }
     }
 

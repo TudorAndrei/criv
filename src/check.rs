@@ -5,24 +5,24 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::fs;
 
-use clap::{Args as ClapArgs, ValueEnum};
 use rumdl_lib::config::Config as RumdlConfig;
 use rumdl_lib::fix_coordinator::FixCoordinator;
 use rumdl_lib::rule::{LintWarning, Rule};
 use rumdl_lib::rules::{all_rules, filter_rules};
 use serde::Serialize;
+use usage::{Args as UsageArgs, ValueEnum};
 
-use crate::diagnostic::{LspRange, SourceLocation};
+use crate::diagnostic::{LspRange, SourceLocation, fix_for};
 use crate::discovery::{
     MarkdownPolicy, discover_markdown, read_selected_text_from, select_markdown,
 };
 #[cfg(test)]
 use crate::git::ChangedEntry;
 use crate::git::{ChangeStatus, ChangedSet};
+use crate::identity::{is_adr_id, kebab};
 use crate::policy_scan::{PolicyDiagnostic, PolicyDiagnosticKind, PolicyScanPlan};
 use crate::repository::RepositoryFiles;
 use crate::state::{self, State};
-use crate::util::{is_adr_id, kebab};
 use crate::vault::{
     Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault, is_typed_source_target,
     source_target_body,
@@ -36,16 +36,16 @@ enum Format {
     Github,
 }
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, UsageArgs)]
 pub(crate) struct CheckOptions {
-    #[arg(long, value_enum, default_value_t = Format::Text)]
+    #[usage(long, value_enum, default = "text")]
     format: Format,
-    #[arg(long)]
+    #[usage(long)]
     filter: Option<String>,
-    #[arg(long)]
+    #[usage(long)]
     fix: bool,
     /// Validate safely scoped facts for the staged Git transaction.
-    #[arg(long, conflicts_with = "fix")]
+    #[usage(long, conflicts = "--fix")]
     changed: bool,
 }
 
@@ -75,6 +75,8 @@ struct JsonDiagnostic<'a> {
     message: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     range: Option<LspRange>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    fix: Option<&'static str>,
 }
 
 #[derive(Clone, Copy)]
@@ -107,12 +109,13 @@ impl Diagnostic {
             line: self.line,
             message: &self.message,
             range: self.location.as_ref().map(SourceLocation::lsp_range),
+            fix: fix_for(self.code),
         }
     }
 }
 
 pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
-    let files = RepositoryFiles::open(root)?;
+    let files = RepositoryFiles::open_vault(root)?;
     let mut diagnostics = if options.changed {
         validate_changed(&files)?
     } else {
@@ -152,7 +155,14 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
     }
 
     if diagnostics.iter().any(Diagnostic::is_error) {
-        return Err(CrivError::new("check failed"));
+        if options.format == Format::Text {
+            println!("next: {}", next_command(&diagnostics));
+        }
+        return Err(CrivError::coded_fix(
+            "check-failed",
+            "check failed",
+            fix_for("check-failed").expect("check-failed carries a repair"),
+        ));
     }
 
     Ok(())
@@ -242,6 +252,16 @@ fn validate_changed(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
     Ok(diagnostics)
 }
 
+const SCOPE_INVALIDATING_CONFIG_FILES: [&str; 7] = [
+    "criv.toml",
+    ".rumdl.toml",
+    "rumdl.toml",
+    ".config/rumdl.toml",
+    "pyproject.toml",
+    ".markdownlint.json",
+    ".markdownlint.yaml",
+];
+
 fn changed_scope_requires_full_check(changes: &ChangedSet, docs_dir: &str, adr_dir: &str) -> bool {
     let adr_prefix = format!(
         "{}/{}/",
@@ -257,7 +277,10 @@ fn changed_scope_requires_full_check(changes: &ChangedSet, docs_dir: &str, adr_d
             entry.previous_path.as_ref().unwrap_or(&entry.path),
         ]
         .into_iter()
-        .any(|path| path == "criv.toml" || path == ".rumdl.toml" || path.starts_with(&adr_prefix))
+        .any(|path| {
+            SCOPE_INVALIDATING_CONFIG_FILES.contains(&path.as_str())
+                || path.starts_with(&adr_prefix)
+        })
     })
 }
 
@@ -456,28 +479,13 @@ fn markdown_diagnostic(path: &str, source: Arc<str>, warning: LintWarning) -> Di
 }
 
 #[cfg(test)]
+#[cfg(test)]
 fn validate(vault: &Vault) -> Vec<Diagnostic> {
     let policy_plan = PolicyScanPlan::new(vault);
-    validate_with_previous_architecture_interfaces(vault, None, &policy_plan)
+    validate_vault(vault, None, &policy_plan)
 }
 
-pub(crate) fn validate_with_policy_plan(
-    vault: &Vault,
-    policy_plan: &PolicyScanPlan,
-) -> Vec<Diagnostic> {
-    validate_with_previous_architecture_interfaces(vault, None, policy_plan)
-}
-
-#[cfg(test)]
-pub(crate) fn validate_with_previous_state(
-    vault: &Vault,
-    previous: Option<&State>,
-) -> Vec<Diagnostic> {
-    let policy_plan = PolicyScanPlan::new(vault);
-    validate_with_previous_state_and_policy_plan(vault, previous, &policy_plan)
-}
-
-pub(crate) fn validate_with_previous_state_and_policy_plan(
+pub(crate) fn validate_vault(
     vault: &Vault,
     previous: Option<&State>,
     policy_plan: &PolicyScanPlan,
@@ -1199,6 +1207,22 @@ fn visit_supersession(
     stack.pop();
 }
 
+fn next_command(diagnostics: &[Diagnostic]) -> &'static str {
+    if diagnostics
+        .iter()
+        .any(|diag| diag.is_error() && diag.code == "markdown-format")
+    {
+        return "criv check --fix";
+    }
+    if diagnostics
+        .iter()
+        .any(|diag| diag.is_error() && diag.code == "unresolved-target")
+    {
+        return "criv watch --once";
+    }
+    "apply the fixes above, then run `criv check`"
+}
+
 fn print_text(diagnostics: &[Diagnostic]) {
     if diagnostics.is_empty() {
         println!("criv check: ok");
@@ -1217,6 +1241,9 @@ fn print_text(diagnostics: &[Diagnostic]) {
             );
         } else {
             println!("{severity}[{}] {}: {}", diag.code, diag.path, diag.message);
+        }
+        if let Some(fix) = fix_for(diag.code) {
+            println!("  fix: {fix}");
         }
     }
 }
@@ -1334,6 +1361,98 @@ fn warning_with_location(
 mod tests {
     use super::*;
     use crate::vault::WikiLink;
+
+    const EMITTED_CODES: [&str; 35] = [
+        "adr-dir-non-decision",
+        "adr-filename",
+        "ambiguous-policy-pattern-body",
+        "ambiguous-source-link",
+        "architecture-interface-drift",
+        "broken-link",
+        "decision-location",
+        "duplicate-doc-pattern",
+        "duplicate-id",
+        "duplicate-pattern-id",
+        "duplicate-policy-pattern",
+        "empty-policy-pattern",
+        "empty-target-scope",
+        "inconsistent-supersession",
+        "invalid-adr-id",
+        "invalid-frontmatter",
+        "invalid-kind",
+        "invalid-likec4-source",
+        "invalid-policy-pattern",
+        "legacy-source-target",
+        "markdown-format",
+        "missing-id",
+        "missing-policy-pattern-body",
+        "missing-policy-pattern-definition",
+        "missing-policy-pattern-id",
+        "missing-policy-pattern-language",
+        "non-portable-note-link",
+        "policy-violation",
+        "source-wikilink",
+        "supersession-cycle",
+        "unknown-superseded-by",
+        "unknown-supersedes",
+        "unresolved-governs",
+        "unresolved-pattern",
+        "unresolved-target",
+    ];
+
+    #[test]
+    fn every_emitted_code_carries_a_repair() {
+        for code in EMITTED_CODES {
+            assert!(
+                fix_for(code).is_some(),
+                "diagnostic code `{code}` reaches a caller with no repair"
+            );
+        }
+        for code in [
+            "not-a-vault",
+            "check-failed",
+            "policy-violation",
+            "import-policy-violation",
+            "adr-immutability-violation",
+            "enforcement-failed",
+        ] {
+            assert!(
+                fix_for(code).is_some(),
+                "failure code `{code}` reaches a caller with no repair"
+            );
+        }
+    }
+
+    #[test]
+    fn every_emitted_code_is_reachable_from_the_source() {
+        let source = include_str!("check.rs");
+        for code in EMITTED_CODES {
+            assert!(
+                source.contains(&format!("\"{code}\"")),
+                "`{code}` is listed as emitted but appears nowhere in this module"
+            );
+        }
+    }
+
+    #[test]
+    fn next_command_names_the_repair_criv_can_run() {
+        let markdown = vec![error("markdown-format", "docs/a.md", None, "bad")];
+        let stale = vec![error("unresolved-target", "docs/a.md", None, "stale")];
+        let other = vec![error("broken-link", "docs/a.md", None, "missing")];
+
+        assert_eq!(next_command(&markdown), "criv check --fix");
+        assert_eq!(next_command(&stale), "criv watch --once");
+        assert!(next_command(&other).contains("criv check"));
+    }
+
+    #[test]
+    fn json_diagnostics_carry_the_repair() {
+        let diagnostic = error("markdown-format", "docs/a.md", None, "bad");
+        let json = serde_json::to_value(diagnostic.json()).expect("serialize");
+
+        assert_eq!(json["code"], "markdown-format");
+        assert_eq!(json["fix"], "Run `criv check --fix`.");
+    }
 
     fn changed_set_fixture(entries: Vec<ChangedEntry>) -> ChangedSet {
         ChangedSet {
@@ -1887,7 +2006,8 @@ pub fn run(input: String) -> usize {
         .unwrap();
 
         let vault = likec4_interface_vault(&root);
-        let diagnostics = validate_with_previous_state(&vault, Some(&previous_state));
+        let diagnostics =
+            validate_vault(&vault, Some(&previous_state), &PolicyScanPlan::new(&vault));
 
         assert!(
             diagnostics
@@ -1919,7 +2039,8 @@ pub fn run(input: String, fallback: usize) -> usize {
         .unwrap();
 
         let vault = likec4_interface_vault(&root);
-        let diagnostics = validate_with_previous_state(&vault, Some(&previous_state));
+        let diagnostics =
+            validate_vault(&vault, Some(&previous_state), &PolicyScanPlan::new(&vault));
 
         assert!(diagnostics.iter().any(|diag| {
             diag.code == "architecture-interface-drift"

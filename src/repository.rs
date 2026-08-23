@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::Result;
+use crate::{CrivError, Result};
 
 #[derive(Clone)]
 pub(crate) struct RepositoryFiles {
@@ -29,6 +29,26 @@ impl RepositoryFiles {
         Ok(Self {
             filesystem: Arc::new(filesystem::FileSystem::open(root)?),
         })
+    }
+
+    pub(crate) fn open_vault(root: &Path) -> Result<Self> {
+        let files = Self::open(root)?;
+        files.require_vault()?;
+        Ok(files)
+    }
+
+    fn require_vault(&self) -> Result<()> {
+        if self.read_optional_string(Path::new("criv.toml"))?.is_some() {
+            return Ok(());
+        }
+        Err(CrivError::coded_fix(
+            "not-a-vault",
+            format!(
+                "not a criv vault: no criv.toml in {}",
+                self.root().display()
+            ),
+            crate::diagnostic::fix_for("not-a-vault").expect("not-a-vault carries a repair"),
+        ))
     }
 
     pub(crate) fn root(&self) -> &Path {

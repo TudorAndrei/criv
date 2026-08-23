@@ -5,17 +5,17 @@ mod tests;
 
 use std::path::Path;
 
-use clap::Args as ClapArgs;
+use usage::Args as UsageArgs;
 
 use crate::Result;
 use crate::install::{self, InstallMode, SkillPublication};
 use crate::repository::RepositoryFiles;
 
-#[derive(Debug, Default, ClapArgs)]
+#[derive(Debug, Default, UsageArgs)]
 pub(crate) struct InitOptions {
-    #[arg(long)]
+    #[usage(long)]
     no_skills: bool,
-    #[arg(long)]
+    #[usage(long)]
     force_skills: bool,
 }
 

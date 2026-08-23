@@ -114,12 +114,36 @@ pub(crate) enum ChangedSetComparison<'a> {
     },
 }
 
+fn same_directory(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
+
 impl GitRepository {
     /// Discovers the repository from `root`, treating bare repositories as not
     /// being inside a worktree to match `git rev-parse --is-inside-work-tree`.
     pub(crate) fn discover(root: &Path) -> Result<Option<Self>> {
         match git2::Repository::discover(root) {
-            Ok(repository) if repository.workdir().is_some() => Ok(Some(Self { repository })),
+            Ok(repository) if repository.workdir().is_some() => {
+                let workdir = repository
+                    .workdir()
+                    .expect("workdir presence checked by the match guard")
+                    .to_path_buf();
+                if !same_directory(&workdir, root) {
+                    return Err(CrivError::coded_fix(
+                        "vault-outside-git-root",
+                        format!(
+                            "the vault at `{}` is not the root of the Git worktree at `{}`; every path basis would shift",
+                            root.display(),
+                            workdir.display()
+                        ),
+                        "Run criv from the worktree root, or make the vault its own repository.",
+                    ));
+                }
+                Ok(Some(Self { repository }))
+            }
             Ok(_) => Ok(None),
             Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
             Err(error) => Err(CrivError::new(format!(

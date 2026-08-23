@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016
+# The GitHub Actions expressions below are matched literally with grep -F.
 set -euo pipefail
 
 repository_root="$(cd "$(dirname "$0")/.." && pwd)"

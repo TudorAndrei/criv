@@ -6,7 +6,7 @@ model {
       link ../../src/lib.rs 'source'
 
       commandInterface = component 'Command interface' {
-        technology 'Rust and clap'
+        technology 'Rust and usage'
         description 'Parses commands and sends each command to one application workflow.'
         link ../../src/lib.rs 'source'
       }

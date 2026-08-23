@@ -5,26 +5,37 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-use clap::Args as ClapArgs;
 use notify_debouncer_mini::{
     DebounceEventResult, Debouncer, new_debouncer,
     notify::{RecommendedWatcher, RecursiveMode},
 };
+use serde::Serialize;
+use usage::{Args as UsageArgs, ValueEnum};
 
 use crate::config::Config;
-use crate::discovery::source_event_relevant;
+use crate::discovery::SourceEventFilter;
 use crate::refresh::{RefreshCause, RefreshSession};
 use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
-#[derive(Debug, Default, ClapArgs)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+enum Format {
+    #[default]
+    Text,
+    Json,
+}
+
+#[derive(Debug, Default, UsageArgs)]
 pub(crate) struct WatchOptions {
-    #[arg(long)]
+    #[usage(long)]
     once: bool,
+    /// Select the human summary or a JSON refresh report. `--once` only.
+    #[usage(long, value_enum, default = "text")]
+    format: Format,
 }
 
 pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
-    let files = RepositoryFiles::open(root)?;
+    let files = RepositoryFiles::open_vault(root)?;
     let mode = if options.once {
         WatchMode::Once
     } else {
@@ -32,7 +43,7 @@ pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
     };
     let _lock = WatchSessionLock::acquire_from(&files, mode)?;
     if options.once {
-        run_once(&files)?;
+        run_once(&files, options.format)?;
         return Ok(());
     }
     let mut session = LiveWatchSession::start_from(&files)?;
@@ -337,6 +348,7 @@ struct ActiveWatchGeneration {
     docs_path: PathBuf,
     topology: WatchTopology,
     watcher: WatchBinding,
+    source_filter: SourceEventFilter,
 }
 
 #[derive(Debug)]
@@ -382,9 +394,12 @@ impl ActiveWatchGeneration {
             .map_err(CandidateFailure::watcher)?;
         let mut refresh =
             RefreshSession::live_from(files, &config).map_err(CandidateFailure::candidate)?;
-        refresh
+        let summary = refresh
             .refresh(RefreshCause::Initial)
-            .map_err(CandidateFailure::candidate)?;
+            .map_err(CandidateFailure::candidate)?
+            .text_summary();
+        println!("{summary}");
+        let source_filter = SourceEventFilter::new(root, &config);
         Ok(Self {
             config,
             config_source,
@@ -392,6 +407,7 @@ impl ActiveWatchGeneration {
             docs_path,
             topology,
             watcher,
+            source_filter,
         })
     }
 }
@@ -469,8 +485,9 @@ impl LiveWatchSession {
                 self.reconfigure();
                 return Ok(());
             }
-            if let Err(err) = result {
-                eprintln!("criv watch: {err}");
+            match result {
+                Ok(refreshed) => println!("{}", refreshed.text_summary()),
+                Err(err) => eprintln!("criv watch: {err}"),
             }
         }
         Ok(())
@@ -510,7 +527,7 @@ impl LiveWatchSession {
 
     fn source_changed(&self, signal: &WatchSignal) -> bool {
         matches!(signal, WatchSignal::Paths(paths) if paths.iter().any(|path| {
-            source_event_relevant(&self.root, &self.active.config, path)
+            self.active.source_filter.relevant(path)
         }))
     }
 
@@ -518,14 +535,16 @@ impl LiveWatchSession {
         if self.suspended {
             return !matches!(signal, WatchSignal::Idle) || Instant::now() >= self.next_retry;
         }
+        if !matches!(signal, WatchSignal::Paths(_)) {
+            return false;
+        }
         let config_changed = match read_config_source(&self.files) {
             Ok(source) => source != self.active.config_source,
             Err(_) => true,
         };
-        matches!(signal, WatchSignal::Paths(_))
-            && (config_changed
-                || WatchTopology::observe(&self.root, &self.active.config) != self.active.topology
-                || WatchSet::active(&self.root, &self.active.config) != self.active.watcher.set)
+        config_changed
+            || WatchTopology::observe(&self.root, &self.active.config) != self.active.topology
+            || WatchSet::active(&self.root, &self.active.config) != self.active.watcher.set
     }
 
     fn reconfigure(&mut self) {
@@ -664,10 +683,38 @@ fn is_junction(_path: &Path) -> bool {
 
 /// A single `criv watch --once` rebuild, warmed by the on-disk source graph
 /// cache left behind by the previous run.
-fn run_once(files: &RepositoryFiles) -> Result<()> {
+fn run_once(files: &RepositoryFiles, format: Format) -> Result<()> {
     let mut refresh = RefreshSession::one_shot_from(files)?;
-    refresh.refresh(RefreshCause::Initial)?;
+    let result = refresh.refresh(RefreshCause::Initial)?;
+    match format {
+        Format::Text => {
+            println!("{}", result.text_summary());
+            println!("next: criv check");
+        }
+        Format::Json => {
+            let report = RefreshReport {
+                ok: result.errors() == 0,
+                snapshot: result.snapshot(),
+                errors: result.errors(),
+                warnings: result.warnings(),
+                next: "criv check",
+            };
+            let json = serde_json::to_string_pretty(&report).map_err(|err| {
+                CrivError::new(format!("failed to serialize refresh report: {err}"))
+            })?;
+            println!("{json}");
+        }
+    }
     Ok(())
+}
+
+#[derive(Serialize)]
+struct RefreshReport<'a> {
+    ok: bool,
+    snapshot: &'a str,
+    errors: usize,
+    warnings: usize,
+    next: &'a str,
 }
 
 #[derive(Debug, Clone, Copy)]

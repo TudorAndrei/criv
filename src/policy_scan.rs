@@ -376,7 +376,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::util::copy_fixture_tree;
+    use crate::identity::copy_fixture_tree;
 
     #[test]
     fn policy_free_accepted_adrs_resolve_no_policy_scopes() {
@@ -423,7 +423,7 @@ mod tests {
             BTreeSet::from(["src/left.rs".to_string(), "src/right.rs".to_string()])
         );
 
-        let _diagnostics = crate::check::validate_with_policy_plan(&vault, &plan);
+        let _diagnostics = crate::check::validate_vault(&vault, None, &plan);
         assert_eq!(
             structural::work_counts().policy_compilations,
             2,

@@ -6,7 +6,7 @@ use std::process::{Command, Output};
 #[cfg(windows)]
 use std::ffi::OsStr;
 
-use clap::{Args as ClapArgs, ValueEnum};
+use usage::{Args as UsageArgs, ValueEnum};
 
 use crate::{CrivError, Result};
 
@@ -32,13 +32,13 @@ impl Editor {
     }
 }
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, UsageArgs)]
 pub(crate) struct InstallEditorOptions {
     /// Editor CLI to use.
-    #[arg(long, value_enum)]
+    #[usage(long, value_enum)]
     editor: Editor,
     /// Validate the bundled viewer and show the install command without changing the editor.
-    #[arg(long)]
+    #[usage(long)]
     dry_run: bool,
 }
 
