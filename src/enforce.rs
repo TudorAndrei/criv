@@ -3,7 +3,7 @@ use std::env;
 use std::io::Read;
 use std::path::Path;
 
-use clap::{Args as ClapArgs, ValueEnum};
+use usage::{Args as UsageArgs, ValueEnum};
 
 use crate::check;
 use crate::git::{
@@ -20,16 +20,16 @@ enum Stage {
     Ci,
 }
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, UsageArgs)]
 pub(crate) struct EnforceOptions {
-    #[arg(long, value_enum)]
+    #[usage(long, value_enum)]
     stage: Stage,
     /// Consume Git's pre-push ref-update records from standard input.
-    #[arg(long, hide = true)]
+    #[usage(long, hide)]
     pre_push: bool,
-    #[arg(long, hide = true, requires = "pre_push")]
+    #[usage(long, hide, requires = "pre_push")]
     remote_name: Option<String>,
-    #[arg(long, hide = true, requires = "pre_push")]
+    #[usage(long, hide, requires = "pre_push")]
     remote_url: Option<String>,
 }
 

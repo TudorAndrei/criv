@@ -144,3 +144,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0131-publish-verified-documentation-assets-for-native-previews|ADR-0131]] - Publish verified documentation assets for native previews
 - [[0132-use-aqua-with-a-mise-alias-and-github-fallback|ADR-0132]] - Use aqua with a mise alias and GitHub fallback
 - [[0133-use-exact-lowercase-documentation-asset-extensions|ADR-0133]] - Use exact lowercase documentation asset extensions
+- [[0134-parse-the-cli-with-usage|ADR-0134]] - Parse the CLI with Usage

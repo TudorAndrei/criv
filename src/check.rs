@@ -5,12 +5,12 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::fs;
 
-use clap::{Args as ClapArgs, ValueEnum};
 use rumdl_lib::config::Config as RumdlConfig;
 use rumdl_lib::fix_coordinator::FixCoordinator;
 use rumdl_lib::rule::{LintWarning, Rule};
 use rumdl_lib::rules::{all_rules, filter_rules};
 use serde::Serialize;
+use usage::{Args as UsageArgs, ValueEnum};
 
 use crate::diagnostic::{LspRange, SourceLocation};
 use crate::discovery::{
@@ -36,16 +36,16 @@ enum Format {
     Github,
 }
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, UsageArgs)]
 pub(crate) struct CheckOptions {
-    #[arg(long, value_enum, default_value_t = Format::Text)]
+    #[usage(long, value_enum, default = "text")]
     format: Format,
-    #[arg(long)]
+    #[usage(long)]
     filter: Option<String>,
-    #[arg(long)]
+    #[usage(long)]
     fix: bool,
     /// Validate safely scoped facts for the staged Git transaction.
-    #[arg(long, conflicts_with = "fix")]
+    #[usage(long, conflicts = "--fix")]
     changed: bool,
 }
 

@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
-use clap::{Args as ClapArgs, Subcommand};
 use serde::{Deserialize, Serialize};
+use usage::{Args as UsageArgs, Subcommands};
 
 use crate::config::Config;
 use crate::git;
@@ -27,27 +27,27 @@ const RECEIPT_SCHEMA: &str = "criv.adr-reconcile/3";
 const RECEIPT_PATH: &str = ".criv/adr-reconcile.json";
 const RECONCILIATION_COMMIT_MESSAGE: &str = "docs(adr): reconcile provisional identifiers";
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, UsageArgs)]
 pub(crate) struct AdrOptions {
-    #[command(subcommand)]
+    #[usage(subcommand)]
     command: AdrCommand,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Subcommands)]
 enum AdrCommand {
     /// Reconcile provisional ADR IDs against an integration target.
     Reconcile(ReconcileOptions),
-    #[command(about = "Reconcile exact governed source renames against an integration target")]
+    /// Reconcile exact governed source renames against an integration target.
     ReconcileSources(source_reconcile::Options),
 }
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, UsageArgs)]
 struct ReconcileOptions {
     /// Target branch or commit to compare with.
-    #[arg(long)]
+    #[usage(long)]
     base: String,
     /// Report a required reconciliation without modifying the worktree.
-    #[arg(long)]
+    #[usage(long)]
     check: bool,
 }
 

@@ -229,8 +229,9 @@ criv query governing src/main.rs
 criv query diff latest latest
 ```
 
-See [docs/query-reference.md](docs/query-reference.md) for every `criv query`
-subcommand, positional argument, flag, and example.
+Run `criv query --help` for every `criv query` subcommand, positional argument,
+and flag. The CLI is the reference, so an agent working in your repository has
+the same information you do.
 
 Run the same enforcement path used by hooks and CI:
 
@@ -301,6 +302,10 @@ criv --usage | usage generate completion --file - zsh criv
 criv --usage | usage generate markdown --file - --out-file docs/cli.md
 criv --usage | usage generate manpage --file - --out-file criv.1
 ```
+
+The `usage` CLI that reads the spec must be the same major version as the
+`usage-rs` that criv builds with. The spec dialect changes between major
+versions, so an older reader cannot parse a newer document.
 
 The installed pre-commit and pre-push hooks run their validation phases
 automatically. The common manual fixer is:

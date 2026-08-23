@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use clap::{Args as ClapArgs, Subcommand, ValueEnum};
+use usage::{Args as UsageArgs, Subcommands, ValueEnum};
 
 use crate::source::SymbolKind;
 use crate::vault::{
@@ -16,13 +16,17 @@ enum Format {
     Json,
 }
 
-#[derive(Debug, ClapArgs)]
+/// Ask the loaded vault graph a focused question.
+///
+/// Each query prints one row per result. Add `--format json` to any query for a
+/// JSON array of rows, as in `criv query nodes --kind decision --format json`.
+#[derive(Debug, UsageArgs)]
 pub(crate) struct QueryOptions {
-    #[command(subcommand)]
+    #[usage(subcommand)]
     command: QueryCommand,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Subcommands)]
 enum QueryCommand {
     /// Print the next ADR id after the highest existing ADR id.
     NextAdrId(OutputOptions),
@@ -51,6 +55,11 @@ enum QueryCommand {
     /// List source, note, or decision nodes.
     Nodes(NodesOptions),
     /// Compare two state snapshots or git refs.
+    ///
+    /// `diff` resolves `latest` through `.criv/latest`, hex-like values through
+    /// `.criv/snapshots/<hash>.json`, and any other value through an embedded
+    /// lookup of `.criv/state.json` in the requested repository ref. It does
+    /// not invoke the `git` executable.
     Diff(DiffOptions),
 }
 
@@ -214,34 +223,34 @@ fn sorted_note_ids(vault: &Vault, note_indexes: Option<&[usize]>) -> Vec<String>
     rows
 }
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, UsageArgs)]
 struct OutputOptions {
     /// Select text rows or a JSON array of rows.
-    #[arg(long, value_enum, default_value_t = Format::Text)]
+    #[usage(long, value_enum, default = "text")]
     format: Format,
 }
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, UsageArgs)]
 struct SymbolOptions {
     /// Source path or symbol selector.
     symbol: String,
-    #[command(flatten)]
+    #[usage(flatten)]
     output: OutputOptions,
 }
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, UsageArgs)]
 struct NoteOptions {
     /// Note id or unique note name.
     note_id: String,
-    #[command(flatten)]
+    #[usage(flatten)]
     output: OutputOptions,
 }
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, UsageArgs)]
 struct DecisionOptions {
     /// ADR id.
     adr_id: String,
-    #[command(flatten)]
+    #[usage(flatten)]
     output: OutputOptions,
 }
 
@@ -251,12 +260,12 @@ enum CoverageBy {
     Adr,
 }
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, UsageArgs)]
 struct CoverageOptions {
     /// Group coverage rows by module or ADR.
-    #[arg(long, value_enum)]
+    #[usage(long, value_enum)]
     by: Option<CoverageBy>,
-    #[command(flatten)]
+    #[usage(flatten)]
     output: OutputOptions,
 }
 
@@ -301,25 +310,25 @@ impl NodeKind {
     }
 }
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, UsageArgs)]
 struct NodesOptions {
     /// Restrict nodes to code, a source symbol kind, documentation, or decisions.
-    #[arg(long, value_enum)]
+    #[usage(long, value_enum)]
     kind: Option<NodeKind>,
     /// Restrict code nodes to symbols that no note references.
-    #[arg(long)]
+    #[usage(long)]
     without_docs: bool,
-    #[command(flatten)]
+    #[usage(flatten)]
     output: OutputOptions,
 }
 
-#[derive(Debug, ClapArgs)]
+#[derive(Debug, UsageArgs)]
 struct DiffOptions {
     /// Left snapshot hash, `latest`, or git ref.
     ref_a: String,
     /// Right snapshot hash, `latest`, or git ref.
     ref_b: String,
-    #[command(flatten)]
+    #[usage(flatten)]
     output: OutputOptions,
 }
 

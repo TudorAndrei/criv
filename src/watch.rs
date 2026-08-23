@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-use clap::Args as ClapArgs;
 use notify_debouncer_mini::{
     DebounceEventResult, Debouncer, new_debouncer,
     notify::{RecommendedWatcher, RecursiveMode},
 };
+use usage::Args as UsageArgs;
 
 use crate::config::Config;
 use crate::discovery::source_event_relevant;
@@ -17,9 +17,9 @@ use crate::refresh::{RefreshCause, RefreshSession};
 use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
-#[derive(Debug, Default, ClapArgs)]
+#[derive(Debug, Default, UsageArgs)]
 pub(crate) struct WatchOptions {
-    #[arg(long)]
+    #[usage(long)]
     once: bool,
 }
 

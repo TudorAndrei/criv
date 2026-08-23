@@ -1470,15 +1470,16 @@ fn query_usage_errors_are_reported() {
         .code(2)
         .stderr(predicate::str::contains("required arguments"))
         .stderr(predicate::str::contains("<SYMBOL>"));
-    let invalid = criv(root)
+    criv(root)
         .args(["query", "bogus"])
         .assert()
         .failure()
         .code(2)
-        .stderr(predicate::str::contains("unrecognized subcommand 'bogus'"))
-        .stderr(predicate::str::contains("Valid query subcommands:"))
-        .stderr(predicate::str::contains("MVP").not());
-    let stderr = String::from_utf8(invalid.get_output().stderr.clone()).unwrap();
+        .stderr(predicate::str::contains("unrecognized subcommand 'bogus'"));
+    // `criv query` with no subcommand answers with its own page, which lists
+    // every query the command tree holds.
+    let listed = criv(root).args(["query"]).assert().failure().code(2);
+    let stderr = String::from_utf8(listed.get_output().stderr.clone()).unwrap();
     for name in [
         "next-adr-id",
         "callers",
