@@ -308,7 +308,7 @@ fn changed_entries(root: &Path, options: &EnforceOptions) -> Result<Option<Chang
     match options.stage {
         Stage::Commit => repository
             .as_ref()
-            .map(|repo| repo.changed_set(ChangedSetComparison::Staged))
+            .map(|repo| repo.changed_set(&ChangedSetComparison::Staged))
             .transpose(),
         Stage::Push if options.pre_push => pre_push_changed_entries(
             required_repository(repository.as_ref())?,
@@ -324,12 +324,12 @@ fn changed_entries(root: &Path, options: &EnforceOptions) -> Result<Option<Chang
         Stage::Push => repository
             .as_ref()
             .map(|repo| {
-                repo.changed_set(ChangedSetComparison::ThreeDot {
+                repo.changed_set(&ChangedSetComparison::ThreeDot {
                     upstream_ref: "@{upstream}",
                     head_ref: "HEAD",
                 })
                 .or_else(|_| {
-                    repo.changed_set(ChangedSetComparison::Trees {
+                    repo.changed_set(&ChangedSetComparison::Trees {
                         old_ref: "HEAD~1",
                         new_ref: "HEAD",
                     })
@@ -351,7 +351,7 @@ fn ci_changed_entries_with_env(
 ) -> Result<Option<ChangedSet>> {
     if let Some(base_ref) = env_value("CRIV_BASE_REF") {
         return required_repository(repository)?
-            .changed_set(ChangedSetComparison::Trees {
+            .changed_set(&ChangedSetComparison::Trees {
                 old_ref: &base_ref,
                 new_ref: "HEAD",
             })
@@ -361,7 +361,7 @@ fn ci_changed_entries_with_env(
     if let Some(base_ref) = env_value("GITHUB_BASE_REF") {
         let origin_ref = format!("origin/{base_ref}");
         if let Some(repository) = repository
-            && let Ok(changes) = repository.changed_set(ChangedSetComparison::Trees {
+            && let Ok(changes) = repository.changed_set(&ChangedSetComparison::Trees {
                 old_ref: &origin_ref,
                 new_ref: "HEAD",
             })
@@ -369,7 +369,7 @@ fn ci_changed_entries_with_env(
             return Ok(Some(changes));
         }
         if let Some(repository) = repository
-            && let Ok(changes) = repository.changed_set(ChangedSetComparison::Trees {
+            && let Ok(changes) = repository.changed_set(&ChangedSetComparison::Trees {
                 old_ref: &base_ref,
                 new_ref: "HEAD",
             })
@@ -385,7 +385,7 @@ fn ci_changed_entries_with_env(
     }
 
     repository
-        .map(|repo| repo.changed_set(ChangedSetComparison::TreeToWorktree { old_ref: "HEAD" }))
+        .map(|repo| repo.changed_set(&ChangedSetComparison::TreeToWorktree { old_ref: "HEAD" }))
         .transpose()
 }
 

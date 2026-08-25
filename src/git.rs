@@ -126,11 +126,10 @@ impl GitRepository {
     /// being inside a worktree to match `git rev-parse --is-inside-work-tree`.
     pub(crate) fn discover(root: &Path) -> Result<Option<Self>> {
         match git2::Repository::discover(root) {
-            Ok(repository) if repository.workdir().is_some() => {
-                let workdir = repository
-                    .workdir()
-                    .expect("workdir presence checked by the match guard")
-                    .to_path_buf();
+            Ok(repository) => {
+                let Some(workdir) = repository.workdir().map(Path::to_path_buf) else {
+                    return Ok(None);
+                };
                 if !same_directory(&workdir, root) {
                     return Err(CrivError::coded_fix(
                         "vault-outside-git-root",
@@ -144,7 +143,6 @@ impl GitRepository {
                 }
                 Ok(Some(Self { repository }))
             }
-            Ok(_) => Ok(None),
             Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
             Err(error) => Err(CrivError::new(format!(
                 "failed to open repository from `{}`: {error}",
@@ -153,7 +151,7 @@ impl GitRepository {
         }
     }
 
-    pub(crate) fn changed_set(&self, comparison: ChangedSetComparison<'_>) -> Result<ChangedSet> {
+    pub(crate) fn changed_set(&self, comparison: &ChangedSetComparison<'_>) -> Result<ChangedSet> {
         match comparison {
             ChangedSetComparison::Staged => {
                 let old_tree = self.head_tree();
@@ -164,7 +162,7 @@ impl GitRepository {
                     .map_err(|error| {
                         CrivError::new(format!("git diff --cached failed: {error}"))
                     })?;
-                self.changed_set_from_diff(diff, Some("HEAD"), Some(":"))
+                Self::changed_set_from_diff(diff, Some("HEAD"), Some(":"))
             }
             ChangedSetComparison::Trees { old_ref, new_ref } => {
                 let old_tree = self.tree_at(old_ref).map_err(|error| {
@@ -180,7 +178,7 @@ impl GitRepository {
                     .map_err(|error| {
                         CrivError::new(format!("git diff {old_ref} {new_ref} failed: {error}"))
                     })?;
-                self.changed_set_from_diff(diff, Some(old_ref), Some(new_ref))
+                Self::changed_set_from_diff(diff, Some(old_ref), Some(new_ref))
             }
             ChangedSetComparison::ThreeDot {
                 upstream_ref,
@@ -227,7 +225,7 @@ impl GitRepository {
                             "git diff {upstream_ref}...{head_ref} failed: {error}"
                         ))
                     })?;
-                self.changed_set_from_diff(diff, Some(upstream_ref), Some(head_ref))
+                Self::changed_set_from_diff(diff, Some(upstream_ref), Some(head_ref))
             }
             ChangedSetComparison::TreeToWorktree { old_ref } => {
                 let old_tree = self.tree_at(old_ref).map_err(|error| {
@@ -240,7 +238,7 @@ impl GitRepository {
                     .map_err(|error| {
                         CrivError::new(format!("git diff {old_ref} failed: {error}"))
                     })?;
-                self.changed_set_from_diff(diff, Some(old_ref), None)
+                Self::changed_set_from_diff(diff, Some(old_ref), None)
             }
         }
     }
@@ -321,7 +319,7 @@ impl GitRepository {
             .map_err(|error| {
                 CrivError::new(format!("Git commit diff `{commit_id}` failed: {error}"))
             })?;
-        self.changed_set_from_diff(diff, old_ref.as_deref(), Some(commit_id))
+        Self::changed_set_from_diff(diff, old_ref.as_deref(), Some(commit_id))
     }
 
     fn commits_between(&self, old_ref: &str, new_ref: &str) -> Result<Vec<String>> {
@@ -409,7 +407,6 @@ impl GitRepository {
     }
 
     fn changed_set_from_diff(
-        &self,
         mut diff: git2::Diff<'_>,
         old_ref: Option<&str>,
         new_ref: Option<&str>,
@@ -532,7 +529,7 @@ pub fn changes_between(root: &Path, old: &str, new: &str) -> Result<ChangedSet> 
 }
 
 pub fn staged_changes(root: &Path) -> Result<ChangedSet> {
-    required_repository(root)?.changed_set(ChangedSetComparison::Staged)
+    required_repository(root)?.changed_set(&ChangedSetComparison::Staged)
 }
 
 pub fn commits_between(root: &Path, old_ref: &str, new_ref: &str) -> Result<Vec<String>> {
@@ -556,7 +553,7 @@ pub fn changes_between_paths(
         .repository
         .diff_tree_to_tree(Some(&old_tree), Some(&new_tree), Some(&mut options))
         .map_err(|error| CrivError::new(format!("git diff {old} {new} failed: {error}")))?;
-    repository.changed_set_from_diff(diff, Some(old), Some(new))
+    GitRepository::changed_set_from_diff(diff, Some(old), Some(new))
 }
 
 pub fn worktree_changes_in(root: &Path, paths: &[&str]) -> Result<ChangedSet> {
@@ -570,7 +567,7 @@ pub fn worktree_changes_in(root: &Path, paths: &[&str]) -> Result<ChangedSet> {
         .repository
         .diff_tree_to_workdir_with_index(Some(&old_tree), Some(&mut options))
         .map_err(|error| CrivError::new(format!("git diff HEAD failed: {error}")))?;
-    repository.changed_set_from_diff(diff, Some("HEAD"), None)
+    GitRepository::changed_set_from_diff(diff, Some("HEAD"), None)
 }
 
 pub fn merge_base(root: &Path, first: &str, second: &str) -> Result<String> {
@@ -737,17 +734,11 @@ fn added_lines_for_blobs(
     let mut ranges = Vec::new();
     let mut line_callback =
         |_: git2::DiffDelta<'_>, _: Option<git2::DiffHunk<'_>>, line: git2::DiffLine<'_>| {
-            if line.origin() == '+' {
-                if let Some(line_no) = line.new_lineno().filter(|line_no| *line_no > 0) {
-                    if let (Ok(start), Some(end)) = (
-                        usize::try_from(line_no),
-                        usize::try_from(line_no)
-                            .ok()
-                            .and_then(|value| value.checked_add(1)),
-                    ) {
-                        ranges.push(start..end);
-                    }
-                }
+            if let Some(line_no) = line.new_lineno().filter(|_| line.origin() == '+')
+                && let Ok(start) = usize::try_from(line_no)
+                && let Some(end) = start.checked_add(1)
+            {
+                ranges.push(start..end);
             }
             true
         };
