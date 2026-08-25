@@ -44,5 +44,7 @@ pub fn kebab(value: &str) -> String {
 pub fn is_adr_id(value: &str) -> bool {
     value.len() == 8
         && value.starts_with("ADR-")
-        && value[4..].chars().all(|ch| ch.is_ascii_digit())
+        && value
+            .get(4..)
+            .is_some_and(|suffix| suffix.chars().all(|ch| ch.is_ascii_digit()))
 }
