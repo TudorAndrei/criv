@@ -116,6 +116,11 @@ model {
       description 'Privately builds, caches, and reuses parsed Source graph data.'
       link ../../src/source/graph.rs 'source'
     }
+    rustSourceExtract = module 'criv::source::graph::extract' {
+      technology 'Rust and tree-sitter'
+      description 'Privately parses generic syntax and extracts signatures, symbols, imports, modules, and calls.'
+      link ../../src/source/graph/extract.rs 'source'
+    }
     rustElixirGraph = module 'criv::source::graph::elixir' {
       technology 'Rust and tree-sitter'
       description 'Privately owns Elixir parsing, identity aliases, directives, and relationship resolution.'
@@ -188,13 +193,23 @@ model {
   extend criv.cli.statePublisher {
     rustState = module 'criv::state' {
       technology 'Rust and serde'
-      description 'Builds and serializes the validated repository state envelope.'
+      description 'Owns State construction, wire serialization, and snapshot publication.'
       link ../../src/state.rs 'source'
     }
     rustStatePublication = module 'criv::state::publication' {
       technology 'Rust'
       description 'Owns the publication transaction, recovery, index, latest pointer, and retention.'
       link ../../src/state/publication.rs 'source'
+    }
+    rustStatePartitions = module 'criv::state::partitions' {
+      technology 'Rust'
+      description 'Privately invalidates, rebuilds, reuses, and flattens State partitions.'
+      link ../../src/state/partitions.rs 'source'
+    }
+    rustStateProjection = module 'criv::state::projection' {
+      technology 'Rust'
+      description 'Privately projects Source, note, C4, and LikeC4 data into State graph rows.'
+      link ../../src/state/projection.rs 'source'
     }
     rustSnapshots = module 'criv::state::snapshots' {
       technology 'Rust and blake3'
@@ -251,6 +266,7 @@ model {
   criv.cli.sourceIntelligence.rustDiscovery -> criv.cli.vaultModel.rustConfig 'Reads file-selection rules'
   criv.cli.sourceIntelligence.rustStructural -> criv.cli.sourceIntelligence.rustSource 'Reads selected Source text'
   criv.cli.sourceIntelligence.rustSourceGraph -> criv.cli.sourceIntelligence.rustElixirGraph 'Uses private Elixir graph meaning'
+  criv.cli.sourceIntelligence.rustSourceGraph -> criv.cli.sourceIntelligence.rustSourceExtract 'Extracts generic language graph data'
   criv.cli.sourceIntelligence.rustSourceGraph -> criv.cli.sourceIntelligence.rustSourcePaths 'Reads selected source content'
   criv.cli.sourceIntelligence.rustStructural -> criv.cli.diagnosticLocations.rustDiagnostic 'Keeps exact match byte spans'
 
@@ -308,6 +324,8 @@ model {
   criv.cli.statePublisher.rustState -> criv.cli.sourceIntelligence.rustSource 'Serializes source relations'
   criv.cli.statePublisher.rustState -> criv.cli.sourceIntelligence.rustStructural 'Serializes structural matches'
   criv.cli.statePublisher.rustState -> criv.cli.statePublisher.rustStatePublication 'Publishes validated State'
+  criv.cli.statePublisher.rustState -> criv.cli.statePublisher.rustStatePartitions 'Builds and reuses State partitions'
+  criv.cli.statePublisher.rustState -> criv.cli.statePublisher.rustStateProjection 'Projects State graph rows'
   criv.cli.statePublisher.rustStatePublication -> criv.cli.statePublisher.rustSnapshots 'Stores retained snapshots'
 
   // Queries.

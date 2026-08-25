@@ -298,7 +298,7 @@ fn write_usage_json(writer: &mut dyn Write) {
 mod tests {
     use std::ffi::{OsStr, OsString};
 
-    use super::{CrivCli, Error, render_help, write_usage_spec};
+    use super::{CrivCli, Error, render_help, write_usage_json, write_usage_spec};
 
     fn help_for(args: &[&str]) -> String {
         let owned: Vec<OsString> = args.iter().map(OsString::from).collect();
@@ -360,6 +360,54 @@ mod tests {
         assert_eq!(names, QUERY_SUBCOMMANDS);
         assert!(query.args.is_empty());
         assert!(query.flags.is_empty());
+    }
+
+    #[test]
+    fn usage_json_exports_visible_command_metadata() {
+        let mut output = Vec::new();
+        write_usage_json(&mut output);
+
+        let tree: serde_json::Value =
+            serde_json::from_slice(&output).expect("usage JSON should be valid JSON");
+        assert_eq!(tree["name"], "criv");
+        assert_eq!(tree["path"], "criv");
+        assert!(tree["flags"].as_array().is_none_or(Vec::is_empty));
+
+        let query = tree["subcommands"]
+            .as_array()
+            .expect("root command has subcommands")
+            .iter()
+            .find(|command| command["name"] == "query")
+            .expect("query command is exported");
+        assert_eq!(query["path"], "criv query");
+        assert!(
+            query["subcommands"]
+                .as_array()
+                .expect("query has subcommands")
+                .iter()
+                .any(|command| command["path"] == "criv query nodes")
+        );
+
+        let check = tree["subcommands"]
+            .as_array()
+            .expect("root command has subcommands")
+            .iter()
+            .find(|command| command["name"] == "check")
+            .expect("check command is exported");
+        let format = check["flags"]
+            .as_array()
+            .expect("check command has flags")
+            .iter()
+            .find(|flag| flag["name"] == "format")
+            .expect("format flag is exported");
+        assert_eq!(format["default"], serde_json::json!(["text"]));
+        assert!(
+            format["choices"]
+                .as_array()
+                .expect("format flag has choices")
+                .iter()
+                .any(|choice| choice == "json")
+        );
     }
 
     #[test]

@@ -389,6 +389,8 @@ fn relative_path(root: &Path, path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Command;
+
     use super::*;
 
     #[test]
@@ -402,5 +404,27 @@ mod tests {
         assert!(!source.contains("__CRIV_LIKEC4_PROTOCOL_VERSION__"));
         assert_eq!(LIKEC4_CONTRACT.node_version, "26.5.1");
         assert_eq!(LIKEC4_CONTRACT.likec4_version, "1.59.2");
+    }
+
+    #[test]
+    fn bridge_package_url_preserves_url_syntax_in_a_repository_path() {
+        let script = r#"
+            import { join } from 'node:path';
+            import { pathToFileURL } from 'node:url';
+            const root = process.argv[1];
+            const url = pathToFileURL(join(root, 'package.json'));
+            if (!url.pathname.endsWith('/criv%23percent%25/package.json')) process.exit(1);
+        "#;
+        let status = Command::new(resolve_node())
+            .args([
+                "--input-type=module",
+                "--eval",
+                script,
+                "/tmp/criv#percent%",
+            ])
+            .status()
+            .expect("Node.js must run the bridge URL contract");
+
+        assert!(status.success());
     }
 }

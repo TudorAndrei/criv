@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 
 const workspace = process.argv[1];
 const revision = Number(process.argv[2] ?? 0);
-const require = createRequire(new URL(`file://${process.cwd()}/package.json`));
+const require = createRequire(pathToFileURL(join(process.cwd(), 'package.json')));
 
 try {
   const entry = require.resolve('likec4');
