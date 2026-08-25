@@ -1,6 +1,6 @@
 [package]
 name = "criv"
-version = "0.12.0"
+version = "0.12.1"
 edition = "2024"
 rust-version = "1.97.1"
 license = "MIT"
@@ -35,7 +35,7 @@ blake3 = "1"
 cap-fs-ext = "4.0.2"
 cap-std = "4.0.2"
 content_inspector = "0.2"
-criv-state-wire = { version = "0.12.0", path = "crates/criv-state-wire" }
+criv-state-wire = { version = "0.12.1", path = "crates/criv-state-wire" }
 git2 = { version = "0.21.0", default-features = false }
 globset = "0.4"
 ignore = "0.4"
