@@ -41,13 +41,15 @@ impl RepositoryFiles {
         if self.read_optional_string(Path::new("criv.toml"))?.is_some() {
             return Ok(());
         }
+        let fix = crate::diagnostic::fix_for("not-a-vault")
+            .ok_or_else(|| CrivError::new("missing repair for not-a-vault"))?;
         Err(CrivError::coded_fix(
             "not-a-vault",
             format!(
                 "not a criv vault: no criv.toml in {}",
                 self.root().display()
             ),
-            crate::diagnostic::fix_for("not-a-vault").expect("not-a-vault carries a repair"),
+            fix,
         ))
     }
 

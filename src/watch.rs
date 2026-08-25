@@ -392,8 +392,7 @@ impl ActiveWatchGeneration {
         let topology = WatchTopology::observe(root, &config);
         let watcher = WatchBinding::start(factory, WatchSet::active(root, &config))
             .map_err(CandidateFailure::watcher)?;
-        let mut refresh =
-            RefreshSession::live_from(files, &config).map_err(CandidateFailure::candidate)?;
+        let mut refresh = RefreshSession::live_from(files, &config);
         let summary = refresh
             .refresh(RefreshCause::Initial)
             .map_err(CandidateFailure::candidate)?

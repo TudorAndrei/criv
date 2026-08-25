@@ -54,16 +54,16 @@ impl RefreshSession {
     #[cfg(test)]
     fn live(root: &Path, config: &Config) -> Result<Self> {
         let files = RepositoryFiles::open(root)?;
-        Self::live_from(&files, config)
+        Ok(Self::live_from(&files, config))
     }
 
-    pub(crate) fn live_from(files: &RepositoryFiles, config: &Config) -> Result<Self> {
-        Ok(Self {
+    pub(crate) fn live_from(files: &RepositoryFiles, config: &Config) -> Self {
+        Self {
             files: files.clone(),
             config: config.clone(),
             source_refresh_pending: false,
             previous: None,
-        })
+        }
     }
 
     pub(crate) fn refresh(&mut self, cause: RefreshCause) -> Result<&RefreshResult> {
@@ -101,10 +101,10 @@ impl RefreshSession {
 
         self.source_refresh_pending = false;
         self.previous = Some(next);
-        Ok(self
-            .previous
-            .as_ref()
-            .expect("refresh result was just stored"))
+        let Some(result) = self.previous.as_ref() else {
+            return Err(CrivError::new("refresh did not retain its result"));
+        };
+        Ok(result)
     }
 }
 fn execute(
