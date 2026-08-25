@@ -6,6 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 use serde::Deserialize;
+use wait_timeout::ChildExt;
 
 use crate::diagnostic::{LspRange, SourceLocation};
 
@@ -16,15 +17,16 @@ const MAX_BRIDGE_OUTPUT: usize = 16 * 1024 * 1024;
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LikeC4Contract {
-    protocol_version: u32,
-    node_version: String,
-    likec4_version: String,
+    #[serde(rename = "protocolVersion")]
+    protocol: u32,
+    #[serde(rename = "nodeVersion")]
+    node: String,
+    #[serde(rename = "likec4Version")]
+    likec4: String,
 }
 
-static LIKEC4_CONTRACT: LazyLock<LikeC4Contract> = LazyLock::new(|| {
-    serde_json::from_str(include_str!("../../assets/likec4-contract.json"))
-        .expect("the embedded LikeC4 contract must be valid JSON")
-});
+static LIKEC4_CONTRACT: LazyLock<Result<LikeC4Contract, serde_json::Error>> =
+    LazyLock::new(|| serde_json::from_str(include_str!("../../assets/likec4-contract.json")));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LikeC4DiagnosticKind {
@@ -104,6 +106,19 @@ pub(super) fn load(root: &Path, docs_path: &Path, sources: &[LikeC4Source]) -> L
         path: workspace.clone(),
         ..LikeC4Workspace::default()
     };
+    let contract = match LIKEC4_CONTRACT.as_ref() {
+        Ok(contract) => contract,
+        Err(error) => {
+            result.diagnostics.push(LikeC4Diagnostic {
+                kind: LikeC4DiagnosticKind::Protocol,
+                path: workspace,
+                line: None,
+                message: format!("invalid embedded LikeC4 contract: {error}"),
+                location: None,
+            });
+            return result;
+        }
+    };
 
     for path in &source_paths {
         if !path.starts_with(&format!("{workspace}/")) {
@@ -120,7 +135,7 @@ pub(super) fn load(root: &Path, docs_path: &Path, sources: &[LikeC4Source]) -> L
         return result;
     }
 
-    let bridge_source = bridge_source();
+    let bridge_source = bridge_source(contract);
     let node = resolve_node();
     let mut child = match Command::new(node)
         .args([
@@ -143,7 +158,7 @@ pub(super) fn load(root: &Path, docs_path: &Path, sources: &[LikeC4Source]) -> L
                 line: None,
                 message: format!(
                     "LikeC4 source requires Node.js {} and local likec4 {}: {error}",
-                    LIKEC4_CONTRACT.node_version, LIKEC4_CONTRACT.likec4_version
+                    contract.node, contract.likec4
                 ),
                 location: None,
             });
@@ -151,12 +166,15 @@ pub(super) fn load(root: &Path, docs_path: &Path, sources: &[LikeC4Source]) -> L
         }
     };
 
-    let stdout = child.stdout.take().expect("LikeC4 stdout is piped");
-    let stderr = child.stderr.take().expect("LikeC4 stderr is piped");
+    let Some(stdout) = child.stdout.take() else {
+        return bridge_stream_missing(result, workspace, "stdout");
+    };
+    let Some(stderr) = child.stderr.take() else {
+        return bridge_stream_missing(result, workspace, "stderr");
+    };
     let stdout_reader = thread::spawn(move || read_capped(stdout));
     let stderr_reader = thread::spawn(move || read_capped(stderr));
 
-    use wait_timeout::ChildExt;
     match child.wait_timeout(BRIDGE_TIMEOUT) {
         Ok(Some(_)) => {}
         Ok(None) => {
@@ -240,9 +258,9 @@ pub(super) fn load(root: &Path, docs_path: &Path, sources: &[LikeC4Source]) -> L
     };
 
     result.version = Some(response.likec4_version.clone());
-    if response.protocol_version != LIKEC4_CONTRACT.protocol_version
-        || response.node_version != LIKEC4_CONTRACT.node_version
-        || response.likec4_version != LIKEC4_CONTRACT.likec4_version
+    if response.protocol_version != contract.protocol
+        || response.node_version != contract.node
+        || response.likec4_version != contract.likec4
         || response.revision != 0
     {
         result.diagnostics.push(LikeC4Diagnostic {
@@ -251,9 +269,9 @@ pub(super) fn load(root: &Path, docs_path: &Path, sources: &[LikeC4Source]) -> L
             line: None,
             message: format!(
                 "LikeC4 bridge version mismatch: expected protocol {}, Node.js {}, and LikeC4 {}; got protocol {}, Node.js {}, and LikeC4 {}",
-                LIKEC4_CONTRACT.protocol_version,
-                LIKEC4_CONTRACT.node_version,
-                LIKEC4_CONTRACT.likec4_version,
+                contract.protocol,
+                contract.node,
+                contract.likec4,
                 response.protocol_version, response.node_version, response.likec4_version
             ),
             location: None,
@@ -292,7 +310,7 @@ pub(super) fn load(root: &Path, docs_path: &Path, sources: &[LikeC4Source]) -> L
                 line: location
                     .as_ref()
                     .and_then(SourceLocation::line)
-                    .or_else(|| diagnostic.line.map(|line| line + 1)),
+                    .or_else(|| diagnostic.line.map(|line| line.saturating_add(1))),
                 message: diagnostic.message,
                 location,
             }
@@ -310,10 +328,10 @@ pub(super) fn load(root: &Path, docs_path: &Path, sources: &[LikeC4Source]) -> L
     result
 }
 
-fn bridge_source() -> String {
+fn bridge_source(contract: &LikeC4Contract) -> String {
     BRIDGE_SOURCE_TEMPLATE.replace(
         "__CRIV_LIKEC4_PROTOCOL_VERSION__",
-        &LIKEC4_CONTRACT.protocol_version.to_string(),
+        &contract.protocol.to_string(),
     )
 }
 
@@ -346,7 +364,7 @@ fn read_capped(mut reader: impl std::io::Read) -> std::io::Result<Vec<u8>> {
             return Ok(stored);
         }
         let remaining = (MAX_BRIDGE_OUTPUT + 1).saturating_sub(stored.len());
-        stored.extend_from_slice(&buffer[..read.min(remaining)]);
+        stored.extend_from_slice(buffer.get(..read.min(remaining)).unwrap_or_default());
         if stored.len() > MAX_BRIDGE_OUTPUT {
             return Ok(stored);
         }
@@ -366,6 +384,14 @@ fn bridge_reader_panic(
         location: None,
     });
     result
+}
+
+fn bridge_stream_missing(
+    result: LikeC4Workspace,
+    workspace: String,
+    stream: &str,
+) -> LikeC4Workspace {
+    bridge_reader_panic(result, workspace, stream)
 }
 
 fn normalize_diagnostic_path(root: &Path, path: &str, sources: &[String]) -> String {
@@ -395,15 +421,15 @@ mod tests {
 
     #[test]
     fn embedded_bridge_uses_the_repository_contract() {
-        let source = bridge_source();
+        let contract = LIKEC4_CONTRACT
+            .as_ref()
+            .unwrap_or_else(|error| panic!("invalid embedded contract: {error}"));
+        let source = bridge_source(contract);
 
-        assert!(source.contains(&format!(
-            "protocolVersion: {}",
-            LIKEC4_CONTRACT.protocol_version
-        )));
+        assert!(source.contains(&format!("protocolVersion: {}", contract.protocol)));
         assert!(!source.contains("__CRIV_LIKEC4_PROTOCOL_VERSION__"));
-        assert_eq!(LIKEC4_CONTRACT.node_version, "26.5.1");
-        assert_eq!(LIKEC4_CONTRACT.likec4_version, "1.59.2");
+        assert_eq!(contract.node, "26.5.1");
+        assert_eq!(contract.likec4, "1.59.2");
     }
 
     #[test]
