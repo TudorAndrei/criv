@@ -144,7 +144,7 @@ pub(crate) fn index_work_counts() -> IndexWorkCounts {
 fn record_scan() {
     WORK_COUNTS.with(|counts| {
         let mut next = counts.get();
-        next.discovery_scans += 1;
+        next.discovery_scans = next.discovery_scans.saturating_add(1);
         counts.set(next);
     });
 }
