@@ -118,7 +118,7 @@ model {
     }
     rustSourceExtract = module 'criv::source::graph::extract' {
       technology 'Rust and tree-sitter'
-      description 'Privately extracts generic language symbols, imports, modules, and calls.'
+      description 'Privately parses generic syntax and extracts signatures, symbols, imports, modules, and calls.'
       link ../../src/source/graph/extract.rs 'source'
     }
     rustElixirGraph = module 'criv::source::graph::elixir' {
@@ -193,7 +193,7 @@ model {
   extend criv.cli.statePublisher {
     rustState = module 'criv::state' {
       technology 'Rust and serde'
-      description 'Builds and serializes the validated repository state envelope.'
+      description 'Owns State construction, wire serialization, and snapshot publication.'
       link ../../src/state.rs 'source'
     }
     rustStatePublication = module 'criv::state::publication' {
@@ -203,12 +203,12 @@ model {
     }
     rustStatePartitions = module 'criv::state::partitions' {
       technology 'Rust'
-      description 'Privately rebuilds and reuses State partitions from current vault facts.'
+      description 'Privately invalidates, rebuilds, reuses, and flattens State partitions.'
       link ../../src/state/partitions.rs 'source'
     }
     rustStateProjection = module 'criv::state::projection' {
       technology 'Rust'
-      description 'Privately projects LikeC4 workspace data into State graph rows.'
+      description 'Privately projects Source, note, C4, and LikeC4 data into State graph rows.'
       link ../../src/state/projection.rs 'source'
     }
     rustSnapshots = module 'criv::state::snapshots' {
@@ -325,7 +325,7 @@ model {
   criv.cli.statePublisher.rustState -> criv.cli.sourceIntelligence.rustStructural 'Serializes structural matches'
   criv.cli.statePublisher.rustState -> criv.cli.statePublisher.rustStatePublication 'Publishes validated State'
   criv.cli.statePublisher.rustState -> criv.cli.statePublisher.rustStatePartitions 'Builds and reuses State partitions'
-  criv.cli.statePublisher.rustState -> criv.cli.statePublisher.rustStateProjection 'Projects LikeC4 graph rows'
+  criv.cli.statePublisher.rustState -> criv.cli.statePublisher.rustStateProjection 'Projects State graph rows'
   criv.cli.statePublisher.rustStatePublication -> criv.cli.statePublisher.rustSnapshots 'Stores retained snapshots'
 
   // Queries.

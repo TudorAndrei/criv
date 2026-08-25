@@ -567,65 +567,6 @@ impl InterfaceSignature {
             .to_string()
     }
 
-    fn from_source(
-        language: Language,
-        symbol_kind: SymbolKind,
-        name: &str,
-        parent: Option<&str>,
-        exported: bool,
-        source: &str,
-    ) -> Self {
-        let qualified_name = parent
-            .map(|parent| format!("{parent}.{name}"))
-            .unwrap_or_else(|| name.to_string());
-        let visibility = exported.then(|| visibility_text(language, source));
-        let (inputs, output) = match symbol_kind {
-            SymbolKind::Function
-            | SymbolKind::Method
-            | SymbolKind::Macro
-            | SymbolKind::Guard
-            | SymbolKind::Callback
-            | SymbolKind::MacroCallback => function_signature(language, source),
-            SymbolKind::Class
-            | SymbolKind::Module
-            | SymbolKind::Protocol
-            | SymbolKind::Implementation
-            | SymbolKind::Struct
-            | SymbolKind::Exception
-            | SymbolKind::Behaviour => (Vec::new(), None),
-        };
-        let (fields, variants) = match symbol_kind {
-            SymbolKind::Class | SymbolKind::Struct | SymbolKind::Exception => {
-                aggregate_signature(language, source)
-            }
-            SymbolKind::Function
-            | SymbolKind::Method
-            | SymbolKind::Module
-            | SymbolKind::Protocol
-            | SymbolKind::Implementation
-            | SymbolKind::Behaviour
-            | SymbolKind::Macro
-            | SymbolKind::Guard
-            | SymbolKind::Callback
-            | SymbolKind::MacroCallback => (Vec::new(), Vec::new()),
-        };
-
-        Self {
-            language,
-            symbol_kind,
-            qualified_name,
-            visibility,
-            inputs,
-            output,
-            fields,
-            variants,
-            arity: None,
-            guards: Vec::new(),
-            defaults: Vec::new(),
-            specifications: Vec::new(),
-        }
-    }
-
     fn stable_text(&self) -> String {
         let mut fields = self.fields.clone();
         fields.sort();

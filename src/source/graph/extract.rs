@@ -2,10 +2,11 @@ use tree_sitter::{Node, Parser};
 
 use super::{
     Call, Import, InterfaceSignature, Language, ModuleDecl, SourceFile, Symbol, SymbolId,
-    SymbolKind, SymbolRange, clean_js_module, descendant_of_kind, elixir, fallback_module_decl,
-    field_text, first_named_child, has_descendant_kind, is_call_keyword, is_comment,
-    is_exported_symbol, node_text, parse_calls, parse_import, parse_imports,
-    parse_rust_impl_target, parse_rust_imports, parse_symbol, symbol_selector,
+    SymbolKind, SymbolRange, aggregate_signature, clean_js_module, descendant_of_kind, elixir,
+    fallback_module_decl, field_text, first_named_child, function_signature, has_descendant_kind,
+    is_call_keyword, is_comment, is_exported_symbol, node_text, parse_calls, parse_import,
+    parse_imports, parse_rust_impl_target, parse_rust_imports, parse_symbol, symbol_selector,
+    visibility_text,
 };
 
 const MAX_AST_DEPTH: usize = 512;
@@ -105,7 +106,7 @@ fn parse_source_file_fallback(path: &str, contents: &str) -> SourceFile {
                     name: name.clone(),
                     selector: symbol_selector(kind, parent.as_deref(), &name),
                 },
-                interface_signature: Some(InterfaceSignature::from_source(
+                interface_signature: Some(interface_signature_from_source(
                     language,
                     kind,
                     &name,
@@ -396,7 +397,7 @@ fn tree_sitter_symbol(
 
     let source = node_text(node, contents).unwrap_or_default();
     let exported = tree_sitter_exported(node, contents, language);
-    let interface_signature = Some(InterfaceSignature::from_source(
+    let interface_signature = Some(interface_signature_from_source(
         language, kind, &name, parent, exported, &source,
     ));
     let range = SymbolRange {
@@ -421,6 +422,65 @@ fn tree_sitter_symbol(
         calls: tree_sitter_calls(node, contents, language),
         relationships: Vec::new(),
     })
+}
+
+fn interface_signature_from_source(
+    language: Language,
+    symbol_kind: SymbolKind,
+    name: &str,
+    parent: Option<&str>,
+    exported: bool,
+    source: &str,
+) -> InterfaceSignature {
+    let qualified_name = parent
+        .map(|parent| format!("{parent}.{name}"))
+        .unwrap_or_else(|| name.to_string());
+    let visibility = exported.then(|| visibility_text(language, source));
+    let (inputs, output) = match symbol_kind {
+        SymbolKind::Function
+        | SymbolKind::Method
+        | SymbolKind::Macro
+        | SymbolKind::Guard
+        | SymbolKind::Callback
+        | SymbolKind::MacroCallback => function_signature(language, source),
+        SymbolKind::Class
+        | SymbolKind::Module
+        | SymbolKind::Protocol
+        | SymbolKind::Implementation
+        | SymbolKind::Struct
+        | SymbolKind::Exception
+        | SymbolKind::Behaviour => (Vec::new(), None),
+    };
+    let (fields, variants) = match symbol_kind {
+        SymbolKind::Class | SymbolKind::Struct | SymbolKind::Exception => {
+            aggregate_signature(language, source)
+        }
+        SymbolKind::Function
+        | SymbolKind::Method
+        | SymbolKind::Module
+        | SymbolKind::Protocol
+        | SymbolKind::Implementation
+        | SymbolKind::Behaviour
+        | SymbolKind::Macro
+        | SymbolKind::Guard
+        | SymbolKind::Callback
+        | SymbolKind::MacroCallback => (Vec::new(), Vec::new()),
+    };
+
+    InterfaceSignature {
+        language,
+        symbol_kind,
+        qualified_name,
+        visibility,
+        inputs,
+        output,
+        fields,
+        variants,
+        arity: None,
+        guards: Vec::new(),
+        defaults: Vec::new(),
+        specifications: Vec::new(),
+    }
 }
 
 fn tree_sitter_calls(node: Node<'_>, contents: &str, language: Language) -> Vec<Call> {
