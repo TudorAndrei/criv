@@ -42,12 +42,16 @@ pub struct InstallEditorOptions {
     dry_run: bool,
 }
 
-pub fn run(options: InstallEditorOptions) -> Result<()> {
+pub fn run(options: &InstallEditorOptions) -> Result<()> {
     let vsix = bundled_vsix()?;
     let editor_cli = resolve_editor(options.editor)?;
 
     if options.dry_run {
-        println!("editor install dry run: {editor_cli:?} --install-extension {vsix:?}");
+        println!(
+            "editor install dry run: {} --install-extension {}",
+            editor_cli.display(),
+            vsix.display()
+        );
         return Ok(());
     }
 
