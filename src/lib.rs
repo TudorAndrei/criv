@@ -1,3 +1,15 @@
+#![cfg_attr(
+    test,
+    allow(
+        clippy::pedantic,
+        clippy::nursery,
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing
+    )
+)]
+
 mod adr;
 mod c4;
 mod check;
@@ -57,7 +69,7 @@ pub type Result<T> = std::result::Result<T, CrivError>;
 pub enum CrivError {
     #[error("{0}")]
     Message(String),
-    #[error("[{code}] {message}{}", fix_suffix(.fix))]
+    #[error("[{code}] {message}{}", fix_suffix(.fix.as_deref()))]
     Coded {
         code: &'static str,
         message: String,
@@ -71,11 +83,8 @@ pub enum CrivError {
     Io(#[from] std::io::Error),
 }
 
-fn fix_suffix(fix: &Option<String>) -> String {
-    match fix {
-        Some(fix) => format!("\nfix: {fix}"),
-        None => String::new(),
-    }
+fn fix_suffix(fix: Option<&str>) -> String {
+    fix.map_or_else(String::new, |fix| format!("\nfix: {fix}"))
 }
 
 impl CrivError {
@@ -95,14 +104,16 @@ impl CrivError {
         Self::Usage(message.into())
     }
 
-    pub fn exit_code(&self) -> i32 {
+    #[must_use]
+    pub const fn exit_code(&self) -> i32 {
         match self {
             Self::Usage(_) | Self::UsageReported => 2,
             Self::Message(_) | Self::Coded { .. } | Self::Io(_) => 1,
         }
     }
 
-    pub fn is_reported(&self) -> bool {
+    #[must_use]
+    pub const fn is_reported(&self) -> bool {
         matches!(self, Self::UsageReported)
     }
 }
@@ -131,19 +142,24 @@ enum Command {
     Enforce(enforce::EnforceOptions),
 }
 
-pub fn run(args: Vec<String>) -> Result<()> {
+/// Runs the command line interface with `args`.
+///
+/// # Errors
+///
+/// Returns an error when parsing, output, or the selected command fails.
+pub fn run(args: &[String]) -> Result<()> {
     let cwd = std::env::current_dir()?;
     run_command(args, &cwd)
 }
 
-fn run_command(args: Vec<String>, cwd: &std::path::Path) -> Result<()> {
+fn run_command(args: &[String], cwd: &std::path::Path) -> Result<()> {
     let owned: Vec<OsString> = args.iter().map(OsString::from).collect();
-    let argv: Vec<&OsStr> = owned.iter().map(OsString::as_os_str).collect();
+    let os_args: Vec<&OsStr> = owned.iter().map(OsString::as_os_str).collect();
 
-    let cli = match CrivCli::parse_from(&argv) {
+    let cli = match CrivCli::parse_from(&os_args) {
         Ok(cli) => cli,
         Err(Error::Help { cmd, long }) => {
-            print!("{}", render_help(cmd, long));
+            print!("{}", render_help(cmd, long)?);
             return Ok(());
         }
         Err(Error::Version { .. }) => {
@@ -151,49 +167,49 @@ fn run_command(args: Vec<String>, cwd: &std::path::Path) -> Result<()> {
             return Ok(());
         }
         Err(err @ (Error::MissingSubcommand | Error::MissingArgsHelp { .. })) => {
-            eprint!("{}", usage::render_failure(CrivCli::spec(), &argv, &err));
+            eprint!("{}", usage::render_failure(CrivCli::spec(), &os_args, &err));
             return Err(CrivError::UsageReported);
         }
         Err(err) => {
             return Err(CrivError::usage(usage::render_failure(
                 CrivCli::spec(),
-                &argv,
+                &os_args,
                 &err,
             )));
         }
     };
 
     if cli.usage {
-        write_usage_spec(&mut std::io::stdout().lock());
-        return Ok(());
+        return write_usage_spec(&mut std::io::stdout().lock());
     }
 
     if cli.usage_json {
-        write_usage_json(&mut std::io::stdout().lock());
-        return Ok(());
+        return write_usage_json(&mut std::io::stdout().lock());
     }
 
     match cli.command {
         None => {
-            print!("{}", render_help(CrivCli::command(), false));
+            print!("{}", render_help(CrivCli::command(), false)?);
             Ok(())
         }
-        Some(Command::Init(options)) => init::run(cwd, options),
-        Some(Command::InstallEditor(options)) => install::install_editor(options),
-        Some(Command::Adr(options)) => adr::run(cwd, options),
-        Some(Command::Check(options)) => check::run(cwd, options),
+        Some(Command::Init(options)) => init::run(cwd, &options),
+        Some(Command::InstallEditor(options)) => install::install_editor(&options),
+        Some(Command::Adr(options)) => adr::run(cwd, &options),
+        Some(Command::Check(options)) => check::run(cwd, &options),
         Some(Command::Query(options)) => query::run(cwd, options),
-        Some(Command::Watch(options)) => watch::run(cwd, options),
-        Some(Command::Enforce(options)) => enforce::run(cwd, options),
+        Some(Command::Watch(options)) => watch::run(cwd, &options),
+        Some(Command::Enforce(options)) => enforce::run(cwd, &options),
     }
 }
 
-fn render_help(command: &usage::Command<'_>, long: bool) -> String {
-    help::render(CrivCli::spec(), command, long).expect("render help")
+fn render_help(command: &usage::Command<'_>, long: bool) -> Result<String> {
+    help::render(CrivCli::spec(), command, long)
+        .ok_or_else(|| CrivError::new("failed to render help"))
 }
 
-fn write_usage_spec(writer: &mut dyn Write) {
-    write!(writer, "{}", CrivCli::to_kdl()).expect("write usage spec");
+fn write_usage_spec(writer: &mut dyn Write) -> Result<()> {
+    write!(writer, "{}", CrivCli::to_kdl())?;
+    Ok(())
 }
 
 #[derive(serde::Serialize)]
@@ -207,7 +223,7 @@ struct JsonCommand<'a> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     flags: Vec<JsonFlag<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    subcommands: Vec<JsonCommand<'a>>,
+    subcommands: Vec<Self>,
 }
 
 #[derive(serde::Serialize)]
@@ -287,11 +303,13 @@ fn json_command<'a>(meta: &'a usage::spec::CommandMeta<'a>, parent: &str) -> Jso
     }
 }
 
-fn write_usage_json(writer: &mut dyn Write) {
+fn write_usage_json(writer: &mut dyn Write) -> Result<()> {
     let spec = CrivCli::spec();
     let tree = json_command(spec.root, "");
-    let json = serde_json::to_string_pretty(&tree).expect("serialize command tree");
-    writeln!(writer, "{json}").expect("write command tree");
+    let json = serde_json::to_string_pretty(&tree)
+        .map_err(|error| CrivError::new(format!("failed to serialize command tree: {error}")))?;
+    writeln!(writer, "{json}")?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -304,8 +322,8 @@ mod tests {
         let owned: Vec<OsString> = args.iter().map(OsString::from).collect();
         let argv: Vec<&OsStr> = owned.iter().map(OsString::as_os_str).collect();
         match CrivCli::parse_from(&argv) {
-            Ok(_) => render_help(CrivCli::command(), false),
-            Err(Error::Help { cmd, long }) => render_help(cmd, long),
+            Ok(_) => render_help(CrivCli::command(), false).unwrap(),
+            Err(Error::Help { cmd, long }) => render_help(cmd, long).unwrap(),
             Err(error) => panic!("expected a help request, got {error:?}"),
         }
     }
@@ -330,7 +348,7 @@ mod tests {
     #[test]
     fn usage_spec_includes_criv_commands() {
         let mut output = Vec::new();
-        write_usage_spec(&mut output);
+        write_usage_spec(&mut output).unwrap();
 
         let spec = String::from_utf8(output).expect("usage spec should be utf-8");
 
@@ -365,7 +383,7 @@ mod tests {
     #[test]
     fn usage_json_exports_visible_command_metadata() {
         let mut output = Vec::new();
-        write_usage_json(&mut output);
+        write_usage_json(&mut output).unwrap();
 
         let tree: serde_json::Value =
             serde_json::from_slice(&output).expect("usage JSON should be valid JSON");

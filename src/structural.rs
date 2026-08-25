@@ -18,13 +18,13 @@ use crate::vault::{PolicyPattern, Vault};
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum PatternSource<'a> {
+pub enum PatternSource<'a> {
     Pattern(&'a str),
     Rule(&'a str),
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct StructuralMatch {
+pub struct StructuralMatch {
     pub(crate) path: String,
     pub(crate) line: usize,
     pub(crate) range: String,
@@ -38,13 +38,13 @@ enum CompiledMatcher {
     Rule(ast_grep_config::RuleCore),
 }
 
-pub(crate) struct CompiledPolicy {
+pub struct CompiledPolicy {
     language: SupportLang,
     matcher: CompiledMatcher,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) enum PolicyCompileError {
+pub enum PolicyCompileError {
     MissingDefinition,
     MissingLanguage,
     AmbiguousBody,
@@ -80,7 +80,7 @@ impl From<PolicyCompileError> for CrivError {
     }
 }
 
-pub(crate) struct PolicyScanRequest<'a> {
+pub struct PolicyScanRequest<'a> {
     pub(crate) key: usize,
     pub(crate) policy: &'a CompiledPolicy,
     pub(crate) paths: &'a BTreeSet<String>,
@@ -130,7 +130,7 @@ pub(crate) fn batch_parse_count() -> usize {
     work_counts().ast_parses
 }
 
-pub(crate) fn compile_policy(
+pub fn compile_policy(
     policy: &PolicyPattern,
 ) -> std::result::Result<CompiledPolicy, PolicyCompileError> {
     let (source, language) = policy_source(policy)?;
@@ -139,7 +139,9 @@ pub(crate) fn compile_policy(
         PatternSource::Rule(_) => PolicyCompileError::InvalidRule(error.to_string()),
     })?;
     #[cfg(test)]
-    record_work(|counts| counts.policy_compilations += 1);
+    record_work(|counts| {
+        counts.policy_compilations = counts.policy_compilations.saturating_add(1);
+    });
     let matcher = compile(source, language).map_err(|error| match source {
         PatternSource::Pattern(_) => PolicyCompileError::InvalidPattern(error.to_string()),
         PatternSource::Rule(_) => PolicyCompileError::InvalidRule(error.to_string()),
@@ -147,7 +149,7 @@ pub(crate) fn compile_policy(
     Ok(CompiledPolicy { language, matcher })
 }
 
-pub(crate) fn find_policies_batch(
+pub fn find_policies_batch(
     vault: &Vault,
     requests: &[PolicyScanRequest<'_>],
 ) -> Result<BTreeMap<usize, Vec<StructuralMatch>>> {
@@ -175,7 +177,7 @@ pub(crate) fn find_policies_batch(
             source_file,
         )?);
         #[cfg(test)]
-        record_work(|counts| counts.ast_parses += 1);
+        record_work(|counts| counts.ast_parses = counts.ast_parses.saturating_add(1));
         let ast = language.ast_grep(contents.as_ref());
         let root = ast.root();
         for request in requests {
@@ -291,16 +293,16 @@ fn row_from_match<D: Doc>(
     let node = matched.get_node();
     let start = node.start_pos();
     let end = node.end_pos();
-    let line = start.line() + 1;
+    let line = start.line().saturating_add(1);
     StructuralMatch {
         path: source_file.to_string(),
         line,
         range: format!(
             "L{}:C{}-L{}:C{}",
             line,
-            start.column(node) + 1,
-            end.line() + 1,
-            end.column(node) + 1
+            start.column(node).saturating_add(1),
+            end.line().saturating_add(1),
+            end.column(node).saturating_add(1)
         ),
         text: node.text().trim().to_string(),
         captures: capture_map(matched),
@@ -373,7 +375,7 @@ mod tests {
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].line, 1);
         assert_eq!(matches[0].range, "L1:C1-L3:C2");
-        let exact = matches[0].location.as_ref().unwrap().lsp_range();
+        let exact = matches[0].location.as_ref().unwrap().lsp_range().unwrap();
         assert_eq!((exact.start.line, exact.start.character), (0, 0));
         assert_eq!((exact.end.line, exact.end.character), (2, 1));
         assert_eq!(

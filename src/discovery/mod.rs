@@ -17,14 +17,14 @@ const MARKDOWN_WALK_THREADS: usize = 4;
 const COLLECT_FLUSH_ENTRIES: usize = 1_024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct VaultPaths {
+pub struct VaultPaths {
     pub(crate) markdown: Vec<String>,
     pub(crate) c4: Vec<String>,
     pub(crate) assets: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct MarkdownPolicy<'a> {
+pub struct MarkdownPolicy<'a> {
     pub(crate) include: &'a [String],
     pub(crate) exclude: &'a [String],
     pub(crate) respect_gitignore: bool,
@@ -109,7 +109,7 @@ impl Profile {
     }
 }
 
-pub(crate) fn discover_source_candidates(root: &Path, config: &Config) -> Result<Vec<String>> {
+pub fn discover_source_candidates(root: &Path, config: &Config) -> Result<Vec<String>> {
     if !config.source_index {
         return Ok(Vec::new());
     }
@@ -128,7 +128,7 @@ pub(crate) fn discover_source_candidates(root: &Path, config: &Config) -> Result
             builder.add(root.join(directory));
         }
         builder.standard_filters(false).follow_links(false);
-        walk(root, &mut builder, profile.clone())?
+        walk(root, &mut builder, profile.clone())
     };
 
     for file in plan.files {
@@ -143,7 +143,7 @@ pub(crate) fn discover_source_candidates(root: &Path, config: &Config) -> Result
 }
 
 #[derive(Debug)]
-pub(crate) struct SourceEventFilter {
+pub struct SourceEventFilter {
     root: PathBuf,
     enabled: bool,
     scope: Option<SourceEventScope>,
@@ -217,7 +217,7 @@ fn source_event_relevant(root: &Path, config: &Config, event: &Path) -> bool {
     SourceEventFilter::new(root, config).relevant(event)
 }
 
-pub(crate) fn discover_vault(root: &Path, docs_dir: &str) -> Result<VaultPaths> {
+pub fn discover_vault(root: &Path, docs_dir: &str) -> Result<VaultPaths> {
     let docs_relative = normalize_relative("vault.docs", docs_dir)?;
     let profile = Arc::new(Profile::Vault);
     if profile_prunes_path(profile.as_ref(), &docs_relative) {
@@ -245,7 +245,7 @@ pub(crate) fn discover_vault(root: &Path, docs_dir: &str) -> Result<VaultPaths> 
         .standard_filters(false)
         .follow_links(false)
         .threads(VAULT_WALK_THREADS);
-    let selections = finish(walk(root, &mut builder, profile)?)?;
+    let selections = finish(walk(root, &mut builder, profile))?;
     let mut markdown = Vec::new();
     let mut c4 = Vec::new();
     let mut assets = Vec::new();
@@ -276,7 +276,7 @@ fn vault_selection_kind(path: &Path) -> Option<SelectionKind> {
         .then_some(SelectionKind::VaultAsset)
 }
 
-pub(crate) fn discover_markdown(root: &Path, policy: MarkdownPolicy<'_>) -> Result<Vec<String>> {
+pub fn discover_markdown(root: &Path, policy: MarkdownPolicy<'_>) -> Result<Vec<String>> {
     let include = (!policy.include.is_empty())
         .then(|| GlobMatcher::new(policy.include))
         .transpose()?;
@@ -287,7 +287,7 @@ pub(crate) fn discover_markdown(root: &Path, policy: MarkdownPolicy<'_>) -> Resu
         exclude,
     });
     let mut builder = markdown_builder(root, policy);
-    finish(walk(root, &mut builder, profile)?)
+    finish(walk(root, &mut builder, profile))
         .map(|selections| selections.into_iter().map(|item| item.path).collect())
 }
 
@@ -299,7 +299,7 @@ fn read_selected_text(root: &Path, path: &Path) -> Result<String> {
     read_selected_text_from(&files, &canonical_path)
 }
 
-pub(crate) fn read_selected_text_from(files: &RepositoryFiles, path: &Path) -> Result<String> {
+pub fn read_selected_text_from(files: &RepositoryFiles, path: &Path) -> Result<String> {
     let root = files.root();
     let relative = relative_utf8(root, path)?;
     files.read_string(Path::new(&relative)).map_err(|error| {
@@ -309,7 +309,7 @@ pub(crate) fn read_selected_text_from(files: &RepositoryFiles, path: &Path) -> R
     })
 }
 
-pub(crate) fn select_markdown(
+pub fn select_markdown(
     root: &Path,
     policy: MarkdownPolicy<'_>,
     candidates: &BTreeSet<String>,
@@ -341,18 +341,18 @@ pub(crate) fn select_markdown(
         {
             continue;
         }
-        let (matched, error) = matcher.matched_with_errors(Path::new(&relative), false);
+        let (ignore_match, error) = matcher.matched_with_errors(Path::new(&relative), false);
         if let Some(error) = error {
-            errors.push(normalize_walk_error(root, error));
+            errors.push(normalize_walk_error(root, &error));
         }
-        if matched.is_ignore() {
+        if ignore_match.is_ignore() {
             continue;
         }
         let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => {
-                errors.push(path_error(root, &path, error));
+                errors.push(path_error(root, &path, &error));
                 continue;
             }
         };
@@ -409,7 +409,7 @@ fn markdown_builder(root: &Path, policy: MarkdownPolicy<'_>) -> WalkBuilder {
     builder
 }
 
-fn walk(root: &Path, builder: &mut WalkBuilder, profile: Arc<Profile>) -> Result<Collected> {
+fn walk(root: &Path, builder: &mut WalkBuilder, profile: Arc<Profile>) -> Collected {
     let root = Arc::new(root.to_path_buf());
     let filter_root = root.clone();
     let filter_profile = profile.clone();
@@ -439,12 +439,11 @@ fn walk(root: &Path, builder: &mut WalkBuilder, profile: Arc<Profile>) -> Result
         shared: shared.clone(),
     };
     builder.build_parallel().visit(&mut visitors);
-    let collected = std::mem::take(
+    std::mem::take(
         &mut *shared
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner),
-    );
-    Ok(collected)
+    )
 }
 
 struct CollectorBuilder {
@@ -478,14 +477,14 @@ impl ParallelVisitor for Collector {
             Err(error) => {
                 self.local
                     .errors
-                    .push(normalize_walk_error(&self.root, error));
+                    .push(normalize_walk_error(&self.root, &error));
                 return ignore::WalkState::Continue;
             }
         };
         if let Some(error) = entry.error() {
             self.local
                 .errors
-                .push(normalize_walk_error(&self.root, error.clone()));
+                .push(normalize_walk_error(&self.root, error));
         }
         if entry.depth() == 0 && entry.path() == self.root.as_path() {
             return ignore::WalkState::Continue;
@@ -515,7 +514,7 @@ impl Collector {
             None => match fs::symlink_metadata(path) {
                 Ok(metadata) => metadata.file_type(),
                 Err(error) => {
-                    self.local.errors.push(path_error(&self.root, path, error));
+                    self.local.errors.push(path_error(&self.root, path, &error));
                     return;
                 }
             },
@@ -534,10 +533,9 @@ impl Collector {
             if profile_prunes_path(self.profile.as_ref(), &relative) {
                 return;
             }
-            self.local.errors.push(format!(
-                "refusing to discover directory link `{}`",
-                relative
-            ));
+            self.local
+                .errors
+                .push(format!("refusing to discover directory link `{relative}`"));
             return;
         }
         if file_type.is_dir() {
@@ -714,13 +712,13 @@ fn validate_root(root: &Path, relative: &str) -> Result<Option<RootKind>> {
                     display_relative(root, &current)
                 )));
             }
-            Ok(metadata) if index + 1 < components.len() && !metadata.is_dir() => {
+            Ok(metadata) if index.saturating_add(1) < components.len() && !metadata.is_dir() => {
                 return Err(CrivError::new(format!(
                     "discovery root `{relative}` has a non-directory component `{}`",
                     display_relative(root, &current)
                 )));
             }
-            Ok(metadata) if index + 1 == components.len() => {
+            Ok(metadata) if index.saturating_add(1) == components.len() => {
                 return if metadata.is_dir() {
                     Ok(Some(RootKind::Directory))
                 } else if metadata.is_file() {
@@ -840,13 +838,13 @@ fn path_contains(ancestor: &str, path: &str) -> bool {
             .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
-fn normalize_walk_error(root: &Path, error: WalkError) -> String {
+fn normalize_walk_error(root: &Path, error: &WalkError) -> String {
     error
         .to_string()
         .replace(&root.to_string_lossy().to_string(), ".")
 }
 
-fn path_error(root: &Path, path: &Path, error: std::io::Error) -> String {
+fn path_error(root: &Path, path: &Path, error: &std::io::Error) -> String {
     format!(
         "failed to inspect `{}`: {error}",
         display_relative(root, path)
@@ -863,7 +861,7 @@ fn is_junction(path: &Path) -> bool {
 }
 
 #[cfg(not(windows))]
-fn is_junction(_path: &Path) -> bool {
+const fn is_junction(_path: &Path) -> bool {
     false
 }
 

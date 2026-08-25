@@ -37,12 +37,12 @@ impl FileSystem {
         &self.root_path
     }
 
-    pub(super) fn validate_scope(&self, allowed_dir: &Path) -> Result<()> {
+    pub(super) fn validate_scope(allowed_dir: &Path) -> Result<()> {
         validate_relative_path("allowed write directory", allowed_dir)
     }
 
     pub(super) fn create_dir(&self, allowed_dir: &Path, destination: &Path) -> Result<()> {
-        self.validate_destination(allowed_dir, destination, "directory destination")?;
+        Self::validate_destination(allowed_dir, destination, "directory destination")?;
         self.open_dir(destination, true)?;
         Ok(())
     }
@@ -153,12 +153,12 @@ impl FileSystem {
         let target = self.for_write(allowed_dir, destination)?;
         let mut options = nofollow_options();
         options.read(true).write(true).create(true);
-        let mut attempts = 0;
+        let mut attempts = 0_usize;
         let file = loop {
             match target.parent.open_with(&target.name, &options) {
                 Ok(file) => break file,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound && attempts < 9 => {
-                    attempts += 1;
+                    attempts = attempts.saturating_add(1);
                 }
                 Err(error) => return Err(error.into()),
             }
@@ -231,7 +231,7 @@ impl FileSystem {
         }
         let mut contents = Vec::new();
         file.read_to_end(&mut contents)?;
-        if contents.len() as u64 > max_bytes {
+        if u64::try_from(contents.len()).map_or(true, |length| length > max_bytes) {
             return Ok(None);
         }
         Ok(Some(contents))
@@ -320,7 +320,7 @@ impl FileSystem {
         target: &Path,
         replace_directory: bool,
     ) -> Result<LinkOutcome> {
-        self.validate_destination(allowed_dir, destination, "link destination")?;
+        Self::validate_destination(allowed_dir, destination, "link destination")?;
         validate_relative_path("link target", target)?;
         let link = self.for_link(allowed_dir, destination)?;
         let relative_target = relative_link_target(destination, target);
@@ -426,6 +426,8 @@ impl FileSystem {
         relative_target: &Path,
         absolute_target: &Path,
     ) -> Result<bool> {
+        #[cfg(not(windows))]
+        let _ = self.root();
         #[cfg(unix)]
         let result = link.parent.symlink_contents(relative_target, &link.name);
         #[cfg(windows)]
@@ -450,6 +452,8 @@ impl FileSystem {
     }
 
     fn remove_link(&self, link: &ConfinedFile) -> Result<()> {
+        #[cfg(not(windows))]
+        let _ = self.root();
         #[cfg(windows)]
         {
             let path = self.root_path.join(&link.relative);
@@ -467,12 +471,7 @@ impl FileSystem {
         sync_directory_handle(&link.parent)
     }
 
-    fn validate_destination(
-        &self,
-        allowed_dir: &Path,
-        destination: &Path,
-        label: &str,
-    ) -> Result<()> {
+    fn validate_destination(allowed_dir: &Path, destination: &Path, label: &str) -> Result<()> {
         validate_relative_path("allowed write directory", allowed_dir)?;
         validate_relative_path(label, destination)?;
         if allowed_dir != Path::new(".") && !destination.starts_with(allowed_dir) {
@@ -516,12 +515,12 @@ impl FileSystem {
         destination: &Path,
         create_parents: bool,
     ) -> Result<Option<ConfinedFile>> {
-        self.validate_destination(allowed_dir, destination, "write destination")?;
+        Self::validate_destination(allowed_dir, destination, "write destination")?;
         self.prepare_optional(destination, create_parents)
     }
 
     fn for_link(&self, allowed_dir: &Path, destination: &Path) -> Result<ConfinedFile> {
-        self.validate_destination(allowed_dir, destination, "link destination")?;
+        Self::validate_destination(allowed_dir, destination, "link destination")?;
         let parent = destination.parent().unwrap_or_else(|| Path::new("."));
         reject_symlink_components(&self.root_path, parent)?;
         let directory = self.open_dir(parent, true)?;
@@ -663,11 +662,11 @@ impl ConfinedFile {
             .map(|duration| duration.as_nanos())
             .unwrap_or_default();
 
-        for attempt in 0..100 {
+        for attempt in 0_u32..100 {
             let temp_name = OsString::from(format!(
                 ".{file_name}.{}.{}.tmp",
                 std::process::id(),
-                nonce + attempt
+                nonce.saturating_add(u128::from(attempt))
             ));
             let mut options = nofollow_options();
             options.write(true).create_new(true);
@@ -683,7 +682,10 @@ impl ConfinedFile {
                     file.set_permissions(permissions)?;
                 }
                 drop(file);
+                #[cfg(windows)]
                 let replaced_permissions = self.prepare_destination_for_replace()?;
+                #[cfg(not(windows))]
+                let replaced_permissions = Self::prepare_destination_for_replace();
                 if let Err(error) = self.parent.rename(&temp_name, &self.parent, &self.name) {
                     if let Some(permissions) = replaced_permissions {
                         self.parent.set_permissions(&self.name, permissions)?;
@@ -725,8 +727,8 @@ impl ConfinedFile {
     }
 
     #[cfg(not(windows))]
-    fn prepare_destination_for_replace(&self) -> Result<Option<CapPermissions>> {
-        Ok(None)
+    const fn prepare_destination_for_replace() -> Option<CapPermissions> {
+        None
     }
 
     fn restore_with_lock(
@@ -754,21 +756,18 @@ impl ConfinedFile {
                 ))
             })?;
         let result = (|| -> Result<()> {
-            match contents {
-                Some((contents, permissions)) => {
-                    lock_file.write_all(contents)?;
-                    lock_file.set_permissions(permissions)?;
-                    lock_file.sync_all()?;
-                    lock.parent.rename(&lock.name, &self.parent, &self.name)?;
+            if let Some((contents, permissions)) = contents {
+                lock_file.write_all(contents)?;
+                lock_file.set_permissions(permissions)?;
+                lock_file.sync_all()?;
+                lock.parent.rename(&lock.name, &self.parent, &self.name)?;
+            } else {
+                lock_file.sync_all()?;
+                drop(lock_file);
+                if self.open_regular(false)?.is_some() {
+                    self.parent.remove_file(&self.name)?;
                 }
-                None => {
-                    lock_file.sync_all()?;
-                    drop(lock_file);
-                    if self.open_regular(false)?.is_some() {
-                        self.parent.remove_file(&self.name)?;
-                    }
-                    lock.parent.remove_file(&lock.name)?;
-                }
+                lock.parent.remove_file(&lock.name)?;
             }
             sync_directory_handle(&self.parent)
         })();
@@ -839,7 +838,6 @@ fn reject_symlink_components(root: &Path, destination: &Path) -> Result<()> {
         .components()
         .filter_map(|component| match component {
             std::path::Component::Normal(part) => Some(part),
-            std::path::Component::CurDir => None,
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -854,7 +852,7 @@ fn reject_symlink_components(root: &Path, destination: &Path) -> Result<()> {
                     current.display()
                 )));
             }
-            Ok(metadata) if index + 1 < components.len() && !metadata.is_dir() => {
+            Ok(metadata) if index.saturating_add(1) < components.len() && !metadata.is_dir() => {
                 return Err(CrivError::new(format!(
                     "cannot create vault path below non-directory component {}",
                     current.display()
@@ -877,15 +875,14 @@ fn is_junction(path: &Path, metadata: &fs::Metadata) -> bool {
 }
 
 #[cfg(not(windows))]
-fn is_junction(_path: &Path, _metadata: &fs::Metadata) -> bool {
+const fn is_junction(_path: &Path, _metadata: &fs::Metadata) -> bool {
     false
 }
 
 fn relative_link_target(destination: &Path, target: &Path) -> PathBuf {
     let depth = destination
         .parent()
-        .map(|parent| parent.components().count())
-        .unwrap_or(0);
+        .map_or(0, |parent| parent.components().count());
     let mut relative = PathBuf::new();
     for _ in 0..depth {
         relative.push("..");

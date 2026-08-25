@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 
-pub(crate) fn find_wiki_links_with_lines(markdown: &str) -> Vec<(usize, String, Range<usize>)> {
+pub fn find_wiki_links_with_lines(markdown: &str) -> Vec<(usize, String, Range<usize>)> {
     let mut in_code_block = false;
     let mut code_ranges = Vec::new();
 
@@ -24,31 +24,43 @@ pub(crate) fn find_wiki_links_with_lines(markdown: &str) -> Vec<(usize, String, 
 
     let mut links = Vec::new();
     let mut start = 0;
-    while let Some(open) = markdown[start..].find("[[") {
-        let open = start + open;
-        let body_start = open + 2;
+    while let Some(tail) = markdown.get(start..) {
+        let Some(relative_open) = tail.find("[[") else {
+            break;
+        };
+        let Some(open) = start.checked_add(relative_open) else {
+            break;
+        };
+        let Some(body_start) = open.checked_add(2) else {
+            break;
+        };
         if in_ranges(open, &code_ranges) {
             start = body_start;
             continue;
         }
-        if let Some(close) = markdown[body_start..].find("]]") {
-            let close = body_start + close;
-            if !in_ranges(close, &code_ranges) {
-                links.push((
-                    line_number(markdown, open),
-                    markdown[body_start..close].to_string(),
-                    open..close + 2,
-                ));
-            }
-            start = close + 2;
-        } else {
+        let Some(body) = markdown.get(body_start..) else {
             break;
+        };
+        let Some(relative_close) = body.find("]]") else {
+            break;
+        };
+        let Some(close) = body_start.checked_add(relative_close) else {
+            break;
+        };
+        let Some(end) = close.checked_add(2) else {
+            break;
+        };
+        if !in_ranges(close, &code_ranges)
+            && let Some(link) = markdown.get(body_start..close)
+        {
+            links.push((line_number(markdown, open), link.to_string(), open..end));
         }
+        start = end;
     }
     links
 }
 
-pub(crate) fn markdown_headings(markdown: &str) -> Vec<(usize, String, usize)> {
+pub fn markdown_headings(markdown: &str) -> Vec<(usize, String, usize)> {
     let mut headings = Vec::new();
     let mut active: Option<(usize, usize, String)> = None;
 
@@ -87,14 +99,15 @@ fn in_ranges(byte_offset: usize, ranges: &[Range<usize>]) -> bool {
 }
 
 fn line_number(markdown: &str, byte_offset: usize) -> usize {
-    markdown[..byte_offset.min(markdown.len())]
-        .bytes()
-        .filter(|byte| *byte == b'\n')
-        .count()
-        + 1
+    markdown
+        .get(..byte_offset.min(markdown.len()))
+        .map_or(0, |prefix| {
+            prefix.bytes().filter(|byte| *byte == b'\n').count()
+        })
+        .saturating_add(1)
 }
 
-fn heading_level(level: HeadingLevel) -> usize {
+const fn heading_level(level: HeadingLevel) -> usize {
     match level {
         HeadingLevel::H1 => 1,
         HeadingLevel::H2 => 2,

@@ -22,11 +22,11 @@ fn normalize_rel(path: &Path) -> String {
         .join("/")
 }
 
-pub(crate) fn strip_prefix(path: &Path, root: &Path) -> String {
+pub fn strip_prefix(path: &Path, root: &Path) -> String {
     normalize_rel(path.strip_prefix(root).unwrap_or(path))
 }
 
-pub(crate) fn kebab(value: &str) -> String {
+pub fn kebab(value: &str) -> String {
     let mut out = String::new();
     let mut last_dash = false;
     for ch in value.chars() {
@@ -41,8 +41,10 @@ pub(crate) fn kebab(value: &str) -> String {
     out.trim_matches('-').to_string()
 }
 
-pub(crate) fn is_adr_id(value: &str) -> bool {
+pub fn is_adr_id(value: &str) -> bool {
     value.len() == 8
         && value.starts_with("ADR-")
-        && value[4..].chars().all(|ch| ch.is_ascii_digit())
+        && value
+            .get(4..)
+            .is_some_and(|suffix| suffix.chars().all(|ch| ch.is_ascii_digit()))
 }

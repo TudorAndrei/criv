@@ -27,10 +27,10 @@ mod projection;
 mod publication;
 mod snapshots;
 
-pub(crate) use publication::load_snapshot;
+pub use publication::load_snapshot;
 
 #[derive(Debug, Clone)]
-pub(crate) struct State {
+pub struct State {
     wire: StateDocument,
     partitions: StatePartitions,
 }
@@ -76,21 +76,35 @@ fn record_work(update: impl FnOnce(&mut WorkCounts)) {
     });
 }
 
+#[cfg(test)]
 fn record_partition_rebuilt(kind: PartitionKind) {
-    #[cfg(test)]
     record_work(|counts| {
-        counts.partitions_rebuilt += 1;
+        counts.partitions_rebuilt = counts.partitions_rebuilt.saturating_add(1);
         match kind {
-            PartitionKind::Source => counts.source_partitions_rebuilt += 1,
-            PartitionKind::Note => counts.note_partitions_rebuilt += 1,
-            PartitionKind::C4Artifact => counts.c4_partitions_rebuilt += 1,
-            PartitionKind::Policy => counts.policy_partitions_rebuilt += 1,
-            PartitionKind::SourceIndex => counts.source_index_partitions_rebuilt += 1,
+            PartitionKind::Source => {
+                counts.source_partitions_rebuilt =
+                    counts.source_partitions_rebuilt.saturating_add(1);
+            }
+            PartitionKind::Note => {
+                counts.note_partitions_rebuilt = counts.note_partitions_rebuilt.saturating_add(1);
+            }
+            PartitionKind::C4Artifact => {
+                counts.c4_partitions_rebuilt = counts.c4_partitions_rebuilt.saturating_add(1);
+            }
+            PartitionKind::Policy => {
+                counts.policy_partitions_rebuilt =
+                    counts.policy_partitions_rebuilt.saturating_add(1);
+            }
+            PartitionKind::SourceIndex => {
+                counts.source_index_partitions_rebuilt =
+                    counts.source_index_partitions_rebuilt.saturating_add(1);
+            }
         }
     });
-    #[cfg(not(test))]
-    let _ = kind;
 }
+
+#[cfg(not(test))]
+const fn record_partition_rebuilt(_: PartitionKind) {}
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 enum PartitionKey {
@@ -170,7 +184,7 @@ enum PartitionKind {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct ArchitectureInterfaceHashRecord {
+pub struct ArchitectureInterfaceHashRecord {
     pub(crate) id: String,
     pub(crate) hash: String,
     pub(crate) path: String,
@@ -198,7 +212,7 @@ impl State {
 
     fn build_with_policy_plan(
         vault: &Vault,
-        previous: Option<&State>,
+        previous: Option<&Self>,
         changed_files: &[String],
         policy_plan: &PolicyScanPlan,
     ) -> Result<Self> {
@@ -261,7 +275,7 @@ impl State {
     fn serialize(&self) -> Result<SerializedState> {
         let _ = &self.partitions;
         #[cfg(test)]
-        record_work(|counts| counts.serializations += 1);
+        record_work(|counts| counts.serializations = counts.serializations.saturating_add(1));
 
         let json = serde_json::to_string_pretty(&self.wire)
             .map_err(|err| CrivError::new(format!("failed to serialize state: {err}")))?;
@@ -272,7 +286,6 @@ impl State {
     }
 
     fn publish_snapshot_with_check(
-        &self,
         vault: &Vault,
         serialized: &SerializedState,
         keep: usize,
@@ -287,7 +300,13 @@ impl State {
         )?;
         #[cfg(test)]
         record_work(|counts| {
-            counts.published_bytes += serialized.published.len() * 2 + serialized.hash.len() + 1;
+            let written = serialized
+                .published
+                .len()
+                .saturating_mul(2)
+                .saturating_add(serialized.hash.len())
+                .saturating_add(1);
+            counts.published_bytes = counts.published_bytes.saturating_add(written);
         });
         Ok(serialized.hash.clone())
     }
@@ -302,7 +321,7 @@ impl Serialize for State {
     }
 }
 
-fn partition_meta(
+const fn partition_meta(
     key: PartitionKey,
     input_fingerprint: String,
     dependencies: PartitionDependencies,
@@ -353,7 +372,7 @@ fn source_input_fingerprint(file: &SourceFile) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
-fn note_input_fingerprint(vault: &Vault, note: &Note) -> String {
+fn note_input_fingerprint(note: &Note) -> String {
     let mut hasher = blake3::Hasher::new();
     fingerprint_str(&mut hasher, &note.rel_path);
     fingerprint_option_str(&mut hasher, note.id.as_deref());
@@ -377,7 +396,10 @@ fn note_input_fingerprint(vault: &Vault, note: &Note) -> String {
     fingerprint_str(&mut hasher, &format!("{:?}", note.supersedes));
     fingerprint_str(&mut hasher, &format!("{:?}", note.superseded_by));
     fingerprint_str(&mut hasher, &format!("{:?}", note.frontmatter_error));
-    fingerprint_str(&mut hasher, &format!("{:?}", vault.effective_governs(note)));
+    fingerprint_str(
+        &mut hasher,
+        &format!("{:?}", Vault::effective_governs(note)),
+    );
     hasher.finalize().to_hex().to_string()
 }
 
@@ -404,7 +426,8 @@ fn source_index_input_fingerprint(entry: &SourceIndexEntry) -> String {
 }
 
 fn fingerprint_str(hasher: &mut blake3::Hasher, value: &str) {
-    hasher.update(&(value.len() as u64).to_le_bytes());
+    let length = u64::try_from(value.len()).unwrap_or(u64::MAX);
+    hasher.update(&length.to_le_bytes());
     hasher.update(value.as_bytes());
 }
 
@@ -421,7 +444,8 @@ fn fingerprint_option_str(hasher: &mut blake3::Hasher, value: Option<&str>) {
 }
 
 fn fingerprint_usize(hasher: &mut blake3::Hasher, value: usize) {
-    hasher.update(&(value as u64).to_le_bytes());
+    let value = u64::try_from(value).unwrap_or(u64::MAX);
+    hasher.update(&value.to_le_bytes());
 }
 
 fn fingerprint_option_usize(hasher: &mut blake3::Hasher, value: Option<usize>) {
@@ -480,14 +504,14 @@ fn write_state(vault: &Vault) -> Result<(String, State)> {
     write_state_with_policy_plan_and_check(vault, &policy_plan, || Ok(()))
 }
 
-pub(crate) fn write_state_with_policy_plan_and_check(
+pub fn write_state_with_policy_plan_and_check(
     vault: &Vault,
     policy_plan: &PolicyScanPlan,
     precommit_check: impl FnOnce() -> Result<()>,
 ) -> Result<(String, State)> {
     let state = State::build_with_policy_plan(vault, None, &[], policy_plan)?;
     let serialized = state.serialize()?;
-    let snapshot = state.publish_snapshot_with_check(
+    let snapshot = State::publish_snapshot_with_check(
         vault,
         &serialized,
         vault.config.state_keep,
@@ -512,7 +536,7 @@ fn write_state_incremental(
     )
 }
 
-pub(crate) fn write_state_incremental_with_policy_plan_and_check(
+pub fn write_state_incremental_with_policy_plan_and_check(
     vault: &Vault,
     previous: Option<&State>,
     changed_files: &[String],
@@ -521,7 +545,7 @@ pub(crate) fn write_state_incremental_with_policy_plan_and_check(
 ) -> Result<(String, State)> {
     let state = State::build_with_policy_plan(vault, previous, changed_files, policy_plan)?;
     let serialized = state.serialize()?;
-    let snapshot = state.publish_snapshot_with_check(
+    let snapshot = State::publish_snapshot_with_check(
         vault,
         &serialized,
         vault.config.state_keep,
@@ -583,9 +607,7 @@ fn changed_paths_in_scopes(paths: &[String], scopes: &[String]) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn architecture_interface_hash_records(
-    vault: &Vault,
-) -> Vec<ArchitectureInterfaceHashRecord> {
+pub fn architecture_interface_hash_records(vault: &Vault) -> Vec<ArchitectureInterfaceHashRecord> {
     let mut records = Vec::new();
     collect_likec4_interface_hashes(vault, &mut records);
     records
@@ -705,7 +727,7 @@ fn graph_root(graph: &Graph) -> String {
         .map(|node| node.hash.as_str())
         .chain(graph.edges.iter().map(|edge| edge.hash.as_str()))
         .collect::<Vec<_>>();
-    hashes.sort();
+    hashes.sort_unstable();
     stable_hash(&hashes.join("\n"))
 }
 

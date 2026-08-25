@@ -23,7 +23,7 @@ enum Format {
 /// Each query prints one row per result. Add `--format json` to any query for a
 /// JSON array of rows, as in `criv query nodes --kind decision --format json`.
 #[derive(Debug, UsageArgs)]
-pub(crate) struct QueryOptions {
+pub struct QueryOptions {
     #[usage(subcommand)]
     command: QueryCommand,
 }
@@ -73,7 +73,7 @@ enum QueryCapability {
 }
 
 impl QueryCommand {
-    fn capability(&self) -> QueryCapability {
+    const fn capability(&self) -> QueryCapability {
         match self {
             Self::Diff(_) => QueryCapability::Snapshot,
             Self::NextAdrId(_) | Self::CitedBy(_) | Self::OrphanDocs(_) => QueryCapability::Docs,
@@ -95,7 +95,7 @@ impl QueryCommand {
         }
     }
 
-    fn reverse_index_scope(&self) -> Option<ReverseIndexScope> {
+    const fn reverse_index_scope(&self) -> Option<ReverseIndexScope> {
         match self {
             Self::CitedBy(_) | Self::OrphanDocs(_) => Some(ReverseIndexScope::Notes),
             Self::References(_)
@@ -147,7 +147,9 @@ impl QueryReverseIndex {
             for link in &note.wiki_links {
                 if include_notes && let ResolvedLink::Note { id } = vault.resolve_link(&link.target)
                 {
-                    notes_with_outgoing_citations[note_index] = true;
+                    if let Some(has_outgoing) = notes_with_outgoing_citations.get_mut(note_index) {
+                        *has_outgoing = true;
+                    }
                     if id != note.display_id() {
                         cited_note_ids.insert(id);
                     }
@@ -219,7 +221,8 @@ fn sorted_note_ids(vault: &Vault, note_indexes: Option<&[usize]>) -> Vec<String>
     let mut rows = note_indexes
         .into_iter()
         .flatten()
-        .map(|index| vault.notes[*index].display_id().to_string())
+        .filter_map(|index| vault.notes.get(*index))
+        .map(|note| note.display_id().to_string())
         .collect::<Vec<_>>();
     rows.sort();
     rows
@@ -295,7 +298,7 @@ enum NodeKind {
 }
 
 impl NodeKind {
-    fn symbol_kind(self) -> Option<SymbolKind> {
+    const fn symbol_kind(self) -> Option<SymbolKind> {
         match self {
             Self::Function => Some(SymbolKind::Function),
             Self::Method => Some(SymbolKind::Method),
@@ -337,7 +340,7 @@ struct DiffOptions {
     output: OutputOptions,
 }
 
-pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
+pub fn run(root: &Path, options: QueryOptions) -> Result<()> {
     RepositoryFiles::open_vault(root)?;
     if let QueryCommand::Diff(options) = &options.command {
         let rows = diff(root, &options.ref_a, &options.ref_b)?;
@@ -371,27 +374,18 @@ pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
         QueryCommand::CitedBy(options) => {
             let rows = cited_by(
                 &vault,
-                reverse_index
-                    .as_ref()
-                    .expect("cited-by declares a reverse index"),
+                required_reverse_index(reverse_index.as_ref())?,
                 &options.note_id,
             )?;
             (rows, options.output)
         }
         QueryCommand::OrphanDocs(output) => (
-            orphan_docs(
-                &vault,
-                reverse_index
-                    .as_ref()
-                    .expect("orphan-docs declares a reverse index"),
-            ),
+            orphan_docs(&vault, required_reverse_index(reverse_index.as_ref())?),
             output,
         ),
         QueryCommand::References(options) => {
-            let rows = reverse_index
-                .as_ref()
-                .expect("references declares a reverse index")
-                .references(&vault, &options.symbol);
+            let rows =
+                required_reverse_index(reverse_index.as_ref())?.references(&vault, &options.symbol);
             (rows, options.output)
         }
         QueryCommand::Governs(options) => {
@@ -412,10 +406,12 @@ pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
                 reverse_index.as_ref(),
                 options.kind,
                 options.without_docs,
-            );
+            )?;
             (rows, options.output)
         }
-        QueryCommand::Diff(_) => unreachable!("snapshot queries return before vault loading"),
+        QueryCommand::Diff(_) => {
+            return Err(CrivError::new("snapshot query reached vault loading"));
+        }
     };
 
     print_rows(&rows, output)
@@ -425,9 +421,7 @@ fn load_query_vault(root: &Path, command: &QueryCommand) -> Result<Vault> {
     match command.capability() {
         QueryCapability::Docs => Vault::load_docs_only(root),
         QueryCapability::Sources => Vault::load(root),
-        QueryCapability::Snapshot => {
-            unreachable!("snapshot queries do not construct a vault")
-        }
+        QueryCapability::Snapshot => Err(CrivError::new("snapshot query does not load a vault")),
     }
 }
 
@@ -445,14 +439,16 @@ fn next_adr_id(vault: &Vault) -> Result<String> {
     let next = highest
         .checked_add(1)
         .filter(|next| *next <= MAX_ADR_NUMBER);
-    match next {
-        Some(next) => Ok(format!("ADR-{next:04}")),
-        None => Err(CrivError::coded_fix(
-            "adr-id-exhausted",
-            format!("no free ADR id after ADR-{highest:04}; ids are four digits"),
-            "Retire or renumber the highest ADR ids, or widen the id format in a new ADR.",
-        )),
-    }
+    next.map_or_else(
+        || {
+            Err(CrivError::coded_fix(
+                "adr-id-exhausted",
+                format!("no free ADR id after ADR-{highest:04}; ids are four digits"),
+                "Retire or renumber the highest ADR ids, or widen the id format in a new ADR.",
+            ))
+        },
+        |next| Ok(format!("ADR-{next:04}")),
+    )
 }
 
 fn targets(vault: &Vault, id: &str) -> Result<Vec<String>> {
@@ -505,7 +501,11 @@ fn orphan_docs(vault: &Vault, index: &QueryReverseIndex) -> Vec<String> {
             continue;
         }
         let id = note.display_id();
-        let has_outgoing = index.notes_with_outgoing_citations[note_index];
+        let has_outgoing = index
+            .notes_with_outgoing_citations
+            .get(note_index)
+            .copied()
+            .unwrap_or(false);
         let has_incoming = index.citing_notes.contains_key(id);
         if !has_outgoing && !has_incoming {
             rows.push(id.to_string());
@@ -519,7 +519,7 @@ fn governs(vault: &Vault, adr_id: &str) -> Result<Vec<String>> {
     let note = vault
         .resolve_note(adr_id)
         .ok_or_else(|| CrivError::new(format!("decision `{adr_id}` does not resolve")))?;
-    let mut rows = vault.source_files_matching_globs(&vault.effective_governs(note));
+    let mut rows = vault.source_files_matching_globs(&Vault::effective_governs(note));
     rows.sort();
     rows.dedup();
     Ok(rows)
@@ -535,7 +535,7 @@ fn governing(vault: &Vault, symbol: &str) -> Vec<String> {
             continue;
         }
         if vault
-            .source_files_matching_globs(&vault.effective_governs(note))
+            .source_files_matching_globs(&Vault::effective_governs(note))
             .contains(&path)
         {
             rows.push(note.display_id().to_string());
@@ -550,7 +550,7 @@ fn coverage(vault: &Vault, by: Option<CoverageBy>) -> Vec<String> {
         .notes
         .iter()
         .filter(|note| note.kind == NoteKind::Decision)
-        .flat_map(|note| vault.source_files_matching_globs(&vault.effective_governs(note)))
+        .flat_map(|note| vault.source_files_matching_globs(&Vault::effective_governs(note)))
         .collect::<std::collections::BTreeSet<_>>();
     match by {
         Some(CoverageBy::Module) => return coverage_by_module(vault, &governed),
@@ -572,13 +572,12 @@ fn coverage_by_module(vault: &Vault, governed: &BTreeSet<String>) -> Vec<String>
     for source_file in vault.source_files() {
         let module = source_file
             .rsplit_once('/')
-            .map(|(parent, _)| parent)
-            .unwrap_or(".")
+            .map_or(".", |(parent, _)| parent)
             .to_string();
         let entry = modules.entry(module).or_default();
-        entry.0 += 1;
+        entry.0 = entry.0.saturating_add(1);
         if governed.contains(source_file) {
-            entry.1 += 1;
+            entry.1 = entry.1.saturating_add(1);
         }
     }
     modules
@@ -599,7 +598,7 @@ fn coverage_by_adr(vault: &Vault) -> Vec<String> {
             continue;
         }
         let governed = vault
-            .source_files_matching_globs(&vault.effective_governs(note))
+            .source_files_matching_globs(&Vault::effective_governs(note))
             .into_iter()
             .collect::<BTreeSet<_>>();
         rows.push(format!(
@@ -612,20 +611,23 @@ fn coverage_by_adr(vault: &Vault) -> Vec<String> {
     rows
 }
 
+fn required_reverse_index(index: Option<&QueryReverseIndex>) -> Result<&QueryReverseIndex> {
+    index.ok_or_else(|| CrivError::new("query command requires a reverse index"))
+}
+
 fn nodes(
     vault: &Vault,
     reverse_index: Option<&QueryReverseIndex>,
     kind: Option<NodeKind>,
     without_docs: bool,
-) -> Vec<String> {
+) -> Result<Vec<String>> {
     let mut rows = Vec::new();
     match kind {
         Some(NodeKind::Code) => {
             for symbol in vault.source_graph().symbols() {
                 let display = symbol.id.display();
                 if without_docs
-                    && !reverse_index
-                        .expect("undocumented code nodes declare a reverse index")
+                    && !required_reverse_index(reverse_index)?
                         .references(vault, &display)
                         .is_empty()
                 {
@@ -651,7 +653,7 @@ fn nodes(
         Some(kind) => {
             let symbol_kind = kind
                 .symbol_kind()
-                .expect("remaining node kinds are source symbol kinds");
+                .ok_or_else(|| CrivError::new("node kind does not identify a source symbol"))?;
             rows.extend(
                 vault
                     .source_graph()
@@ -666,7 +668,7 @@ fn nodes(
         }
     }
     rows.sort();
-    rows
+    Ok(rows)
 }
 
 fn diff(root: &Path, left: &str, right: &str) -> Result<Vec<String>> {
@@ -764,10 +766,9 @@ fn json_edge_set(value: &serde_json::Value) -> BTreeSet<String> {
 }
 
 fn print_rows(rows: &[String], output: OutputOptions) -> Result<()> {
-    let rows = match output.limit {
-        Some(limit) => &rows[..rows.len().min(limit)],
-        None => rows,
-    };
+    let rows = output.limit.map_or(rows, |limit| {
+        rows.get(..rows.len().min(limit)).unwrap_or(rows)
+    });
     match output.format {
         Format::Text => {
             for row in rows {
@@ -974,7 +975,7 @@ mod tests {
         crate::vault::reset_work_counts();
         let reverse_index = QueryReverseIndex::build(&vault, ReverseIndexScope::Sources);
         assert_eq!(
-            nodes(&vault, Some(&reverse_index), Some(NodeKind::Code), true),
+            nodes(&vault, Some(&reverse_index), Some(NodeKind::Code), true).unwrap(),
             vec!["src/lib.rs#fn:undocumented"]
         );
         let input_targets = vault

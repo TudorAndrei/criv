@@ -3,7 +3,7 @@ use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone)]
-pub(crate) struct GlobMatcher {
+pub struct GlobMatcher {
     sets: Vec<(GlobSet, Vec<usize>)>,
 }
 
@@ -27,17 +27,17 @@ impl GlobMatcher {
                 valid.push((index, pattern.clone()));
             }
         }
-        match Self::from_patterns(
+        Self::from_patterns(
             &valid
                 .iter()
                 .map(|(_, pattern)| pattern.clone())
                 .collect::<Vec<_>>(),
             valid.iter().map(|(index, _)| *index).collect(),
-        ) {
-            Ok(matcher) => matcher,
+        )
+        .unwrap_or_else(
             // A valid aggregate can exceed globset's automaton limit. Keep the
             // tolerant contract by compiling each valid pattern independently.
-            Err(_) => Self {
+            |_| Self {
                 sets: valid
                     .iter()
                     .filter_map(|(index, pattern)| {
@@ -46,7 +46,7 @@ impl GlobMatcher {
                     .flat_map(|matcher| matcher.sets)
                     .collect(),
             },
-        }
+        )
     }
 
     fn from_patterns(patterns: &[String], pattern_indices: Vec<usize>) -> Result<Self> {
@@ -81,7 +81,11 @@ impl GlobMatcher {
             // globset clears `matched` before every call, so it is safe to
             // reuse this scratch allocation while accumulating all sets.
             set.matches_into(value, &mut matched);
-            into.extend(matched.iter().map(|index| pattern_indices[*index]));
+            into.extend(
+                matched
+                    .iter()
+                    .filter_map(|index| pattern_indices.get(*index).copied()),
+            );
         }
     }
 }

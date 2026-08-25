@@ -1,4 +1,4 @@
-pub(crate) mod templates;
+pub mod templates;
 
 #[cfg(test)]
 mod tests;
@@ -12,14 +12,14 @@ use crate::install::{self, InstallMode, SkillPublication};
 use crate::repository::RepositoryFiles;
 
 #[derive(Debug, Default, UsageArgs)]
-pub(crate) struct InitOptions {
+pub struct InitOptions {
     #[usage(long)]
     no_skills: bool,
     #[usage(long)]
     force_skills: bool,
 }
 
-pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
+pub fn run(root: &Path, options: &InitOptions) -> Result<()> {
     let files = RepositoryFiles::open(root)?;
     let scope = files.write_scope(Path::new("."))?;
     let mut created = Vec::new();
@@ -41,7 +41,7 @@ pub(crate) fn run(root: &Path, options: InitOptions) -> Result<()> {
     write_template(
         &scope,
         "criv.toml",
-        &templates::default_config()?,
+        &templates::default_config(),
         &mut created,
     )?;
 

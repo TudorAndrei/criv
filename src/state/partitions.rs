@@ -1,4 +1,12 @@
-use super::*;
+use super::{
+    Arc, BTreeMap, BTreeSet, Graph, PartitionDependencies, PartitionKey, PartitionKind,
+    PartitionMeta, PatternMatch, PendingPolicyScan, PolicyPartition, PolicyScanPlan, Result,
+    SourceIndexEntry, SourceIndexPartition, State, StatePartitions, Vault, add_node,
+    append_graph_rows, c4_artifact_input_fingerprint, changed_paths_in_scopes, graph_root,
+    note_catalog_fingerprint, note_input_fingerprint, observe_partition_meta, partition_meta,
+    pattern_match_from_structural, record_partition_rebuilt, reusable_matches,
+    sort_and_dedup_pattern_matches, source_index_input_fingerprint, source_mime, structural,
+};
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct ReverseDependencies {
@@ -185,7 +193,7 @@ pub(super) fn build(
 
     for note in &vault.notes {
         let key = PartitionKey::Note(note.rel_path.clone());
-        let fingerprint = note_input_fingerprint(vault, note);
+        let fingerprint = note_input_fingerprint(note);
         let partition = previous
             .and_then(|previous| previous.notes.get(&note.rel_path))
             .filter(|partition| {
@@ -331,7 +339,7 @@ fn build_policy_partitions(
             };
             let input_fingerprint = policy
                 .state_input_fingerprint()
-                .expect("published policies have an input fingerprint")
+                .ok_or_else(|| crate::CrivError::new("published policy has no input fingerprint"))?
                 .to_string();
             let previous_partition =
                 previous.and_then(|previous| previous.policies.get(pattern_id));
@@ -344,12 +352,12 @@ fn build_policy_partitions(
             };
 
             if definition_unchanged && paths.is_empty() {
-                partitions.insert(
-                    pattern_id.to_string(),
-                    previous_partition
-                        .expect("unchanged definitions have a previous partition")
-                        .clone(),
-                );
+                let Some(previous_partition) = previous_partition else {
+                    return Err(crate::CrivError::new(
+                        "unchanged policy definition has no prior partition",
+                    ));
+                };
+                partitions.insert(pattern_id.to_string(), previous_partition.clone());
                 continue;
             }
 
@@ -385,7 +393,7 @@ fn build_policy_partitions(
         matches.extend(
             rescanned
                 .get(&key)
-                .expect("every policy scan request has a result")
+                .ok_or_else(|| crate::CrivError::new("policy scan returned no result"))?
                 .iter()
                 .map(pattern_match_from_structural),
         );
@@ -415,7 +423,7 @@ fn policy_fingerprints(policy_plan: &PolicyScanPlan) -> BTreeMap<String, String>
     policy_plan
         .owners()
         .iter()
-        .flat_map(|owner| owner.policies())
+        .flat_map(super::super::policy_scan::PlannedOwner::policies)
         .filter_map(|policy| {
             Some((
                 policy.state_pattern_id()?.to_string(),

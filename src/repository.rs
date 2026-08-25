@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::{CrivError, Result};
 
 #[derive(Clone)]
-pub(crate) struct RepositoryFiles {
+pub struct RepositoryFiles {
     filesystem: Arc<filesystem::FileSystem>,
 }
 
@@ -41,13 +41,15 @@ impl RepositoryFiles {
         if self.read_optional_string(Path::new("criv.toml"))?.is_some() {
             return Ok(());
         }
+        let fix = crate::diagnostic::fix_for("not-a-vault")
+            .ok_or_else(|| CrivError::new("missing repair for not-a-vault"))?;
         Err(CrivError::coded_fix(
             "not-a-vault",
             format!(
                 "not a criv vault: no criv.toml in {}",
                 self.root().display()
             ),
-            crate::diagnostic::fix_for("not-a-vault").expect("not-a-vault carries a repair"),
+            fix,
         ))
     }
 
@@ -59,7 +61,7 @@ impl RepositoryFiles {
         &'a self,
         allowed_dir: &Path,
     ) -> Result<RepositoryWriteScope<'a>> {
-        self.filesystem.validate_scope(allowed_dir)?;
+        filesystem::FileSystem::validate_scope(allowed_dir)?;
         Ok(RepositoryWriteScope {
             files: self,
             allowed_dir: allowed_dir.to_path_buf(),
@@ -125,7 +127,7 @@ impl RepositoryFiles {
     }
 }
 
-pub(crate) struct RepositoryWriteScope<'a> {
+pub struct RepositoryWriteScope<'a> {
     files: &'a RepositoryFiles,
     allowed_dir: PathBuf,
 }
@@ -238,7 +240,7 @@ impl RepositoryWriteScope<'_> {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum LinkOutcome {
+pub enum LinkOutcome {
     Unchanged,
     Created,
     Replaced,
@@ -247,7 +249,7 @@ pub(crate) enum LinkOutcome {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum LinkLayout {
+pub enum LinkLayout {
     Missing,
     Expected,
     Directory,

@@ -17,7 +17,7 @@ use crate::config::Config;
 use crate::discovery::discover_source_candidates;
 use crate::repository::RepositoryFiles;
 
-pub(crate) use graph::{
+pub use graph::{
     DirectiveKind, Import, Language, ModuleRelationshipRole, Relationship, RelationshipKind,
     RelationshipTarget, SourceFile, SourceGraph, Symbol, SymbolKind,
 };
@@ -26,16 +26,16 @@ pub(crate) use graph::{
     WorkCounts as GraphWorkCounts, reset_work_counts as reset_graph_work_counts,
     work_counts as graph_work_counts,
 };
-pub(crate) use paths::read_source_to_string_from;
+pub use paths::read_source_to_string_from;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct IndexedSource {
+pub struct IndexedSource {
     pub(crate) path: String,
 }
 
 /// One complete Source observation and its graph-cache lifecycle.
 #[derive(Debug, Clone)]
-pub(crate) struct SourceState {
+pub struct SourceState {
     catalog: catalog::SourceCatalog,
     graph: graph::SourceGraphBuild,
 }
@@ -94,7 +94,7 @@ impl SourceState {
         self.catalog.entries()
     }
 
-    pub(crate) fn graph(&self) -> &SourceGraph {
+    pub(crate) const fn graph(&self) -> &SourceGraph {
         self.graph.graph()
     }
 
@@ -144,7 +144,7 @@ pub(crate) fn index_work_counts() -> IndexWorkCounts {
 fn record_scan() {
     WORK_COUNTS.with(|counts| {
         let mut next = counts.get();
-        next.discovery_scans += 1;
+        next.discovery_scans = next.discovery_scans.saturating_add(1);
         counts.set(next);
     });
 }

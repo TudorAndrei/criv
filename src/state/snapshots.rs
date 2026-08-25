@@ -59,7 +59,7 @@ struct StoreView {
     latest: Option<String>,
 }
 
-pub(crate) struct PublicationPlan {
+pub struct PublicationPlan {
     pub(crate) index_contents: String,
     pub(crate) removals: Vec<String>,
 }
@@ -71,7 +71,7 @@ fn publish(root: &Path, hash: &str, contents: &str, keep: usize) -> Result<()> {
     publish_preflighted(&files, hash, contents, keep)
 }
 
-pub(crate) fn plan_publication(
+pub fn plan_publication(
     files: &RepositoryFiles,
     hash: &str,
     contents: &str,
@@ -129,7 +129,8 @@ fn publish_preflighted(
         hash.to_string(),
         SnapshotFile {
             #[cfg(test)]
-            bytes: contents.len() as u64,
+            bytes: u64::try_from(contents.len())
+                .map_err(|_| CrivError::new("snapshot contents exceed the supported size"))?,
             modified: SystemTime::now(),
         },
     );
@@ -142,7 +143,7 @@ fn publish_preflighted(
     Ok(())
 }
 
-pub(crate) fn load_unlocked(files: &RepositoryFiles, id: &str) -> Result<Option<String>> {
+pub fn load_unlocked(files: &RepositoryFiles, id: &str) -> Result<Option<String>> {
     let hash = if id == "latest" {
         read_latest(files)?
             .ok_or_else(|| CrivError::new("local snapshot `latest` does not resolve"))?
@@ -174,7 +175,7 @@ pub(crate) fn load_unlocked(files: &RepositoryFiles, id: &str) -> Result<Option<
 fn list(root: &Path) -> Result<Vec<SnapshotRecord>> {
     let files = RepositoryFiles::open(root)?;
     let view = reconcile(&files)?;
-    Ok(records_newest_first(&view))
+    records_newest_first(&view)
 }
 
 #[cfg(test)]
@@ -213,18 +214,32 @@ fn apply_prune(
         .iter()
         .rev()
         .enumerate()
-        .map(|(index, hash)| (hash.clone(), index + 1))
+        .map(|(index, hash)| (hash.clone(), index.saturating_add(1)))
         .collect::<BTreeMap<_, _>>();
     let removed = removed_hashes
         .iter()
-        .map(|hash| SnapshotRecord {
-            hash: hash.clone(),
-            position: positions[hash],
-            bytes: view.files[hash].bytes,
-            latest: view.latest.as_ref() == Some(hash),
+        .map(|hash| {
+            let position = positions
+                .get(hash)
+                .copied()
+                .ok_or_else(|| CrivError::new("snapshot position is missing"))?;
+            let file = view
+                .files
+                .get(hash)
+                .ok_or_else(|| CrivError::new("snapshot metadata is missing"))?;
+            Ok(SnapshotRecord {
+                hash: hash.clone(),
+                position,
+                bytes: file.bytes,
+                latest: view.latest.as_ref() == Some(hash),
+            })
         })
-        .collect::<Vec<_>>();
-    let retained = view.order.len() - removed.len();
+        .collect::<Result<Vec<_>>>()?;
+    let retained = view
+        .order
+        .len()
+        .checked_sub(removed.len())
+        .ok_or_else(|| CrivError::new("snapshot removal count exceeds stored snapshots"))?;
 
     if !dry_run {
         for hash in &removed_hashes {
@@ -368,16 +383,22 @@ fn index_contents(order: &[String]) -> Result<String> {
 }
 
 #[cfg(test)]
-fn records_newest_first(view: &StoreView) -> Vec<SnapshotRecord> {
+fn records_newest_first(view: &StoreView) -> Result<Vec<SnapshotRecord>> {
     view.order
         .iter()
         .rev()
         .enumerate()
-        .map(|(index, hash)| SnapshotRecord {
-            hash: hash.clone(),
-            position: index + 1,
-            bytes: view.files[hash].bytes,
-            latest: view.latest.as_ref() == Some(hash),
+        .map(|(index, hash)| {
+            let file = view
+                .files
+                .get(hash)
+                .ok_or_else(|| CrivError::new("snapshot metadata is missing"))?;
+            Ok(SnapshotRecord {
+                hash: hash.clone(),
+                position: index.saturating_add(1),
+                bytes: file.bytes,
+                latest: view.latest.as_ref() == Some(hash),
+            })
         })
         .collect()
 }

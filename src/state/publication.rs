@@ -80,7 +80,7 @@ fn publish(root: &Path, hash: &str, contents: &str, keep: usize) -> Result<()> {
     publish_with(root, hash, contents, keep, &RealPublicationControl)
 }
 
-pub(crate) fn publish_with_precommit_check(
+pub fn publish_with_precommit_check(
     files: &RepositoryFiles,
     hash: &str,
     contents: &str,
@@ -142,20 +142,20 @@ fn publish_with_check(
     }
 
     let result = stage_candidate(files, &record, control)
-        .and_then(|_| set_phase(files, &mut record, TransactionPhase::Staged))
-        .and_then(|_| quarantine_removals(files, &record, control))
-        .and_then(|_| set_phase(files, &mut record, TransactionPhase::Quarantined))
-        .and_then(|_| install_candidate_controlled(files, &record, control))
-        .and_then(|_| set_phase(files, &mut record, TransactionPhase::Installed))
-        .and_then(|_| control.checkpoint(PublicationStep::BeforeCommit))
-        .and_then(|_| precommit_check())
-        .and_then(|_| {
+        .and_then(|()| set_phase(files, &mut record, TransactionPhase::Staged))
+        .and_then(|()| quarantine_removals(files, &record, control))
+        .and_then(|()| set_phase(files, &mut record, TransactionPhase::Quarantined))
+        .and_then(|()| install_candidate_controlled(files, &record, control))
+        .and_then(|()| set_phase(files, &mut record, TransactionPhase::Installed))
+        .and_then(|()| control.checkpoint(PublicationStep::BeforeCommit))
+        .and_then(|()| precommit_check())
+        .and_then(|()| {
             files
                 .write_scope(Path::new(".criv"))?
                 .write_atomic(Path::new(".criv/state.json"), contents)
         })
-        .and_then(|_| set_phase(files, &mut record, TransactionPhase::Committed))
-        .and_then(|_| control.checkpoint(PublicationStep::Commit));
+        .and_then(|()| set_phase(files, &mut record, TransactionPhase::Committed))
+        .and_then(|()| control.checkpoint(PublicationStep::Commit));
     if let Err(error) = result {
         let state_committed = read_optional(files, ".criv/state.json", "State commit record")?
             .as_deref()
@@ -179,8 +179,8 @@ fn publish_with_check(
     }
 
     if let Err(error) = set_phase(files, &mut record, TransactionPhase::Cleanup)
-        .and_then(|_| control.checkpoint(PublicationStep::Cleanup))
-        .and_then(|_| cleanup_transaction(files, &record))
+        .and_then(|()| control.checkpoint(PublicationStep::Cleanup))
+        .and_then(|()| cleanup_transaction(files, &record))
     {
         eprintln!("criv: warning: State publication cleanup failed: {error}");
     }
@@ -207,7 +207,7 @@ fn set_phase(
     write_record(files, record)
 }
 
-pub(crate) fn load_snapshot(root: &Path, id: &str) -> Result<Option<String>> {
+pub fn load_snapshot(root: &Path, id: &str) -> Result<Option<String>> {
     let files = RepositoryFiles::open(root)?;
     let _lock = PublicationLock::acquire(&files)?;
     recover_locked(&files)?;
@@ -222,7 +222,9 @@ impl PublicationLock {
             .map_err(|error| {
                 CrivError::new(format!("unsafe State publication lock path: {error}"))
             })?;
-        let deadline = Instant::now() + LOCK_TIMEOUT;
+        let deadline = Instant::now()
+            .checked_add(LOCK_TIMEOUT)
+            .ok_or_else(|| CrivError::new("State publication lock timeout overflow"))?;
         loop {
             match file.try_lock() {
                 Ok(()) => return Ok(Self { _file: file }),
@@ -474,7 +476,7 @@ mod tests {
 
     impl PublicationControl for FailAt {
         fn checkpoint(&self, step: PublicationStep) -> Result<()> {
-            if (step == self.step && self.hits.replace(self.hits.get() + 1) == 0)
+            if (step == self.step && self.hits.replace(self.hits.get().saturating_add(1)) == 0)
                 || (step == PublicationStep::Rollback && self.also_fail_rollback)
             {
                 return Err(CrivError::new(format!("controlled failure at {step:?}")));

@@ -8,12 +8,12 @@ use crate::identity::strip_prefix;
 use crate::repository::RepositoryFiles;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum C4ArtifactFormat {
+pub enum C4ArtifactFormat {
     LikeC4,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct C4Artifact {
+pub struct C4Artifact {
     pub(crate) path: std::path::PathBuf,
     pub(crate) rel_path: String,
     pub(crate) format: Option<C4ArtifactFormat>,
@@ -22,14 +22,14 @@ pub(crate) struct C4Artifact {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct C4ArtifactDiagnostic {
+pub struct C4ArtifactDiagnostic {
     pub(crate) code: &'static str,
     pub(crate) line: Option<usize>,
     pub(crate) message: String,
     pub(crate) location: Option<SourceLocation>,
 }
 
-pub(crate) fn parse_file_from(
+pub fn parse_file_from(
     files: &RepositoryFiles,
     docs_path: &Path,
     path: &Path,
@@ -50,7 +50,7 @@ fn parse_contents(root: &Path, docs_path: &Path, path: &Path, contents: &str) ->
             code: "unknown-c4-format",
             line,
             message: ".c4 content must use LikeC4 DSL".into(),
-            location: line.and_then(|line| line_location(source.clone(), line)),
+            location: line.and_then(|line| line_location(&source, line)),
         });
     }
     for (line, value) in &directives {
@@ -62,7 +62,7 @@ fn parse_contents(root: &Path, docs_path: &Path, path: &Path, contents: &str) ->
                 code: "invalid-c4-generated",
                 line: Some(*line),
                 message: "criv:generated must be true or false".into(),
-                location: line_location(source.clone(), *line),
+                location: line_location(&source, *line),
             });
         }
     }
@@ -106,7 +106,10 @@ fn generated_directives(contents: &str) -> Vec<(usize, Option<String>)> {
         .filter_map(|(index, line)| {
             let body = line.trim().strip_prefix("//")?.trim();
             let value = body.strip_prefix("criv:generated")?.trim();
-            Some((index + 1, (!value.is_empty()).then(|| value.to_string())))
+            Some((
+                index.saturating_add(1),
+                (!value.is_empty()).then(|| value.to_string()),
+            ))
         })
         .collect()
 }
@@ -115,21 +118,21 @@ fn first_non_empty_line(contents: &str) -> Option<usize> {
     contents
         .lines()
         .position(|line| !line.trim().is_empty())
-        .map(|index| index + 1)
+        .map(|index| index.saturating_add(1))
 }
 
-fn line_location(source: Arc<str>, line: usize) -> Option<SourceLocation> {
+fn line_location(source: &Arc<str>, line: usize) -> Option<SourceLocation> {
     let start = source
         .split_inclusive('\n')
         .take(line.saturating_sub(1))
         .map(str::len)
         .sum::<usize>();
-    let raw = source
-        .get(start..)?
+    let remaining = source.get(start..)?;
+    let raw = remaining
         .split_once('\n')
-        .map_or_else(|| &source[start..], |(line, _)| line);
+        .map_or(remaining, |(line, _)| line);
     let line = raw.strip_suffix('\r').unwrap_or(raw);
-    SourceLocation::new(source.clone(), start..start + line.len())
+    SourceLocation::new(source.clone(), start..start.checked_add(line.len())?)
 }
 
 #[cfg(test)]
@@ -160,7 +163,8 @@ mod tests {
                 .location
                 .as_ref()
                 .expect("the non-empty source line has an exact location")
-                .lsp_range();
+                .lsp_range()
+                .expect("the validated source location has an LSP range");
             assert_eq!((exact.start.line, exact.start.character), (0, 0));
             assert_eq!(exact.end.line, 0);
             assert!(exact.end.character > 0);

@@ -3,23 +3,22 @@ use serde::Serialize;
 
 use crate::{CrivError, Result};
 
-pub(crate) fn default_config() -> Result<String> {
-    Ok(DEFAULT_CONFIG.to_string())
+pub fn default_config() -> String {
+    DEFAULT_CONFIG.to_string()
 }
 
-pub(crate) fn default_state() -> Result<String> {
+pub fn default_state() -> Result<String> {
     json_pretty(&StateDocument::default(), ".criv/state.json")
 }
 
-pub(crate) fn adr_readme() -> Result<String> {
+pub fn adr_readme() -> Result<String> {
     let frontmatter = serde_norway::to_string(&AdrReadmeFrontmatter::default()).map_err(|err| {
         CrivError::new(format!(
             "failed to serialize docs/adr/README.md frontmatter: {err}"
         ))
     })?;
     Ok(format!(
-        "---\n{}---\n\n# Architectural Decisions\n\nAccepted decisions live in this directory as MADR-style notes named `NNNN-kebab-title.md`.\n",
-        frontmatter
+        "---\n{frontmatter}---\n\n# Architectural Decisions\n\nAccepted decisions live in this directory as MADR-style notes named `NNNN-kebab-title.md`.\n"
     ))
 }
 

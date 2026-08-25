@@ -1,3 +1,11 @@
+#![allow(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::pedantic,
+    clippy::unwrap_used
+)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

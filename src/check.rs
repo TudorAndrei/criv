@@ -37,7 +37,7 @@ enum Format {
 }
 
 #[derive(Debug, UsageArgs)]
-pub(crate) struct CheckOptions {
+pub struct CheckOptions {
     #[usage(long, value_enum, default = "text")]
     format: Format,
     #[usage(long)]
@@ -51,13 +51,13 @@ pub(crate) struct CheckOptions {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum Severity {
+pub enum Severity {
     Error,
     Warning,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct Diagnostic {
+pub struct Diagnostic {
     severity: Severity,
     code: &'static str,
     path: String,
@@ -86,19 +86,19 @@ struct MarkdownFixScope<'a> {
 }
 
 impl Diagnostic {
-    pub(crate) fn is_error(&self) -> bool {
+    pub(crate) const fn is_error(&self) -> bool {
         matches!(self.severity, Severity::Error)
     }
 
-    pub(crate) fn is_warning(&self) -> bool {
+    pub(crate) const fn is_warning(&self) -> bool {
         matches!(self.severity, Severity::Warning)
     }
 
     pub(crate) fn describe(&self) -> String {
-        match self.line {
-            Some(line) => format!("{}:{line}: {}", self.path, self.message),
-            None => format!("{}: {}", self.path, self.message),
-        }
+        self.line.map_or_else(
+            || format!("{}: {}", self.path, self.message),
+            |line| format!("{}:{line}: {}", self.path, self.message),
+        )
     }
 
     fn json(&self) -> JsonDiagnostic<'_> {
@@ -108,13 +108,13 @@ impl Diagnostic {
             path: &self.path,
             line: self.line,
             message: &self.message,
-            range: self.location.as_ref().map(SourceLocation::lsp_range),
+            range: self.location.as_ref().and_then(SourceLocation::lsp_range),
             fix: fix_for(self.code),
         }
     }
 }
 
-pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
+pub fn run(root: &Path, options: &CheckOptions) -> Result<()> {
     let files = RepositoryFiles::open_vault(root)?;
     let mut diagnostics = if options.changed {
         validate_changed(&files)?
@@ -161,14 +161,14 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
         return Err(CrivError::coded_fix(
             "check-failed",
             "check failed",
-            fix_for("check-failed").expect("check-failed carries a repair"),
+            fix_for("check-failed").unwrap_or("Run `criv check` and repair the reported issue."),
         ));
     }
 
     Ok(())
 }
 
-pub(crate) fn validate_all_from(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
+pub fn validate_all_from(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
     validate_all_with_fix(files, false)
 }
 
@@ -349,7 +349,7 @@ fn validate_markdown_format(
                 diagnostics.extend(
                     warnings
                         .into_iter()
-                        .map(|warning| markdown_diagnostic(&rel_path, source.clone(), warning)),
+                        .map(|warning| markdown_diagnostic(&rel_path, source.clone(), &warning)),
                 );
             }
             Err(err) => diagnostics.push(error(
@@ -460,7 +460,7 @@ fn rules_for_ignored_rules(
         .collect()
 }
 
-fn markdown_diagnostic(path: &str, source: Arc<str>, warning: LintWarning) -> Diagnostic {
+fn markdown_diagnostic(path: &str, source: Arc<str>, warning: &LintWarning) -> Diagnostic {
     let rule = warning.rule_name.as_deref().unwrap_or("rumdl");
     let location = SourceLocation::from_one_based_character_range(
         source,
@@ -485,7 +485,7 @@ fn validate(vault: &Vault) -> Vec<Diagnostic> {
     validate_vault(vault, None, &policy_plan)
 }
 
-pub(crate) fn validate_vault(
+pub fn validate_vault(
     vault: &Vault,
     previous: Option<&State>,
     policy_plan: &PolicyScanPlan,
@@ -587,7 +587,11 @@ fn validate_changed_vault(
     {
         validate_c4_artifact(artifact, &mut diagnostics);
     }
-    if changed_paths.iter().any(|path| path.ends_with(".c4")) {
+    if changed_paths.iter().any(|path| {
+        Path::new(path)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("c4"))
+    }) {
         validate_likec4_workspace(vault, &mut diagnostics);
     }
     validate_architecture_interface_drift_for_paths(
@@ -712,7 +716,7 @@ fn validate_note_local(
             &note.rel_path,
             None,
             note.frontmatter_error_location.clone(),
-            err.to_string(),
+            err.clone(),
         ));
     }
 
@@ -780,7 +784,9 @@ fn validate_decision_note(
     if let Some(filename) = note.path.file_name().map(|value| value.to_string_lossy())
         && is_adr_id(id)
     {
-        let suffix = &id[4..];
+        let Some(suffix) = id.get(4..) else {
+            return;
+        };
         let expected_prefix = format!("{suffix}-");
         let title_kebab = note.title.as_deref().map(kebab).unwrap_or_default();
         let title_matches = title_kebab.is_empty()
@@ -887,7 +893,7 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
 }
 
 fn unresolved_governs(vault: &Vault, note: &Note) -> Vec<String> {
-    let governs = vault.effective_governs(note);
+    let governs = Vault::effective_governs(note);
     governs
         .iter()
         .zip(vault.source_globs_have_matches(&governs))
@@ -896,7 +902,7 @@ fn unresolved_governs(vault: &Vault, note: &Note) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn publication_blocking_diagnostics(vault: &Vault) -> Vec<Diagnostic> {
+pub fn publication_blocking_diagnostics(vault: &Vault) -> Vec<Diagnostic> {
     let mut diagnostics = vault
         .notes
         .iter()
@@ -1160,9 +1166,8 @@ fn validate_supersession(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
         diagnostics.push(error(
             "supersession-cycle",
             decisions
-                .get(cycle.first().map(String::as_str).unwrap_or(""))
-                .map(|note| note.rel_path.as_str())
-                .unwrap_or("docs"),
+                .get(cycle.first().map_or("", String::as_str))
+                .map_or("docs", |note| note.rel_path.as_str()),
             None,
             format!("supersession chain is cyclic: {}", cycle.join(" -> ")),
         ));
@@ -1189,7 +1194,7 @@ fn visit_supersession(
     cycles: &mut Vec<Vec<String>>,
 ) {
     if let Some(position) = stack.iter().position(|value| value == id) {
-        let mut cycle = stack[position..].to_vec();
+        let mut cycle = stack.get(position..).unwrap_or_default().to_vec();
         cycle.push(id.to_string());
         cycles.push(cycle);
         return;
@@ -1267,20 +1272,24 @@ fn github_annotation(diag: &Diagnostic) -> String {
         Severity::Error => "error",
         Severity::Warning => "warning",
     };
-    let location = if let Some(location) = &diag.location {
-        let location = location.github_location();
-        match (location.column, location.end_column) {
-            (Some(column), Some(end_column)) => format!(
-                ",line={},col={column},endLine={},endColumn={end_column}",
-                location.line, location.end_line
-            ),
-            _ => format!(",line={},endLine={}", location.line, location.end_line),
-        }
-    } else {
-        diag.line
-            .map(|line| format!(",line={line}"))
-            .unwrap_or_default()
-    };
+    let location = diag
+        .location
+        .as_ref()
+        .and_then(SourceLocation::github_location)
+        .map_or_else(
+            || {
+                diag.line
+                    .map(|line| format!(",line={line}"))
+                    .unwrap_or_default()
+            },
+            |location| match (location.column, location.end_column) {
+                (Some(column), Some(end_column)) => format!(
+                    ",line={},col={column},endLine={},endColumn={end_column}",
+                    location.line, location.end_line
+                ),
+                _ => format!(",line={},endLine={}", location.line, location.end_line),
+            },
+        );
     format!(
         "::{command} file={}{},title={}::{}",
         escape_github_property(&diag.path),
@@ -1319,7 +1328,7 @@ fn error_with_location(
     location: Option<SourceLocation>,
     message: impl Into<String>,
 ) -> Diagnostic {
-    let line = location.as_ref().map(SourceLocation::line).or(line);
+    let line = location.as_ref().and_then(SourceLocation::line).or(line);
     Diagnostic {
         severity: Severity::Error,
         code,
@@ -1346,7 +1355,7 @@ fn warning_with_location(
     location: Option<SourceLocation>,
     message: impl Into<String>,
 ) -> Diagnostic {
-    let line = location.as_ref().map(SourceLocation::line).or(line);
+    let line = location.as_ref().and_then(SourceLocation::line).or(line);
     Diagnostic {
         severity: Severity::Warning,
         code,
@@ -1560,7 +1569,7 @@ mod tests {
         let diagnostic = markdown_diagnostic(
             "docs/unicode.md",
             Arc::from("é😀bad\n"),
-            LintWarning {
+            &LintWarning {
                 message: "bad emoji".into(),
                 line: 1,
                 column: 2,
@@ -1591,7 +1600,7 @@ mod tests {
         let diagnostic = markdown_diagnostic(
             "docs/invalid.md",
             Arc::from("short\n"),
-            LintWarning {
+            &LintWarning {
                 message: "invalid range".into(),
                 line: 1,
                 column: 20,

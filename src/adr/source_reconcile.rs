@@ -19,7 +19,7 @@ const RECEIPT_PATH: &str = ".criv/source-reconcile.json";
 const COMMIT_MESSAGE: &str = "docs(adr): reconcile renamed source scopes";
 
 #[derive(Debug, UsageArgs)]
-pub(crate) struct Options {
+pub struct Options {
     #[usage(long, help = "Target branch or commit to compare with")]
     base: String,
     #[usage(
@@ -84,7 +84,7 @@ struct ScalarSpan {
     style: ScalarStyle,
 }
 
-pub(crate) fn run(root: &Path, options: Options) -> Result<()> {
+pub fn run(root: &Path, options: &Options) -> Result<()> {
     let files = RepositoryFiles::open(root)?;
     if !git::is_repository(root)? {
         return Err(CrivError::new(
@@ -162,64 +162,7 @@ fn build_plan(files: &RepositoryFiles, base_ref: &str, target_sha: &str) -> Resu
     let head_sha = git::resolve_commit(root, "HEAD")?;
     let merge_base = git::merge_base(root, target_sha, &head_sha)?;
     let changes = git::changes_between(root, &merge_base, &head_sha)?;
-    let mappings = rename_mappings(&changes)?;
-    let mapping_by_old = mappings
-        .iter()
-        .map(|mapping| (mapping.old_path.as_str(), mapping.new_path.as_str()))
-        .collect::<BTreeMap<_, _>>();
-    let deleted = changes
-        .entries
-        .iter()
-        .filter(|entry| entry.status == ChangeStatus::Deleted)
-        .map(|entry| entry.path.as_str())
-        .collect::<BTreeSet<_>>();
-    let copied = changes
-        .entries
-        .iter()
-        .filter(|entry| entry.status == ChangeStatus::Copied)
-        .filter_map(|entry| entry.previous_path.as_deref())
-        .collect::<BTreeSet<_>>();
-    let current_sources = vault
-        .source_files()
-        .iter()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
-    let mut required = BTreeMap::new();
-
-    for note in vault
-        .notes
-        .iter()
-        .filter(|note| vault.is_effective_decision(note))
-    {
-        let matches = vault.source_globs_have_matches(&note.governs);
-        for (governs, has_match) in note.governs.iter().zip(matches) {
-            if has_match {
-                continue;
-            }
-            if let Some(new_path) = mapping_by_old.get(governs.as_str()) {
-                if !current_sources.contains(new_path) {
-                    return Err(CrivError::new(format!(
-                        "cannot reconcile `{governs}` to `{new_path}` because the destination is not in the current source catalog"
-                    )));
-                }
-                required.insert(governs.clone(), (*new_path).to_string());
-                continue;
-            }
-            if deleted.contains(governs.as_str()) {
-                return Err(successor_required(governs, "was deleted"));
-            }
-            if copied.contains(governs.as_str()) {
-                return Err(successor_required(
-                    governs,
-                    "was copied rather than renamed",
-                ));
-            }
-            return Err(successor_required(
-                governs,
-                "is unresolved and has no one-to-one Git rename",
-            ));
-        }
-    }
+    let required = required_reconciliations(&vault, &changes)?;
 
     let mut files = Vec::new();
     if !required.is_empty() {
@@ -275,6 +218,70 @@ fn build_plan(files: &RepositoryFiles, base_ref: &str, target_sha: &str) -> Resu
         mappings,
         files,
     })
+}
+
+fn required_reconciliations(
+    vault: &Vault,
+    changes: &ChangedSet,
+) -> Result<BTreeMap<String, String>> {
+    let mappings = rename_mappings(changes)?;
+    let mapping_by_old = mappings
+        .iter()
+        .map(|mapping| (mapping.old_path.as_str(), mapping.new_path.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let deleted = changes
+        .entries
+        .iter()
+        .filter(|entry| entry.status == ChangeStatus::Deleted)
+        .map(|entry| entry.path.as_str())
+        .collect::<BTreeSet<_>>();
+    let copied = changes
+        .entries
+        .iter()
+        .filter(|entry| entry.status == ChangeStatus::Copied)
+        .filter_map(|entry| entry.previous_path.as_deref())
+        .collect::<BTreeSet<_>>();
+    let current_sources = vault
+        .source_files()
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let mut required = BTreeMap::new();
+    for note in vault
+        .notes
+        .iter()
+        .filter(|note| vault.is_effective_decision(note))
+    {
+        let matches = vault.source_globs_have_matches(&note.governs);
+        for (governs, has_match) in note.governs.iter().zip(matches) {
+            if has_match {
+                continue;
+            }
+            if let Some(new_path) = mapping_by_old.get(governs.as_str()) {
+                if !current_sources.contains(new_path) {
+                    return Err(CrivError::new(format!(
+                        "cannot reconcile `{governs}` to `{new_path}` because the destination is not in the current source catalog"
+                    )));
+                }
+                required.insert(governs.clone(), (*new_path).to_string());
+                continue;
+            }
+            if deleted.contains(governs.as_str()) {
+                return Err(successor_required(governs, "was deleted"));
+            }
+            if copied.contains(governs.as_str()) {
+                return Err(successor_required(
+                    governs,
+                    "was copied rather than renamed",
+                ));
+            }
+            return Err(successor_required(
+                governs,
+                "is unresolved and has no one-to-one Git rename",
+            ));
+        }
+    }
+    Ok(required)
 }
 
 fn successor_required(path: &str, reason: &str) -> CrivError {
@@ -348,7 +355,7 @@ fn apply_plan(files: &RepositoryFiles, plan: &Plan) -> Result<()> {
     }
     let errors = crate::check::validate_all_from(files)?
         .into_iter()
-        .filter(|diagnostic| diagnostic.is_error())
+        .filter(super::super::check::Diagnostic::is_error)
         .map(|diagnostic| diagnostic.describe())
         .collect::<Vec<_>>();
     if !errors.is_empty() {
@@ -384,14 +391,14 @@ fn apply_plan(files: &RepositoryFiles, plan: &Plan) -> Result<()> {
         .write_atomic(Path::new(RECEIPT_PATH), &contents)
 }
 
-pub(crate) fn receipt_is_current(root: &Path) -> bool {
+pub fn receipt_is_current(root: &Path) -> bool {
     read_receipt(root).is_ok_and(|receipt| {
         receipt.schema == RECEIPT_SCHEMA
             && git::resolve_commit(root, "HEAD").ok().as_deref() == Some(receipt.head_sha.as_str())
     })
 }
 
-pub(crate) fn receipt_allows_transaction(root: &Path, entries: &[ChangedEntry]) -> bool {
+pub fn receipt_allows_transaction(root: &Path, entries: &[ChangedEntry]) -> bool {
     let Ok(files) = RepositoryFiles::open(root) else {
         return false;
     };
@@ -441,11 +448,7 @@ fn receipt_allows_transaction_from(files: &RepositoryFiles, entries: &[ChangedEn
         })
 }
 
-pub(crate) fn allows_history_change(
-    root: &Path,
-    changes: &ChangedSet,
-    entry: &ChangedEntry,
-) -> bool {
+pub fn allows_history_change(root: &Path, changes: &ChangedSet, entry: &ChangedEntry) -> bool {
     if entry.status != ChangeStatus::Modified || entry.previous_path.is_some() {
         return false;
     }
@@ -462,12 +465,10 @@ pub(crate) fn allows_history_change(
     let Ok(old) = git::blob(root, old_ref, &entry.path) else {
         return false;
     };
-    let new = match new_ref {
-        Some(reference) => git::blob(root, reference, &entry.path),
-        None => {
-            RepositoryFiles::open(root).and_then(|files| files.read_string(Path::new(&entry.path)))
-        }
-    };
+    let new = new_ref.map_or_else(
+        || RepositoryFiles::open(root).and_then(|files| files.read_string(Path::new(&entry.path))),
+        |reference| git::blob(root, reference, &entry.path),
+    );
     new.is_ok_and(|new| transition_matches(&old, &new, &mappings))
 }
 
@@ -595,7 +596,11 @@ fn governs_scalars(contents: &str) -> Result<Vec<ScalarSpan>> {
         return Ok(Vec::new());
     };
     let mut spans = Vec::new();
-    for (line_start, line) in lines.iter().take(frontmatter_end).skip(field + 1) {
+    for (line_start, line) in lines
+        .iter()
+        .take(frontmatter_end)
+        .skip(field.saturating_add(1))
+    {
         if !line.starts_with(char::is_whitespace) && !line.trim().is_empty() {
             break;
         }
@@ -621,9 +626,15 @@ fn governs_scalars(contents: &str) -> Result<Vec<ScalarSpan>> {
         let raw_offset = line
             .find(raw)
             .ok_or_else(|| CrivError::new("cannot locate `governs:` scalar"))?;
+        let range_start = line_start
+            .checked_add(raw_offset)
+            .ok_or_else(|| CrivError::new("`governs:` scalar position exceeds address space"))?;
+        let range_end = range_start
+            .checked_add(raw.len())
+            .ok_or_else(|| CrivError::new("`governs:` scalar range exceeds address space"))?;
         spans.push(ScalarSpan {
             value,
-            range: line_start + raw_offset..line_start + raw_offset + raw.len(),
+            range: range_start..range_end,
             style,
         });
     }
@@ -631,12 +642,12 @@ fn governs_scalars(contents: &str) -> Result<Vec<ScalarSpan>> {
 }
 
 fn indexed_lines(contents: &str) -> Vec<(usize, &str)> {
-    let mut offset = 0;
+    let mut offset = 0_usize;
     contents
         .split_inclusive('\n')
         .map(|line| {
             let start = offset;
-            offset += line.len();
+            offset = offset.saturating_add(line.len());
             (start, line.trim_end_matches(['\r', '\n']))
         })
         .collect()
@@ -680,7 +691,8 @@ fn top_level_scalar(contents: &str, key: &str) -> Option<String> {
     let lines = indexed_lines(contents);
     let (start, end) = frontmatter_bounds(&lines)?;
     let prefix = format!("{key}:");
-    lines[start..end]
+    lines
+        .get(start..end)?
         .iter()
         .filter(|(_, line)| !line.starts_with(char::is_whitespace))
         .find_map(|(_, line)| line.strip_prefix(&prefix).map(str::trim))

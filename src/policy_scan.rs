@@ -9,7 +9,7 @@ use crate::structural::{self, CompiledPolicy, PolicyCompileError, PolicyScanRequ
 use crate::vault::{NoteKind, Vault};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) enum PolicyDiagnosticKind {
+pub enum PolicyDiagnosticKind {
     MissingId,
     EmptyId,
     DuplicateId { id: String },
@@ -22,14 +22,14 @@ pub(crate) enum PolicyDiagnosticKind {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct PolicyDiagnostic {
+pub struct PolicyDiagnostic {
     pub(crate) path: String,
     pub(crate) line: usize,
     pub(crate) kind: PolicyDiagnosticKind,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct PolicyViolation {
+pub struct PolicyViolation {
     pub(crate) path: String,
     pub(crate) line: usize,
     pub(crate) adr_id: String,
@@ -38,20 +38,20 @@ pub(crate) struct PolicyViolation {
     pub(crate) location: Option<SourceLocation>,
 }
 
-pub(crate) struct PolicyScanPlan {
+pub struct PolicyScanPlan {
     diagnostics: Vec<PolicyDiagnostic>,
     owners: Vec<PlannedOwner>,
     state_definition_error: Option<String>,
 }
 
-pub(crate) struct PlannedOwner {
+pub struct PlannedOwner {
     adr_id: String,
     scopes: Vec<String>,
     paths: BTreeSet<String>,
     policies: Vec<PlannedPolicy>,
 }
 
-pub(crate) struct PlannedPolicy {
+pub struct PlannedPolicy {
     pattern_id: String,
     state: Option<PlannedStatePolicy>,
     compiled: CompiledPolicy,
@@ -75,7 +75,7 @@ enum ScanPaths<'a> {
 }
 
 impl ScanPaths<'_> {
-    fn as_set(&self) -> &BTreeSet<String> {
+    const fn as_set(&self) -> &BTreeSet<String> {
         match self {
             Self::Borrowed(paths) => paths,
             Self::Filtered(paths) => paths,
@@ -118,6 +118,10 @@ pub(crate) fn work_counts() -> WorkCounts {
 }
 
 impl PolicyScanPlan {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "policy planning collects related vault indexes in one deterministic pass"
+    )]
     pub(crate) fn new(vault: &Vault) -> Self {
         let mut diagnostics = Vec::new();
         let mut owners = Vec::new();
@@ -170,7 +174,10 @@ impl PolicyScanPlan {
                 }
 
                 #[cfg(test)]
-                record_work(|counts| counts.definition_compilations += 1);
+                record_work(|counts| {
+                    counts.definition_compilations =
+                        counts.definition_compilations.saturating_add(1);
+                });
                 let state_pattern_id = active_adr_id.and_then(|adr_id| {
                     let pattern_id = format!("{adr_id}/{raw_local_id}");
                     (vault.patterns().contains(&pattern_id)
@@ -216,8 +223,10 @@ impl PolicyScanPlan {
             }
 
             #[cfg(test)]
-            record_work(|counts| counts.adr_scope_resolutions += 1);
-            let scopes = vault.effective_governs(note);
+            record_work(|counts| {
+                counts.adr_scope_resolutions = counts.adr_scope_resolutions.saturating_add(1);
+            });
+            let scopes = Vault::effective_governs(note);
             let paths = vault
                 .source_files_matching_globs(&scopes)
                 .into_iter()
@@ -279,16 +288,17 @@ impl PolicyScanPlan {
         let scan_paths = self
             .owners
             .iter()
-            .map(|owner| match changed_files {
-                None => ScanPaths::Borrowed(&owner.paths),
-                Some(changed) => ScanPaths::Filtered(
-                    owner
-                        .paths
-                        .iter()
-                        .filter(|path| changed.contains(*path))
-                        .cloned()
-                        .collect(),
-                ),
+            .map(|owner| {
+                changed_files.map_or(ScanPaths::Borrowed(&owner.paths), |changed| {
+                    ScanPaths::Filtered(
+                        owner
+                            .paths
+                            .iter()
+                            .filter(|path| changed.contains(*path))
+                            .cloned()
+                            .collect(),
+                    )
+                })
             })
             .collect::<Vec<_>>();
 
@@ -301,7 +311,9 @@ impl PolicyScanPlan {
                 requests.push(PolicyScanRequest {
                     key,
                     policy: &policy.compiled,
-                    paths: scan_paths[owner_index].as_set(),
+                    paths: scan_paths
+                        .get(owner_index)
+                        .map_or(&owner.paths, ScanPaths::as_set),
                 });
             }
         }
@@ -329,7 +341,7 @@ impl PlannedOwner {
         &self.scopes
     }
 
-    pub(crate) fn paths(&self) -> &BTreeSet<String> {
+    pub(crate) const fn paths(&self) -> &BTreeSet<String> {
         &self.paths
     }
 
@@ -349,7 +361,7 @@ impl PlannedPolicy {
             .map(|state| state.input_fingerprint.as_str())
     }
 
-    pub(crate) fn compiled(&self) -> &CompiledPolicy {
+    pub(crate) const fn compiled(&self) -> &CompiledPolicy {
         &self.compiled
     }
 }
@@ -434,7 +446,12 @@ mod tests {
 
         assert_eq!(structural::work_counts().policy_compilations, 2);
         assert_eq!(structural::work_counts().ast_parses, 2);
-        let exact = violations[0].location.as_ref().unwrap().lsp_range();
+        let exact = violations[0]
+            .location
+            .as_ref()
+            .unwrap()
+            .lsp_range()
+            .unwrap();
         assert_eq!((exact.start.line, exact.start.character), (0, 0));
         assert_eq!((exact.end.line, exact.end.character), (0, 12));
         assert_eq!(

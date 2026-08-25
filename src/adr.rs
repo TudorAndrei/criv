@@ -17,7 +17,7 @@ use crate::{CrivError, Result};
 
 use self::reconcile_transaction::Snapshot;
 
-pub(crate) use source_reconcile::{
+pub use source_reconcile::{
     allows_history_change as source_history_change_is_allowed,
     receipt_allows_transaction as source_receipt_allows_transaction,
     receipt_is_current as source_receipt_is_current,
@@ -28,7 +28,7 @@ const RECEIPT_PATH: &str = ".criv/adr-reconcile.json";
 const RECONCILIATION_COMMIT_MESSAGE: &str = "docs(adr): reconcile provisional identifiers";
 
 #[derive(Debug, UsageArgs)]
-pub(crate) struct AdrOptions {
+pub struct AdrOptions {
     #[usage(subcommand)]
     command: AdrCommand,
 }
@@ -113,19 +113,19 @@ struct ReceiptSource {
     before_mode: String,
 }
 
-pub(crate) fn run(root: &Path, options: AdrOptions) -> Result<()> {
+pub fn run(root: &Path, options: &AdrOptions) -> Result<()> {
     RepositoryFiles::open_vault(root)?;
-    match options.command {
+    match &options.command {
         AdrCommand::Reconcile(options) => reconcile(root, options),
         AdrCommand::ReconcileSources(options) => source_reconcile::run(root, options),
     }
 }
 
 /// CI calls the same read-only planner as the user-facing `--check` command.
-pub(crate) fn check_base(root: &Path, base_ref: &str) -> Result<()> {
+pub fn check_base(root: &Path, base_ref: &str) -> Result<()> {
     reconcile(
         root,
-        ReconcileOptions {
+        &ReconcileOptions {
             base: base_ref.to_owned(),
             check: true,
         },
@@ -134,7 +134,7 @@ pub(crate) fn check_base(root: &Path, base_ref: &str) -> Result<()> {
 
 /// Local hooks accept only the complete staged transaction produced by this
 /// command. Git may present its ADR move as either a rename or a deletion.
-pub(crate) fn receipt_allows_change(root: &Path, entry: &git::ChangedEntry) -> bool {
+pub fn receipt_allows_change(root: &Path, entry: &git::ChangedEntry) -> bool {
     let Ok(receipt) = read_receipt(root) else {
         return false;
     };
@@ -158,7 +158,7 @@ pub(crate) fn receipt_allows_change(root: &Path, entry: &git::ChangedEntry) -> b
 
 /// A receipt is relevant only to the exact commit from which reconciliation
 /// started. A later commit leaves the ignored receipt behind harmlessly.
-pub(crate) fn receipt_is_current(root: &Path) -> bool {
+pub fn receipt_is_current(root: &Path) -> bool {
     let Ok(receipt) = read_receipt(root) else {
         return false;
     };
@@ -169,7 +169,7 @@ pub(crate) fn receipt_is_current(root: &Path) -> bool {
 /// Reject partial staging even when Git has no deletion entry left to send
 /// through the per-ADR immutability gate (for example, after a source ADR is
 /// recreated at its former path).
-pub(crate) fn receipt_allows_transaction(root: &Path, entries: &[git::ChangedEntry]) -> bool {
+pub fn receipt_allows_transaction(root: &Path, entries: &[git::ChangedEntry]) -> bool {
     let Ok(receipt) = read_receipt(root) else {
         return false;
     };
@@ -182,7 +182,7 @@ pub(crate) fn receipt_allows_transaction(root: &Path, entries: &[git::ChangedEnt
 /// A reconciliation receipt may prove exactly one committed transaction after
 /// its planning HEAD. This is used for push enforcement, where the receipt is
 /// intentionally ignored and the checkout may have advanced past that commit.
-pub(crate) fn receipt_allows_commit(root: &Path, commit: &str) -> bool {
+pub fn receipt_allows_commit(root: &Path, commit: &str) -> bool {
     let Ok(receipt) = read_receipt(root) else {
         return false;
     };
@@ -201,7 +201,7 @@ pub(crate) fn receipt_allows_commit(root: &Path, commit: &str) -> bool {
 /// A combined push comparison may end at a later commit or merge. Admit only
 /// receipt paths whose exact transaction is present in the compared history
 /// and whose generated outputs have not changed since that commit.
-pub(crate) fn receipt_allows_history_change(
+pub fn receipt_allows_history_change(
     root: &Path,
     changes: &git::ChangedSet,
     entry: &git::ChangedEntry,
@@ -242,8 +242,7 @@ fn receipt_common_matches(root: &Path, receipt: &Receipt) -> bool {
         && git::ref_is_stable(root, &receipt.base_ref, &receipt.target_sha).unwrap_or(false)
         && receipt.sources.iter().all(|source| {
             git::blob(root, &receipt.head_sha, &source.path)
-                .map(|contents| hash(&contents) == source.before_hash)
-                .unwrap_or(false)
+                .is_ok_and(|contents| hash(&contents) == source.before_hash)
                 && git::file_mode(root, &receipt.head_sha, &source.path)
                     .ok()
                     .flatten()
@@ -254,12 +253,13 @@ fn receipt_common_matches(root: &Path, receipt: &Receipt) -> bool {
 
 fn receipt_tree_matches(root: &Path, receipt: &Receipt, tree: &str) -> bool {
     receipt.files.iter().all(|file| {
-        let before_matches = match &file.before_hash {
-            Some(before_hash) => git::blob(root, &receipt.head_sha, &file.path)
-                .map(|contents| hash(&contents) == *before_hash)
-                .unwrap_or(false),
-            None => git::blob(root, &receipt.head_sha, &file.path).is_err(),
-        };
+        let before_matches = file.before_hash.as_ref().map_or_else(
+            || git::blob(root, &receipt.head_sha, &file.path).is_err(),
+            |before_hash| {
+                git::blob(root, &receipt.head_sha, &file.path)
+                    .is_ok_and(|contents| hash(&contents) == *before_hash)
+            },
+        );
         before_matches
             && git::file_mode(root, &receipt.head_sha, &file.path)
                 .ok()
@@ -267,8 +267,7 @@ fn receipt_tree_matches(root: &Path, receipt: &Receipt, tree: &str) -> bool {
                 .as_deref()
                 == file.before_mode.as_deref()
             && git::blob(root, tree, &file.path)
-                .map(|contents| hash(&contents) == file.after_hash)
-                .unwrap_or(false)
+                .is_ok_and(|contents| hash(&contents) == file.after_hash)
             && git::file_mode(root, tree, &file.path)
                 .ok()
                 .flatten()
@@ -281,9 +280,7 @@ fn receipt_tree_matches(root: &Path, receipt: &Receipt, tree: &str) -> bool {
 
 fn receipt_outputs_survive(root: &Path, receipt: &Receipt, tree: &str) -> bool {
     receipt.files.iter().all(|file| {
-        git::blob(root, tree, &file.path)
-            .map(|contents| hash(&contents) == file.after_hash)
-            .unwrap_or(false)
+        git::blob(root, tree, &file.path).is_ok_and(|contents| hash(&contents) == file.after_hash)
             && git::file_mode(root, tree, &file.path)
                 .ok()
                 .flatten()
@@ -320,7 +317,7 @@ fn receipt_paths_match(receipt: &Receipt, entries: &[git::ChangedEntry]) -> bool
     actual == expected
 }
 
-fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
+fn reconcile(root: &Path, options: &ReconcileOptions) -> Result<()> {
     let files = RepositoryFiles::open(root)?;
     if !git::is_repository(root)? {
         return Err(CrivError::new(
@@ -409,6 +406,10 @@ fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the reconciliation plan validates one complete Git and vault snapshot"
+)]
 fn build_plan_from(
     files: &RepositoryFiles,
     base_ref: &str,
@@ -657,7 +658,11 @@ fn ensure_proven_new_adr(
         .map(|path| (merge_base, path))
         .chain(target_paths.iter().map(|path| (target_sha, path)));
     for (revision, candidate) in candidates {
-        if candidate == path || !candidate.ends_with(".md") {
+        if candidate == path
+            || !Path::new(candidate)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+        {
             continue;
         }
         let source = git::blob(root, revision, candidate)?;
@@ -691,9 +696,15 @@ fn plausible_carried_content(first: &str, second: &str) -> bool {
     let smaller_body_chars = first
         .body
         .iter()
-        .map(|line| line.len())
+        .map(std::string::String::len)
         .sum::<usize>()
-        .min(second.body.iter().map(|line| line.len()).sum::<usize>());
+        .min(
+            second
+                .body
+                .iter()
+                .map(std::string::String::len)
+                .sum::<usize>(),
+        );
     shared_chars >= 80 && shared_chars.saturating_mul(2) >= smaller_body_chars
 }
 
@@ -766,7 +777,10 @@ fn allocation_mappings(
     let mut ordered = branch_adrs.to_vec();
     ordered.sort_by_key(|adr| adr.id);
     let allocation_end = target_max
-        .checked_add(ordered.len() as u32)
+        .checked_add(
+            u32::try_from(ordered.len())
+                .map_err(|_| CrivError::new("ADR ID allocation count exceeds u32"))?,
+        )
         .ok_or_else(|| CrivError::new("ADR ID allocation overflow"))?;
     if allocation_end > 9999 {
         return Err(CrivError::new(
@@ -778,9 +792,13 @@ fn allocation_mappings(
         .enumerate()
         .map(|(offset, adr)| {
             let new_id = target_max
-                .checked_add(offset as u32 + 1)
+                .checked_add(
+                    u32::try_from(offset)
+                        .map_err(|_| CrivError::new("ADR ID allocation offset exceeds u32"))?
+                        .saturating_add(1),
+                )
                 .ok_or_else(|| CrivError::new("ADR ID allocation overflow"))?;
-            let new_name = filename(&new_id, &adr.slug);
+            let new_name = filename(new_id, &adr.slug);
             let parent = Path::new(&adr.path)
                 .parent()
                 .unwrap_or_else(|| Path::new(""));
@@ -795,7 +813,11 @@ fn allocation_mappings(
 }
 
 fn is_adr_path(prefix: &str, path: &str) -> bool {
-    path.starts_with(prefix) && path != format!("{prefix}README.md") && path.ends_with(".md")
+    path.starts_with(prefix)
+        && path != format!("{prefix}README.md")
+        && Path::new(path)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
 }
 
 fn same_adr_slug(first: &str, second: &str) -> bool {
@@ -808,7 +830,12 @@ fn same_adr_slug(first: &str, second: &str) -> bool {
                 .and_then(|stem| stem.split_once('-').map(|(_, slug)| slug))
         })
         .collect::<Option<Vec<_>>>()
-        .is_some_and(|slugs| slugs[0] == slugs[1])
+        .is_some_and(|slugs| {
+            slugs
+                .first()
+                .zip(slugs.get(1))
+                .is_some_and(|(first, second)| first == second)
+        })
 }
 
 fn parse_adr(path: &str, contents: String) -> Result<AdrFile> {
@@ -829,7 +856,9 @@ fn parse_adr(path: &str, contents: String) -> Result<AdrFile> {
             "branch-local ADR `{path}` has a malformed filename"
         )));
     }
-    let id = number.parse::<u32>().unwrap();
+    let id = number
+        .parse::<u32>()
+        .map_err(|error| CrivError::new(format!("ADR `{path}` has an invalid ID: {error}")))?;
     let normalized = contents.replace("\r\n", "\n");
     let frontmatter = normalized
         .strip_prefix("---\n")
@@ -870,7 +899,7 @@ fn ensure_unique(adrs: &[AdrFile], owner: &str) -> Result<()> {
     Ok(())
 }
 
-fn filename(id: &u32, slug: &str) -> String {
+fn filename(id: u32, slug: &str) -> String {
     format!("{id:04}-{slug}.md")
 }
 
@@ -964,7 +993,7 @@ fn apply_plan(files: &RepositoryFiles, plan: &ReconcilePlan) -> Result<()> {
     }
     let errors = crate::check::validate_all_from(files)?
         .into_iter()
-        .filter(|diagnostic| diagnostic.is_error())
+        .filter(super::check::Diagnostic::is_error)
         .collect::<Vec<_>>();
     if !errors.is_empty() {
         return Err(CrivError::new(format!(
@@ -1017,8 +1046,7 @@ fn materialized_receipt(root: &Path) -> Result<Receipt> {
         || git::resolve_commit(root, "HEAD")? != receipt.head_sha
         || receipt.sources.iter().any(|source| {
             git::blob(root, &receipt.head_sha, &source.path)
-                .map(|contents| hash(&contents) != source.before_hash)
-                .unwrap_or(true)
+                .map_or(true, |contents| hash(&contents) != source.before_hash)
                 || git::file_mode(root, &receipt.head_sha, &source.path)
                     .ok()
                     .flatten()
@@ -1028,8 +1056,7 @@ fn materialized_receipt(root: &Path) -> Result<Receipt> {
         || receipt.files.iter().any(|file| {
             let before_matches = match &file.before_hash {
                 Some(before_hash) => git::blob(root, &receipt.head_sha, &file.path)
-                    .map(|contents| hash(&contents) == *before_hash)
-                    .unwrap_or(false),
+                    .is_ok_and(|contents| hash(&contents) == *before_hash),
                 None => git::blob(root, &receipt.head_sha, &file.path).is_err(),
             };
             !before_matches
@@ -1039,11 +1066,8 @@ fn materialized_receipt(root: &Path) -> Result<Receipt> {
                     .as_deref()
                     != file.before_mode.as_deref()
                 || git::worktree_blob(root, &file.path)
-                    .map(|contents| hash(&contents) != file.after_hash)
-                    .unwrap_or(true)
-                || worktree_file_mode(root, &file.path)
-                    .map(|mode| mode != file.after_mode)
-                    .unwrap_or(true)
+                    .map_or(true, |contents| hash(&contents) != file.after_hash)
+                || worktree_file_mode(root, &file.path).map_or(true, |mode| mode != file.after_mode)
         })
         || receipt
             .deletions
@@ -1104,6 +1128,10 @@ fn superseded_paths(mappings: &[Mapping]) -> Vec<&str> {
         .collect()
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "candidate rewriting keeps file safety checks with their rewrite decisions"
+)]
 fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<String, String>> {
     let changed_paths = git::changes_between(root, &plan.merge_base, "HEAD")?
         .entries
@@ -1126,17 +1154,14 @@ fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<Stri
         if !files.file_exists(Path::new(&path))? {
             continue;
         }
-        let contents = match files.read_string(Path::new(&path)) {
-            Ok(contents) => contents,
-            Err(_) => {
-                let bytes = files.read(Path::new(&path))?;
-                if contains_reference(&bytes, &plan.mappings) {
-                    return Err(CrivError::new(format!(
-                        "refusing to reconcile binary or non-UTF-8 file `{path}` containing an ADR reference"
-                    )));
-                }
-                continue;
+        let Ok(contents) = files.read_string(Path::new(&path)) else {
+            let bytes = files.read(Path::new(&path))?;
+            if contains_reference(&bytes, &plan.mappings) {
+                return Err(CrivError::new(format!(
+                    "refusing to reconcile binary or non-UTF-8 file `{path}` containing an ADR reference"
+                )));
             }
+            continue;
         };
         let rewritten = if plan.branch_adrs.iter().any(|adr| adr.path == path) {
             // A receipt can have already moved this branch-owned ADR to an
@@ -1207,8 +1232,7 @@ fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<Stri
             .mappings
             .iter()
             .find(|mapping| mapping.old_path == path)
-            .map(|mapping| mapping.new_path.clone())
-            .unwrap_or_else(|| path.clone());
+            .map_or_else(|| path.clone(), |mapping| mapping.new_path.clone());
         if rewritten != contents || output_path != path {
             rewrites.insert(output_path, rewritten);
         }
@@ -1300,7 +1324,7 @@ fn rewrite_owned_lines(
     };
     let mut output = String::new();
     for (index, line) in contents.split_inclusive('\n').enumerate() {
-        let line_number = index + 1;
+        let line_number = index.saturating_add(1);
         let owned = ranges.iter().any(|range| range.contains(&line_number));
         let rewritten = if owned {
             rewrite_text(line, mappings)?
@@ -1339,7 +1363,9 @@ fn rewrite_text(contents: &str, mappings: &[Mapping]) -> Result<String> {
     let edits = reference_edits(contents, mappings)?;
     let mut output = contents.to_owned();
     for edit in edits.into_iter().rev() {
-        output.replace_range(edit.start..edit.end, &edit.replacement);
+        if output.get(edit.start..edit.end).is_some() {
+            output.replace_range(edit.start..edit.end, &edit.replacement);
+        }
     }
     Ok(output)
 }
@@ -1351,7 +1377,9 @@ fn reference_edits(contents: &str, mappings: &[Mapping]) -> Result<Vec<TextEdit>
         let old_id = format!("ADR-{:04}", mapping.old_id);
         let new_id = format!("ADR-{:04}", mapping.new_id);
         for (start, _) in contents.match_indices(&old_id) {
-            let end = start + old_id.len();
+            let Some(end) = start.checked_add(old_id.len()) else {
+                continue;
+            };
             if is_exact_token(bytes, start, end) {
                 edits.push(TextEdit {
                     start,
@@ -1362,22 +1390,44 @@ fn reference_edits(contents: &str, mappings: &[Mapping]) -> Result<Vec<TextEdit>
         }
     }
     let mut cursor = 0;
-    while let Some(relative_start) = contents[cursor..].find("[[") {
-        let start = cursor + relative_start;
-        let body_start = start + 2;
-        let Some(relative_end) = contents[body_start..].find("]]") else {
+    while let Some(tail) = contents.get(cursor..) {
+        let Some(relative_start) = tail.find("[[") else {
             break;
         };
-        let end = body_start + relative_end;
+        let Some(start) = cursor.checked_add(relative_start) else {
+            break;
+        };
+        let Some(body_start) = start.checked_add(2) else {
+            break;
+        };
+        let Some(body_tail) = contents.get(body_start..) else {
+            break;
+        };
+        let Some(relative_end) = body_tail.find("]]") else {
+            break;
+        };
+        let Some(end) = body_start.checked_add(relative_end) else {
+            break;
+        };
         add_wikilink_edits(contents, body_start, end, mappings, &mut edits);
-        cursor = end + 2;
+        let Some(next) = end.checked_add(2) else {
+            break;
+        };
+        cursor = next;
     }
     edits.sort_by_key(|edit| (edit.start, edit.end));
     for pair in edits.windows(2) {
-        if pair[0].end > pair[1].start
-            && (pair[0].start != pair[1].start
-                || pair[0].end != pair[1].end
-                || pair[0].replacement != pair[1].replacement)
+        let [left, right] = pair else {
+            continue;
+        };
+        let overlaps = left
+            .end
+            .checked_sub(right.start)
+            .is_some_and(|distance| distance > 0);
+        if overlaps
+            && (left.start != right.start
+                || left.end != right.end
+                || left.replacement != right.replacement)
         {
             return Err(CrivError::new("ADR reference edits overlap ambiguously"));
         }
@@ -1393,7 +1443,9 @@ fn add_wikilink_edits(
     mappings: &[Mapping],
     edits: &mut Vec<TextEdit>,
 ) {
-    let body = &contents[start..end];
+    let Some(body) = contents.get(start..end) else {
+        return;
+    };
     let mut part_start = start;
     for part in body.split('|') {
         let link_target = part.split_once('#').map_or(part, |(target, _)| target);
@@ -1420,12 +1472,12 @@ fn add_wikilink_edits(
             if let Some(replacement) = replacement {
                 edits.push(TextEdit {
                     start: part_start,
-                    end: part_start + link_target.len(),
+                    end: part_start.saturating_add(link_target.len()),
                     replacement: replacement.to_owned(),
                 });
             }
         }
-        part_start += part.len() + 1;
+        part_start = part_start.saturating_add(part.len()).saturating_add(1);
     }
 }
 
@@ -1435,22 +1487,37 @@ fn contains_exact_id(bytes: &[u8], id: u32) -> bool {
         .windows(needle.len())
         .enumerate()
         .any(|(start, window)| {
-            window == needle.as_bytes() && is_exact_token(bytes, start, start + needle.len())
+            window == needle.as_bytes()
+                && start
+                    .checked_add(needle.len())
+                    .is_some_and(|end| is_exact_token(bytes, start, end))
         })
 }
 
 fn contains_wikilink_reference_bytes(bytes: &[u8], mappings: &[Mapping]) -> bool {
     let mut cursor = 0;
-    while let Some(relative_start) = bytes[cursor..]
-        .windows(2)
-        .position(|window| window == b"[[")
-    {
-        let start = cursor + relative_start + 2;
-        let Some(relative_end) = bytes[start..].windows(2).position(|window| window == b"]]")
+    while let Some(tail) = bytes.get(cursor..) {
+        let Some(relative_start) = tail.windows(2).position(|window| window == b"[[") else {
+            break;
+        };
+        let Some(start) = cursor
+            .checked_add(relative_start)
+            .and_then(|offset| offset.checked_add(2))
         else {
             break;
         };
-        let body = &bytes[start..start + relative_end];
+        let Some(relative_end) = bytes
+            .get(start..)
+            .and_then(|tail| tail.windows(2).position(|window| window == b"]]"))
+        else {
+            break;
+        };
+        let Some(end) = start.checked_add(relative_end) else {
+            break;
+        };
+        let Some(body) = bytes.get(start..end) else {
+            break;
+        };
         if body.split(|byte| *byte == b'|').any(|part| {
             let target = part.split(|byte| *byte == b'#').next().unwrap_or(part);
             mappings.iter().any(|mapping| {
@@ -1466,14 +1533,22 @@ fn contains_wikilink_reference_bytes(bytes: &[u8], mappings: &[Mapping]) -> bool
         }) {
             return true;
         }
-        cursor = start + relative_end + 2;
+        let Some(next) = end.checked_add(2) else {
+            break;
+        };
+        cursor = next;
     }
     false
 }
 
 fn is_exact_token(bytes: &[u8], start: usize, end: usize) -> bool {
     let is_word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
-    (start == 0 || !is_word(bytes[start - 1])) && (end == bytes.len() || !is_word(bytes[end]))
+    let before_is_word = start
+        .checked_sub(1)
+        .and_then(|index| bytes.get(index))
+        .is_some_and(|byte| is_word(*byte));
+    let after_is_word = bytes.get(end).is_some_and(|byte| is_word(*byte));
+    !before_is_word && !after_is_word
 }
 
 fn hash(contents: &str) -> String {

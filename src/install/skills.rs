@@ -13,26 +13,26 @@ const AGENT_SKILLS_DIR: &str = ".agents/skills";
 const CLAUDE_SKILLS_DIR: &str = ".claude/skills";
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum InstallMode {
+pub enum InstallMode {
     CreateOnly,
     Refresh,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum SkillPublication {
+pub enum SkillPublication {
     Created,
     Refreshed,
     Preserved,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) struct SkillPublicationFact {
+pub struct SkillPublicationFact {
     pub(crate) path: &'static str,
     pub(crate) publication: SkillPublication,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum ClaudePublication {
+pub enum ClaudePublication {
     Current,
     Linked,
     Replaced,
@@ -41,7 +41,7 @@ pub(crate) enum ClaudePublication {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct InstallReport {
+pub struct InstallReport {
     skills: Vec<SkillPublicationFact>,
     claude: ClaudePublication,
 }
@@ -51,12 +51,12 @@ impl InstallReport {
         &self.skills
     }
 
-    pub(crate) fn claude_publication(&self) -> ClaudePublication {
+    pub(crate) const fn claude_publication(&self) -> ClaudePublication {
         self.claude
     }
 }
 
-pub(crate) fn describe_claude_publication(publication: ClaudePublication) -> &'static str {
+pub const fn describe_claude_publication(publication: ClaudePublication) -> &'static str {
     match publication {
         ClaudePublication::Current => "skipped .claude/skills: already linked to .agents/skills",
         ClaudePublication::Linked => "linked .claude/skills to .agents/skills",
@@ -73,7 +73,7 @@ pub(crate) fn describe_claude_publication(publication: ClaudePublication) -> &'s
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum InstalledSkillStatus {
+pub enum InstalledSkillStatus {
     Missing,
     Current,
     Stale,
@@ -82,13 +82,13 @@ pub(crate) enum InstalledSkillStatus {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) struct InstalledSkillFact {
+pub struct InstalledSkillFact {
     path: &'static str,
     status: InstalledSkillStatus,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum ClaudeLayout {
+pub enum ClaudeLayout {
     Missing,
     Linked,
     Copied,
@@ -96,7 +96,7 @@ pub(crate) enum ClaudeLayout {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct SkillInventory {
+pub struct SkillInventory {
     skills: Vec<InstalledSkillFact>,
     claude: ClaudeLayout,
 }
@@ -106,7 +106,7 @@ impl SkillInventory {
         &self.skills
     }
 
-    fn claude_layout(&self) -> ClaudeLayout {
+    const fn claude_layout(&self) -> ClaudeLayout {
         self.claude
     }
 
@@ -143,7 +143,7 @@ fn install(root: &Path, mode: InstallMode) -> Result<InstallReport> {
     install_from(&files, mode)
 }
 
-pub(crate) fn install_from(files: &RepositoryFiles, mode: InstallMode) -> Result<InstallReport> {
+pub fn install_from(files: &RepositoryFiles, mode: InstallMode) -> Result<InstallReport> {
     install_with_linker(files, mode, |scope, replace_directory| {
         scope.link_dir(
             Path::new(CLAUDE_SKILLS_DIR),
@@ -162,7 +162,7 @@ pub(crate) fn inventory(root: &Path) -> SkillInventory {
     inventory_from(&files)
 }
 
-pub(crate) fn inventory_from(files: &RepositoryFiles) -> SkillInventory {
+pub fn inventory_from(files: &RepositoryFiles) -> SkillInventory {
     let skills = SKILLS
         .iter()
         .map(|skill| InstalledSkillFact {
@@ -263,10 +263,9 @@ fn installed_status(files: &RepositoryFiles, skill: &SkillTemplate) -> Installed
 }
 
 fn claude_layout(files: &RepositoryFiles) -> ClaudeLayout {
-    match files.link_layout(Path::new(CLAUDE_SKILLS_DIR), Path::new(AGENT_SKILLS_DIR)) {
-        Ok(layout) => map_claude_layout(layout),
-        Err(_) => ClaudeLayout::Other,
-    }
+    files
+        .link_layout(Path::new(CLAUDE_SKILLS_DIR), Path::new(AGENT_SKILLS_DIR))
+        .map_or(ClaudeLayout::Other, map_claude_layout)
 }
 
 fn installable_claude_layout(files: &RepositoryFiles) -> Result<ClaudeLayout> {
@@ -280,7 +279,7 @@ fn installable_claude_layout(files: &RepositoryFiles) -> Result<ClaudeLayout> {
         })
 }
 
-fn map_claude_layout(layout: LinkLayout) -> ClaudeLayout {
+const fn map_claude_layout(layout: LinkLayout) -> ClaudeLayout {
     match layout {
         LinkLayout::Missing => ClaudeLayout::Missing,
         LinkLayout::Expected => ClaudeLayout::Linked,
@@ -303,7 +302,22 @@ impl SkillTemplate {
 }
 
 fn template_hash(contents: &str) -> String {
-    blake3::hash(normalize_newlines(contents).as_bytes()).to_hex()[..16].to_string()
+    blake3::hash(normalize_newlines(contents).as_bytes())
+        .to_hex()
+        .chars()
+        .take(16)
+        .collect()
+}
+
+fn metadata_children_end(lines: &[String], metadata: usize) -> usize {
+    let child_start = metadata.saturating_add(1);
+    lines.get(child_start..).map_or(lines.len(), |children| {
+        children
+            .iter()
+            .position(|line| !line.starts_with(' ') && !line.starts_with('\t'))
+            .and_then(|offset| child_start.checked_add(offset))
+            .unwrap_or(lines.len())
+    })
 }
 
 fn normalize_newlines(contents: &str) -> String {
@@ -314,10 +328,10 @@ fn stamp_skill(contents: &str) -> String {
     let contents = unstamp_skill(&normalize_newlines(contents));
     let marker = format!("criv-template: blake3:{}", template_hash(&contents));
     let Some(rest) = contents.strip_prefix("---\n") else {
-        return contents.to_string();
+        return contents;
     };
     let Some((frontmatter, body)) = rest.split_once("---\n") else {
-        return contents.to_string();
+        return contents.clone();
     };
 
     let mut lines: Vec<String> = frontmatter.lines().map(str::to_string).collect();
@@ -325,16 +339,19 @@ fn stamp_skill(contents: &str) -> String {
         .iter()
         .position(|line| line.trim_start() == "metadata:")
     {
-        let insert_at = lines[index + 1..]
-            .iter()
-            .position(|line| !line.starts_with(' ') && !line.starts_with('\t'))
-            .map_or(lines.len(), |offset| index + 1 + offset);
-        let marker_line = (index + 1..insert_at)
-            .find(|&line| lines[line].trim_start().starts_with("criv-template:"));
+        let child_start = index.saturating_add(1);
+        let insert_at = metadata_children_end(&lines, index);
+        let marker_line = (child_start..insert_at).find(|&line| {
+            lines
+                .get(line)
+                .is_some_and(|line| line.trim_start().starts_with("criv-template:"))
+        });
         if let Some(marker_line) = marker_line {
-            lines[marker_line] = format!("  {marker}");
+            if let Some(line) = lines.get_mut(marker_line) {
+                *line = format!("  {marker}");
+            }
         } else {
-            lines.insert(index + 1, format!("  {marker}"));
+            lines.insert(child_start, format!("  {marker}"));
         }
     } else {
         lines.push("metadata:".to_string());
@@ -361,15 +378,20 @@ fn unstamp_skill(contents: &str) -> String {
     else {
         return contents.to_string();
     };
-    let end = lines[metadata + 1..]
-        .iter()
-        .position(|line| !line.starts_with(' ') && !line.starts_with('\t'))
-        .map_or(lines.len(), |offset| metadata + 1 + offset);
-    let marker_lines: Vec<usize> = (metadata + 1..end)
-        .filter(|&index| lines[index].trim_start().starts_with("criv-template:"))
+    let child_start = metadata.saturating_add(1);
+    let end = metadata_children_end(&lines, metadata);
+    let marker_lines: Vec<usize> = (child_start..end)
+        .filter(|&index| {
+            lines
+                .get(index)
+                .is_some_and(|line| line.trim_start().starts_with("criv-template:"))
+        })
         .collect();
-    let has_metadata_child =
-        (metadata + 1..end).any(|index| !lines[index].trim_start().starts_with("criv-template:"));
+    let has_metadata_child = (child_start..end).any(|index| {
+        lines
+            .get(index)
+            .is_some_and(|line| !line.trim_start().starts_with("criv-template:"))
+    });
     for index in marker_lines.into_iter().rev() {
         lines.remove(index);
     }

@@ -30,7 +30,7 @@ enum Format {
 }
 
 #[derive(Debug, UsageArgs)]
-pub(crate) struct EnforceOptions {
+pub struct EnforceOptions {
     #[usage(long, value_enum)]
     stage: Stage,
     /// Select the human report or a JSON enforcement report.
@@ -45,7 +45,11 @@ pub(crate) struct EnforceOptions {
     remote_url: Option<String>,
 }
 
-pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
+#[expect(
+    clippy::too_many_lines,
+    reason = "enforcement assembles one stage report from related vault and policy checks"
+)]
+pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
     if options.pre_push && options.stage != Stage::Push {
         return Err(CrivError::usage(
             "--pre-push is only valid with --stage push",
@@ -75,7 +79,7 @@ pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();
 
-    let changed_entries = changed_entries(root, &options)?;
+    let changed_entries = changed_entries(root, options)?;
     let changed_files = if options.stage == Stage::Ci {
         None
     } else {
@@ -266,7 +270,7 @@ fn enforce_failure(
     Some(EnforceFailure {
         code,
         message,
-        fix: diagnostic::fix_for(code).expect("every enforcement code carries a repair"),
+        fix: diagnostic::fix_for(code).unwrap_or("Run `criv check` and repair the reported issue."),
         violations,
     })
 }
@@ -308,7 +312,7 @@ fn changed_entries(root: &Path, options: &EnforceOptions) -> Result<Option<Chang
     match options.stage {
         Stage::Commit => repository
             .as_ref()
-            .map(|repo| repo.changed_set(ChangedSetComparison::Staged))
+            .map(|repo| repo.changed_set(&ChangedSetComparison::Staged))
             .transpose(),
         Stage::Push if options.pre_push => pre_push_changed_entries(
             required_repository(repository.as_ref())?,
@@ -324,12 +328,12 @@ fn changed_entries(root: &Path, options: &EnforceOptions) -> Result<Option<Chang
         Stage::Push => repository
             .as_ref()
             .map(|repo| {
-                repo.changed_set(ChangedSetComparison::ThreeDot {
+                repo.changed_set(&ChangedSetComparison::ThreeDot {
                     upstream_ref: "@{upstream}",
                     head_ref: "HEAD",
                 })
                 .or_else(|_| {
-                    repo.changed_set(ChangedSetComparison::Trees {
+                    repo.changed_set(&ChangedSetComparison::Trees {
                         old_ref: "HEAD~1",
                         new_ref: "HEAD",
                     })
@@ -351,7 +355,7 @@ fn ci_changed_entries_with_env(
 ) -> Result<Option<ChangedSet>> {
     if let Some(base_ref) = env_value("CRIV_BASE_REF") {
         return required_repository(repository)?
-            .changed_set(ChangedSetComparison::Trees {
+            .changed_set(&ChangedSetComparison::Trees {
                 old_ref: &base_ref,
                 new_ref: "HEAD",
             })
@@ -361,7 +365,7 @@ fn ci_changed_entries_with_env(
     if let Some(base_ref) = env_value("GITHUB_BASE_REF") {
         let origin_ref = format!("origin/{base_ref}");
         if let Some(repository) = repository
-            && let Ok(changes) = repository.changed_set(ChangedSetComparison::Trees {
+            && let Ok(changes) = repository.changed_set(&ChangedSetComparison::Trees {
                 old_ref: &origin_ref,
                 new_ref: "HEAD",
             })
@@ -369,7 +373,7 @@ fn ci_changed_entries_with_env(
             return Ok(Some(changes));
         }
         if let Some(repository) = repository
-            && let Ok(changes) = repository.changed_set(ChangedSetComparison::Trees {
+            && let Ok(changes) = repository.changed_set(&ChangedSetComparison::Trees {
                 old_ref: &base_ref,
                 new_ref: "HEAD",
             })
@@ -385,7 +389,7 @@ fn ci_changed_entries_with_env(
     }
 
     repository
-        .map(|repo| repo.changed_set(ChangedSetComparison::TreeToWorktree { old_ref: "HEAD" }))
+        .map(|repo| repo.changed_set(&ChangedSetComparison::TreeToWorktree { old_ref: "HEAD" }))
         .transpose()
 }
 
@@ -424,12 +428,12 @@ fn parse_pre_push_updates(input: &str) -> Result<Vec<PrePushUpdate>> {
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
             let fields = line.split_whitespace().collect::<Vec<_>>();
-            if fields.len() != 4 {
+            let [local_ref, local_oid, remote_ref, remote_oid] = fields.as_slice() else {
                 return Err(CrivError::new(format!(
                     "invalid pre-push ref update `{line}`; expected local-ref local-oid remote-ref remote-oid"
                 )));
-            }
-            for oid in [fields[1], fields[3]] {
+            };
+            for oid in [*local_oid, *remote_oid] {
                 if oid.len() != 40 || !oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                     return Err(CrivError::new(format!(
                         "invalid pre-push object ID `{oid}`"
@@ -437,10 +441,10 @@ fn parse_pre_push_updates(input: &str) -> Result<Vec<PrePushUpdate>> {
                 }
             }
             Ok(PrePushUpdate {
-                local_ref: fields[0].to_string(),
-                local_oid: fields[1].to_string(),
-                remote_ref: fields[2].to_string(),
-                remote_oid: fields[3].to_string(),
+                local_ref: (*local_ref).to_string(),
+                local_oid: (*local_oid).to_string(),
+                remote_ref: (*remote_ref).to_string(),
+                remote_oid: (*remote_oid).to_string(),
             })
         })
         .collect()
@@ -498,11 +502,10 @@ fn adr_immutability_violations(
             continue;
         }
 
-        let display_path = entry
-            .previous_path
-            .as_ref()
-            .map(|previous| format!("{previous} -> {}", entry.path))
-            .unwrap_or_else(|| entry.path.clone());
+        let display_path = entry.previous_path.as_ref().map_or_else(
+            || entry.path.clone(),
+            |previous| format!("{previous} -> {}", entry.path),
+        );
         violations.push(format!(
             "{display_path}: ADR files are immutable; add a new ADR with `supersedes` instead of modifying an existing one"
         ));
@@ -560,8 +563,7 @@ fn is_branch_local_ci_change(root: &Path, entry: &ChangedEntry) -> bool {
         return false;
     };
     git::tree_paths(root, &merge_base, path)
-        .map(|paths| !paths.iter().any(|candidate| candidate == path))
-        .unwrap_or(false)
+        .is_ok_and(|paths| !paths.iter().any(|candidate| candidate == path))
 }
 
 fn read_changed_content(root: &Path, git_ref: Option<&str>, path: &str) -> Option<String> {
@@ -578,25 +580,46 @@ fn is_mechanical_wikilink_portability_migration(old: &str, new: &str) -> bool {
 fn normalize_portable_adr_links(markdown: &str) -> String {
     let mut normalized = String::with_capacity(markdown.len());
     let mut start = 0;
-    while let Some(open) = markdown[start..].find("[[") {
-        let open = start + open;
-        let body_start = open + 2;
-        let Some(close_offset) = markdown[body_start..].find("]]") else {
+    while let Some(tail) = markdown.get(start..) {
+        let Some(relative_open) = tail.find("[[") else {
             break;
         };
-        let close = body_start + close_offset;
-        normalized.push_str(&markdown[start..open]);
-        let body = &markdown[body_start..close];
+        let Some(open) = start.checked_add(relative_open) else {
+            break;
+        };
+        let Some(body_start) = open.checked_add(2) else {
+            break;
+        };
+        let Some(body_tail) = markdown.get(body_start..) else {
+            break;
+        };
+        let Some(relative_close) = body_tail.find("]]") else {
+            break;
+        };
+        let Some(close) = body_start.checked_add(relative_close) else {
+            break;
+        };
+        let Some(end) = close.checked_add(2) else {
+            break;
+        };
+        let (Some(prefix), Some(body), Some(link)) = (
+            markdown.get(start..open),
+            markdown.get(body_start..close),
+            markdown.get(open..end),
+        ) else {
+            break;
+        };
+        normalized.push_str(prefix);
         if let Some(alias) = portable_adr_link_alias(body) {
             normalized.push_str("[[");
             normalized.push_str(alias);
             normalized.push_str("]]");
         } else {
-            normalized.push_str(&markdown[open..close + 2]);
+            normalized.push_str(link);
         }
-        start = close + 2;
+        start = end;
     }
-    normalized.push_str(&markdown[start..]);
+    normalized.push_str(markdown.get(start..).unwrap_or_default());
     normalized
 }
 
@@ -612,7 +635,7 @@ fn portable_adr_link_alias(body: &str) -> Option<&str> {
     if target_fragment != alias_fragment {
         return None;
     }
-    let number = &alias_base[4..];
+    let number = alias_base.get(4..)?;
     let target_base = target.split('#').next().unwrap_or(target).trim();
     let basename = target_base
         .trim_end_matches(".md")
@@ -686,11 +709,11 @@ fn import_matches(pattern: &str, matcher: Option<&crate::glob::GlobMatcher>, mod
 }
 
 impl Stage {
-    fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
-            Stage::Commit => "commit",
-            Stage::Push => "push",
-            Stage::Ci => "ci",
+            Self::Commit => "commit",
+            Self::Push => "push",
+            Self::Ci => "ci",
         }
     }
 }

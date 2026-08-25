@@ -26,7 +26,7 @@ enum Format {
 }
 
 #[derive(Debug, Default, UsageArgs)]
-pub(crate) struct WatchOptions {
+pub struct WatchOptions {
     #[usage(long)]
     once: bool,
     /// Select the human summary or a JSON refresh report. `--once` only.
@@ -34,7 +34,7 @@ pub(crate) struct WatchOptions {
     format: Format,
 }
 
-pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
+pub fn run(root: &Path, options: &WatchOptions) -> Result<()> {
     let files = RepositoryFiles::open_vault(root)?;
     let mode = if options.once {
         WatchMode::Once
@@ -179,14 +179,14 @@ enum WatchDepth {
 }
 
 impl WatchTarget {
-    fn non_recursive(path: PathBuf) -> Self {
+    const fn non_recursive(path: PathBuf) -> Self {
         Self {
             path,
             depth: WatchDepth::NonRecursive,
         }
     }
 
-    fn recursive(path: PathBuf) -> Self {
+    const fn recursive(path: PathBuf) -> Self {
         Self {
             path,
             depth: WatchDepth::Recursive,
@@ -302,7 +302,7 @@ enum WatchDecision {
     Continue,
 }
 
-fn watch_decision(docs_changed: bool, source_changed: bool) -> WatchDecision {
+const fn watch_decision(docs_changed: bool, source_changed: bool) -> WatchDecision {
     match (docs_changed, source_changed) {
         (_, true) => WatchDecision::Rebuild {
             cause: RefreshCause::SourceChanged,
@@ -358,14 +358,14 @@ struct CandidateFailure {
 }
 
 impl CandidateFailure {
-    fn candidate(error: CrivError) -> Self {
+    const fn candidate(error: CrivError) -> Self {
         Self {
             error,
             watcher_unavailable: false,
         }
     }
 
-    fn watcher(error: CrivError) -> Self {
+    const fn watcher(error: CrivError) -> Self {
         Self {
             error,
             watcher_unavailable: true,
@@ -392,8 +392,7 @@ impl ActiveWatchGeneration {
         let topology = WatchTopology::observe(root, &config);
         let watcher = WatchBinding::start(factory, WatchSet::active(root, &config))
             .map_err(CandidateFailure::watcher)?;
-        let mut refresh =
-            RefreshSession::live_from(files, &config).map_err(CandidateFailure::candidate)?;
+        let mut refresh = RefreshSession::live_from(files, &config);
         let summary = refresh
             .refresh(RefreshCause::Initial)
             .map_err(CandidateFailure::candidate)?
@@ -495,14 +494,13 @@ impl LiveWatchSession {
 
     fn poll(&mut self, timeout: Duration) -> Result<WatchSignal> {
         let poll = if self.suspended {
-            match self.recovery.as_mut() {
-                Some(recovery) => recovery.adapter.poll(timeout),
-                None => {
-                    if !timeout.is_zero() {
-                        std::thread::sleep(timeout);
-                    }
-                    WatcherPoll::Idle
+            if let Some(recovery) = self.recovery.as_mut() {
+                recovery.adapter.poll(timeout)
+            } else {
+                if !timeout.is_zero() {
+                    std::thread::sleep(timeout);
                 }
+                WatcherPoll::Idle
             }
         } else {
             self.active.watcher.adapter.poll(timeout)
@@ -538,10 +536,8 @@ impl LiveWatchSession {
         if !matches!(signal, WatchSignal::Paths(_)) {
             return false;
         }
-        let config_changed = match read_config_source(&self.files) {
-            Ok(source) => source != self.active.config_source,
-            Err(_) => true,
-        };
+        let config_changed = read_config_source(&self.files)
+            .map_or(true, |source| source != self.active.config_source);
         config_changed
             || WatchTopology::observe(&self.root, &self.active.config) != self.active.topology
             || WatchSet::active(&self.root, &self.active.config) != self.active.watcher.set
@@ -583,7 +579,7 @@ impl LiveWatchSession {
                         Ok(recovery) => self.recovery = Some(recovery),
                         Err(watcher_error) => {
                             self.recovery = None;
-                            cause.push_str(&format!("; watcher adapter error: {watcher_error}"));
+                            cause = format!("{cause}; watcher adapter error: {watcher_error}");
                         }
                     }
                 }
@@ -594,7 +590,9 @@ impl LiveWatchSession {
 
     fn suspend(&mut self, cause: &str) {
         self.suspended = true;
-        self.next_retry = Instant::now() + Duration::from_secs(1);
+        self.next_retry = Instant::now()
+            .checked_add(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
         if self.failure.as_deref() != Some(cause) {
             eprintln!("criv watch: reconfiguration failed: {cause}; keeping last successful State");
             self.failure = Some(cause.to_string());
@@ -634,7 +632,7 @@ fn path_kind(root: &Path, path: &Path) -> PathKind {
     for (index, component) in components.iter().enumerate() {
         current.push(component.as_os_str());
         let kind = exact_path_kind(&current);
-        if index + 1 == components.len() {
+        if index.saturating_add(1) == components.len() {
             return kind;
         }
         match kind {
@@ -651,9 +649,8 @@ fn exact_path_kind(path: &Path) -> PathKind {
         Ok(metadata) if metadata.file_type().is_symlink() || is_junction(path) => PathKind::Unsafe,
         Ok(metadata) if metadata.is_file() => PathKind::File,
         Ok(metadata) if metadata.is_dir() => PathKind::Directory,
-        Ok(_) => PathKind::Unsafe,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => PathKind::Missing,
-        Err(_) => PathKind::Unsafe,
+        Err(_) | Ok(_) => PathKind::Unsafe,
     }
 }
 
@@ -677,7 +674,7 @@ fn is_junction(path: &Path) -> bool {
 }
 
 #[cfg(not(windows))]
-fn is_junction(_path: &Path) -> bool {
+const fn is_junction(_path: &Path) -> bool {
     false
 }
 
@@ -724,7 +721,7 @@ enum WatchMode {
 }
 
 impl WatchMode {
-    fn label(self) -> &'static str {
+    const fn label(self) -> &'static str {
         match self {
             Self::Live => "live",
             Self::Once => "once",
@@ -777,9 +774,9 @@ impl WatchSessionLock {
             mode.label()
         );
         file.set_len(0)
-            .and_then(|_| file.rewind())
-            .and_then(|_| file.write_all(record.as_bytes()))
-            .and_then(|_| file.sync_all())
+            .and_then(|()| file.rewind())
+            .and_then(|()| file.write_all(record.as_bytes()))
+            .and_then(|()| file.sync_all())
             .map_err(|err| {
                 CrivError::new(format!(
                     "failed to publish watch lock diagnostics at {}: {err}",
@@ -800,11 +797,14 @@ fn read_watch_lock_record(file: &mut fs::File) -> Option<WatchLockRecord> {
     let mut contents = String::new();
     file.read_to_string(&mut contents).ok()?;
     let lines = contents.lines().collect::<Vec<_>>();
-    if lines.len() != 3 || lines[0] != "schema criv.watch-lock.v1" {
+    let [schema, pid, mode] = lines.as_slice() else {
+        return None;
+    };
+    if *schema != "schema criv.watch-lock.v1" {
         return None;
     }
-    let pid = lines[1].strip_prefix("pid ")?.parse().ok()?;
-    let mode = match lines[2].strip_prefix("mode ")? {
+    let pid = pid.strip_prefix("pid ")?.parse().ok()?;
+    let mode = match mode.strip_prefix("mode ")? {
         "live" => "live",
         "once" => "once",
         _ => return None,
@@ -823,7 +823,9 @@ mod tests {
     use super::*;
 
     fn watcher_reports_path(mut watcher: NotifyWatcherAdapter, expected: &Path) -> bool {
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(3))
+            .unwrap_or_else(Instant::now);
         while Instant::now() < deadline {
             if let WatcherPoll::Paths(paths) = watcher.poll(Duration::from_millis(250))
                 && paths.iter().any(|path| path == expected)
