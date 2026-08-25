@@ -582,7 +582,7 @@ impl LiveWatchSession {
                         Ok(recovery) => self.recovery = Some(recovery),
                         Err(watcher_error) => {
                             self.recovery = None;
-                            cause.push_str(&format!("; watcher adapter error: {watcher_error}"));
+                            cause = format!("{cause}; watcher adapter error: {watcher_error}");
                         }
                     }
                 }
@@ -593,7 +593,9 @@ impl LiveWatchSession {
 
     fn suspend(&mut self, cause: &str) {
         self.suspended = true;
-        self.next_retry = Instant::now() + Duration::from_secs(1);
+        self.next_retry = Instant::now()
+            .checked_add(Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
         if self.failure.as_deref() != Some(cause) {
             eprintln!("criv watch: reconfiguration failed: {cause}; keeping last successful State");
             self.failure = Some(cause.to_string());
@@ -633,7 +635,7 @@ fn path_kind(root: &Path, path: &Path) -> PathKind {
     for (index, component) in components.iter().enumerate() {
         current.push(component.as_os_str());
         let kind = exact_path_kind(&current);
-        if index + 1 == components.len() {
+        if index.saturating_add(1) == components.len() {
             return kind;
         }
         match kind {
@@ -799,11 +801,14 @@ fn read_watch_lock_record(file: &mut fs::File) -> Option<WatchLockRecord> {
     let mut contents = String::new();
     file.read_to_string(&mut contents).ok()?;
     let lines = contents.lines().collect::<Vec<_>>();
-    if lines.len() != 3 || lines[0] != "schema criv.watch-lock.v1" {
+    let [schema, pid, mode] = lines.as_slice() else {
+        return None;
+    };
+    if *schema != "schema criv.watch-lock.v1" {
         return None;
     }
-    let pid = lines[1].strip_prefix("pid ")?.parse().ok()?;
-    let mode = match lines[2].strip_prefix("mode ")? {
+    let pid = pid.strip_prefix("pid ")?.parse().ok()?;
+    let mode = match mode.strip_prefix("mode ")? {
         "live" => "live",
         "once" => "once",
         _ => return None,
