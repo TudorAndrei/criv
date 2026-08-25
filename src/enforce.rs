@@ -266,7 +266,7 @@ fn enforce_failure(
     Some(EnforceFailure {
         code,
         message,
-        fix: diagnostic::fix_for(code).expect("every enforcement code carries a repair"),
+        fix: diagnostic::fix_for(code).unwrap_or("Run `criv check` and repair the reported issue."),
         violations,
     })
 }
@@ -424,12 +424,12 @@ fn parse_pre_push_updates(input: &str) -> Result<Vec<PrePushUpdate>> {
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
             let fields = line.split_whitespace().collect::<Vec<_>>();
-            if fields.len() != 4 {
+            let [local_ref, local_oid, remote_ref, remote_oid] = fields.as_slice() else {
                 return Err(CrivError::new(format!(
                     "invalid pre-push ref update `{line}`; expected local-ref local-oid remote-ref remote-oid"
                 )));
-            }
-            for oid in [fields[1], fields[3]] {
+            };
+            for oid in [*local_oid, *remote_oid] {
                 if oid.len() != 40 || !oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                     return Err(CrivError::new(format!(
                         "invalid pre-push object ID `{oid}`"
@@ -437,10 +437,10 @@ fn parse_pre_push_updates(input: &str) -> Result<Vec<PrePushUpdate>> {
                 }
             }
             Ok(PrePushUpdate {
-                local_ref: fields[0].to_string(),
-                local_oid: fields[1].to_string(),
-                remote_ref: fields[2].to_string(),
-                remote_oid: fields[3].to_string(),
+                local_ref: (*local_ref).to_string(),
+                local_oid: (*local_oid).to_string(),
+                remote_ref: (*remote_ref).to_string(),
+                remote_oid: (*remote_oid).to_string(),
             })
         })
         .collect()
@@ -576,25 +576,46 @@ fn is_mechanical_wikilink_portability_migration(old: &str, new: &str) -> bool {
 fn normalize_portable_adr_links(markdown: &str) -> String {
     let mut normalized = String::with_capacity(markdown.len());
     let mut start = 0;
-    while let Some(open) = markdown[start..].find("[[") {
-        let open = start + open;
-        let body_start = open + 2;
-        let Some(close_offset) = markdown[body_start..].find("]]") else {
+    while let Some(tail) = markdown.get(start..) {
+        let Some(relative_open) = tail.find("[[") else {
             break;
         };
-        let close = body_start + close_offset;
-        normalized.push_str(&markdown[start..open]);
-        let body = &markdown[body_start..close];
+        let Some(open) = start.checked_add(relative_open) else {
+            break;
+        };
+        let Some(body_start) = open.checked_add(2) else {
+            break;
+        };
+        let Some(body_tail) = markdown.get(body_start..) else {
+            break;
+        };
+        let Some(relative_close) = body_tail.find("]]") else {
+            break;
+        };
+        let Some(close) = body_start.checked_add(relative_close) else {
+            break;
+        };
+        let Some(end) = close.checked_add(2) else {
+            break;
+        };
+        let (Some(prefix), Some(body), Some(link)) = (
+            markdown.get(start..open),
+            markdown.get(body_start..close),
+            markdown.get(open..end),
+        ) else {
+            break;
+        };
+        normalized.push_str(prefix);
         if let Some(alias) = portable_adr_link_alias(body) {
             normalized.push_str("[[");
             normalized.push_str(alias);
             normalized.push_str("]]");
         } else {
-            normalized.push_str(&markdown[open..close + 2]);
+            normalized.push_str(link);
         }
-        start = close + 2;
+        start = end;
     }
-    normalized.push_str(&markdown[start..]);
+    normalized.push_str(markdown.get(start..).unwrap_or_default());
     normalized
 }
 
@@ -610,7 +631,7 @@ fn portable_adr_link_alias(body: &str) -> Option<&str> {
     if target_fragment != alias_fragment {
         return None;
     }
-    let number = &alias_base[4..];
+    let number = alias_base.get(4..)?;
     let target_base = target.split('#').next().unwrap_or(target).trim();
     let basename = target_base
         .trim_end_matches(".md")
