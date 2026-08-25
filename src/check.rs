@@ -95,10 +95,10 @@ impl Diagnostic {
     }
 
     pub(crate) fn describe(&self) -> String {
-        match self.line {
-            Some(line) => format!("{}:{line}: {}", self.path, self.message),
-            None => format!("{}: {}", self.path, self.message),
-        }
+        self.line.map_or_else(
+            || format!("{}: {}", self.path, self.message),
+            |line| format!("{}:{line}: {}", self.path, self.message),
+        )
     }
 
     fn json(&self) -> JsonDiagnostic<'_> {
@@ -114,7 +114,7 @@ impl Diagnostic {
     }
 }
 
-pub fn run(root: &Path, options: CheckOptions) -> Result<()> {
+pub fn run(root: &Path, options: &CheckOptions) -> Result<()> {
     let files = RepositoryFiles::open_vault(root)?;
     let mut diagnostics = if options.changed {
         validate_changed(&files)?
@@ -161,7 +161,7 @@ pub fn run(root: &Path, options: CheckOptions) -> Result<()> {
         return Err(CrivError::coded_fix(
             "check-failed",
             "check failed",
-            fix_for("check-failed").expect("check-failed carries a repair"),
+            fix_for("check-failed").unwrap_or("Run `criv check` and repair the reported issue."),
         ));
     }
 
@@ -349,7 +349,7 @@ fn validate_markdown_format(
                 diagnostics.extend(
                     warnings
                         .into_iter()
-                        .map(|warning| markdown_diagnostic(&rel_path, source.clone(), warning)),
+                        .map(|warning| markdown_diagnostic(&rel_path, source.clone(), &warning)),
                 );
             }
             Err(err) => diagnostics.push(error(
@@ -460,7 +460,7 @@ fn rules_for_ignored_rules(
         .collect()
 }
 
-fn markdown_diagnostic(path: &str, source: Arc<str>, warning: LintWarning) -> Diagnostic {
+fn markdown_diagnostic(path: &str, source: Arc<str>, warning: &LintWarning) -> Diagnostic {
     let rule = warning.rule_name.as_deref().unwrap_or("rumdl");
     let location = SourceLocation::from_one_based_character_range(
         source,
@@ -587,7 +587,11 @@ fn validate_changed_vault(
     {
         validate_c4_artifact(artifact, &mut diagnostics);
     }
-    if changed_paths.iter().any(|path| path.ends_with(".c4")) {
+    if changed_paths.iter().any(|path| {
+        Path::new(path)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("c4"))
+    }) {
         validate_likec4_workspace(vault, &mut diagnostics);
     }
     validate_architecture_interface_drift_for_paths(
@@ -780,7 +784,9 @@ fn validate_decision_note(
     if let Some(filename) = note.path.file_name().map(|value| value.to_string_lossy())
         && is_adr_id(id)
     {
-        let suffix = &id[4..];
+        let Some(suffix) = id.get(4..) else {
+            return;
+        };
         let expected_prefix = format!("{suffix}-");
         let title_kebab = note.title.as_deref().map(kebab).unwrap_or_default();
         let title_matches = title_kebab.is_empty()
@@ -1188,7 +1194,7 @@ fn visit_supersession(
     cycles: &mut Vec<Vec<String>>,
 ) {
     if let Some(position) = stack.iter().position(|value| value == id) {
-        let mut cycle = stack[position..].to_vec();
+        let mut cycle = stack.get(position..).unwrap_or_default().to_vec();
         cycle.push(id.to_string());
         cycles.push(cycle);
         return;
@@ -1266,23 +1272,24 @@ fn github_annotation(diag: &Diagnostic) -> String {
         Severity::Error => "error",
         Severity::Warning => "warning",
     };
-    let location = if let Some(location) = diag
+    let location = diag
         .location
         .as_ref()
         .and_then(SourceLocation::github_location)
-    {
-        match (location.column, location.end_column) {
-            (Some(column), Some(end_column)) => format!(
-                ",line={},col={column},endLine={},endColumn={end_column}",
-                location.line, location.end_line
-            ),
-            _ => format!(",line={},endLine={}", location.line, location.end_line),
-        }
-    } else {
-        diag.line
-            .map(|line| format!(",line={line}"))
-            .unwrap_or_default()
-    };
+        .map_or_else(
+            || {
+                diag.line
+                    .map(|line| format!(",line={line}"))
+                    .unwrap_or_default()
+            },
+            |location| match (location.column, location.end_column) {
+                (Some(column), Some(end_column)) => format!(
+                    ",line={},col={column},endLine={},endColumn={end_column}",
+                    location.line, location.end_line
+                ),
+                _ => format!(",line={},endLine={}", location.line, location.end_line),
+            },
+        );
     format!(
         "::{command} file={}{},title={}::{}",
         escape_github_property(&diag.path),
@@ -1562,7 +1569,7 @@ mod tests {
         let diagnostic = markdown_diagnostic(
             "docs/unicode.md",
             Arc::from("é😀bad\n"),
-            LintWarning {
+            &LintWarning {
                 message: "bad emoji".into(),
                 line: 1,
                 column: 2,
@@ -1593,7 +1600,7 @@ mod tests {
         let diagnostic = markdown_diagnostic(
             "docs/invalid.md",
             Arc::from("short\n"),
-            LintWarning {
+            &LintWarning {
                 message: "invalid range".into(),
                 line: 1,
                 column: 20,
