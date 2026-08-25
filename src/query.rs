@@ -371,27 +371,18 @@ pub fn run(root: &Path, options: QueryOptions) -> Result<()> {
         QueryCommand::CitedBy(options) => {
             let rows = cited_by(
                 &vault,
-                reverse_index
-                    .as_ref()
-                    .expect("cited-by declares a reverse index"),
+                required_reverse_index(reverse_index.as_ref())?,
                 &options.note_id,
             )?;
             (rows, options.output)
         }
         QueryCommand::OrphanDocs(output) => (
-            orphan_docs(
-                &vault,
-                reverse_index
-                    .as_ref()
-                    .expect("orphan-docs declares a reverse index"),
-            ),
+            orphan_docs(&vault, required_reverse_index(reverse_index.as_ref())?),
             output,
         ),
         QueryCommand::References(options) => {
-            let rows = reverse_index
-                .as_ref()
-                .expect("references declares a reverse index")
-                .references(&vault, &options.symbol);
+            let rows =
+                required_reverse_index(reverse_index.as_ref())?.references(&vault, &options.symbol);
             (rows, options.output)
         }
         QueryCommand::Governs(options) => {
@@ -412,10 +403,12 @@ pub fn run(root: &Path, options: QueryOptions) -> Result<()> {
                 reverse_index.as_ref(),
                 options.kind,
                 options.without_docs,
-            );
+            )?;
             (rows, options.output)
         }
-        QueryCommand::Diff(_) => unreachable!("snapshot queries return before vault loading"),
+        QueryCommand::Diff(_) => {
+            return Err(CrivError::new("snapshot query reached vault loading"));
+        }
     };
 
     print_rows(&rows, output)
@@ -425,9 +418,7 @@ fn load_query_vault(root: &Path, command: &QueryCommand) -> Result<Vault> {
     match command.capability() {
         QueryCapability::Docs => Vault::load_docs_only(root),
         QueryCapability::Sources => Vault::load(root),
-        QueryCapability::Snapshot => {
-            unreachable!("snapshot queries do not construct a vault")
-        }
+        QueryCapability::Snapshot => Err(CrivError::new("snapshot query does not load a vault")),
     }
 }
 
@@ -611,20 +602,23 @@ fn coverage_by_adr(vault: &Vault) -> Vec<String> {
     rows
 }
 
+fn required_reverse_index(index: Option<&QueryReverseIndex>) -> Result<&QueryReverseIndex> {
+    index.ok_or_else(|| CrivError::new("query command requires a reverse index"))
+}
+
 fn nodes(
     vault: &Vault,
     reverse_index: Option<&QueryReverseIndex>,
     kind: Option<NodeKind>,
     without_docs: bool,
-) -> Vec<String> {
+) -> Result<Vec<String>> {
     let mut rows = Vec::new();
     match kind {
         Some(NodeKind::Code) => {
             for symbol in vault.source_graph().symbols() {
                 let display = symbol.id.display();
                 if without_docs
-                    && !reverse_index
-                        .expect("undocumented code nodes declare a reverse index")
+                    && !required_reverse_index(reverse_index)?
                         .references(vault, &display)
                         .is_empty()
                 {
@@ -650,7 +644,7 @@ fn nodes(
         Some(kind) => {
             let symbol_kind = kind
                 .symbol_kind()
-                .expect("remaining node kinds are source symbol kinds");
+                .ok_or_else(|| CrivError::new("node kind does not identify a source symbol"))?;
             rows.extend(
                 vault
                     .source_graph()
@@ -665,7 +659,7 @@ fn nodes(
         }
     }
     rows.sort();
-    rows
+    Ok(rows)
 }
 
 fn diff(root: &Path, left: &str, right: &str) -> Result<Vec<String>> {
@@ -973,7 +967,7 @@ mod tests {
         crate::vault::reset_work_counts();
         let reverse_index = QueryReverseIndex::build(&vault, ReverseIndexScope::Sources);
         assert_eq!(
-            nodes(&vault, Some(&reverse_index), Some(NodeKind::Code), true),
+            nodes(&vault, Some(&reverse_index), Some(NodeKind::Code), true).unwrap(),
             vec!["src/lib.rs#fn:undocumented"]
         );
         let input_targets = vault
