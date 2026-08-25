@@ -61,7 +61,7 @@ impl RepositoryFiles {
         &'a self,
         allowed_dir: &Path,
     ) -> Result<RepositoryWriteScope<'a>> {
-        self.filesystem.validate_scope(allowed_dir)?;
+        filesystem::FileSystem::validate_scope(allowed_dir)?;
         Ok(RepositoryWriteScope {
             files: self,
             allowed_dir: allowed_dir.to_path_buf(),
