@@ -147,7 +147,9 @@ impl QueryReverseIndex {
             for link in &note.wiki_links {
                 if include_notes && let ResolvedLink::Note { id } = vault.resolve_link(&link.target)
                 {
-                    notes_with_outgoing_citations[note_index] = true;
+                    if let Some(has_outgoing) = notes_with_outgoing_citations.get_mut(note_index) {
+                        *has_outgoing = true;
+                    }
                     if id != note.display_id() {
                         cited_note_ids.insert(id);
                     }
@@ -219,7 +221,8 @@ fn sorted_note_ids(vault: &Vault, note_indexes: Option<&[usize]>) -> Vec<String>
     let mut rows = note_indexes
         .into_iter()
         .flatten()
-        .map(|index| vault.notes[*index].display_id().to_string())
+        .filter_map(|index| vault.notes.get(*index))
+        .map(|note| note.display_id().to_string())
         .collect::<Vec<_>>();
     rows.sort();
     rows
@@ -436,14 +439,16 @@ fn next_adr_id(vault: &Vault) -> Result<String> {
     let next = highest
         .checked_add(1)
         .filter(|next| *next <= MAX_ADR_NUMBER);
-    match next {
-        Some(next) => Ok(format!("ADR-{next:04}")),
-        None => Err(CrivError::coded_fix(
-            "adr-id-exhausted",
-            format!("no free ADR id after ADR-{highest:04}; ids are four digits"),
-            "Retire or renumber the highest ADR ids, or widen the id format in a new ADR.",
-        )),
-    }
+    next.map_or_else(
+        || {
+            Err(CrivError::coded_fix(
+                "adr-id-exhausted",
+                format!("no free ADR id after ADR-{highest:04}; ids are four digits"),
+                "Retire or renumber the highest ADR ids, or widen the id format in a new ADR.",
+            ))
+        },
+        |next| Ok(format!("ADR-{next:04}")),
+    )
 }
 
 fn targets(vault: &Vault, id: &str) -> Result<Vec<String>> {
@@ -496,7 +501,11 @@ fn orphan_docs(vault: &Vault, index: &QueryReverseIndex) -> Vec<String> {
             continue;
         }
         let id = note.display_id();
-        let has_outgoing = index.notes_with_outgoing_citations[note_index];
+        let has_outgoing = index
+            .notes_with_outgoing_citations
+            .get(note_index)
+            .copied()
+            .unwrap_or(false);
         let has_incoming = index.citing_notes.contains_key(id);
         if !has_outgoing && !has_incoming {
             rows.push(id.to_string());
@@ -566,9 +575,9 @@ fn coverage_by_module(vault: &Vault, governed: &BTreeSet<String>) -> Vec<String>
             .map_or(".", |(parent, _)| parent)
             .to_string();
         let entry = modules.entry(module).or_default();
-        entry.0 += 1;
+        entry.0 = entry.0.saturating_add(1);
         if governed.contains(source_file) {
-            entry.1 += 1;
+            entry.1 = entry.1.saturating_add(1);
         }
     }
     modules
@@ -757,10 +766,9 @@ fn json_edge_set(value: &serde_json::Value) -> BTreeSet<String> {
 }
 
 fn print_rows(rows: &[String], output: OutputOptions) -> Result<()> {
-    let rows = match output.limit {
-        Some(limit) => &rows[..rows.len().min(limit)],
-        None => rows,
-    };
+    let rows = output.limit.map_or(rows, |limit| {
+        rows.get(..rows.len().min(limit)).unwrap_or(rows)
+    });
     match output.format {
         Format::Text => {
             for row in rows {
