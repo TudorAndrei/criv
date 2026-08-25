@@ -145,6 +145,11 @@ enum Command {
     Enforce(enforce::EnforceOptions),
 }
 
+/// Runs the command line interface with `args`.
+///
+/// # Errors
+///
+/// Returns an error when parsing, output, or the selected command fails.
 pub fn run(args: Vec<String>) -> Result<()> {
     let cwd = std::env::current_dir()?;
     run_command(args, &cwd)
@@ -157,7 +162,7 @@ fn run_command(args: Vec<String>, cwd: &std::path::Path) -> Result<()> {
     let cli = match CrivCli::parse_from(&argv) {
         Ok(cli) => cli,
         Err(Error::Help { cmd, long }) => {
-            print!("{}", render_help(cmd, long));
+            print!("{}", render_help(cmd, long)?);
             return Ok(());
         }
         Err(Error::Version { .. }) => {
@@ -178,18 +183,16 @@ fn run_command(args: Vec<String>, cwd: &std::path::Path) -> Result<()> {
     };
 
     if cli.usage {
-        write_usage_spec(&mut std::io::stdout().lock());
-        return Ok(());
+        return write_usage_spec(&mut std::io::stdout().lock());
     }
 
     if cli.usage_json {
-        write_usage_json(&mut std::io::stdout().lock());
-        return Ok(());
+        return write_usage_json(&mut std::io::stdout().lock());
     }
 
     match cli.command {
         None => {
-            print!("{}", render_help(CrivCli::command(), false));
+            print!("{}", render_help(CrivCli::command(), false)?);
             Ok(())
         }
         Some(Command::Init(options)) => init::run(cwd, options),
@@ -202,12 +205,14 @@ fn run_command(args: Vec<String>, cwd: &std::path::Path) -> Result<()> {
     }
 }
 
-fn render_help(command: &usage::Command<'_>, long: bool) -> String {
-    help::render(CrivCli::spec(), command, long).expect("render help")
+fn render_help(command: &usage::Command<'_>, long: bool) -> Result<String> {
+    help::render(CrivCli::spec(), command, long)
+        .ok_or_else(|| CrivError::new("failed to render help"))
 }
 
-fn write_usage_spec(writer: &mut dyn Write) {
-    write!(writer, "{}", CrivCli::to_kdl()).expect("write usage spec");
+fn write_usage_spec(writer: &mut dyn Write) -> Result<()> {
+    write!(writer, "{}", CrivCli::to_kdl())?;
+    Ok(())
 }
 
 #[derive(serde::Serialize)]
@@ -301,11 +306,13 @@ fn json_command<'a>(meta: &'a usage::spec::CommandMeta<'a>, parent: &str) -> Jso
     }
 }
 
-fn write_usage_json(writer: &mut dyn Write) {
+fn write_usage_json(writer: &mut dyn Write) -> Result<()> {
     let spec = CrivCli::spec();
     let tree = json_command(spec.root, "");
-    let json = serde_json::to_string_pretty(&tree).expect("serialize command tree");
-    writeln!(writer, "{json}").expect("write command tree");
+    let json = serde_json::to_string_pretty(&tree)
+        .map_err(|error| CrivError::new(format!("failed to serialize command tree: {error}")))?;
+    writeln!(writer, "{json}")?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -318,8 +325,8 @@ mod tests {
         let owned: Vec<OsString> = args.iter().map(OsString::from).collect();
         let argv: Vec<&OsStr> = owned.iter().map(OsString::as_os_str).collect();
         match CrivCli::parse_from(&argv) {
-            Ok(_) => render_help(CrivCli::command(), false),
-            Err(Error::Help { cmd, long }) => render_help(cmd, long),
+            Ok(_) => render_help(CrivCli::command(), false).unwrap(),
+            Err(Error::Help { cmd, long }) => render_help(cmd, long).unwrap(),
             Err(error) => panic!("expected a help request, got {error:?}"),
         }
     }
@@ -344,7 +351,7 @@ mod tests {
     #[test]
     fn usage_spec_includes_criv_commands() {
         let mut output = Vec::new();
-        write_usage_spec(&mut output);
+        write_usage_spec(&mut output).unwrap();
 
         let spec = String::from_utf8(output).expect("usage spec should be utf-8");
 
@@ -379,7 +386,7 @@ mod tests {
     #[test]
     fn usage_json_exports_visible_command_metadata() {
         let mut output = Vec::new();
-        write_usage_json(&mut output);
+        write_usage_json(&mut output).unwrap();
 
         let tree: serde_json::Value =
             serde_json::from_slice(&output).expect("usage JSON should be valid JSON");
