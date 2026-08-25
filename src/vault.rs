@@ -457,52 +457,59 @@ impl Vault {
 
     pub(crate) fn source_files_matching_globs(&self, patterns: &[String]) -> Vec<String> {
         let matcher = GlobMatcher::from_valid_patterns(patterns);
-        let mut matches_by_pattern = vec![Vec::new(); patterns.len()];
+        let mut files_by_pattern = vec![Vec::new(); patterns.len()];
         let mut indices = Vec::new();
         for source_file in self.source.paths() {
             matcher.matching_pattern_indices_into(source_file, &mut indices);
             for index in &indices {
-                matches_by_pattern[*index].push(source_file.clone());
+                if let Some(files) = files_by_pattern.get_mut(*index) {
+                    files.push(source_file.clone());
+                }
             }
         }
-        let mut matches = Vec::new();
+        let mut resolved_files = Vec::new();
         for (index, pattern) in patterns.iter().enumerate() {
-            if matches_by_pattern[index].is_empty()
+            let files = files_by_pattern.get(index).map_or(&[][..], Vec::as_slice);
+            if files.is_empty()
                 && let SourceTargetResolution::Resolved { path, .. } =
                     self.resolve_source_target(pattern)
             {
-                matches.push(path);
+                resolved_files.push(path);
             } else {
-                matches.extend(matches_by_pattern[index].iter().cloned());
+                resolved_files.extend(files.iter().cloned());
             }
         }
-        matches
+        resolved_files
     }
 
     pub(crate) fn source_globs_have_matches(&self, patterns: &[String]) -> Vec<bool> {
         let matcher = GlobMatcher::from_valid_patterns(patterns);
-        let mut matched = vec![false; patterns.len()];
+        let mut matched_patterns = vec![false; patterns.len()];
         let mut indices = Vec::new();
         for source_file in self.source.paths() {
             matcher.matching_pattern_indices_into(source_file, &mut indices);
             for index in &indices {
-                matched[*index] = true;
+                if let Some(value) = matched_patterns.get_mut(*index) {
+                    *value = true;
+                }
             }
         }
         for (index, pattern) in patterns.iter().enumerate() {
-            matched[index] |= matches!(
-                self.resolve_source_target(pattern),
-                SourceTargetResolution::Resolved { .. }
-            );
+            if let Some(value) = matched_patterns.get_mut(index) {
+                *value |= matches!(
+                    self.resolve_source_target(pattern),
+                    SourceTargetResolution::Resolved { .. }
+                );
+            }
         }
-        matched
+        matched_patterns
     }
 
     pub(crate) fn source_files(&self) -> &[String] {
         self.source.paths()
     }
 
-    pub(crate) fn source_graph(&self) -> &SourceGraph {
+    pub(crate) const fn source_graph(&self) -> &SourceGraph {
         self.source.graph()
     }
 
@@ -548,7 +555,7 @@ impl Vault {
         Some((note, policy))
     }
 
-    pub(crate) fn effective_governs(&self, note: &Note) -> Vec<String> {
+    pub(crate) fn effective_governs(note: &Note) -> Vec<String> {
         if note.kind == NoteKind::Decision && note.governs.is_empty() {
             vec!["**".into()]
         } else {
@@ -629,7 +636,9 @@ fn load_documentation_assets_with_limits(
         let Some(contents) = files.read_bounded(Path::new(&path), max_asset_bytes)? else {
             continue;
         };
-        let bytes = contents.len() as u64;
+        let bytes = u64::try_from(contents.len()).map_err(|_| {
+            crate::CrivError::new(format!("asset `{path}` exceeds the supported byte range"))
+        })?;
         if total_bytes.saturating_add(bytes) > max_total_bytes {
             break;
         }
@@ -642,7 +651,7 @@ fn load_documentation_assets_with_limits(
         if detected.mime_type() != expected_mime {
             continue;
         }
-        total_bytes += bytes;
+        total_bytes = total_bytes.saturating_add(bytes);
         assets.push(DocumentationAsset {
             path,
             mime: expected_mime.to_string(),
@@ -753,7 +762,7 @@ fn parse_note(files: &RepositoryFiles, docs_path: &Path, path: &Path) -> Result<
             superseded_by: Vec::new(),
             wiki_links: Vec::new(),
             frontmatter_error_location: err.offset.and_then(|offset| {
-                let offset = frontmatter_start + offset;
+                let offset = frontmatter_start.saturating_add(offset);
                 SourceLocation::new(source.clone(), offset..offset)
             }),
             frontmatter_error: Some(err.message),
@@ -767,10 +776,10 @@ fn parse_note(files: &RepositoryFiles, docs_path: &Path, path: &Path) -> Result<
         .map(|(line, raw, span)| WikiLink {
             target: raw.split('|').next().unwrap_or(&raw).trim().to_string(),
             raw,
-            line: line + line_offset,
+            line: line.saturating_add(line_offset),
             location: SourceLocation::new(
                 source.clone(),
-                body_start + span.start..body_start + span.end,
+                body_start.saturating_add(span.start)..body_start.saturating_add(span.end),
             ),
         })
         .collect();
@@ -779,7 +788,7 @@ fn parse_note(files: &RepositoryFiles, docs_path: &Path, path: &Path) -> Result<
         .map(|(level, text, line)| Heading {
             level,
             text,
-            line: line + line_offset,
+            line: line.saturating_add(line_offset),
         })
         .collect();
     note.rel_path = rel_path;
@@ -801,10 +810,14 @@ fn split_frontmatter(contents: &str) -> (&str, String, usize, usize, usize) {
     let mut cursor = frontmatter_start;
     while let Some((line, next)) = delimiter_line(contents, cursor) {
         if line == "---" {
-            let consumed = contents[..next].matches('\n').count();
+            let consumed = contents
+                .get(..next)
+                .map_or(0, |prefix| prefix.matches('\n').count());
+            let frontmatter = contents.get(frontmatter_start..cursor).unwrap_or_default();
+            let body = contents.get(next..).unwrap_or_default();
             return (
-                &contents[frontmatter_start..cursor],
-                contents[next..].to_string(),
+                frontmatter,
+                body.to_string(),
                 consumed,
                 frontmatter_start,
                 next,
@@ -819,11 +832,14 @@ fn split_frontmatter(contents: &str) -> (&str, String, usize, usize, usize) {
 /// Returns the line without its LF/CRLF terminator plus the next byte offset.
 /// A final unterminated line is deliberately not a frontmatter delimiter.
 fn delimiter_line(contents: &str, start: usize) -> Option<(&str, usize)> {
-    let newline = contents[start..].find('\n')? + start;
-    let line_end = contents[start..newline]
+    let tail = contents.get(start..)?;
+    let newline = tail.find('\n')?.checked_add(start)?;
+    let raw_line = contents.get(start..newline)?;
+    let line_end = raw_line
         .strip_suffix('\r')
-        .map_or(newline, |_| newline - 1);
-    Some((&contents[start..line_end], newline + 1))
+        .map_or(newline, |_| newline.saturating_sub(1));
+    let next = newline.checked_add(1)?;
+    Some((contents.get(start..line_end)?, next))
 }
 
 fn parse_frontmatter(
@@ -991,7 +1007,7 @@ fn frontmatter_line(frontmatter: &str, needle: &str) -> usize {
     frontmatter
         .lines()
         .position(|line| line.contains(needle))
-        .map_or(2, |index| index + 2)
+        .map_or(2, |index| index.saturating_add(2))
 }
 
 fn raw_pattern_line(frontmatter: &str, pattern: &RawPatternRef) -> usize {

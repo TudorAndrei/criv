@@ -307,7 +307,7 @@ pub(super) fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
         );
     }
 
-    let governs = vault.effective_governs(note);
+    let governs = Vault::effective_governs(note);
     if !governs.is_empty() {
         dependencies.catalog_sensitive = true;
     }
@@ -393,7 +393,7 @@ pub(super) fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
     RowPartition {
         meta: partition_meta(
             PartitionKey::Note(note.rel_path.clone()),
-            note_input_fingerprint(vault, note),
+            note_input_fingerprint(note),
             dependencies,
         ),
         rows: graph_rows(graph),

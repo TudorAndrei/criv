@@ -887,7 +887,7 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
 }
 
 fn unresolved_governs(vault: &Vault, note: &Note) -> Vec<String> {
-    let governs = vault.effective_governs(note);
+    let governs = Vault::effective_governs(note);
     governs
         .iter()
         .zip(vault.source_globs_have_matches(&governs))

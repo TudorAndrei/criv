@@ -519,7 +519,7 @@ fn governs(vault: &Vault, adr_id: &str) -> Result<Vec<String>> {
     let note = vault
         .resolve_note(adr_id)
         .ok_or_else(|| CrivError::new(format!("decision `{adr_id}` does not resolve")))?;
-    let mut rows = vault.source_files_matching_globs(&vault.effective_governs(note));
+    let mut rows = vault.source_files_matching_globs(&Vault::effective_governs(note));
     rows.sort();
     rows.dedup();
     Ok(rows)
@@ -535,7 +535,7 @@ fn governing(vault: &Vault, symbol: &str) -> Vec<String> {
             continue;
         }
         if vault
-            .source_files_matching_globs(&vault.effective_governs(note))
+            .source_files_matching_globs(&Vault::effective_governs(note))
             .contains(&path)
         {
             rows.push(note.display_id().to_string());
@@ -550,7 +550,7 @@ fn coverage(vault: &Vault, by: Option<CoverageBy>) -> Vec<String> {
         .notes
         .iter()
         .filter(|note| note.kind == NoteKind::Decision)
-        .flat_map(|note| vault.source_files_matching_globs(&vault.effective_governs(note)))
+        .flat_map(|note| vault.source_files_matching_globs(&Vault::effective_governs(note)))
         .collect::<std::collections::BTreeSet<_>>();
     match by {
         Some(CoverageBy::Module) => return coverage_by_module(vault, &governed),
@@ -598,7 +598,7 @@ fn coverage_by_adr(vault: &Vault) -> Vec<String> {
             continue;
         }
         let governed = vault
-            .source_files_matching_globs(&vault.effective_governs(note))
+            .source_files_matching_globs(&Vault::effective_governs(note))
             .into_iter()
             .collect::<BTreeSet<_>>();
         rows.push(format!(

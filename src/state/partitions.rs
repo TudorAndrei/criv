@@ -193,7 +193,7 @@ pub(super) fn build(
 
     for note in &vault.notes {
         let key = PartitionKey::Note(note.rel_path.clone());
-        let fingerprint = note_input_fingerprint(vault, note);
+        let fingerprint = note_input_fingerprint(note);
         let partition = previous
             .and_then(|previous| previous.notes.get(&note.rel_path))
             .filter(|partition| {

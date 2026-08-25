@@ -217,7 +217,7 @@ impl PolicyScanPlan {
 
             #[cfg(test)]
             record_work(|counts| counts.adr_scope_resolutions += 1);
-            let scopes = vault.effective_governs(note);
+            let scopes = Vault::effective_governs(note);
             let paths = vault
                 .source_files_matching_globs(&scopes)
                 .into_iter()

@@ -372,7 +372,7 @@ fn source_input_fingerprint(file: &SourceFile) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
-fn note_input_fingerprint(vault: &Vault, note: &Note) -> String {
+fn note_input_fingerprint(note: &Note) -> String {
     let mut hasher = blake3::Hasher::new();
     fingerprint_str(&mut hasher, &note.rel_path);
     fingerprint_option_str(&mut hasher, note.id.as_deref());
@@ -396,7 +396,10 @@ fn note_input_fingerprint(vault: &Vault, note: &Note) -> String {
     fingerprint_str(&mut hasher, &format!("{:?}", note.supersedes));
     fingerprint_str(&mut hasher, &format!("{:?}", note.superseded_by));
     fingerprint_str(&mut hasher, &format!("{:?}", note.frontmatter_error));
-    fingerprint_str(&mut hasher, &format!("{:?}", vault.effective_governs(note)));
+    fingerprint_str(
+        &mut hasher,
+        &format!("{:?}", Vault::effective_governs(note)),
+    );
     hasher.finalize().to_hex().to_string()
 }
 
