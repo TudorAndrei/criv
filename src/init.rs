@@ -41,7 +41,7 @@ pub fn run(root: &Path, options: InitOptions) -> Result<()> {
     write_template(
         &scope,
         "criv.toml",
-        &templates::default_config()?,
+        &templates::default_config(),
         &mut created,
     )?;
 

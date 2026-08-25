@@ -3,8 +3,8 @@ use serde::Serialize;
 
 use crate::{CrivError, Result};
 
-pub fn default_config() -> Result<String> {
-    Ok(DEFAULT_CONFIG.to_string())
+pub fn default_config() -> String {
+    DEFAULT_CONFIG.to_string()
 }
 
 pub fn default_state() -> Result<String> {
