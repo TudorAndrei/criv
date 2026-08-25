@@ -170,7 +170,10 @@ impl PolicyScanPlan {
                 }
 
                 #[cfg(test)]
-                record_work(|counts| counts.definition_compilations += 1);
+                record_work(|counts| {
+                    counts.definition_compilations =
+                        counts.definition_compilations.saturating_add(1);
+                });
                 let state_pattern_id = active_adr_id.and_then(|adr_id| {
                     let pattern_id = format!("{adr_id}/{raw_local_id}");
                     (vault.patterns().contains(&pattern_id)
@@ -216,7 +219,9 @@ impl PolicyScanPlan {
             }
 
             #[cfg(test)]
-            record_work(|counts| counts.adr_scope_resolutions += 1);
+            record_work(|counts| {
+                counts.adr_scope_resolutions = counts.adr_scope_resolutions.saturating_add(1);
+            });
             let scopes = Vault::effective_governs(note);
             let paths = vault
                 .source_files_matching_globs(&scopes)
