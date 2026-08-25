@@ -670,7 +670,11 @@ pub fn file_mode(root: &Path, reference: &str, path: &str) -> Result<Option<Stri
             .tree_at(reference)?
             .get_path(Path::new(path))
             .ok()
-            .map(|entry| entry.filemode() as u32)
+            .map(|entry| {
+                u32::try_from(entry.filemode())
+                    .map_err(|_| CrivError::new("Git tree entry has a negative file mode"))
+            })
+            .transpose()?
     };
     Ok(mode.map(|mode| format!("{mode:06o}")))
 }
@@ -733,9 +737,17 @@ fn added_lines_for_blobs(
     let mut ranges = Vec::new();
     let mut line_callback =
         |_: git2::DiffDelta<'_>, _: Option<git2::DiffHunk<'_>>, line: git2::DiffLine<'_>| {
-            if line.origin() == '+' && line.new_lineno().is_some_and(|line_no| line_no > 0) {
-                let line_no = line.new_lineno().unwrap() as usize;
-                ranges.push(line_no..line_no + 1);
+            if line.origin() == '+' {
+                if let Some(line_no) = line.new_lineno().filter(|line_no| *line_no > 0) {
+                    if let (Ok(start), Some(end)) = (
+                        usize::try_from(line_no),
+                        usize::try_from(line_no)
+                            .ok()
+                            .and_then(|value| value.checked_add(1)),
+                    ) {
+                        ranges.push(start..end);
+                    }
+                }
             }
             true
         };
