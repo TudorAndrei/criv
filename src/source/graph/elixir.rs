@@ -2098,8 +2098,8 @@ fn descendant_call(node: Node<'_>) -> Option<Node<'_>> {
 
 fn node_range(node: Node<'_>) -> SymbolRange {
     SymbolRange {
-        start_line: node.start_position().row + 1,
-        end_line: node.end_position().row + 1,
+        start_line: node.start_position().row.saturating_add(1),
+        end_line: node.end_position().row.saturating_add(1),
     }
 }
 
@@ -2115,14 +2115,16 @@ fn normalize_callable_name(name: &str) -> String {
 }
 
 fn signature_parts(text: &str) -> Option<(String, usize, Vec<String>, Option<String>)> {
-    let (head, output) = split_top_level_operator(text, "::")
-        .map(|(left, right)| (left.trim(), Some(right.trim().to_string())))
-        .unwrap_or((text.trim(), None));
+    let (head, output) = split_top_level_operator(text, "::").map_or_else(
+        || (text.trim(), None),
+        |(left, right)| (left.trim(), Some(right.trim().to_string())),
+    );
     let head = split_top_level_operator(head, "when").map_or(head, |(left, _)| left.trim());
     if let Some(open) = head.find('(') {
         let close = matching_close(head, open, '(', ')')?;
-        let name = normalize_callable_name(head[..open].trim());
-        let params = split_top_level(&head[open + 1..close], ',');
+        let name = normalize_callable_name(head.get(..open)?.trim());
+        let params_start = open.checked_add(1)?;
+        let params = split_top_level(head.get(params_start..close)?, ',');
         return (!name.is_empty()).then_some((name, params.len(), params, output));
     }
     let name = normalize_callable_name(head);
@@ -2132,19 +2134,14 @@ fn signature_parts(text: &str) -> Option<(String, usize, Vec<String>, Option<Str
 fn split_top_level_operator<'a>(value: &'a str, operator: &str) -> Option<(&'a str, &'a str)> {
     let mut depths = [0usize; 4];
     for (index, character) in value.char_indices() {
-        match character {
-            '(' => depths[0] += 1,
-            ')' => depths[0] = depths[0].saturating_sub(1),
-            '[' => depths[1] += 1,
-            ']' => depths[1] = depths[1].saturating_sub(1),
-            '{' => depths[2] += 1,
-            '}' => depths[2] = depths[2].saturating_sub(1),
-            '<' => depths[3] += 1,
-            '>' => depths[3] = depths[3].saturating_sub(1),
-            _ => {}
-        }
-        if depths == [0; 4] && value[index..].starts_with(operator) {
-            return Some((&value[..index], &value[index + operator.len()..]));
+        update_delimiter_depths(&mut depths, character);
+        if depths == [0; 4]
+            && let Some(tail) = value.get(index..)
+            && tail.starts_with(operator)
+            && let Some(right_start) = index.checked_add(operator.len())
+            && let (Some(left), Some(right)) = (value.get(..index), value.get(right_start..))
+        {
+            return Some((left, right));
         }
     }
     None
@@ -2152,13 +2149,13 @@ fn split_top_level_operator<'a>(value: &'a str, operator: &str) -> Option<(&'a s
 
 fn matching_close(value: &str, open: usize, open_char: char, close_char: char) -> Option<usize> {
     let mut depth = 0usize;
-    for (offset, character) in value[open..].char_indices() {
+    for (offset, character) in value.get(open..)?.char_indices() {
         if character == open_char {
-            depth += 1;
+            depth = depth.saturating_add(1);
         } else if character == close_char {
             depth = depth.saturating_sub(1);
             if depth == 0 {
-                return Some(open + offset);
+                return open.checked_add(offset);
             }
         }
     }
@@ -2170,30 +2167,37 @@ fn split_top_level(value: &str, separator: char) -> Vec<String> {
     let mut depths = [0usize; 4];
     let mut start = 0usize;
     for (index, character) in value.char_indices() {
-        match character {
-            '(' => depths[0] += 1,
-            ')' => depths[0] = depths[0].saturating_sub(1),
-            '[' => depths[1] += 1,
-            ']' => depths[1] = depths[1].saturating_sub(1),
-            '{' => depths[2] += 1,
-            '}' => depths[2] = depths[2].saturating_sub(1),
-            '<' => depths[3] += 1,
-            '>' => depths[3] = depths[3].saturating_sub(1),
-            _ => {}
-        }
+        update_delimiter_depths(&mut depths, character);
         if character == separator && depths == [0; 4] {
-            let row = value[start..index].trim();
-            if !row.is_empty() {
+            if let Some(row) = value.get(start..index).map(str::trim)
+                && !row.is_empty()
+            {
                 rows.push(row.to_string());
             }
-            start = index + character.len_utf8();
+            start = index.saturating_add(character.len_utf8());
         }
     }
-    let row = value[start..].trim();
-    if !row.is_empty() {
+    if let Some(row) = value.get(start..).map(str::trim)
+        && !row.is_empty()
+    {
         rows.push(row.to_string());
     }
     rows
+}
+
+const fn update_delimiter_depths(depths: &mut [usize; 4], character: char) {
+    let [parentheses, brackets, braces, angles] = depths;
+    match character {
+        '(' => *parentheses = parentheses.saturating_add(1),
+        ')' => *parentheses = parentheses.saturating_sub(1),
+        '[' => *brackets = brackets.saturating_add(1),
+        ']' => *brackets = brackets.saturating_sub(1),
+        '{' => *braces = braces.saturating_add(1),
+        '}' => *braces = braces.saturating_sub(1),
+        '<' => *angles = angles.saturating_add(1),
+        '>' => *angles = angles.saturating_sub(1),
+        _ => {}
+    }
 }
 
 fn struct_fields(node: Node<'_>, contents: &str) -> Vec<FieldSignature> {
