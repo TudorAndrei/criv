@@ -1294,7 +1294,7 @@ fn rewrite_owned_lines(
     };
     let mut output = String::new();
     for (index, line) in contents.split_inclusive('\n').enumerate() {
-        let line_number = index + 1;
+        let line_number = index.saturating_add(1);
         let owned = ranges.iter().any(|range| range.contains(&line_number));
         let rewritten = if owned {
             rewrite_text(line, mappings)?
@@ -1333,7 +1333,9 @@ fn rewrite_text(contents: &str, mappings: &[Mapping]) -> Result<String> {
     let edits = reference_edits(contents, mappings)?;
     let mut output = contents.to_owned();
     for edit in edits.into_iter().rev() {
-        output.replace_range(edit.start..edit.end, &edit.replacement);
+        if output.get(edit.start..edit.end).is_some() {
+            output.replace_range(edit.start..edit.end, &edit.replacement);
+        }
     }
     Ok(output)
 }
@@ -1345,7 +1347,9 @@ fn reference_edits(contents: &str, mappings: &[Mapping]) -> Result<Vec<TextEdit>
         let old_id = format!("ADR-{:04}", mapping.old_id);
         let new_id = format!("ADR-{:04}", mapping.new_id);
         for (start, _) in contents.match_indices(&old_id) {
-            let end = start + old_id.len();
+            let Some(end) = start.checked_add(old_id.len()) else {
+                continue;
+            };
             if is_exact_token(bytes, start, end) {
                 edits.push(TextEdit {
                     start,
@@ -1356,22 +1360,40 @@ fn reference_edits(contents: &str, mappings: &[Mapping]) -> Result<Vec<TextEdit>
         }
     }
     let mut cursor = 0;
-    while let Some(relative_start) = contents[cursor..].find("[[") {
-        let start = cursor + relative_start;
-        let body_start = start + 2;
-        let Some(relative_end) = contents[body_start..].find("]]") else {
+    while let Some(tail) = contents.get(cursor..) {
+        let Some(relative_start) = tail.find("[[") else {
             break;
         };
-        let end = body_start + relative_end;
+        let Some(start) = cursor.checked_add(relative_start) else {
+            break;
+        };
+        let Some(body_start) = start.checked_add(2) else {
+            break;
+        };
+        let Some(body_tail) = contents.get(body_start..) else {
+            break;
+        };
+        let Some(relative_end) = body_tail.find("]]") else {
+            break;
+        };
+        let Some(end) = body_start.checked_add(relative_end) else {
+            break;
+        };
         add_wikilink_edits(contents, body_start, end, mappings, &mut edits);
-        cursor = end + 2;
+        let Some(next) = end.checked_add(2) else {
+            break;
+        };
+        cursor = next;
     }
     edits.sort_by_key(|edit| (edit.start, edit.end));
     for pair in edits.windows(2) {
-        if pair[0].end > pair[1].start
-            && (pair[0].start != pair[1].start
-                || pair[0].end != pair[1].end
-                || pair[0].replacement != pair[1].replacement)
+        let [left, right] = pair else {
+            continue;
+        };
+        if right.start < left.end
+            && (left.start != right.start
+                || left.end != right.end
+                || left.replacement != right.replacement)
         {
             return Err(CrivError::new("ADR reference edits overlap ambiguously"));
         }
@@ -1387,7 +1409,9 @@ fn add_wikilink_edits(
     mappings: &[Mapping],
     edits: &mut Vec<TextEdit>,
 ) {
-    let body = &contents[start..end];
+    let Some(body) = contents.get(start..end) else {
+        return;
+    };
     let mut part_start = start;
     for part in body.split('|') {
         let link_target = part.split_once('#').map_or(part, |(target, _)| target);
@@ -1414,12 +1438,12 @@ fn add_wikilink_edits(
             if let Some(replacement) = replacement {
                 edits.push(TextEdit {
                     start: part_start,
-                    end: part_start + link_target.len(),
+                    end: part_start.saturating_add(link_target.len()),
                     replacement: replacement.to_owned(),
                 });
             }
         }
-        part_start += part.len() + 1;
+        part_start = part_start.saturating_add(part.len()).saturating_add(1);
     }
 }
 
@@ -1429,22 +1453,37 @@ fn contains_exact_id(bytes: &[u8], id: u32) -> bool {
         .windows(needle.len())
         .enumerate()
         .any(|(start, window)| {
-            window == needle.as_bytes() && is_exact_token(bytes, start, start + needle.len())
+            window == needle.as_bytes()
+                && start
+                    .checked_add(needle.len())
+                    .is_some_and(|end| is_exact_token(bytes, start, end))
         })
 }
 
 fn contains_wikilink_reference_bytes(bytes: &[u8], mappings: &[Mapping]) -> bool {
     let mut cursor = 0;
-    while let Some(relative_start) = bytes[cursor..]
-        .windows(2)
-        .position(|window| window == b"[[")
-    {
-        let start = cursor + relative_start + 2;
-        let Some(relative_end) = bytes[start..].windows(2).position(|window| window == b"]]")
+    while let Some(tail) = bytes.get(cursor..) {
+        let Some(relative_start) = tail.windows(2).position(|window| window == b"[[") else {
+            break;
+        };
+        let Some(start) = cursor
+            .checked_add(relative_start)
+            .and_then(|offset| offset.checked_add(2))
         else {
             break;
         };
-        let body = &bytes[start..start + relative_end];
+        let Some(relative_end) = bytes
+            .get(start..)
+            .and_then(|tail| tail.windows(2).position(|window| window == b"]]"))
+        else {
+            break;
+        };
+        let Some(end) = start.checked_add(relative_end) else {
+            break;
+        };
+        let Some(body) = bytes.get(start..end) else {
+            break;
+        };
         if body.split(|byte| *byte == b'|').any(|part| {
             let target = part.split(|byte| *byte == b'#').next().unwrap_or(part);
             mappings.iter().any(|mapping| {
@@ -1460,14 +1499,22 @@ fn contains_wikilink_reference_bytes(bytes: &[u8], mappings: &[Mapping]) -> bool
         }) {
             return true;
         }
-        cursor = start + relative_end + 2;
+        let Some(next) = end.checked_add(2) else {
+            break;
+        };
+        cursor = next;
     }
     false
 }
 
 fn is_exact_token(bytes: &[u8], start: usize, end: usize) -> bool {
     let is_word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
-    (start == 0 || !is_word(bytes[start - 1])) && (end == bytes.len() || !is_word(bytes[end]))
+    let before_is_word = start
+        .checked_sub(1)
+        .and_then(|index| bytes.get(index))
+        .is_some_and(|byte| is_word(*byte));
+    let after_is_word = bytes.get(end).is_some_and(|byte| is_word(*byte));
+    !before_is_word && !after_is_word
 }
 
 fn hash(contents: &str) -> String {
