@@ -8,7 +8,7 @@ fn init_writes_parseable_structured_templates() {
     let root = unique_temp_dir("criv-init-templates");
     run(
         &root,
-        InitOptions {
+        &InitOptions {
             no_skills: true,
             force_skills: false,
         },
@@ -41,7 +41,7 @@ fn init_writes_parseable_structured_templates() {
 fn init_does_not_create_editor_files() {
     let root = unique_temp_dir("criv-init-no-editor-files");
 
-    run(&root, fast_options()).unwrap();
+    run(&root, &fast_options()).unwrap();
 
     assert!(!root.join(".obsidian").exists());
     assert!(!root.join(".vscode/extensions.json").exists());
@@ -57,7 +57,7 @@ fn init_installs_c4_authoring_skill() {
         force_skills: false,
     };
 
-    run(&root, options).unwrap();
+    run(&root, &options).unwrap();
 
     for path in [
         ".agents/skills/c4-authoring/SKILL.md",
@@ -80,19 +80,19 @@ fn init_force_skills_refreshes_existing_skills_but_plain_init_preserves_them() {
     let root = unique_temp_dir("criv-init-force-skills");
     let mut options = fast_options();
     options.no_skills = false;
-    run(&root, options).unwrap();
+    run(&root, &options).unwrap();
 
     let path = root.join(".agents/skills/criv/SKILL.md");
     std::fs::write(&path, "locally stale\n").unwrap();
     let mut plain = fast_options();
     plain.no_skills = false;
-    run(&root, plain).unwrap();
+    run(&root, &plain).unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "locally stale\n");
 
     let mut forced = fast_options();
     forced.no_skills = false;
     forced.force_skills = true;
-    run(&root, forced).unwrap();
+    run(&root, &forced).unwrap();
     assert_eq!(
         crate::install::skill_inventory(&root).status(".agents/skills/criv/SKILL.md"),
         Some(crate::install::InstalledSkillStatus::Current)
@@ -106,7 +106,7 @@ fn init_force_skills_respects_no_skills() {
     let root = unique_temp_dir("criv-init-force-no-skills");
     let mut options = fast_options();
     options.force_skills = true;
-    run(&root, options).unwrap();
+    run(&root, &options).unwrap();
     assert!(!root.join(".agents/skills").exists());
     assert!(!root.join(".claude/skills").exists());
 
@@ -119,7 +119,7 @@ fn init_force_skills_isolates_refresh_from_other_scaffolding() {
     let mut options = fast_options();
     options.force_skills = true;
     options.no_skills = false;
-    run(&root, options).unwrap();
+    run(&root, &options).unwrap();
 
     assert!(root.join(".agents/skills/criv/SKILL.md").exists());
     assert!(root.join(".claude/skills/criv/SKILL.md").exists());
@@ -145,7 +145,7 @@ fn init_force_skills_refuses_symlinked_destination() {
     let mut options = fast_options();
     options.no_skills = false;
     options.force_skills = true;
-    let error = run(&root, options).unwrap_err();
+    let error = run(&root, &options).unwrap_err();
     assert!(
         error
             .to_string()
@@ -177,7 +177,7 @@ fn init_refuses_to_scaffold_through_a_symlinked_docs_directory() {
 
     let error = run(
         &root,
-        InitOptions {
+        &InitOptions {
             no_skills: true,
             force_skills: false,
         },
@@ -208,7 +208,7 @@ fn init_refuses_to_write_a_template_through_a_symlinked_state_directory() {
 
     let error = run(
         &root,
-        InitOptions {
+        &InitOptions {
             no_skills: true,
             force_skills: false,
         },

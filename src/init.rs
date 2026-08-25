@@ -19,7 +19,7 @@ pub struct InitOptions {
     force_skills: bool,
 }
 
-pub fn run(root: &Path, options: InitOptions) -> Result<()> {
+pub fn run(root: &Path, options: &InitOptions) -> Result<()> {
     let files = RepositoryFiles::open(root)?;
     let scope = files.write_scope(Path::new("."))?;
     let mut created = Vec::new();
