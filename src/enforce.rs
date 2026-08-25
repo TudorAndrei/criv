@@ -30,7 +30,7 @@ enum Format {
 }
 
 #[derive(Debug, UsageArgs)]
-pub(crate) struct EnforceOptions {
+pub struct EnforceOptions {
     #[usage(long, value_enum)]
     stage: Stage,
     /// Select the human report or a JSON enforcement report.
@@ -45,7 +45,7 @@ pub(crate) struct EnforceOptions {
     remote_url: Option<String>,
 }
 
-pub(crate) fn run(root: &Path, options: EnforceOptions) -> Result<()> {
+pub fn run(root: &Path, options: EnforceOptions) -> Result<()> {
     if options.pre_push && options.stage != Stage::Push {
         return Err(CrivError::usage(
             "--pre-push is only valid with --stage push",
@@ -498,11 +498,10 @@ fn adr_immutability_violations(
             continue;
         }
 
-        let display_path = entry
-            .previous_path
-            .as_ref()
-            .map(|previous| format!("{previous} -> {}", entry.path))
-            .unwrap_or_else(|| entry.path.clone());
+        let display_path = entry.previous_path.as_ref().map_or_else(
+            || entry.path.clone(),
+            |previous| format!("{previous} -> {}", entry.path),
+        );
         violations.push(format!(
             "{display_path}: ADR files are immutable; add a new ADR with `supersedes` instead of modifying an existing one"
         ));
@@ -560,8 +559,7 @@ fn is_branch_local_ci_change(root: &Path, entry: &ChangedEntry) -> bool {
         return false;
     };
     git::tree_paths(root, &merge_base, path)
-        .map(|paths| !paths.iter().any(|candidate| candidate == path))
-        .unwrap_or(false)
+        .is_ok_and(|paths| !paths.iter().any(|candidate| candidate == path))
 }
 
 fn read_changed_content(root: &Path, git_ref: Option<&str>, path: &str) -> Option<String> {
@@ -686,11 +684,11 @@ fn import_matches(pattern: &str, matcher: Option<&crate::glob::GlobMatcher>, mod
 }
 
 impl Stage {
-    fn as_str(self) -> &'static str {
+    const fn as_str(self) -> &'static str {
         match self {
-            Stage::Commit => "commit",
-            Stage::Push => "push",
-            Stage::Ci => "ci",
+            Self::Commit => "commit",
+            Self::Push => "push",
+            Self::Ci => "ci",
         }
     }
 }

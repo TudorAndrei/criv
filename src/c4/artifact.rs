@@ -8,12 +8,12 @@ use crate::identity::strip_prefix;
 use crate::repository::RepositoryFiles;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum C4ArtifactFormat {
+pub enum C4ArtifactFormat {
     LikeC4,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct C4Artifact {
+pub struct C4Artifact {
     pub(crate) path: std::path::PathBuf,
     pub(crate) rel_path: String,
     pub(crate) format: Option<C4ArtifactFormat>,
@@ -22,14 +22,14 @@ pub(crate) struct C4Artifact {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct C4ArtifactDiagnostic {
+pub struct C4ArtifactDiagnostic {
     pub(crate) code: &'static str,
     pub(crate) line: Option<usize>,
     pub(crate) message: String,
     pub(crate) location: Option<SourceLocation>,
 }
 
-pub(crate) fn parse_file_from(
+pub fn parse_file_from(
     files: &RepositoryFiles,
     docs_path: &Path,
     path: &Path,

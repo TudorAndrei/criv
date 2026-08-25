@@ -1,3 +1,15 @@
+#![cfg_attr(
+    test,
+    allow(
+        clippy::pedantic,
+        clippy::nursery,
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing
+    )
+)]
+
 mod adr;
 mod c4;
 mod check;
@@ -95,14 +107,16 @@ impl CrivError {
         Self::Usage(message.into())
     }
 
-    pub fn exit_code(&self) -> i32 {
+    #[must_use]
+    pub const fn exit_code(&self) -> i32 {
         match self {
             Self::Usage(_) | Self::UsageReported => 2,
             Self::Message(_) | Self::Coded { .. } | Self::Io(_) => 1,
         }
     }
 
-    pub fn is_reported(&self) -> bool {
+    #[must_use]
+    pub const fn is_reported(&self) -> bool {
         matches!(self, Self::UsageReported)
     }
 }
@@ -207,7 +221,7 @@ struct JsonCommand<'a> {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     flags: Vec<JsonFlag<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    subcommands: Vec<JsonCommand<'a>>,
+    subcommands: Vec<Self>,
 }
 
 #[derive(serde::Serialize)]

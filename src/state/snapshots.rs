@@ -59,7 +59,7 @@ struct StoreView {
     latest: Option<String>,
 }
 
-pub(crate) struct PublicationPlan {
+pub struct PublicationPlan {
     pub(crate) index_contents: String,
     pub(crate) removals: Vec<String>,
 }
@@ -71,7 +71,7 @@ fn publish(root: &Path, hash: &str, contents: &str, keep: usize) -> Result<()> {
     publish_preflighted(&files, hash, contents, keep)
 }
 
-pub(crate) fn plan_publication(
+pub fn plan_publication(
     files: &RepositoryFiles,
     hash: &str,
     contents: &str,
@@ -142,7 +142,7 @@ fn publish_preflighted(
     Ok(())
 }
 
-pub(crate) fn load_unlocked(files: &RepositoryFiles, id: &str) -> Result<Option<String>> {
+pub fn load_unlocked(files: &RepositoryFiles, id: &str) -> Result<Option<String>> {
     let hash = if id == "latest" {
         read_latest(files)?
             .ok_or_else(|| CrivError::new("local snapshot `latest` does not resolve"))?

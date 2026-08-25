@@ -3,7 +3,7 @@ use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone)]
-pub(crate) struct GlobMatcher {
+pub struct GlobMatcher {
     sets: Vec<(GlobSet, Vec<usize>)>,
 }
 

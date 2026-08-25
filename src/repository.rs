@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::{CrivError, Result};
 
 #[derive(Clone)]
-pub(crate) struct RepositoryFiles {
+pub struct RepositoryFiles {
     filesystem: Arc<filesystem::FileSystem>,
 }
 
@@ -125,7 +125,7 @@ impl RepositoryFiles {
     }
 }
 
-pub(crate) struct RepositoryWriteScope<'a> {
+pub struct RepositoryWriteScope<'a> {
     files: &'a RepositoryFiles,
     allowed_dir: PathBuf,
 }
@@ -238,7 +238,7 @@ impl RepositoryWriteScope<'_> {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum LinkOutcome {
+pub enum LinkOutcome {
     Unchanged,
     Created,
     Replaced,
@@ -247,7 +247,7 @@ pub(crate) enum LinkOutcome {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum LinkLayout {
+pub enum LinkLayout {
     Missing,
     Expected,
     Directory,

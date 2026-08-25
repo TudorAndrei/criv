@@ -23,7 +23,7 @@ enum Format {
 /// Each query prints one row per result. Add `--format json` to any query for a
 /// JSON array of rows, as in `criv query nodes --kind decision --format json`.
 #[derive(Debug, UsageArgs)]
-pub(crate) struct QueryOptions {
+pub struct QueryOptions {
     #[usage(subcommand)]
     command: QueryCommand,
 }
@@ -73,7 +73,7 @@ enum QueryCapability {
 }
 
 impl QueryCommand {
-    fn capability(&self) -> QueryCapability {
+    const fn capability(&self) -> QueryCapability {
         match self {
             Self::Diff(_) => QueryCapability::Snapshot,
             Self::NextAdrId(_) | Self::CitedBy(_) | Self::OrphanDocs(_) => QueryCapability::Docs,
@@ -95,7 +95,7 @@ impl QueryCommand {
         }
     }
 
-    fn reverse_index_scope(&self) -> Option<ReverseIndexScope> {
+    const fn reverse_index_scope(&self) -> Option<ReverseIndexScope> {
         match self {
             Self::CitedBy(_) | Self::OrphanDocs(_) => Some(ReverseIndexScope::Notes),
             Self::References(_)
@@ -295,7 +295,7 @@ enum NodeKind {
 }
 
 impl NodeKind {
-    fn symbol_kind(self) -> Option<SymbolKind> {
+    const fn symbol_kind(self) -> Option<SymbolKind> {
         match self {
             Self::Function => Some(SymbolKind::Function),
             Self::Method => Some(SymbolKind::Method),
@@ -337,7 +337,7 @@ struct DiffOptions {
     output: OutputOptions,
 }
 
-pub(crate) fn run(root: &Path, options: QueryOptions) -> Result<()> {
+pub fn run(root: &Path, options: QueryOptions) -> Result<()> {
     RepositoryFiles::open_vault(root)?;
     if let QueryCommand::Diff(options) = &options.command {
         let rows = diff(root, &options.ref_a, &options.ref_b)?;
@@ -572,8 +572,7 @@ fn coverage_by_module(vault: &Vault, governed: &BTreeSet<String>) -> Vec<String>
     for source_file in vault.source_files() {
         let module = source_file
             .rsplit_once('/')
-            .map(|(parent, _)| parent)
-            .unwrap_or(".")
+            .map_or(".", |(parent, _)| parent)
             .to_string();
         let entry = modules.entry(module).or_default();
         entry.0 += 1;

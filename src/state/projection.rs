@@ -1,4 +1,13 @@
-use super::*;
+use super::{
+    BTreeSet, C4Artifact, Graph, ModuleRelationshipRole, Node, Note, NoteKind,
+    PartitionDependencies, PartitionKey, Relationship, RelationshipKind, RelationshipTarget,
+    ResolvedLink, RowPartition, SourceFile, SourcePartition, SourceTargetResolution, Symbol, Vault,
+    add_edge, add_node, c4_artifact_input_fingerprint, c4_artifact_node_id, code_node_id,
+    directive_node_id, external_call_node_id, external_module_node_id, graph_root, graph_rows,
+    interface_anchor_hash, likec4_element_node_id, likec4_interface_node_id, model_array,
+    note_input_fingerprint, note_node_id, partition_meta, pattern_node_id, relationship_endpoint,
+    source_input_fingerprint, symbol_label, symbol_node_id,
+};
 
 pub(super) fn build_source_partition(vault: &Vault, file: &SourceFile) -> SourcePartition {
     let mut graph = Graph::default();
@@ -81,9 +90,10 @@ pub(super) fn build_source_partition(vault: &Vault, file: &SourceFile) -> Source
             if resolved.is_none() {
                 dependencies.catalog_sensitive = true;
             }
-            let target = resolved
-                .map(|target| symbol_node_id(&target.display()))
-                .unwrap_or_else(|| external_call_node_id(&call.target));
+            let target = resolved.map_or_else(
+                || external_call_node_id(&call.target),
+                |target| symbol_node_id(&target.display()),
+            );
             if target.starts_with("external-call:") {
                 add_node(
                     &mut graph,
@@ -157,10 +167,10 @@ fn project_relationship(
     if resolved.is_none() && !matches!(relationship.target, RelationshipTarget::Dynamic { .. }) {
         dependencies.catalog_sensitive = true;
     }
-    let target = resolved
-        .as_ref()
-        .map(|target| symbol_node_id(&target.display()))
-        .unwrap_or_else(|| relationship_target_node_id(relationship, &label));
+    let target = resolved.as_ref().map_or_else(
+        || relationship_target_node_id(relationship, &label),
+        |target| symbol_node_id(&target.display()),
+    );
     if resolved.is_none() {
         add_node(
             graph,
@@ -191,7 +201,7 @@ fn relationship_target_node_id(relationship: &Relationship, label: &str) -> Stri
     }
 }
 
-fn relationship_target_node_kind(relationship: &Relationship) -> &'static str {
+const fn relationship_target_node_kind(relationship: &Relationship) -> &'static str {
     match &relationship.target {
         RelationshipTarget::Dynamic { .. } => "dynamic-call",
         RelationshipTarget::Callable { .. } => "external-call",
@@ -199,7 +209,7 @@ fn relationship_target_node_kind(relationship: &Relationship) -> &'static str {
     }
 }
 
-fn relationship_edge_kind(relationship: &Relationship) -> &'static str {
+const fn relationship_edge_kind(relationship: &Relationship) -> &'static str {
     match (&relationship.kind, &relationship.target) {
         (RelationshipKind::Call, _) => "calls",
         (RelationshipKind::Capture, _) => "captures",
@@ -398,7 +408,7 @@ pub(super) fn build_c4_artifact_partition(artifact: &C4Artifact) -> RowPartition
         &mut graph,
         &mut seen_nodes,
         Node {
-            id: artifact_id.clone(),
+            id: artifact_id,
             hash: String::new(),
             kind: "architecture-source".into(),
             label: artifact.rel_path.clone(),

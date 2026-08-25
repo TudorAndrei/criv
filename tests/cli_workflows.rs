@@ -717,7 +717,7 @@ fn stale_effective_governance_fails_all_check_formats_and_preserves_publication(
     fs::write(root.join("src/retired.rs"), "pub fn retired() {}\n").unwrap();
     fs::write(
         root.join("docs/adr/0999-retired.md"),
-        r#"---
+        r"---
 id: ADR-0999
 kind: decision
 title: Retired
@@ -727,7 +727,7 @@ governs:
 ---
 
 # Retired
-"#,
+",
     )
     .unwrap();
     criv(root).args(["watch", "--once"]).assert().success();
@@ -1045,7 +1045,7 @@ fn elixir_call_queries_resolve_arity_delegates_and_dynamic_sites() {
     );
     fs::write(
         root.join("lib/sample.ex"),
-        r#"
+        r"
 defmodule Repo do
   def fetch(value), do: value
 end
@@ -1061,7 +1061,7 @@ defmodule Client do
   defdelegate delegated(value), to: Data, as: :fetch
   def capture_only(), do: &Data.fetch/1
 end
-"#,
+",
     )
     .unwrap();
 
@@ -1120,7 +1120,7 @@ fn elixir_query_kinds_governance_visibility_and_ambiguity_are_exact() {
     );
     fs::write(
         root.join("lib/sample.ex"),
-        r#"
+        r"
 defmodule Repo do
   def fetch(value), do: value
   def fetch(value, opts), do: {value, opts}
@@ -1132,12 +1132,12 @@ defmodule Client do
   def run(value), do: Repo.fetch(value)
   def run(value, opts), do: Repo.fetch(value, opts)
 end
-"#,
+",
     )
     .unwrap();
     fs::write(
         root.join("docs/adr/0998-elixir.md"),
-        r#"---
+        r"---
 id: ADR-0998
 kind: decision
 title: Elixir source
@@ -1147,7 +1147,7 @@ governs:
 ---
 
 # Elixir source
-"#,
+",
     )
     .unwrap();
 
@@ -1838,7 +1838,7 @@ fn check_github_output_emits_workflow_annotation() {
     init(root);
     fs::write(
         root.join("docs/broken.md"),
-        r#"---
+        r"---
 id: broken
 kind: doc
 title: Broken
@@ -1847,7 +1847,7 @@ title: Broken
 # Broken
 
 Missing [[missing-target]]
-"#,
+",
     )
     .unwrap();
 
@@ -2038,7 +2038,7 @@ fn source_fragment_validation_checks_symbols_and_line_links() {
     );
     fs::write(
         root.join("docs/adr/0999-source-fragments.md"),
-        r#"---
+        r"---
 id: ADR-0999
 kind: decision
 title: Source fragments
@@ -2051,7 +2051,7 @@ targets:
 # Source fragments
 
 Missing [[src/lib.rs#absent]]
-"#,
+",
     )
     .unwrap();
 
@@ -2066,7 +2066,7 @@ Missing [[src/lib.rs#absent]]
 
     fs::write(
         root.join("docs/adr/0999-source-fragments.md"),
-        r#"---
+        r"---
 id: ADR-0999
 kind: decision
 title: Source fragments
@@ -2082,7 +2082,7 @@ targets:
 
 Line [[src/lib.rs#L1]]
 Range [[src/lib.rs#L1-L1]]
-"#,
+",
     )
     .unwrap();
 
@@ -2147,7 +2147,7 @@ fn unresolved_pattern_diagnostic_uses_file_line_number() {
     );
     fs::write(
         root.join("docs/adr/0998-pattern-lines.md"),
-        r#"---
+        r"---
 id: ADR-0998
 kind: decision
 title: Pattern lines
@@ -2158,7 +2158,7 @@ targets:
 ---
 
 # Pattern lines
-"#,
+",
     )
     .unwrap();
 
@@ -2403,7 +2403,7 @@ function linkTargets(target: string): string {
   return safeDecode(target);
 }
 "#;
-    let valid_rust = r#"
+    let valid_rust = r"
 struct PreparedState {
     exact_source_lookup: std::collections::HashMap<u64, Vec<usize>>,
     legacy_source_lookup: std::collections::HashMap<u64, Vec<usize>>,
@@ -2414,7 +2414,7 @@ impl PreparedState {
         let _ = self.legacy_source_lookup.get(key);
     }
 }
-"#;
+";
     fs::write(root.join("src/editor.ts"), valid_typescript).unwrap();
     fs::write(root.join("src/lookup.rs"), valid_rust).unwrap();
 
@@ -3480,7 +3480,7 @@ fn query_fixture(root: &Path) {
     );
     fs::write(
         root.join("docs/adr/0001-test-decision.md"),
-        r#"---
+        r"---
 id: ADR-0001
 kind: decision
 title: Test decision
@@ -3490,12 +3490,12 @@ governs:
 ---
 
 # Test decision
-"#,
+",
     )
     .unwrap();
     fs::write(
         root.join("docs/guide.md"),
-        r#"---
+        r"---
 id: guide
 kind: doc
 title: Guide
@@ -3507,19 +3507,19 @@ targets:
 # Guide
 
 This cites [[ADR-0001]] and mentions [[src/lib.rs#fn:helper]].
-"#,
+",
     )
     .unwrap();
     fs::write(
         root.join("docs/orphan.md"),
-        r#"---
+        r"---
 id: orphan
 kind: doc
 title: Orphan
 ---
 
 # Orphan
-"#,
+",
     )
     .unwrap();
 

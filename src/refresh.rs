@@ -11,14 +11,14 @@ use crate::vault::Vault;
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum RefreshCause {
+pub enum RefreshCause {
     Initial,
     DocsChanged,
     SourceChanged,
 }
 
 #[derive(Debug)]
-pub(crate) struct RefreshResult {
+pub struct RefreshResult {
     vault: Vault,
     state: State,
     snapshot: String,
@@ -27,7 +27,7 @@ pub(crate) struct RefreshResult {
 }
 
 #[derive(Debug)]
-pub(crate) struct RefreshSession {
+pub struct RefreshSession {
     files: RepositoryFiles,
     config: Config,
     source_refresh_pending: bool,
@@ -171,11 +171,11 @@ impl RefreshResult {
         &self.snapshot
     }
 
-    pub(crate) fn errors(&self) -> usize {
+    pub(crate) const fn errors(&self) -> usize {
         self.errors
     }
 
-    pub(crate) fn warnings(&self) -> usize {
+    pub(crate) const fn warnings(&self) -> usize {
         self.warnings
     }
 

@@ -251,7 +251,7 @@ impl TreeSitterWalk<'_> {
                 });
                 Some(name)
             } else {
-                module_parent.clone()
+                module_parent
             };
 
         if let Some(symbol) = tree_sitter_symbol(
@@ -264,7 +264,7 @@ impl TreeSitterWalk<'_> {
             let symbol_parent = if symbol.kind == SymbolKind::Class {
                 Some(symbol.name.clone())
             } else {
-                parent.clone()
+                parent
             };
             file.symbols.push(symbol);
             let mut cursor = node.walk();
@@ -358,12 +358,11 @@ fn tree_sitter_symbol(
         (Language::Rust, "struct_item" | "enum_item") => {
             (field_text(node, contents, "name")?, SymbolKind::Class)
         }
-        (Language::TypeScript | Language::JavaScript, "function_declaration")
-        | (Language::TypeScript | Language::JavaScript, "generator_function_declaration") => {
-            (field_text(node, contents, "name")?, SymbolKind::Function)
-        }
-        (Language::TypeScript | Language::JavaScript, "method_definition")
-        | (Language::TypeScript | Language::JavaScript, "method_signature") => {
+        (
+            Language::TypeScript | Language::JavaScript,
+            "function_declaration" | "generator_function_declaration",
+        ) => (field_text(node, contents, "name")?, SymbolKind::Function),
+        (Language::TypeScript | Language::JavaScript, "method_definition" | "method_signature") => {
             (field_text(node, contents, "name")?, SymbolKind::Method)
         }
         (Language::TypeScript | Language::JavaScript, "class_declaration") => {
@@ -432,9 +431,8 @@ fn interface_signature_from_source(
     exported: bool,
     source: &str,
 ) -> InterfaceSignature {
-    let qualified_name = parent
-        .map(|parent| format!("{parent}.{name}"))
-        .unwrap_or_else(|| name.to_string());
+    let qualified_name =
+        parent.map_or_else(|| name.to_string(), |parent| format!("{parent}.{name}"));
     let visibility = exported.then(|| visibility_text(language, source));
     let (inputs, output) = match symbol_kind {
         SymbolKind::Function

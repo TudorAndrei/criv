@@ -13,26 +13,26 @@ const AGENT_SKILLS_DIR: &str = ".agents/skills";
 const CLAUDE_SKILLS_DIR: &str = ".claude/skills";
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum InstallMode {
+pub enum InstallMode {
     CreateOnly,
     Refresh,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum SkillPublication {
+pub enum SkillPublication {
     Created,
     Refreshed,
     Preserved,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) struct SkillPublicationFact {
+pub struct SkillPublicationFact {
     pub(crate) path: &'static str,
     pub(crate) publication: SkillPublication,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum ClaudePublication {
+pub enum ClaudePublication {
     Current,
     Linked,
     Replaced,
@@ -41,7 +41,7 @@ pub(crate) enum ClaudePublication {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct InstallReport {
+pub struct InstallReport {
     skills: Vec<SkillPublicationFact>,
     claude: ClaudePublication,
 }
@@ -51,12 +51,12 @@ impl InstallReport {
         &self.skills
     }
 
-    pub(crate) fn claude_publication(&self) -> ClaudePublication {
+    pub(crate) const fn claude_publication(&self) -> ClaudePublication {
         self.claude
     }
 }
 
-pub(crate) fn describe_claude_publication(publication: ClaudePublication) -> &'static str {
+pub const fn describe_claude_publication(publication: ClaudePublication) -> &'static str {
     match publication {
         ClaudePublication::Current => "skipped .claude/skills: already linked to .agents/skills",
         ClaudePublication::Linked => "linked .claude/skills to .agents/skills",
@@ -73,7 +73,7 @@ pub(crate) fn describe_claude_publication(publication: ClaudePublication) -> &'s
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum InstalledSkillStatus {
+pub enum InstalledSkillStatus {
     Missing,
     Current,
     Stale,
@@ -82,13 +82,13 @@ pub(crate) enum InstalledSkillStatus {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) struct InstalledSkillFact {
+pub struct InstalledSkillFact {
     path: &'static str,
     status: InstalledSkillStatus,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum ClaudeLayout {
+pub enum ClaudeLayout {
     Missing,
     Linked,
     Copied,
@@ -96,7 +96,7 @@ pub(crate) enum ClaudeLayout {
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct SkillInventory {
+pub struct SkillInventory {
     skills: Vec<InstalledSkillFact>,
     claude: ClaudeLayout,
 }
@@ -106,7 +106,7 @@ impl SkillInventory {
         &self.skills
     }
 
-    fn claude_layout(&self) -> ClaudeLayout {
+    const fn claude_layout(&self) -> ClaudeLayout {
         self.claude
     }
 
@@ -143,7 +143,7 @@ fn install(root: &Path, mode: InstallMode) -> Result<InstallReport> {
     install_from(&files, mode)
 }
 
-pub(crate) fn install_from(files: &RepositoryFiles, mode: InstallMode) -> Result<InstallReport> {
+pub fn install_from(files: &RepositoryFiles, mode: InstallMode) -> Result<InstallReport> {
     install_with_linker(files, mode, |scope, replace_directory| {
         scope.link_dir(
             Path::new(CLAUDE_SKILLS_DIR),
@@ -162,7 +162,7 @@ pub(crate) fn inventory(root: &Path) -> SkillInventory {
     inventory_from(&files)
 }
 
-pub(crate) fn inventory_from(files: &RepositoryFiles) -> SkillInventory {
+pub fn inventory_from(files: &RepositoryFiles) -> SkillInventory {
     let skills = SKILLS
         .iter()
         .map(|skill| InstalledSkillFact {
@@ -280,7 +280,7 @@ fn installable_claude_layout(files: &RepositoryFiles) -> Result<ClaudeLayout> {
         })
 }
 
-fn map_claude_layout(layout: LinkLayout) -> ClaudeLayout {
+const fn map_claude_layout(layout: LinkLayout) -> ClaudeLayout {
     match layout {
         LinkLayout::Missing => ClaudeLayout::Missing,
         LinkLayout::Expected => ClaudeLayout::Linked,
@@ -314,10 +314,10 @@ fn stamp_skill(contents: &str) -> String {
     let contents = unstamp_skill(&normalize_newlines(contents));
     let marker = format!("criv-template: blake3:{}", template_hash(&contents));
     let Some(rest) = contents.strip_prefix("---\n") else {
-        return contents.to_string();
+        return contents;
     };
     let Some((frontmatter, body)) = rest.split_once("---\n") else {
-        return contents.to_string();
+        return contents.clone();
     };
 
     let mut lines: Vec<String> = frontmatter.lines().map(str::to_string).collect();

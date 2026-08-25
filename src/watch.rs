@@ -26,7 +26,7 @@ enum Format {
 }
 
 #[derive(Debug, Default, UsageArgs)]
-pub(crate) struct WatchOptions {
+pub struct WatchOptions {
     #[usage(long)]
     once: bool,
     /// Select the human summary or a JSON refresh report. `--once` only.
@@ -34,7 +34,7 @@ pub(crate) struct WatchOptions {
     format: Format,
 }
 
-pub(crate) fn run(root: &Path, options: WatchOptions) -> Result<()> {
+pub fn run(root: &Path, options: WatchOptions) -> Result<()> {
     let files = RepositoryFiles::open_vault(root)?;
     let mode = if options.once {
         WatchMode::Once
@@ -179,14 +179,14 @@ enum WatchDepth {
 }
 
 impl WatchTarget {
-    fn non_recursive(path: PathBuf) -> Self {
+    const fn non_recursive(path: PathBuf) -> Self {
         Self {
             path,
             depth: WatchDepth::NonRecursive,
         }
     }
 
-    fn recursive(path: PathBuf) -> Self {
+    const fn recursive(path: PathBuf) -> Self {
         Self {
             path,
             depth: WatchDepth::Recursive,
@@ -302,7 +302,7 @@ enum WatchDecision {
     Continue,
 }
 
-fn watch_decision(docs_changed: bool, source_changed: bool) -> WatchDecision {
+const fn watch_decision(docs_changed: bool, source_changed: bool) -> WatchDecision {
     match (docs_changed, source_changed) {
         (_, true) => WatchDecision::Rebuild {
             cause: RefreshCause::SourceChanged,
@@ -358,14 +358,14 @@ struct CandidateFailure {
 }
 
 impl CandidateFailure {
-    fn candidate(error: CrivError) -> Self {
+    const fn candidate(error: CrivError) -> Self {
         Self {
             error,
             watcher_unavailable: false,
         }
     }
 
-    fn watcher(error: CrivError) -> Self {
+    const fn watcher(error: CrivError) -> Self {
         Self {
             error,
             watcher_unavailable: true,
@@ -495,14 +495,13 @@ impl LiveWatchSession {
 
     fn poll(&mut self, timeout: Duration) -> Result<WatchSignal> {
         let poll = if self.suspended {
-            match self.recovery.as_mut() {
-                Some(recovery) => recovery.adapter.poll(timeout),
-                None => {
-                    if !timeout.is_zero() {
-                        std::thread::sleep(timeout);
-                    }
-                    WatcherPoll::Idle
+            if let Some(recovery) = self.recovery.as_mut() {
+                recovery.adapter.poll(timeout)
+            } else {
+                if !timeout.is_zero() {
+                    std::thread::sleep(timeout);
                 }
+                WatcherPoll::Idle
             }
         } else {
             self.active.watcher.adapter.poll(timeout)
@@ -677,7 +676,7 @@ fn is_junction(path: &Path) -> bool {
 }
 
 #[cfg(not(windows))]
-fn is_junction(_path: &Path) -> bool {
+const fn is_junction(_path: &Path) -> bool {
     false
 }
 
@@ -724,7 +723,7 @@ enum WatchMode {
 }
 
 impl WatchMode {
-    fn label(self) -> &'static str {
+    const fn label(self) -> &'static str {
         match self {
             Self::Live => "live",
             Self::Once => "once",
@@ -777,9 +776,9 @@ impl WatchSessionLock {
             mode.label()
         );
         file.set_len(0)
-            .and_then(|_| file.rewind())
-            .and_then(|_| file.write_all(record.as_bytes()))
-            .and_then(|_| file.sync_all())
+            .and_then(|()| file.rewind())
+            .and_then(|()| file.write_all(record.as_bytes()))
+            .and_then(|()| file.sync_all())
             .map_err(|err| {
                 CrivError::new(format!(
                     "failed to publish watch lock diagnostics at {}: {err}",

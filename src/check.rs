@@ -37,7 +37,7 @@ enum Format {
 }
 
 #[derive(Debug, UsageArgs)]
-pub(crate) struct CheckOptions {
+pub struct CheckOptions {
     #[usage(long, value_enum, default = "text")]
     format: Format,
     #[usage(long)]
@@ -51,13 +51,13 @@ pub(crate) struct CheckOptions {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum Severity {
+pub enum Severity {
     Error,
     Warning,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct Diagnostic {
+pub struct Diagnostic {
     severity: Severity,
     code: &'static str,
     path: String,
@@ -86,11 +86,11 @@ struct MarkdownFixScope<'a> {
 }
 
 impl Diagnostic {
-    pub(crate) fn is_error(&self) -> bool {
+    pub(crate) const fn is_error(&self) -> bool {
         matches!(self.severity, Severity::Error)
     }
 
-    pub(crate) fn is_warning(&self) -> bool {
+    pub(crate) const fn is_warning(&self) -> bool {
         matches!(self.severity, Severity::Warning)
     }
 
@@ -114,7 +114,7 @@ impl Diagnostic {
     }
 }
 
-pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
+pub fn run(root: &Path, options: CheckOptions) -> Result<()> {
     let files = RepositoryFiles::open_vault(root)?;
     let mut diagnostics = if options.changed {
         validate_changed(&files)?
@@ -168,7 +168,7 @@ pub(crate) fn run(root: &Path, options: CheckOptions) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn validate_all_from(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
+pub fn validate_all_from(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
     validate_all_with_fix(files, false)
 }
 
@@ -485,7 +485,7 @@ fn validate(vault: &Vault) -> Vec<Diagnostic> {
     validate_vault(vault, None, &policy_plan)
 }
 
-pub(crate) fn validate_vault(
+pub fn validate_vault(
     vault: &Vault,
     previous: Option<&State>,
     policy_plan: &PolicyScanPlan,
@@ -712,7 +712,7 @@ fn validate_note_local(
             &note.rel_path,
             None,
             note.frontmatter_error_location.clone(),
-            err.to_string(),
+            err.clone(),
         ));
     }
 
@@ -896,7 +896,7 @@ fn unresolved_governs(vault: &Vault, note: &Note) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn publication_blocking_diagnostics(vault: &Vault) -> Vec<Diagnostic> {
+pub fn publication_blocking_diagnostics(vault: &Vault) -> Vec<Diagnostic> {
     let mut diagnostics = vault
         .notes
         .iter()
@@ -1160,9 +1160,8 @@ fn validate_supersession(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
         diagnostics.push(error(
             "supersession-cycle",
             decisions
-                .get(cycle.first().map(String::as_str).unwrap_or(""))
-                .map(|note| note.rel_path.as_str())
-                .unwrap_or("docs"),
+                .get(cycle.first().map_or("", String::as_str))
+                .map_or("docs", |note| note.rel_path.as_str()),
             None,
             format!("supersession chain is cyclic: {}", cycle.join(" -> ")),
         ));

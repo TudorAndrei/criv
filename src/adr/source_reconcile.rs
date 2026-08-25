@@ -19,7 +19,7 @@ const RECEIPT_PATH: &str = ".criv/source-reconcile.json";
 const COMMIT_MESSAGE: &str = "docs(adr): reconcile renamed source scopes";
 
 #[derive(Debug, UsageArgs)]
-pub(crate) struct Options {
+pub struct Options {
     #[usage(long, help = "Target branch or commit to compare with")]
     base: String,
     #[usage(
@@ -84,7 +84,7 @@ struct ScalarSpan {
     style: ScalarStyle,
 }
 
-pub(crate) fn run(root: &Path, options: Options) -> Result<()> {
+pub fn run(root: &Path, options: Options) -> Result<()> {
     let files = RepositoryFiles::open(root)?;
     if !git::is_repository(root)? {
         return Err(CrivError::new(
@@ -348,7 +348,7 @@ fn apply_plan(files: &RepositoryFiles, plan: &Plan) -> Result<()> {
     }
     let errors = crate::check::validate_all_from(files)?
         .into_iter()
-        .filter(|diagnostic| diagnostic.is_error())
+        .filter(super::super::check::Diagnostic::is_error)
         .map(|diagnostic| diagnostic.describe())
         .collect::<Vec<_>>();
     if !errors.is_empty() {
@@ -384,14 +384,14 @@ fn apply_plan(files: &RepositoryFiles, plan: &Plan) -> Result<()> {
         .write_atomic(Path::new(RECEIPT_PATH), &contents)
 }
 
-pub(crate) fn receipt_is_current(root: &Path) -> bool {
+pub fn receipt_is_current(root: &Path) -> bool {
     read_receipt(root).is_ok_and(|receipt| {
         receipt.schema == RECEIPT_SCHEMA
             && git::resolve_commit(root, "HEAD").ok().as_deref() == Some(receipt.head_sha.as_str())
     })
 }
 
-pub(crate) fn receipt_allows_transaction(root: &Path, entries: &[ChangedEntry]) -> bool {
+pub fn receipt_allows_transaction(root: &Path, entries: &[ChangedEntry]) -> bool {
     let Ok(files) = RepositoryFiles::open(root) else {
         return false;
     };
@@ -441,11 +441,7 @@ fn receipt_allows_transaction_from(files: &RepositoryFiles, entries: &[ChangedEn
         })
 }
 
-pub(crate) fn allows_history_change(
-    root: &Path,
-    changes: &ChangedSet,
-    entry: &ChangedEntry,
-) -> bool {
+pub fn allows_history_change(root: &Path, changes: &ChangedSet, entry: &ChangedEntry) -> bool {
     if entry.status != ChangeStatus::Modified || entry.previous_path.is_some() {
         return false;
     }

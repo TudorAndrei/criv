@@ -68,7 +68,7 @@ pub(crate) fn work_counts() -> WorkCounts {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct SourceGraph {
+pub struct SourceGraph {
     pub(crate) files: BTreeMap<String, SourceFile>,
     file_fingerprints: BTreeMap<String, String>,
     #[serde(skip)]
@@ -79,7 +79,7 @@ pub(crate) struct SourceGraph {
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct SourceFile {
+pub struct SourceFile {
     pub(crate) path: String,
     pub(crate) language: Language,
     pub(crate) imports: Vec<Import>,
@@ -89,13 +89,13 @@ pub(crate) struct SourceFile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct ModuleDecl {
+pub struct ModuleDecl {
     name: String,
     line: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Import {
+pub struct Import {
     pub(crate) module: String,
     pub(crate) line: usize,
     #[serde(default)]
@@ -117,7 +117,7 @@ pub(crate) struct Import {
 }
 
 impl Import {
-    fn legacy(module: String, line: usize) -> Self {
+    const fn legacy(module: String, line: usize) -> Self {
         Self {
             module,
             line,
@@ -134,13 +134,13 @@ impl Import {
 }
 
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub(crate) struct LexicalScope {
+pub struct LexicalScope {
     start_byte: usize,
     end_byte: usize,
 }
 
 #[derive(Debug, Default, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub(crate) enum DirectiveKind {
+pub enum DirectiveKind {
     Alias,
     Import,
     Require,
@@ -150,7 +150,7 @@ pub(crate) enum DirectiveKind {
 }
 
 impl DirectiveKind {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Alias => "alias",
             Self::Import | Self::Legacy => "import",
@@ -161,7 +161,7 @@ impl DirectiveKind {
 }
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub(crate) enum DirectiveFilter {
+pub enum DirectiveFilter {
     Callables(Vec<CallableFilter>),
     Functions,
     Macros,
@@ -169,13 +169,13 @@ pub(crate) enum DirectiveFilter {
 }
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub(crate) struct CallableFilter {
+pub struct CallableFilter {
     name: String,
     arity: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Symbol {
+pub struct Symbol {
     pub(crate) id: SymbolId,
     pub(crate) name: String,
     pub(crate) kind: SymbolKind,
@@ -195,19 +195,19 @@ pub(crate) struct Symbol {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
-pub(crate) struct SymbolRange {
+pub struct SymbolRange {
     pub(crate) start_line: usize,
     pub(crate) end_line: usize,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
-pub(crate) enum SymbolOwner {
+pub enum SymbolOwner {
     Module { name: String },
     Implementation { protocol: String, for_type: String },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
-pub(crate) struct SymbolId {
+pub struct SymbolId {
     pub(crate) path: String,
     name: String,
     selector: String,
@@ -224,13 +224,13 @@ impl SymbolId {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Call {
+pub struct Call {
     pub(crate) target: String,
     pub(crate) line: usize,
 }
 
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub(crate) enum RelationshipKind {
+pub enum RelationshipKind {
     Call,
     Capture,
     Delegate,
@@ -239,7 +239,7 @@ pub(crate) enum RelationshipKind {
 }
 
 impl RelationshipKind {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Call => "calls",
             Self::Capture => "captures",
@@ -251,7 +251,7 @@ impl RelationshipKind {
 }
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub(crate) struct Relationship {
+pub struct Relationship {
     pub(crate) kind: RelationshipKind,
     pub(crate) target: RelationshipTarget,
     pub(crate) line: usize,
@@ -260,14 +260,14 @@ pub(crate) struct Relationship {
 }
 
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub(crate) enum ModuleRelationshipRole {
+pub enum ModuleRelationshipRole {
     Protocol,
     ForType,
     Behaviour,
 }
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub(crate) enum RelationshipTarget {
+pub enum RelationshipTarget {
     Callable {
         module: Option<String>,
         name: String,
@@ -285,7 +285,7 @@ pub(crate) enum RelationshipTarget {
 }
 
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub(crate) enum SymbolKind {
+pub enum SymbolKind {
     Function,
     Method,
     Class,
@@ -302,7 +302,7 @@ pub(crate) enum SymbolKind {
 }
 
 impl SymbolKind {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Function => "function",
             Self::Method => "method",
@@ -322,14 +322,14 @@ impl SymbolKind {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) enum SymbolResolution {
+pub enum SymbolResolution {
     Resolved(SymbolId),
     Ambiguous(Vec<SymbolId>),
     Missing,
 }
 
 #[derive(Debug, Default, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub(crate) enum Language {
+pub enum Language {
     Rust,
     TypeScript,
     JavaScript,
@@ -341,7 +341,7 @@ pub(crate) enum Language {
 }
 
 impl Language {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Rust => "rust",
             Self::TypeScript => "typescript",
@@ -353,7 +353,7 @@ impl Language {
         }
     }
 
-    pub(crate) fn mime(self) -> Option<&'static str> {
+    pub(crate) const fn mime(self) -> Option<&'static str> {
         match self {
             Self::Elixir => Some("text/x-elixir"),
             _ => None,
@@ -362,7 +362,7 @@ impl Language {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
-pub(crate) struct InterfaceSignature {
+pub struct InterfaceSignature {
     language: Language,
     symbol_kind: SymbolKind,
     qualified_name: String,
@@ -382,13 +382,13 @@ pub(crate) struct InterfaceSignature {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
-pub(crate) struct FieldSignature {
+pub struct FieldSignature {
     name: String,
     ty: Option<String>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
-pub(crate) struct VariantSignature {
+pub struct VariantSignature {
     name: String,
     fields: Vec<FieldSignature>,
 }
@@ -462,7 +462,7 @@ impl SourceGraphBuild {
         let graph = SourceGraph::build_incremental_with_workers(
             files,
             source_files,
-            previous.map(SourceGraphBuild::graph),
+            previous.map(Self::graph),
             workers,
         )?;
         let can_reuse = previous.is_some_and(|previous| {
@@ -489,7 +489,7 @@ impl SourceGraphBuild {
         reused
     }
 
-    pub(super) fn graph(&self) -> &SourceGraph {
+    pub(super) const fn graph(&self) -> &SourceGraph {
         &self.graph
     }
 
@@ -950,8 +950,7 @@ fn process_source_files(
 fn source_worker_count(source_files: usize) -> usize {
     let useful_workers = source_files.div_ceil(MIN_FILES_PER_SOURCE_WORKER).max(1);
     thread::available_parallelism()
-        .map(usize::from)
-        .unwrap_or(1)
+        .map_or(1, usize::from)
         .min(MAX_SOURCE_WORKERS)
         .min(useful_workers)
 }
@@ -1038,8 +1037,7 @@ fn function_signature(language: Language, source: &str) -> (Vec<String>, Option<
 fn rust_function_signature(source: &str) -> (Vec<String>, Option<String>) {
     let header = source
         .split_once('{')
-        .map(|(head, _)| head)
-        .unwrap_or(source)
+        .map_or(source, |(head, _)| head)
         .trim();
     let inputs = paren_contents(header)
         .map(split_signature_list)
@@ -1077,8 +1075,7 @@ fn typescript_function_signature(source: &str) -> (Vec<String>, Option<String>) 
 fn generic_function_signature(source: &str) -> (Vec<String>, Option<String>) {
     let header = source
         .split_once('{')
-        .map(|(head, _)| head)
-        .unwrap_or(source)
+        .map_or(source, |(head, _)| head)
         .trim();
     let inputs = paren_contents(header)
         .map(split_signature_list)
@@ -1244,8 +1241,7 @@ fn fallback_module_decl(line: &str, language: Language) -> Option<String> {
         Language::Rust => "mod ",
         Language::TypeScript | Language::JavaScript => line
             .strip_prefix("export ")
-            .map(|_| "namespace ")
-            .unwrap_or("namespace "),
+            .map_or("namespace ", |_| "namespace "),
         Language::Go => "package ",
         _ => return None,
     };
@@ -1347,8 +1343,7 @@ fn expand_rust_import(prefix: &str, body: &str) -> Vec<String> {
 
     let leaf = body
         .split_once(" as ")
-        .map(|(module, _)| module)
-        .unwrap_or(body)
+        .map_or(body, |(module, _)| module)
         .trim();
     let module = join_rust_import(prefix, leaf);
     if module.is_empty() {
@@ -1597,11 +1592,11 @@ impl Language {
     pub(crate) fn from_path(path: &str) -> Self {
         match Path::new(path).extension().and_then(|ext| ext.to_str()) {
             Some("rs") => Self::Rust,
-            Some("ts") | Some("tsx") => Self::TypeScript,
-            Some("js") | Some("jsx") | Some("mjs") | Some("cjs") => Self::JavaScript,
+            Some("ts" | "tsx") => Self::TypeScript,
+            Some("js" | "jsx" | "mjs" | "cjs") => Self::JavaScript,
             Some("py") => Self::Python,
             Some("go") => Self::Go,
-            Some("ex") | Some("exs") => Self::Elixir,
+            Some("ex" | "exs") => Self::Elixir,
             _ => Self::Unknown,
         }
     }

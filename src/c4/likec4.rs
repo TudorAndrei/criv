@@ -10,7 +10,7 @@ use serde::Deserialize;
 use crate::diagnostic::{LspRange, SourceLocation};
 
 const BRIDGE_SOURCE_TEMPLATE: &str = include_str!("../../assets/likec4-bridge.mjs");
-const BRIDGE_TIMEOUT: Duration = Duration::from_secs(60);
+const BRIDGE_TIMEOUT: Duration = Duration::from_mins(1);
 const MAX_BRIDGE_OUTPUT: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
@@ -27,14 +27,14 @@ static LIKEC4_CONTRACT: LazyLock<LikeC4Contract> = LazyLock::new(|| {
 });
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LikeC4DiagnosticKind {
+pub enum LikeC4DiagnosticKind {
     Model,
     Runtime,
     Protocol,
 }
 
 impl LikeC4DiagnosticKind {
-    pub(crate) fn code(self) -> &'static str {
+    pub(crate) const fn code(self) -> &'static str {
         match self {
             Self::Model => "invalid-likec4",
             Self::Runtime => "missing-likec4-runtime",
@@ -44,7 +44,7 @@ impl LikeC4DiagnosticKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LikeC4Diagnostic {
+pub struct LikeC4Diagnostic {
     pub(crate) kind: LikeC4DiagnosticKind,
     pub(crate) path: String,
     pub(crate) line: Option<usize>,
@@ -53,7 +53,7 @@ pub(crate) struct LikeC4Diagnostic {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct LikeC4Workspace {
+pub struct LikeC4Workspace {
     pub(crate) path: String,
     pub(crate) version: Option<String>,
     pub(crate) diagnostics: Vec<LikeC4Diagnostic>,

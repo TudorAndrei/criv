@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 
-pub(crate) fn find_wiki_links_with_lines(markdown: &str) -> Vec<(usize, String, Range<usize>)> {
+pub fn find_wiki_links_with_lines(markdown: &str) -> Vec<(usize, String, Range<usize>)> {
     let mut in_code_block = false;
     let mut code_ranges = Vec::new();
 
@@ -48,7 +48,7 @@ pub(crate) fn find_wiki_links_with_lines(markdown: &str) -> Vec<(usize, String, 
     links
 }
 
-pub(crate) fn markdown_headings(markdown: &str) -> Vec<(usize, String, usize)> {
+pub fn markdown_headings(markdown: &str) -> Vec<(usize, String, usize)> {
     let mut headings = Vec::new();
     let mut active: Option<(usize, usize, String)> = None;
 
@@ -94,7 +94,7 @@ fn line_number(markdown: &str, byte_offset: usize) -> usize {
         + 1
 }
 
-fn heading_level(level: HeadingLevel) -> usize {
+const fn heading_level(level: HeadingLevel) -> usize {
     match level {
         HeadingLevel::H1 => 1,
         HeadingLevel::H2 => 2,

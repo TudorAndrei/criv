@@ -1,4 +1,12 @@
-use super::*;
+use super::{
+    Arc, BTreeMap, BTreeSet, Graph, PartitionDependencies, PartitionKey, PartitionKind,
+    PartitionMeta, PatternMatch, PendingPolicyScan, PolicyPartition, PolicyScanPlan, Result,
+    SourceIndexEntry, SourceIndexPartition, State, StatePartitions, Vault, add_node,
+    append_graph_rows, c4_artifact_input_fingerprint, changed_paths_in_scopes, graph_root,
+    note_catalog_fingerprint, note_input_fingerprint, observe_partition_meta, partition_meta,
+    pattern_match_from_structural, record_partition_rebuilt, reusable_matches,
+    sort_and_dedup_pattern_matches, source_index_input_fingerprint, source_mime, structural,
+};
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct ReverseDependencies {
@@ -415,7 +423,7 @@ fn policy_fingerprints(policy_plan: &PolicyScanPlan) -> BTreeMap<String, String>
     policy_plan
         .owners()
         .iter()
-        .flat_map(|owner| owner.policies())
+        .flat_map(super::super::policy_scan::PlannedOwner::policies)
         .filter_map(|policy| {
             Some((
                 policy.state_pattern_id()?.to_string(),

@@ -725,7 +725,7 @@ impl ConfinedFile {
     }
 
     #[cfg(not(windows))]
-    fn prepare_destination_for_replace(&self) -> Result<Option<CapPermissions>> {
+    const fn prepare_destination_for_replace(&self) -> Result<Option<CapPermissions>> {
         Ok(None)
     }
 
@@ -754,21 +754,18 @@ impl ConfinedFile {
                 ))
             })?;
         let result = (|| -> Result<()> {
-            match contents {
-                Some((contents, permissions)) => {
-                    lock_file.write_all(contents)?;
-                    lock_file.set_permissions(permissions)?;
-                    lock_file.sync_all()?;
-                    lock.parent.rename(&lock.name, &self.parent, &self.name)?;
+            if let Some((contents, permissions)) = contents {
+                lock_file.write_all(contents)?;
+                lock_file.set_permissions(permissions)?;
+                lock_file.sync_all()?;
+                lock.parent.rename(&lock.name, &self.parent, &self.name)?;
+            } else {
+                lock_file.sync_all()?;
+                drop(lock_file);
+                if self.open_regular(false)?.is_some() {
+                    self.parent.remove_file(&self.name)?;
                 }
-                None => {
-                    lock_file.sync_all()?;
-                    drop(lock_file);
-                    if self.open_regular(false)?.is_some() {
-                        self.parent.remove_file(&self.name)?;
-                    }
-                    lock.parent.remove_file(&lock.name)?;
-                }
+                lock.parent.remove_file(&lock.name)?;
             }
             sync_directory_handle(&self.parent)
         })();
@@ -877,15 +874,14 @@ fn is_junction(path: &Path, metadata: &fs::Metadata) -> bool {
 }
 
 #[cfg(not(windows))]
-fn is_junction(_path: &Path, _metadata: &fs::Metadata) -> bool {
+const fn is_junction(_path: &Path, _metadata: &fs::Metadata) -> bool {
     false
 }
 
 fn relative_link_target(destination: &Path, target: &Path) -> PathBuf {
     let depth = destination
         .parent()
-        .map(|parent| parent.components().count())
-        .unwrap_or(0);
+        .map_or(0, |parent| parent.components().count());
     let mut relative = PathBuf::new();
     for _ in 0..depth {
         relative.push("..");

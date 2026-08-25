@@ -17,14 +17,14 @@ const MARKDOWN_WALK_THREADS: usize = 4;
 const COLLECT_FLUSH_ENTRIES: usize = 1_024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct VaultPaths {
+pub struct VaultPaths {
     pub(crate) markdown: Vec<String>,
     pub(crate) c4: Vec<String>,
     pub(crate) assets: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct MarkdownPolicy<'a> {
+pub struct MarkdownPolicy<'a> {
     pub(crate) include: &'a [String],
     pub(crate) exclude: &'a [String],
     pub(crate) respect_gitignore: bool,
@@ -109,7 +109,7 @@ impl Profile {
     }
 }
 
-pub(crate) fn discover_source_candidates(root: &Path, config: &Config) -> Result<Vec<String>> {
+pub fn discover_source_candidates(root: &Path, config: &Config) -> Result<Vec<String>> {
     if !config.source_index {
         return Ok(Vec::new());
     }
@@ -143,7 +143,7 @@ pub(crate) fn discover_source_candidates(root: &Path, config: &Config) -> Result
 }
 
 #[derive(Debug)]
-pub(crate) struct SourceEventFilter {
+pub struct SourceEventFilter {
     root: PathBuf,
     enabled: bool,
     scope: Option<SourceEventScope>,
@@ -217,7 +217,7 @@ fn source_event_relevant(root: &Path, config: &Config, event: &Path) -> bool {
     SourceEventFilter::new(root, config).relevant(event)
 }
 
-pub(crate) fn discover_vault(root: &Path, docs_dir: &str) -> Result<VaultPaths> {
+pub fn discover_vault(root: &Path, docs_dir: &str) -> Result<VaultPaths> {
     let docs_relative = normalize_relative("vault.docs", docs_dir)?;
     let profile = Arc::new(Profile::Vault);
     if profile_prunes_path(profile.as_ref(), &docs_relative) {
@@ -276,7 +276,7 @@ fn vault_selection_kind(path: &Path) -> Option<SelectionKind> {
         .then_some(SelectionKind::VaultAsset)
 }
 
-pub(crate) fn discover_markdown(root: &Path, policy: MarkdownPolicy<'_>) -> Result<Vec<String>> {
+pub fn discover_markdown(root: &Path, policy: MarkdownPolicy<'_>) -> Result<Vec<String>> {
     let include = (!policy.include.is_empty())
         .then(|| GlobMatcher::new(policy.include))
         .transpose()?;
@@ -299,7 +299,7 @@ fn read_selected_text(root: &Path, path: &Path) -> Result<String> {
     read_selected_text_from(&files, &canonical_path)
 }
 
-pub(crate) fn read_selected_text_from(files: &RepositoryFiles, path: &Path) -> Result<String> {
+pub fn read_selected_text_from(files: &RepositoryFiles, path: &Path) -> Result<String> {
     let root = files.root();
     let relative = relative_utf8(root, path)?;
     files.read_string(Path::new(&relative)).map_err(|error| {
@@ -309,7 +309,7 @@ pub(crate) fn read_selected_text_from(files: &RepositoryFiles, path: &Path) -> R
     })
 }
 
-pub(crate) fn select_markdown(
+pub fn select_markdown(
     root: &Path,
     policy: MarkdownPolicy<'_>,
     candidates: &BTreeSet<String>,
@@ -534,10 +534,9 @@ impl Collector {
             if profile_prunes_path(self.profile.as_ref(), &relative) {
                 return;
             }
-            self.local.errors.push(format!(
-                "refusing to discover directory link `{}`",
-                relative
-            ));
+            self.local
+                .errors
+                .push(format!("refusing to discover directory link `{relative}`"));
             return;
         }
         if file_type.is_dir() {
@@ -863,7 +862,7 @@ fn is_junction(path: &Path) -> bool {
 }
 
 #[cfg(not(windows))]
-fn is_junction(_path: &Path) -> bool {
+const fn is_junction(_path: &Path) -> bool {
     false
 }
 

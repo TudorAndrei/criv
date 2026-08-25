@@ -237,7 +237,7 @@ impl ElixirRelationships {
     }
 }
 
-pub(super) fn is_executable_query_edge(kind: RelationshipKind) -> bool {
+pub(super) const fn is_executable_query_edge(kind: RelationshipKind) -> bool {
     matches!(kind, RelationshipKind::Call | RelationshipKind::Delegate)
 }
 
@@ -1535,8 +1535,10 @@ fn delegate_relationship(
     let target_name = arguments
         .and_then(|arguments| keyword_value(arguments, contents, "as:"))
         .and_then(|node| node_text(node, contents))
-        .map(|value| normalize_callable_name(&value))
-        .unwrap_or_else(|| source_name.to_string());
+        .map_or_else(
+            || source_name.to_string(),
+            |value| normalize_callable_name(&value),
+        );
     let module = arguments
         .and_then(|arguments| keyword_value(arguments, contents, "to:"))
         .and_then(|node| node_text(node, contents))
@@ -2116,9 +2118,7 @@ fn signature_parts(text: &str) -> Option<(String, usize, Vec<String>, Option<Str
     let (head, output) = split_top_level_operator(text, "::")
         .map(|(left, right)| (left.trim(), Some(right.trim().to_string())))
         .unwrap_or((text.trim(), None));
-    let head = split_top_level_operator(head, "when")
-        .map(|(left, _)| left.trim())
-        .unwrap_or(head);
+    let head = split_top_level_operator(head, "when").map_or(head, |(left, _)| left.trim());
     if let Some(open) = head.find('(') {
         let close = matching_close(head, open, '(', ')')?;
         let name = normalize_callable_name(head[..open].trim());

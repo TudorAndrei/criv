@@ -63,20 +63,20 @@ impl WorkCounts {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum NoteKind {
+pub enum NoteKind {
     Doc,
     Decision,
     Unknown,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct PatternRef {
+pub struct PatternRef {
     pub(crate) id: String,
     pub(crate) line: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PolicyPattern {
+pub struct PolicyPattern {
     pub(crate) id: Option<String>,
     pub(crate) line: usize,
     pub(crate) language: Option<String>,
@@ -86,7 +86,7 @@ pub(crate) struct PolicyPattern {
 }
 
 impl PolicyPattern {
-    pub(crate) fn has_inline_definition(&self) -> bool {
+    pub(crate) const fn has_inline_definition(&self) -> bool {
         self.language.is_some()
             || self.pattern.is_some()
             || self.rule.is_some()
@@ -95,7 +95,7 @@ impl PolicyPattern {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct WikiLink {
+pub struct WikiLink {
     pub(crate) raw: String,
     pub(crate) target: String,
     pub(crate) line: usize,
@@ -103,14 +103,14 @@ pub(crate) struct WikiLink {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Heading {
+pub struct Heading {
     pub(crate) level: usize,
     pub(crate) text: String,
     pub(crate) line: usize,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct Note {
+pub struct Note {
     pub(crate) path: PathBuf,
     pub(crate) rel_path: String,
     pub(crate) id: Option<String>,
@@ -145,7 +145,7 @@ impl Note {
 }
 
 #[derive(Debug)]
-pub(crate) struct Vault {
+pub struct Vault {
     files: RepositoryFiles,
     pub(crate) config: Config,
     pub(crate) notes: Vec<Note>,
@@ -162,7 +162,7 @@ pub(crate) struct Vault {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DocumentationAsset {
+pub struct DocumentationAsset {
     pub(crate) path: String,
     pub(crate) mime: String,
     pub(crate) bytes: u64,
@@ -170,7 +170,7 @@ pub(crate) struct DocumentationAsset {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ResolvedLink {
+pub enum ResolvedLink {
     Source { path: String, ambiguous: bool },
     Pattern { id: String },
     Note { id: String },
@@ -178,7 +178,7 @@ pub(crate) enum ResolvedLink {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SourceTargetResolution {
+pub enum SourceTargetResolution {
     Resolved { path: String, ambiguous: bool },
     MissingFile,
     MissingFragment { path: String },
@@ -297,7 +297,7 @@ impl Vault {
             .and_then(|index| self.notes.get(*index))
     }
 
-    pub(crate) fn repository_files(&self) -> &RepositoryFiles {
+    pub(crate) const fn repository_files(&self) -> &RepositoryFiles {
         &self.files
     }
 
@@ -324,8 +324,7 @@ impl Vault {
         let target = target.split('|').next().unwrap_or(target).trim();
         let (target_without_heading, heading) = target
             .split_once('#')
-            .map(|(base, heading)| (base, Some(heading)))
-            .unwrap_or((target, None));
+            .map_or((target, None), |(base, heading)| (base, Some(heading)));
         let note = self.resolve_note(target_without_heading.trim())?;
         let mut portable = note.filename_stem()?;
         if let Some(heading) = heading
@@ -507,7 +506,7 @@ impl Vault {
         self.source.graph()
     }
 
-    pub(crate) fn source_state(&self) -> &SourceState {
+    pub(crate) const fn source_state(&self) -> &SourceState {
         &self.source
     }
 
@@ -519,7 +518,7 @@ impl Vault {
         &self.assets
     }
 
-    pub(crate) fn patterns(&self) -> &BTreeSet<String> {
+    pub(crate) const fn patterns(&self) -> &BTreeSet<String> {
         &self.patterns
     }
 
@@ -937,18 +936,18 @@ fn normalized_link_target(target: &str) -> &str {
     target.split('|').next().unwrap_or(target).trim()
 }
 
-pub(crate) fn source_fragment_path(value: &str) -> &str {
+pub fn source_fragment_path(value: &str) -> &str {
     let value = source_target_body(value);
     value.split('#').next().unwrap_or(value)
 }
 
-pub(crate) fn source_fragment_name(value: &str) -> Option<&str> {
+pub fn source_fragment_name(value: &str) -> Option<&str> {
     let value = source_target_body(value);
     let fragment = value.split_once('#')?.1;
     (!fragment.is_empty() && !is_line_fragment(fragment)).then_some(fragment)
 }
 
-pub(crate) fn source_target_body(value: &str) -> &str {
+pub fn source_target_body(value: &str) -> &str {
     value
         .split('|')
         .next()
@@ -958,7 +957,7 @@ pub(crate) fn source_target_body(value: &str) -> &str {
         .unwrap_or_else(|| value.split('|').next().unwrap_or(value).trim())
 }
 
-pub(crate) fn is_typed_source_target(value: &str) -> bool {
+pub fn is_typed_source_target(value: &str) -> bool {
     value
         .split('|')
         .next()
@@ -992,8 +991,7 @@ fn frontmatter_line(frontmatter: &str, needle: &str) -> usize {
     frontmatter
         .lines()
         .position(|line| line.contains(needle))
-        .map(|index| index + 2)
-        .unwrap_or(2)
+        .map_or(2, |index| index + 2)
 }
 
 fn raw_pattern_line(frontmatter: &str, pattern: &RawPatternRef) -> usize {
@@ -1005,8 +1003,10 @@ fn raw_pattern_line(frontmatter: &str, pattern: &RawPatternRef) -> usize {
         .or(pattern.rule.as_deref())
         .or(pattern.language.as_deref())
         .or(pattern.message.as_deref())
-        .map(|needle| frontmatter_line(frontmatter, needle))
-        .unwrap_or_else(|| frontmatter_line(frontmatter, "patterns:"))
+        .map_or_else(
+            || frontmatter_line(frontmatter, "patterns:"),
+            |needle| frontmatter_line(frontmatter, needle),
+        )
 }
 
 #[derive(Debug, Default, Deserialize)]

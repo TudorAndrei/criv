@@ -7,7 +7,7 @@ use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone)]
-pub(crate) struct Config {
+pub struct Config {
     pub(crate) docs_dir: String,
     pub(crate) adr_dir: String,
     pub(crate) source_roots: Vec<String>,
@@ -19,7 +19,7 @@ pub(crate) struct Config {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ImportPolicy {
+pub struct ImportPolicy {
     pub(crate) id: String,
     pub(crate) scope_matcher: crate::glob::GlobMatcher,
     pub(crate) deny: Vec<String>,
@@ -90,7 +90,7 @@ impl RawConfig {
             ));
         }
         Ok(Config {
-            docs_dir: docs_dir.clone(),
+            docs_dir,
             adr_dir: vault_path("vault.adr", &self.vault.adr.unwrap_or(defaults.adr_dir))?,
             source_roots: self
                 .source

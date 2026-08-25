@@ -11,7 +11,7 @@ use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct ChangedSet {
+pub struct ChangedSet {
     pub(crate) entries: Vec<ChangedEntry>,
     pub(crate) old_ref: Option<String>,
     pub(crate) new_ref: Option<String>,
@@ -19,7 +19,7 @@ pub(crate) struct ChangedSet {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct ChangedEntry {
+pub struct ChangedEntry {
     pub(crate) status: ChangeStatus,
     pub(crate) path: String,
     pub(crate) previous_path: Option<String>,
@@ -28,7 +28,7 @@ pub(crate) struct ChangedEntry {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) enum ChangeStatus {
+pub enum ChangeStatus {
     Added,
     Modified,
     Deleted,
@@ -55,11 +55,11 @@ impl ChangedSet {
 
 /// A repository opened from an explicit vault root. Its `git2` handle remains
 /// private so callers cannot depend on backend-specific values.
-pub(crate) struct GitRepository {
+pub struct GitRepository {
     repository: git2::Repository,
 }
 
-pub(crate) struct IndexSnapshot {
+pub struct IndexSnapshot {
     git_files: RepositoryFiles,
     file: Option<IndexFileSnapshot>,
 }
@@ -99,7 +99,7 @@ impl IndexSnapshot {
     }
 }
 
-pub(crate) enum ChangedSetComparison<'a> {
+pub enum ChangedSetComparison<'a> {
     Staged,
     Trees {
         old_ref: &'a str,
@@ -501,7 +501,7 @@ fn similarity_diff_options() -> git2::DiffOptions {
 
 /// Reads a file from the tree selected by `reference` in the repository
 /// discovered from `root`.
-pub(crate) fn read_file_at_ref(root: &Path, reference: &str, path: &Path) -> Result<Vec<u8>> {
+pub fn read_file_at_ref(root: &Path, reference: &str, path: &Path) -> Result<Vec<u8>> {
     let repository = GitRepository::discover(root)?.ok_or_else(|| {
         CrivError::new(format!(
             "failed to open repository from `{}`",
@@ -513,7 +513,7 @@ pub(crate) fn read_file_at_ref(root: &Path, reference: &str, path: &Path) -> Res
 
 /// Resolves a reference to a commit ID without consulting inherited hook
 /// environment. `Repository::discover` anchors all operations at `root`.
-pub(crate) fn resolve_commit(root: &Path, reference: &str) -> Result<String> {
+pub fn resolve_commit(root: &Path, reference: &str) -> Result<String> {
     let repository = required_repository(root)?;
     repository
         .commit_at(reference)
@@ -523,23 +523,23 @@ pub(crate) fn resolve_commit(root: &Path, reference: &str) -> Result<String> {
         )))
 }
 
-pub(crate) fn is_repository(root: &Path) -> Result<bool> {
+pub fn is_repository(root: &Path) -> Result<bool> {
     Ok(GitRepository::discover(root)?.is_some())
 }
 
-pub(crate) fn changes_between(root: &Path, old: &str, new: &str) -> Result<ChangedSet> {
+pub fn changes_between(root: &Path, old: &str, new: &str) -> Result<ChangedSet> {
     changes_between_paths(root, old, new, &[])
 }
 
-pub(crate) fn staged_changes(root: &Path) -> Result<ChangedSet> {
+pub fn staged_changes(root: &Path) -> Result<ChangedSet> {
     required_repository(root)?.changed_set(ChangedSetComparison::Staged)
 }
 
-pub(crate) fn commits_between(root: &Path, old_ref: &str, new_ref: &str) -> Result<Vec<String>> {
+pub fn commits_between(root: &Path, old_ref: &str, new_ref: &str) -> Result<Vec<String>> {
     required_repository(root)?.commits_between(old_ref, new_ref)
 }
 
-pub(crate) fn changes_between_paths(
+pub fn changes_between_paths(
     root: &Path,
     old: &str,
     new: &str,
@@ -559,7 +559,7 @@ pub(crate) fn changes_between_paths(
     repository.changed_set_from_diff(diff, Some(old), Some(new))
 }
 
-pub(crate) fn worktree_changes_in(root: &Path, paths: &[&str]) -> Result<ChangedSet> {
+pub fn worktree_changes_in(root: &Path, paths: &[&str]) -> Result<ChangedSet> {
     let repository = required_repository(root)?;
     let old_tree = repository.tree_at("HEAD")?;
     let mut options = similarity_diff_options();
@@ -573,7 +573,7 @@ pub(crate) fn worktree_changes_in(root: &Path, paths: &[&str]) -> Result<Changed
     repository.changed_set_from_diff(diff, Some("HEAD"), None)
 }
 
-pub(crate) fn merge_base(root: &Path, first: &str, second: &str) -> Result<String> {
+pub fn merge_base(root: &Path, first: &str, second: &str) -> Result<String> {
     let repository = required_repository(root)?;
     let first_ref = first;
     let second_ref = second;
@@ -590,7 +590,7 @@ pub(crate) fn merge_base(root: &Path, first: &str, second: &str) -> Result<Strin
         )))
 }
 
-pub(crate) fn tree_paths(root: &Path, reference: &str, prefix: &str) -> Result<Vec<String>> {
+pub fn tree_paths(root: &Path, reference: &str, prefix: &str) -> Result<Vec<String>> {
     let repository = required_repository(root)?;
     let tree = repository.tree_at(reference)?;
     let prefix = prefix.trim_start_matches("./").trim_end_matches('/');
@@ -620,7 +620,7 @@ pub(crate) fn tree_paths(root: &Path, reference: &str, prefix: &str) -> Result<V
     Ok(paths)
 }
 
-pub(crate) fn blob(root: &Path, reference: &str, path: &str) -> Result<String> {
+pub fn blob(root: &Path, reference: &str, path: &str) -> Result<String> {
     let bytes = if reference == ":" {
         required_repository(root)?.read_file_at_index(Path::new(path))?
     } else {
@@ -633,7 +633,7 @@ pub(crate) fn blob(root: &Path, reference: &str, path: &str) -> Result<String> {
 
 /// Reads a worktree file as Git would stage it, including configured clean
 /// filters such as `core.autocrlf`, without writing the repository index.
-pub(crate) fn worktree_blob(root: &Path, path: &str) -> Result<String> {
+pub fn worktree_blob(root: &Path, path: &str) -> Result<String> {
     let repository = required_repository(root)?;
     let mut index = repository
         .repository
@@ -656,7 +656,7 @@ pub(crate) fn worktree_blob(root: &Path, path: &str) -> Result<String> {
     })
 }
 
-pub(crate) fn file_mode(root: &Path, reference: &str, path: &str) -> Result<Option<String>> {
+pub fn file_mode(root: &Path, reference: &str, path: &str) -> Result<Option<String>> {
     let repository = required_repository(root)?;
     let mode = if reference == ":" {
         repository
@@ -675,12 +675,7 @@ pub(crate) fn file_mode(root: &Path, reference: &str, path: &str) -> Result<Opti
     Ok(mode.map(|mode| format!("{mode:06o}")))
 }
 
-pub(crate) fn added_lines(
-    root: &Path,
-    old: &str,
-    new: &str,
-    path: &str,
-) -> Result<Vec<Range<usize>>> {
+pub fn added_lines(root: &Path, old: &str, new: &str, path: &str) -> Result<Vec<Range<usize>>> {
     let repository = required_repository(root)?;
     let old_tree = repository.tree_at(old)?;
     let new_tree = repository.tree_at(new)?;
@@ -701,7 +696,7 @@ pub(crate) fn added_lines(
     )
 }
 
-pub(crate) fn added_lines_between_blobs(
+pub fn added_lines_between_blobs(
     root: &Path,
     old: &str,
     old_path: &str,
@@ -776,7 +771,7 @@ fn coalesce_ranges(ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
     result
 }
 
-pub(crate) fn dirty_paths(root: &Path) -> Result<Vec<String>> {
+pub fn dirty_paths(root: &Path) -> Result<Vec<String>> {
     let repository = required_repository(root)?;
     let mut options = git2::StatusOptions::new();
     options
@@ -823,11 +818,11 @@ pub(crate) fn dirty_paths(root: &Path) -> Result<Vec<String>> {
     Ok(paths)
 }
 
-pub(crate) fn preflight_commit_identity(root: &Path) -> Result<()> {
+pub fn preflight_commit_identity(root: &Path) -> Result<()> {
     commit_signature(&required_repository(root)?).map(|_| ())
 }
 
-pub(crate) fn stage_paths(root: &Path, paths: &[String]) -> Result<()> {
+pub fn stage_paths(root: &Path, paths: &[String]) -> Result<()> {
     let repository = required_repository(root)?;
     let mut index = repository
         .repository
@@ -849,7 +844,7 @@ pub(crate) fn stage_paths(root: &Path, paths: &[String]) -> Result<()> {
         .map_err(|error| CrivError::new(format!("Git index could not be written: {error}")))
 }
 
-pub(crate) fn commit_staged(root: &Path, message: &str) -> Result<String> {
+pub fn commit_staged(root: &Path, message: &str) -> Result<String> {
     let repository = required_repository(root)?;
     let signature = commit_signature(&repository)?;
     let parent = repository
@@ -888,11 +883,11 @@ fn commit_signature(repository: &GitRepository) -> Result<git2::Signature<'stati
     })
 }
 
-pub(crate) fn ref_is_stable(root: &Path, reference: &str, expected: &str) -> Result<bool> {
+pub fn ref_is_stable(root: &Path, reference: &str, expected: &str) -> Result<bool> {
     Ok(resolve_commit(root, reference)? == expected)
 }
 
-pub(crate) fn first_parent(root: &Path, commit: &str) -> Result<Option<String>> {
+pub fn first_parent(root: &Path, commit: &str) -> Result<Option<String>> {
     let repository = required_repository(root)?;
     let commit = repository.commit_at(commit)?;
     Ok(commit.parent_id(0).ok().map(|oid| oid.to_string()))

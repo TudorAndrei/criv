@@ -17,7 +17,7 @@ use crate::{CrivError, Result};
 
 use self::reconcile_transaction::Snapshot;
 
-pub(crate) use source_reconcile::{
+pub use source_reconcile::{
     allows_history_change as source_history_change_is_allowed,
     receipt_allows_transaction as source_receipt_allows_transaction,
     receipt_is_current as source_receipt_is_current,
@@ -28,7 +28,7 @@ const RECEIPT_PATH: &str = ".criv/adr-reconcile.json";
 const RECONCILIATION_COMMIT_MESSAGE: &str = "docs(adr): reconcile provisional identifiers";
 
 #[derive(Debug, UsageArgs)]
-pub(crate) struct AdrOptions {
+pub struct AdrOptions {
     #[usage(subcommand)]
     command: AdrCommand,
 }
@@ -113,7 +113,7 @@ struct ReceiptSource {
     before_mode: String,
 }
 
-pub(crate) fn run(root: &Path, options: AdrOptions) -> Result<()> {
+pub fn run(root: &Path, options: AdrOptions) -> Result<()> {
     RepositoryFiles::open_vault(root)?;
     match options.command {
         AdrCommand::Reconcile(options) => reconcile(root, options),
@@ -122,7 +122,7 @@ pub(crate) fn run(root: &Path, options: AdrOptions) -> Result<()> {
 }
 
 /// CI calls the same read-only planner as the user-facing `--check` command.
-pub(crate) fn check_base(root: &Path, base_ref: &str) -> Result<()> {
+pub fn check_base(root: &Path, base_ref: &str) -> Result<()> {
     reconcile(
         root,
         ReconcileOptions {
@@ -134,7 +134,7 @@ pub(crate) fn check_base(root: &Path, base_ref: &str) -> Result<()> {
 
 /// Local hooks accept only the complete staged transaction produced by this
 /// command. Git may present its ADR move as either a rename or a deletion.
-pub(crate) fn receipt_allows_change(root: &Path, entry: &git::ChangedEntry) -> bool {
+pub fn receipt_allows_change(root: &Path, entry: &git::ChangedEntry) -> bool {
     let Ok(receipt) = read_receipt(root) else {
         return false;
     };
@@ -158,7 +158,7 @@ pub(crate) fn receipt_allows_change(root: &Path, entry: &git::ChangedEntry) -> b
 
 /// A receipt is relevant only to the exact commit from which reconciliation
 /// started. A later commit leaves the ignored receipt behind harmlessly.
-pub(crate) fn receipt_is_current(root: &Path) -> bool {
+pub fn receipt_is_current(root: &Path) -> bool {
     let Ok(receipt) = read_receipt(root) else {
         return false;
     };
@@ -169,7 +169,7 @@ pub(crate) fn receipt_is_current(root: &Path) -> bool {
 /// Reject partial staging even when Git has no deletion entry left to send
 /// through the per-ADR immutability gate (for example, after a source ADR is
 /// recreated at its former path).
-pub(crate) fn receipt_allows_transaction(root: &Path, entries: &[git::ChangedEntry]) -> bool {
+pub fn receipt_allows_transaction(root: &Path, entries: &[git::ChangedEntry]) -> bool {
     let Ok(receipt) = read_receipt(root) else {
         return false;
     };
@@ -182,7 +182,7 @@ pub(crate) fn receipt_allows_transaction(root: &Path, entries: &[git::ChangedEnt
 /// A reconciliation receipt may prove exactly one committed transaction after
 /// its planning HEAD. This is used for push enforcement, where the receipt is
 /// intentionally ignored and the checkout may have advanced past that commit.
-pub(crate) fn receipt_allows_commit(root: &Path, commit: &str) -> bool {
+pub fn receipt_allows_commit(root: &Path, commit: &str) -> bool {
     let Ok(receipt) = read_receipt(root) else {
         return false;
     };
@@ -201,7 +201,7 @@ pub(crate) fn receipt_allows_commit(root: &Path, commit: &str) -> bool {
 /// A combined push comparison may end at a later commit or merge. Admit only
 /// receipt paths whose exact transaction is present in the compared history
 /// and whose generated outputs have not changed since that commit.
-pub(crate) fn receipt_allows_history_change(
+pub fn receipt_allows_history_change(
     root: &Path,
     changes: &git::ChangedSet,
     entry: &git::ChangedEntry,
@@ -242,8 +242,7 @@ fn receipt_common_matches(root: &Path, receipt: &Receipt) -> bool {
         && git::ref_is_stable(root, &receipt.base_ref, &receipt.target_sha).unwrap_or(false)
         && receipt.sources.iter().all(|source| {
             git::blob(root, &receipt.head_sha, &source.path)
-                .map(|contents| hash(&contents) == source.before_hash)
-                .unwrap_or(false)
+                .is_ok_and(|contents| hash(&contents) == source.before_hash)
                 && git::file_mode(root, &receipt.head_sha, &source.path)
                     .ok()
                     .flatten()
@@ -256,8 +255,7 @@ fn receipt_tree_matches(root: &Path, receipt: &Receipt, tree: &str) -> bool {
     receipt.files.iter().all(|file| {
         let before_matches = match &file.before_hash {
             Some(before_hash) => git::blob(root, &receipt.head_sha, &file.path)
-                .map(|contents| hash(&contents) == *before_hash)
-                .unwrap_or(false),
+                .is_ok_and(|contents| hash(&contents) == *before_hash),
             None => git::blob(root, &receipt.head_sha, &file.path).is_err(),
         };
         before_matches
@@ -267,8 +265,7 @@ fn receipt_tree_matches(root: &Path, receipt: &Receipt, tree: &str) -> bool {
                 .as_deref()
                 == file.before_mode.as_deref()
             && git::blob(root, tree, &file.path)
-                .map(|contents| hash(&contents) == file.after_hash)
-                .unwrap_or(false)
+                .is_ok_and(|contents| hash(&contents) == file.after_hash)
             && git::file_mode(root, tree, &file.path)
                 .ok()
                 .flatten()
@@ -281,9 +278,7 @@ fn receipt_tree_matches(root: &Path, receipt: &Receipt, tree: &str) -> bool {
 
 fn receipt_outputs_survive(root: &Path, receipt: &Receipt, tree: &str) -> bool {
     receipt.files.iter().all(|file| {
-        git::blob(root, tree, &file.path)
-            .map(|contents| hash(&contents) == file.after_hash)
-            .unwrap_or(false)
+        git::blob(root, tree, &file.path).is_ok_and(|contents| hash(&contents) == file.after_hash)
             && git::file_mode(root, tree, &file.path)
                 .ok()
                 .flatten()
@@ -691,9 +686,15 @@ fn plausible_carried_content(first: &str, second: &str) -> bool {
     let smaller_body_chars = first
         .body
         .iter()
-        .map(|line| line.len())
+        .map(std::string::String::len)
         .sum::<usize>()
-        .min(second.body.iter().map(|line| line.len()).sum::<usize>());
+        .min(
+            second
+                .body
+                .iter()
+                .map(std::string::String::len)
+                .sum::<usize>(),
+        );
     shared_chars >= 80 && shared_chars.saturating_mul(2) >= smaller_body_chars
 }
 
@@ -964,7 +965,7 @@ fn apply_plan(files: &RepositoryFiles, plan: &ReconcilePlan) -> Result<()> {
     }
     let errors = crate::check::validate_all_from(files)?
         .into_iter()
-        .filter(|diagnostic| diagnostic.is_error())
+        .filter(super::check::Diagnostic::is_error)
         .collect::<Vec<_>>();
     if !errors.is_empty() {
         return Err(CrivError::new(format!(
@@ -1017,8 +1018,7 @@ fn materialized_receipt(root: &Path) -> Result<Receipt> {
         || git::resolve_commit(root, "HEAD")? != receipt.head_sha
         || receipt.sources.iter().any(|source| {
             git::blob(root, &receipt.head_sha, &source.path)
-                .map(|contents| hash(&contents) != source.before_hash)
-                .unwrap_or(true)
+                .map_or(true, |contents| hash(&contents) != source.before_hash)
                 || git::file_mode(root, &receipt.head_sha, &source.path)
                     .ok()
                     .flatten()
@@ -1028,8 +1028,7 @@ fn materialized_receipt(root: &Path) -> Result<Receipt> {
         || receipt.files.iter().any(|file| {
             let before_matches = match &file.before_hash {
                 Some(before_hash) => git::blob(root, &receipt.head_sha, &file.path)
-                    .map(|contents| hash(&contents) == *before_hash)
-                    .unwrap_or(false),
+                    .is_ok_and(|contents| hash(&contents) == *before_hash),
                 None => git::blob(root, &receipt.head_sha, &file.path).is_err(),
             };
             !before_matches
@@ -1039,11 +1038,8 @@ fn materialized_receipt(root: &Path) -> Result<Receipt> {
                     .as_deref()
                     != file.before_mode.as_deref()
                 || git::worktree_blob(root, &file.path)
-                    .map(|contents| hash(&contents) != file.after_hash)
-                    .unwrap_or(true)
-                || worktree_file_mode(root, &file.path)
-                    .map(|mode| mode != file.after_mode)
-                    .unwrap_or(true)
+                    .map_or(true, |contents| hash(&contents) != file.after_hash)
+                || worktree_file_mode(root, &file.path).map_or(true, |mode| mode != file.after_mode)
         })
         || receipt
             .deletions
@@ -1126,17 +1122,16 @@ fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<Stri
         if !files.file_exists(Path::new(&path))? {
             continue;
         }
-        let contents = match files.read_string(Path::new(&path)) {
-            Ok(contents) => contents,
-            Err(_) => {
-                let bytes = files.read(Path::new(&path))?;
-                if contains_reference(&bytes, &plan.mappings) {
-                    return Err(CrivError::new(format!(
-                        "refusing to reconcile binary or non-UTF-8 file `{path}` containing an ADR reference"
-                    )));
-                }
-                continue;
+        let contents = if let Ok(contents) = files.read_string(Path::new(&path)) {
+            contents
+        } else {
+            let bytes = files.read(Path::new(&path))?;
+            if contains_reference(&bytes, &plan.mappings) {
+                return Err(CrivError::new(format!(
+                    "refusing to reconcile binary or non-UTF-8 file `{path}` containing an ADR reference"
+                )));
             }
+            continue;
         };
         let rewritten = if plan.branch_adrs.iter().any(|adr| adr.path == path) {
             // A receipt can have already moved this branch-owned ADR to an
@@ -1207,8 +1202,7 @@ fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<Stri
             .mappings
             .iter()
             .find(|mapping| mapping.old_path == path)
-            .map(|mapping| mapping.new_path.clone())
-            .unwrap_or_else(|| path.clone());
+            .map_or_else(|| path.clone(), |mapping| mapping.new_path.clone());
         if rewritten != contents || output_path != path {
             rewrites.insert(output_path, rewritten);
         }

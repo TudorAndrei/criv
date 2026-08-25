@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-pub(crate) fn fix_for(code: &str) -> Option<&'static str> {
+pub fn fix_for(code: &str) -> Option<&'static str> {
     let fix = match code {
         "adr-dir-non-decision" => {
             "Set `kind: decision` in the frontmatter, or move the file out of the ADR directory."
@@ -73,7 +73,7 @@ pub(crate) fn fix_for(code: &str) -> Option<&'static str> {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) struct ByteSpan {
+pub struct ByteSpan {
     start: usize,
     end: usize,
 }
@@ -92,19 +92,19 @@ impl ByteSpan {
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct LspPosition {
+pub struct LspPosition {
     pub(crate) line: usize,
     pub(crate) character: usize,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Eq, PartialEq, Serialize)]
-pub(crate) struct LspRange {
+pub struct LspRange {
     pub(crate) start: LspPosition,
     pub(crate) end: LspPosition,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) struct GithubLocation {
+pub struct GithubLocation {
     pub(crate) line: usize,
     pub(crate) column: Option<usize>,
     pub(crate) end_line: usize,
@@ -112,7 +112,7 @@ pub(crate) struct GithubLocation {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct SourceLocation {
+pub struct SourceLocation {
     source: Arc<str>,
     span: ByteSpan,
 }

@@ -27,10 +27,10 @@ mod projection;
 mod publication;
 mod snapshots;
 
-pub(crate) use publication::load_snapshot;
+pub use publication::load_snapshot;
 
 #[derive(Debug, Clone)]
-pub(crate) struct State {
+pub struct State {
     wire: StateDocument,
     partitions: StatePartitions,
 }
@@ -76,8 +76,8 @@ fn record_work(update: impl FnOnce(&mut WorkCounts)) {
     });
 }
 
+#[cfg(test)]
 fn record_partition_rebuilt(kind: PartitionKind) {
-    #[cfg(test)]
     record_work(|counts| {
         counts.partitions_rebuilt += 1;
         match kind {
@@ -88,9 +88,10 @@ fn record_partition_rebuilt(kind: PartitionKind) {
             PartitionKind::SourceIndex => counts.source_index_partitions_rebuilt += 1,
         }
     });
-    #[cfg(not(test))]
-    let _ = kind;
 }
+
+#[cfg(not(test))]
+const fn record_partition_rebuilt(_: PartitionKind) {}
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 enum PartitionKey {
@@ -170,7 +171,7 @@ enum PartitionKind {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct ArchitectureInterfaceHashRecord {
+pub struct ArchitectureInterfaceHashRecord {
     pub(crate) id: String,
     pub(crate) hash: String,
     pub(crate) path: String,
@@ -198,7 +199,7 @@ impl State {
 
     fn build_with_policy_plan(
         vault: &Vault,
-        previous: Option<&State>,
+        previous: Option<&Self>,
         changed_files: &[String],
         policy_plan: &PolicyScanPlan,
     ) -> Result<Self> {
@@ -302,7 +303,7 @@ impl Serialize for State {
     }
 }
 
-fn partition_meta(
+const fn partition_meta(
     key: PartitionKey,
     input_fingerprint: String,
     dependencies: PartitionDependencies,
@@ -480,7 +481,7 @@ fn write_state(vault: &Vault) -> Result<(String, State)> {
     write_state_with_policy_plan_and_check(vault, &policy_plan, || Ok(()))
 }
 
-pub(crate) fn write_state_with_policy_plan_and_check(
+pub fn write_state_with_policy_plan_and_check(
     vault: &Vault,
     policy_plan: &PolicyScanPlan,
     precommit_check: impl FnOnce() -> Result<()>,
@@ -512,7 +513,7 @@ fn write_state_incremental(
     )
 }
 
-pub(crate) fn write_state_incremental_with_policy_plan_and_check(
+pub fn write_state_incremental_with_policy_plan_and_check(
     vault: &Vault,
     previous: Option<&State>,
     changed_files: &[String],
@@ -583,9 +584,7 @@ fn changed_paths_in_scopes(paths: &[String], scopes: &[String]) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn architecture_interface_hash_records(
-    vault: &Vault,
-) -> Vec<ArchitectureInterfaceHashRecord> {
+pub fn architecture_interface_hash_records(vault: &Vault) -> Vec<ArchitectureInterfaceHashRecord> {
     let mut records = Vec::new();
     collect_likec4_interface_hashes(vault, &mut records);
     records
@@ -705,7 +704,7 @@ fn graph_root(graph: &Graph) -> String {
         .map(|node| node.hash.as_str())
         .chain(graph.edges.iter().map(|edge| edge.hash.as_str()))
         .collect::<Vec<_>>();
-    hashes.sort();
+    hashes.sort_unstable();
     stable_hash(&hashes.join("\n"))
 }
 

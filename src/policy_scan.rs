@@ -9,7 +9,7 @@ use crate::structural::{self, CompiledPolicy, PolicyCompileError, PolicyScanRequ
 use crate::vault::{NoteKind, Vault};
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) enum PolicyDiagnosticKind {
+pub enum PolicyDiagnosticKind {
     MissingId,
     EmptyId,
     DuplicateId { id: String },
@@ -22,14 +22,14 @@ pub(crate) enum PolicyDiagnosticKind {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct PolicyDiagnostic {
+pub struct PolicyDiagnostic {
     pub(crate) path: String,
     pub(crate) line: usize,
     pub(crate) kind: PolicyDiagnosticKind,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct PolicyViolation {
+pub struct PolicyViolation {
     pub(crate) path: String,
     pub(crate) line: usize,
     pub(crate) adr_id: String,
@@ -38,20 +38,20 @@ pub(crate) struct PolicyViolation {
     pub(crate) location: Option<SourceLocation>,
 }
 
-pub(crate) struct PolicyScanPlan {
+pub struct PolicyScanPlan {
     diagnostics: Vec<PolicyDiagnostic>,
     owners: Vec<PlannedOwner>,
     state_definition_error: Option<String>,
 }
 
-pub(crate) struct PlannedOwner {
+pub struct PlannedOwner {
     adr_id: String,
     scopes: Vec<String>,
     paths: BTreeSet<String>,
     policies: Vec<PlannedPolicy>,
 }
 
-pub(crate) struct PlannedPolicy {
+pub struct PlannedPolicy {
     pattern_id: String,
     state: Option<PlannedStatePolicy>,
     compiled: CompiledPolicy,
@@ -75,7 +75,7 @@ enum ScanPaths<'a> {
 }
 
 impl ScanPaths<'_> {
-    fn as_set(&self) -> &BTreeSet<String> {
+    const fn as_set(&self) -> &BTreeSet<String> {
         match self {
             Self::Borrowed(paths) => paths,
             Self::Filtered(paths) => paths,
@@ -329,7 +329,7 @@ impl PlannedOwner {
         &self.scopes
     }
 
-    pub(crate) fn paths(&self) -> &BTreeSet<String> {
+    pub(crate) const fn paths(&self) -> &BTreeSet<String> {
         &self.paths
     }
 
@@ -349,7 +349,7 @@ impl PlannedPolicy {
             .map(|state| state.input_fingerprint.as_str())
     }
 
-    pub(crate) fn compiled(&self) -> &CompiledPolicy {
+    pub(crate) const fn compiled(&self) -> &CompiledPolicy {
         &self.compiled
     }
 }

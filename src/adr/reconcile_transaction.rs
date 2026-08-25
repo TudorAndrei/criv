@@ -5,7 +5,7 @@ use crate::git;
 use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
-pub(crate) struct Snapshot {
+pub struct Snapshot {
     files: RepositoryFiles,
     index: git::IndexSnapshot,
     paths: Vec<CapturedPath>,

@@ -18,13 +18,13 @@ use crate::vault::{PolicyPattern, Vault};
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum PatternSource<'a> {
+pub enum PatternSource<'a> {
     Pattern(&'a str),
     Rule(&'a str),
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct StructuralMatch {
+pub struct StructuralMatch {
     pub(crate) path: String,
     pub(crate) line: usize,
     pub(crate) range: String,
@@ -38,13 +38,13 @@ enum CompiledMatcher {
     Rule(ast_grep_config::RuleCore),
 }
 
-pub(crate) struct CompiledPolicy {
+pub struct CompiledPolicy {
     language: SupportLang,
     matcher: CompiledMatcher,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) enum PolicyCompileError {
+pub enum PolicyCompileError {
     MissingDefinition,
     MissingLanguage,
     AmbiguousBody,
@@ -80,7 +80,7 @@ impl From<PolicyCompileError> for CrivError {
     }
 }
 
-pub(crate) struct PolicyScanRequest<'a> {
+pub struct PolicyScanRequest<'a> {
     pub(crate) key: usize,
     pub(crate) policy: &'a CompiledPolicy,
     pub(crate) paths: &'a BTreeSet<String>,
@@ -130,7 +130,7 @@ pub(crate) fn batch_parse_count() -> usize {
     work_counts().ast_parses
 }
 
-pub(crate) fn compile_policy(
+pub fn compile_policy(
     policy: &PolicyPattern,
 ) -> std::result::Result<CompiledPolicy, PolicyCompileError> {
     let (source, language) = policy_source(policy)?;
@@ -147,7 +147,7 @@ pub(crate) fn compile_policy(
     Ok(CompiledPolicy { language, matcher })
 }
 
-pub(crate) fn find_policies_batch(
+pub fn find_policies_batch(
     vault: &Vault,
     requests: &[PolicyScanRequest<'_>],
 ) -> Result<BTreeMap<usize, Vec<StructuralMatch>>> {

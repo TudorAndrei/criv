@@ -17,14 +17,14 @@ enum Editor {
 }
 
 impl Editor {
-    fn command_name(self) -> &'static str {
+    const fn command_name(self) -> &'static str {
         match self {
             Self::Code => "code",
             Self::Cursor => "cursor",
         }
     }
 
-    fn alternative(self) -> &'static str {
+    const fn alternative(self) -> &'static str {
         match self {
             Self::Code => "cursor",
             Self::Cursor => "code",
@@ -33,7 +33,7 @@ impl Editor {
 }
 
 #[derive(Debug, UsageArgs)]
-pub(crate) struct InstallEditorOptions {
+pub struct InstallEditorOptions {
     /// Editor CLI to use.
     #[usage(long, value_enum)]
     editor: Editor,
@@ -42,15 +42,12 @@ pub(crate) struct InstallEditorOptions {
     dry_run: bool,
 }
 
-pub(crate) fn run(options: InstallEditorOptions) -> Result<()> {
+pub fn run(options: InstallEditorOptions) -> Result<()> {
     let vsix = bundled_vsix()?;
     let editor_cli = resolve_editor(options.editor)?;
 
     if options.dry_run {
-        println!(
-            "editor install dry run: {:?} --install-extension {:?}",
-            editor_cli, vsix
-        );
+        println!("editor install dry run: {editor_cli:?} --install-extension {vsix:?}");
         return Ok(());
     }
 
@@ -120,7 +117,7 @@ fn resolve_editor(editor: Editor) -> Result<PathBuf> {
 }
 
 #[cfg(not(windows))]
-fn editor_candidates(editor: Editor) -> [&'static str; 1] {
+const fn editor_candidates(editor: Editor) -> [&'static str; 1] {
     [editor.command_name()]
 }
 
