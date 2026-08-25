@@ -291,16 +291,16 @@ fn row_from_match<D: Doc>(
     let node = matched.get_node();
     let start = node.start_pos();
     let end = node.end_pos();
-    let line = start.line() + 1;
+    let line = start.line().saturating_add(1);
     StructuralMatch {
         path: source_file.to_string(),
         line,
         range: format!(
             "L{}:C{}-L{}:C{}",
             line,
-            start.column(node) + 1,
-            end.line() + 1,
-            end.column(node) + 1
+            start.column(node).saturating_add(1),
+            end.line().saturating_add(1),
+            end.column(node).saturating_add(1)
         ),
         text: node.text().trim().to_string(),
         captures: capture_map(matched),
