@@ -222,7 +222,9 @@ impl PublicationLock {
             .map_err(|error| {
                 CrivError::new(format!("unsafe State publication lock path: {error}"))
             })?;
-        let deadline = Instant::now() + LOCK_TIMEOUT;
+        let deadline = Instant::now()
+            .checked_add(LOCK_TIMEOUT)
+            .ok_or_else(|| CrivError::new("State publication lock timeout overflow"))?;
         loop {
             match file.try_lock() {
                 Ok(()) => return Ok(Self { _file: file }),
@@ -474,7 +476,7 @@ mod tests {
 
     impl PublicationControl for FailAt {
         fn checkpoint(&self, step: PublicationStep) -> Result<()> {
-            if (step == self.step && self.hits.replace(self.hits.get() + 1) == 0)
+            if (step == self.step && self.hits.replace(self.hits.get().saturating_add(1)) == 0)
                 || (step == PublicationStep::Rollback && self.also_fail_rollback)
             {
                 return Err(CrivError::new(format!("controlled failure at {step:?}")));
