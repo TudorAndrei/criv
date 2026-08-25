@@ -263,10 +263,9 @@ fn installed_status(files: &RepositoryFiles, skill: &SkillTemplate) -> Installed
 }
 
 fn claude_layout(files: &RepositoryFiles) -> ClaudeLayout {
-    match files.link_layout(Path::new(CLAUDE_SKILLS_DIR), Path::new(AGENT_SKILLS_DIR)) {
-        Ok(layout) => map_claude_layout(layout),
-        Err(_) => ClaudeLayout::Other,
-    }
+    files
+        .link_layout(Path::new(CLAUDE_SKILLS_DIR), Path::new(AGENT_SKILLS_DIR))
+        .map_or(ClaudeLayout::Other, map_claude_layout)
 }
 
 fn installable_claude_layout(files: &RepositoryFiles) -> Result<ClaudeLayout> {
@@ -303,7 +302,22 @@ impl SkillTemplate {
 }
 
 fn template_hash(contents: &str) -> String {
-    blake3::hash(normalize_newlines(contents).as_bytes()).to_hex()[..16].to_string()
+    blake3::hash(normalize_newlines(contents).as_bytes())
+        .to_hex()
+        .chars()
+        .take(16)
+        .collect()
+}
+
+fn metadata_children_end(lines: &[String], metadata: usize) -> usize {
+    let child_start = metadata.saturating_add(1);
+    lines.get(child_start..).map_or(lines.len(), |children| {
+        children
+            .iter()
+            .position(|line| !line.starts_with(' ') && !line.starts_with('\t'))
+            .and_then(|offset| child_start.checked_add(offset))
+            .unwrap_or(lines.len())
+    })
 }
 
 fn normalize_newlines(contents: &str) -> String {
@@ -325,16 +339,19 @@ fn stamp_skill(contents: &str) -> String {
         .iter()
         .position(|line| line.trim_start() == "metadata:")
     {
-        let insert_at = lines[index + 1..]
-            .iter()
-            .position(|line| !line.starts_with(' ') && !line.starts_with('\t'))
-            .map_or(lines.len(), |offset| index + 1 + offset);
-        let marker_line = (index + 1..insert_at)
-            .find(|&line| lines[line].trim_start().starts_with("criv-template:"));
+        let child_start = index.saturating_add(1);
+        let insert_at = metadata_children_end(&lines, index);
+        let marker_line = (child_start..insert_at).find(|&line| {
+            lines
+                .get(line)
+                .is_some_and(|line| line.trim_start().starts_with("criv-template:"))
+        });
         if let Some(marker_line) = marker_line {
-            lines[marker_line] = format!("  {marker}");
+            if let Some(line) = lines.get_mut(marker_line) {
+                *line = format!("  {marker}");
+            }
         } else {
-            lines.insert(index + 1, format!("  {marker}"));
+            lines.insert(child_start, format!("  {marker}"));
         }
     } else {
         lines.push("metadata:".to_string());
@@ -361,15 +378,20 @@ fn unstamp_skill(contents: &str) -> String {
     else {
         return contents.to_string();
     };
-    let end = lines[metadata + 1..]
-        .iter()
-        .position(|line| !line.starts_with(' ') && !line.starts_with('\t'))
-        .map_or(lines.len(), |offset| metadata + 1 + offset);
-    let marker_lines: Vec<usize> = (metadata + 1..end)
-        .filter(|&index| lines[index].trim_start().starts_with("criv-template:"))
+    let child_start = metadata.saturating_add(1);
+    let end = metadata_children_end(&lines, metadata);
+    let marker_lines: Vec<usize> = (child_start..end)
+        .filter(|&index| {
+            lines
+                .get(index)
+                .is_some_and(|line| line.trim_start().starts_with("criv-template:"))
+        })
         .collect();
-    let has_metadata_child =
-        (metadata + 1..end).any(|index| !lines[index].trim_start().starts_with("criv-template:"));
+    let has_metadata_child = (child_start..end).any(|index| {
+        lines
+            .get(index)
+            .is_some_and(|line| !line.trim_start().starts_with("criv-template:"))
+    });
     for index in marker_lines.into_iter().rev() {
         lines.remove(index);
     }
