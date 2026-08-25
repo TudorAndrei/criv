@@ -339,7 +339,7 @@ fn build_policy_partitions(
             };
             let input_fingerprint = policy
                 .state_input_fingerprint()
-                .expect("published policies have an input fingerprint")
+                .ok_or_else(|| crate::CrivError::new("published policy has no input fingerprint"))?
                 .to_string();
             let previous_partition =
                 previous.and_then(|previous| previous.policies.get(pattern_id));
@@ -352,12 +352,12 @@ fn build_policy_partitions(
             };
 
             if definition_unchanged && paths.is_empty() {
-                partitions.insert(
-                    pattern_id.to_string(),
-                    previous_partition
-                        .expect("unchanged definitions have a previous partition")
-                        .clone(),
-                );
+                let Some(previous_partition) = previous_partition else {
+                    return Err(crate::CrivError::new(
+                        "unchanged policy definition has no prior partition",
+                    ));
+                };
+                partitions.insert(pattern_id.to_string(), previous_partition.clone());
                 continue;
             }
 
@@ -393,7 +393,7 @@ fn build_policy_partitions(
         matches.extend(
             rescanned
                 .get(&key)
-                .expect("every policy scan request has a result")
+                .ok_or_else(|| crate::CrivError::new("policy scan returned no result"))?
                 .iter()
                 .map(pattern_match_from_structural),
         );
