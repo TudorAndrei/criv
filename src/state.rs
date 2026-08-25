@@ -79,13 +79,26 @@ fn record_work(update: impl FnOnce(&mut WorkCounts)) {
 #[cfg(test)]
 fn record_partition_rebuilt(kind: PartitionKind) {
     record_work(|counts| {
-        counts.partitions_rebuilt += 1;
+        counts.partitions_rebuilt = counts.partitions_rebuilt.saturating_add(1);
         match kind {
-            PartitionKind::Source => counts.source_partitions_rebuilt += 1,
-            PartitionKind::Note => counts.note_partitions_rebuilt += 1,
-            PartitionKind::C4Artifact => counts.c4_partitions_rebuilt += 1,
-            PartitionKind::Policy => counts.policy_partitions_rebuilt += 1,
-            PartitionKind::SourceIndex => counts.source_index_partitions_rebuilt += 1,
+            PartitionKind::Source => {
+                counts.source_partitions_rebuilt =
+                    counts.source_partitions_rebuilt.saturating_add(1);
+            }
+            PartitionKind::Note => {
+                counts.note_partitions_rebuilt = counts.note_partitions_rebuilt.saturating_add(1);
+            }
+            PartitionKind::C4Artifact => {
+                counts.c4_partitions_rebuilt = counts.c4_partitions_rebuilt.saturating_add(1);
+            }
+            PartitionKind::Policy => {
+                counts.policy_partitions_rebuilt =
+                    counts.policy_partitions_rebuilt.saturating_add(1);
+            }
+            PartitionKind::SourceIndex => {
+                counts.source_index_partitions_rebuilt =
+                    counts.source_index_partitions_rebuilt.saturating_add(1);
+            }
         }
     });
 }
@@ -262,7 +275,7 @@ impl State {
     fn serialize(&self) -> Result<SerializedState> {
         let _ = &self.partitions;
         #[cfg(test)]
-        record_work(|counts| counts.serializations += 1);
+        record_work(|counts| counts.serializations = counts.serializations.saturating_add(1));
 
         let json = serde_json::to_string_pretty(&self.wire)
             .map_err(|err| CrivError::new(format!("failed to serialize state: {err}")))?;
@@ -287,7 +300,13 @@ impl State {
         )?;
         #[cfg(test)]
         record_work(|counts| {
-            counts.published_bytes += serialized.published.len() * 2 + serialized.hash.len() + 1;
+            let written = serialized
+                .published
+                .len()
+                .saturating_mul(2)
+                .saturating_add(serialized.hash.len())
+                .saturating_add(1);
+            counts.published_bytes = counts.published_bytes.saturating_add(written);
         });
         Ok(serialized.hash.clone())
     }

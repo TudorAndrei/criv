@@ -139,7 +139,9 @@ pub fn compile_policy(
         PatternSource::Rule(_) => PolicyCompileError::InvalidRule(error.to_string()),
     })?;
     #[cfg(test)]
-    record_work(|counts| counts.policy_compilations += 1);
+    record_work(|counts| {
+        counts.policy_compilations = counts.policy_compilations.saturating_add(1);
+    });
     let matcher = compile(source, language).map_err(|error| match source {
         PatternSource::Pattern(_) => PolicyCompileError::InvalidPattern(error.to_string()),
         PatternSource::Rule(_) => PolicyCompileError::InvalidRule(error.to_string()),
@@ -175,7 +177,7 @@ pub fn find_policies_batch(
             source_file,
         )?);
         #[cfg(test)]
-        record_work(|counts| counts.ast_parses += 1);
+        record_work(|counts| counts.ast_parses = counts.ast_parses.saturating_add(1));
         let ast = language.ast_grep(contents.as_ref());
         let root = ast.root();
         for request in requests {
