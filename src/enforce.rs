@@ -45,7 +45,11 @@ pub struct EnforceOptions {
     remote_url: Option<String>,
 }
 
-pub fn run(root: &Path, options: EnforceOptions) -> Result<()> {
+#[expect(
+    clippy::too_many_lines,
+    reason = "enforcement assembles one stage report from related vault and policy checks"
+)]
+pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
     if options.pre_push && options.stage != Stage::Push {
         return Err(CrivError::usage(
             "--pre-push is only valid with --stage push",
@@ -75,7 +79,7 @@ pub fn run(root: &Path, options: EnforceOptions) -> Result<()> {
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();
 
-    let changed_entries = changed_entries(root, &options)?;
+    let changed_entries = changed_entries(root, options)?;
     let changed_files = if options.stage == Stage::Ci {
         None
     } else {

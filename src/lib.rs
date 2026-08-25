@@ -198,7 +198,7 @@ fn run_command(args: &[String], cwd: &std::path::Path) -> Result<()> {
         Some(Command::Check(options)) => check::run(cwd, &options),
         Some(Command::Query(options)) => query::run(cwd, options),
         Some(Command::Watch(options)) => watch::run(cwd, &options),
-        Some(Command::Enforce(options)) => enforce::run(cwd, options),
+        Some(Command::Enforce(options)) => enforce::run(cwd, &options),
     }
 }
 

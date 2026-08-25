@@ -9,6 +9,10 @@ use super::{
     source_input_fingerprint, symbol_label, symbol_node_id,
 };
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "source partition building preserves graph insertion order and dependencies together"
+)]
 pub(super) fn build_source_partition(vault: &Vault, file: &SourceFile) -> SourcePartition {
     let mut graph = Graph::default();
     let mut seen_nodes = BTreeSet::new();
@@ -233,6 +237,10 @@ const fn relationship_edge_kind(relationship: &Relationship) -> &'static str {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "note partition building keeps graph and dependency construction synchronized"
+)]
 pub(super) fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
     let mut graph = Graph::default();
     let mut seen_nodes = BTreeSet::new();
@@ -438,6 +446,10 @@ fn collect_graph_source_dependencies(graph: &Graph, dependencies: &mut Partition
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "LikeC4 model projection maintains its recursive graph conversion in one place"
+)]
 pub(super) fn add_likec4_model_to_graph(
     graph: &mut Graph,
     vault: &Vault,

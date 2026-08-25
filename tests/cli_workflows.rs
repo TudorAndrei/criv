@@ -1,3 +1,11 @@
+#![allow(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::pedantic,
+    clippy::unwrap_used
+)]
+
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -428,7 +436,7 @@ fn changed_check_promotes_renames_and_deletions_to_full_validation() {
         match operation {
             "rename" => git(root, &["mv", "docs/change-me.md", "docs/changed-name.md"]),
             "delete" => git(root, &["rm", "docs/change-me.md"]),
-            _ => unreachable!(),
+            _ => continue,
         }
 
         criv(root)
@@ -3285,7 +3293,9 @@ impl WatchProcess {
     }
 
     fn wait_until_running(&mut self) {
-        let deadline = Instant::now() + Duration::from_secs(45);
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(45))
+            .unwrap_or_else(Instant::now);
         let mut output = Vec::new();
         while Instant::now() < deadline {
             match self.lines.recv_timeout(Duration::from_millis(100)) {
@@ -3310,7 +3320,9 @@ impl WatchProcess {
             .to_hex()
             .to_string();
         let marker = format!("state updated: snapshot {snapshot},");
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(10))
+            .unwrap_or_else(Instant::now);
         let mut output = Vec::new();
         while Instant::now() < deadline {
             match self.lines.recv_timeout(Duration::from_millis(100)) {
@@ -3351,7 +3363,9 @@ fn wait_for_state(
     description: &str,
     predicate: impl Fn(&serde_json::Value) -> bool,
 ) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now()
+        .checked_add(Duration::from_secs(10))
+        .unwrap_or_else(Instant::now);
     let state_path = root.join(".criv/state.json");
     let mut latest = String::new();
     while Instant::now() < deadline {
@@ -3370,7 +3384,9 @@ fn wait_for_state(
 }
 
 fn assert_state_remains(root: &Path, expected: &str, description: &str) {
-    let deadline = Instant::now() + Duration::from_millis(800);
+    let deadline = Instant::now()
+        .checked_add(Duration::from_millis(800))
+        .unwrap_or_else(Instant::now);
     while Instant::now() < deadline {
         let actual = fs::read_to_string(root.join(".criv/state.json")).unwrap();
         assert_eq!(actual, expected, "state changed during {description}");

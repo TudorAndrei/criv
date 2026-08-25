@@ -118,6 +118,10 @@ pub(crate) fn work_counts() -> WorkCounts {
 }
 
 impl PolicyScanPlan {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "policy planning collects related vault indexes in one deterministic pass"
+    )]
     pub(crate) fn new(vault: &Vault) -> Self {
         let mut diagnostics = Vec::new();
         let mut owners = Vec::new();

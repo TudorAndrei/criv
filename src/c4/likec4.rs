@@ -90,6 +90,10 @@ pub(super) struct LikeC4Source {
     pub(super) source: Arc<str>,
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "bridge execution keeps child process lifecycle and response validation together"
+)]
 pub(super) fn load(root: &Path, docs_path: &Path, sources: &[LikeC4Source]) -> LikeC4Workspace {
     if sources.is_empty() {
         return LikeC4Workspace::default();
