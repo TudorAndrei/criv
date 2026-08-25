@@ -37,15 +37,15 @@ fn parse_source_file_fallback(path: &str, contents: &str) -> SourceFile {
         symbols: Vec::new(),
     };
     let mut current_symbol: Option<usize> = None;
-    let mut brace_depth = 0isize;
-    let mut rust_impl_depth = 0isize;
+    let mut brace_depth = 0usize;
+    let mut rust_impl_depth = 0usize;
     let mut rust_impl_target: Option<String> = None;
     let mut python_indent: Option<usize> = None;
     let mut python_class: Option<(String, usize)> = None;
     let total_lines = contents.lines().count().max(1);
 
     for (index, line) in contents.lines().enumerate() {
-        let line_no = index + 1;
+        let line_no = index.saturating_add(1);
         let trimmed = line.trim();
         if trimmed.is_empty() || is_comment(trimmed, language) {
             continue;
@@ -61,120 +61,183 @@ fn parse_source_file_fallback(path: &str, contents: &str) -> SourceFile {
         }
 
         if language == Language::Python {
-            let indent = line.len() - line.trim_start().len();
-            if python_class.as_ref().is_some_and(|(_, class_indent)| {
-                indent <= *class_indent && !trimmed.starts_with('@')
-            }) {
-                python_class = None;
-            }
-            if let Some(active_indent) = python_indent
-                && indent <= active_indent
-                && !trimmed.starts_with('@')
-            {
-                if let Some(symbol_index) = current_symbol {
-                    file.symbols[symbol_index].range.end_line = line_no.saturating_sub(1);
-                }
-                current_symbol = None;
-                python_indent = None;
-            }
+            update_python_scope(
+                &mut file,
+                line,
+                trimmed,
+                line_no,
+                &mut current_symbol,
+                &mut python_indent,
+                &mut python_class,
+            );
         }
 
-        let in_rust_impl = language == Language::Rust && rust_impl_depth > 0;
-        if let Some((name, mut kind)) = parse_symbol(trimmed, language, in_rust_impl) {
-            let parent = if language == Language::Rust && kind == SymbolKind::Method {
-                rust_impl_target.clone()
-            } else if language == Language::Python && kind == SymbolKind::Function {
-                let indent = line.len() - line.trim_start().len();
-                python_class
-                    .as_ref()
-                    .filter(|(_, class_indent)| indent > *class_indent)
-                    .map(|(class_name, _)| {
-                        kind = SymbolKind::Method;
-                        class_name.clone()
-                    })
-            } else {
-                None
-            };
-            let exported = is_exported_symbol(trimmed, language);
-            let range = SymbolRange {
-                start_line: line_no,
-                end_line: total_lines,
-            };
-            file.symbols.push(Symbol {
-                id: SymbolId {
-                    path: path.into(),
-                    name: name.clone(),
-                    selector: symbol_selector(kind, parent.as_deref(), &name),
-                },
-                interface_signature: Some(interface_signature_from_source(
-                    language,
-                    kind,
-                    &name,
-                    parent.as_deref(),
-                    exported,
-                    trimmed,
-                )),
-                name,
-                kind,
-                parent,
-                owner: None,
-                arity: None,
-                exported,
-                range,
-                clause_ranges: vec![range],
-                calls: Vec::new(),
-                relationships: Vec::new(),
-            });
-            current_symbol = Some(file.symbols.len() - 1);
-            if language == Language::Python {
-                python_indent = Some(line.len() - line.trim_start().len());
-                if kind == SymbolKind::Class {
-                    python_class = Some((
-                        file.symbols.last().expect("pushed").name.clone(),
-                        line.len() - line.trim_start().len(),
-                    ));
-                }
-            }
+        let context = FallbackSymbolContext {
+            path,
+            line,
+            trimmed,
+            line_no,
+            total_lines,
+            language,
+            in_rust_impl: rust_impl_depth > 0,
+            rust_impl_target: &rust_impl_target,
+        };
+        if let Some(symbol_index) = context.append(&mut file, &mut python_indent, &mut python_class)
+        {
+            current_symbol = Some(symbol_index);
         }
 
-        if let Some(symbol_index) = current_symbol {
+        if let Some(symbol_index) = current_symbol
+            && let Some(symbol) = file.symbols.get(symbol_index)
+        {
             let calls = parse_calls(trimmed, language)
                 .into_iter()
-                .filter(|call| call != &file.symbols[symbol_index].name)
+                .filter(|call| call != &symbol.name)
                 .map(|target| Call {
                     target,
                     line: line_no,
                 })
                 .collect::<Vec<_>>();
-            file.symbols[symbol_index].calls.extend(calls);
+            if let Some(symbol) = file.symbols.get_mut(symbol_index) {
+                symbol.calls.extend(calls);
+            }
         }
         if language != Language::Python {
             if language == Language::Rust && trimmed.starts_with("impl ") {
                 rust_impl_target = parse_rust_impl_target(trimmed);
-                rust_impl_depth += line.matches('{').count().max(1) as isize;
+                rust_impl_depth = rust_impl_depth.saturating_add(line.matches('{').count().max(1));
             } else if rust_impl_depth > 0 {
-                rust_impl_depth += line.matches('{').count() as isize;
-                rust_impl_depth -= line.matches('}').count() as isize;
-                rust_impl_depth = rust_impl_depth.max(0);
+                rust_impl_depth = rust_impl_depth.saturating_add(line.matches('{').count());
+                rust_impl_depth = rust_impl_depth.saturating_sub(line.matches('}').count());
                 if rust_impl_depth == 0 {
                     rust_impl_target = None;
                 }
             }
-            brace_depth += line.matches('{').count() as isize;
-            brace_depth -= line.matches('}').count() as isize;
-            if brace_depth <= 0 {
-                if let Some(symbol_index) = current_symbol {
-                    file.symbols[symbol_index].range.end_line = line_no;
+            brace_depth = brace_depth.saturating_add(line.matches('{').count());
+            brace_depth = brace_depth.saturating_sub(line.matches('}').count());
+            if brace_depth == 0 {
+                if let Some(symbol_index) = current_symbol
+                    && let Some(symbol) = file.symbols.get_mut(symbol_index)
+                {
+                    symbol.range.end_line = line_no;
                 }
                 current_symbol = None;
                 brace_depth = 0;
             }
         }
     }
-    if let Some(symbol_index) = current_symbol {
-        file.symbols[symbol_index].range.end_line = total_lines;
+    if let Some(symbol_index) = current_symbol
+        && let Some(symbol) = file.symbols.get_mut(symbol_index)
+    {
+        symbol.range.end_line = total_lines;
     }
     file
+}
+
+struct FallbackSymbolContext<'a> {
+    path: &'a str,
+    line: &'a str,
+    trimmed: &'a str,
+    line_no: usize,
+    total_lines: usize,
+    language: Language,
+    in_rust_impl: bool,
+    rust_impl_target: &'a Option<String>,
+}
+
+fn update_python_scope(
+    file: &mut SourceFile,
+    line: &str,
+    trimmed: &str,
+    line_no: usize,
+    current_symbol: &mut Option<usize>,
+    python_indent: &mut Option<usize>,
+    python_class: &mut Option<(String, usize)>,
+) {
+    let indent = line.len().saturating_sub(line.trim_start().len());
+    if python_class
+        .as_ref()
+        .is_some_and(|(_, class_indent)| indent <= *class_indent && !trimmed.starts_with('@'))
+    {
+        *python_class = None;
+    }
+    if let Some(active_indent) = *python_indent
+        && indent <= active_indent
+        && !trimmed.starts_with('@')
+    {
+        if let Some(symbol_index) = *current_symbol
+            && let Some(symbol) = file.symbols.get_mut(symbol_index)
+        {
+            symbol.range.end_line = line_no.saturating_sub(1);
+        }
+        *current_symbol = None;
+        *python_indent = None;
+    }
+}
+
+impl FallbackSymbolContext<'_> {
+    fn append(
+        &self,
+        file: &mut SourceFile,
+        python_indent: &mut Option<usize>,
+        python_class: &mut Option<(String, usize)>,
+    ) -> Option<usize> {
+        let (name, mut kind) = parse_symbol(self.trimmed, self.language, self.in_rust_impl)?;
+        let indent = self.line.len().saturating_sub(self.line.trim_start().len());
+        let parent = if self.language == Language::Rust && kind == SymbolKind::Method {
+            self.rust_impl_target.clone()
+        } else if self.language == Language::Python && kind == SymbolKind::Function {
+            python_class
+                .as_ref()
+                .filter(|(_, class_indent)| indent > *class_indent)
+                .map(|(class_name, _)| {
+                    kind = SymbolKind::Method;
+                    class_name.clone()
+                })
+        } else {
+            None
+        };
+        let exported = is_exported_symbol(self.trimmed, self.language);
+        let range = SymbolRange {
+            start_line: self.line_no,
+            end_line: self.total_lines,
+        };
+        file.symbols.push(Symbol {
+            id: SymbolId {
+                path: self.path.into(),
+                name: name.clone(),
+                selector: symbol_selector(kind, parent.as_deref(), &name),
+            },
+            interface_signature: Some(interface_signature_from_source(
+                self.language,
+                kind,
+                &name,
+                parent.as_deref(),
+                exported,
+                self.trimmed,
+            )),
+            name,
+            kind,
+            parent,
+            owner: None,
+            arity: None,
+            exported,
+            range,
+            clause_ranges: vec![range],
+            calls: Vec::new(),
+            relationships: Vec::new(),
+        });
+        let symbol_index = file.symbols.len().checked_sub(1)?;
+        if self.language == Language::Python {
+            *python_indent = Some(indent);
+            if kind == SymbolKind::Class
+                && let Some(symbol) = file.symbols.get(symbol_index)
+            {
+                *python_class = Some((symbol.name.clone(), indent));
+            }
+        }
+        Some(symbol_index)
+    }
 }
 
 fn parse_tree_sitter_file(path: &str, contents: &str) -> Option<SourceFile> {
@@ -237,8 +300,10 @@ impl TreeSitterWalk<'_> {
             return;
         }
         for import in tree_sitter_imports(node, self.contents, self.language) {
-            file.imports
-                .push(Import::legacy(import, node.start_position().row + 1));
+            file.imports.push(Import::legacy(
+                import,
+                node.start_position().row.saturating_add(1),
+            ));
         }
         let child_module_parent =
             if let Some(name) = tree_sitter_module(node, self.contents, self.language) {
@@ -247,7 +312,7 @@ impl TreeSitterWalk<'_> {
                     .map_or_else(|| name.clone(), |parent| format!("{parent}::{name}"));
                 file.modules.push(ModuleDecl {
                     name: name.clone(),
-                    line: node.start_position().row + 1,
+                    line: node.start_position().row.saturating_add(1),
                 });
                 Some(name)
             } else {
@@ -274,7 +339,7 @@ impl TreeSitterWalk<'_> {
                     symbol_parent.clone(),
                     child_module_parent.clone(),
                     file,
-                    depth + 1,
+                    depth.saturating_add(1),
                 );
             }
             return;
@@ -293,7 +358,7 @@ impl TreeSitterWalk<'_> {
                 impl_parent.clone(),
                 child_module_parent.clone(),
                 file,
-                depth + 1,
+                depth.saturating_add(1),
             );
         }
     }
@@ -347,7 +412,7 @@ fn tree_sitter_symbol(
     parent: Option<&str>,
 ) -> Option<Symbol> {
     let (name, kind) = match (language, node.kind()) {
-        (Language::Rust, "function_item") => (
+        (Language::Rust, "function_item") | (Language::Python, "function_definition") => (
             field_text(node, contents, "name")?,
             if parent.is_some() {
                 SymbolKind::Method
@@ -355,42 +420,26 @@ fn tree_sitter_symbol(
                 SymbolKind::Function
             },
         ),
-        (Language::Rust, "struct_item" | "enum_item") => {
-            (field_text(node, contents, "name")?, SymbolKind::Class)
-        }
+        (Language::Rust, "struct_item" | "enum_item")
+        | (Language::TypeScript | Language::JavaScript, "class_declaration")
+        | (Language::Python, "class_definition")
+        | (Language::Go, "type_spec") => (field_text(node, contents, "name")?, SymbolKind::Class),
         (
             Language::TypeScript | Language::JavaScript,
             "function_declaration" | "generator_function_declaration",
         ) => (field_text(node, contents, "name")?, SymbolKind::Function),
-        (Language::TypeScript | Language::JavaScript, "method_definition" | "method_signature") => {
+        (Language::TypeScript | Language::JavaScript, "method_definition" | "method_signature")
+        | (Language::Go, "method_declaration") => {
             (field_text(node, contents, "name")?, SymbolKind::Method)
-        }
-        (Language::TypeScript | Language::JavaScript, "class_declaration") => {
-            (field_text(node, contents, "name")?, SymbolKind::Class)
         }
         (Language::TypeScript | Language::JavaScript, "variable_declarator")
             if has_descendant_kind(node, &["arrow_function", "function_expression"]) =>
         {
             (field_text(node, contents, "name")?, SymbolKind::Function)
         }
-        (Language::Python, "function_definition") => (
-            field_text(node, contents, "name")?,
-            if parent.is_some() {
-                SymbolKind::Method
-            } else {
-                SymbolKind::Function
-            },
-        ),
-        (Language::Python, "class_definition") => {
-            (field_text(node, contents, "name")?, SymbolKind::Class)
-        }
         (Language::Go, "function_declaration") => {
             (field_text(node, contents, "name")?, SymbolKind::Function)
         }
-        (Language::Go, "method_declaration") => {
-            (field_text(node, contents, "name")?, SymbolKind::Method)
-        }
-        (Language::Go, "type_spec") => (field_text(node, contents, "name")?, SymbolKind::Class),
         _ => return None,
     };
 
@@ -400,8 +449,8 @@ fn tree_sitter_symbol(
         language, kind, &name, parent, exported, &source,
     ));
     let range = SymbolRange {
-        start_line: node.start_position().row + 1,
-        end_line: node.end_position().row + 1,
+        start_line: node.start_position().row.saturating_add(1),
+        end_line: node.end_position().row.saturating_add(1),
     };
     Some(Symbol {
         id: SymbolId {
@@ -504,7 +553,7 @@ fn collect_tree_sitter_calls(
         {
             calls.push(Call {
                 target,
-                line: node.start_position().row + 1,
+                line: node.start_position().row.saturating_add(1),
             });
         }
     }
