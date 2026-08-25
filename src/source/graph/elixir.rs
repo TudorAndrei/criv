@@ -108,7 +108,7 @@ impl ElixirRelationships {
                     relationship.line,
                     relationship.site,
                 );
-                self.unique_locations(
+                Self::unique_locations(
                     files,
                     self.modules
                         .get(&module)
@@ -129,7 +129,7 @@ impl ElixirRelationships {
                         relationship.line,
                         relationship.site,
                     );
-                    return self.unique_locations(
+                    return Self::unique_locations(
                         files,
                         self.indexed_callables(&module, name, *arity)
                             .iter()
@@ -167,13 +167,12 @@ impl ElixirRelationships {
                             .map(|callable| &callable.location),
                     );
                 }
-                self.unique_locations(files, candidates)
+                Self::unique_locations(files, candidates)
             }
         }
     }
 
     pub(super) fn target_label(
-        &self,
         files: &BTreeMap<String, SourceFile>,
         caller: &SymbolId,
         relationship: &Relationship,
@@ -218,13 +217,16 @@ impl ElixirRelationships {
         let start = module.callables.partition_point(|callable| {
             callable.name.as_str() < name || (callable.name == name && callable.arity < arity)
         });
-        let count = module.callables[start..]
-            .partition_point(|callable| callable.name == name && callable.arity == arity);
-        &module.callables[start..start + count]
+        let callables = module.callables.get(start..).unwrap_or_default();
+        let count =
+            callables.partition_point(|callable| callable.name == name && callable.arity == arity);
+        module
+            .callables
+            .get(start..start.saturating_add(count))
+            .unwrap_or_default()
     }
 
     fn unique_locations<'a>(
-        &self,
         files: &BTreeMap<String, SourceFile>,
         locations: impl IntoIterator<Item = &'a SymbolLocation>,
     ) -> Option<SymbolId> {
@@ -413,7 +415,7 @@ fn resolve_module_inner(
         &mapped,
         mapping.line,
         mapping.site.saturating_sub(1),
-        depth + 1,
+        depth.saturating_add(1),
     )
 }
 
@@ -604,10 +606,21 @@ fn collect_modules(
     }
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        collect_modules(child, contents, path, parent_module, file, depth + 1);
+        collect_modules(
+            child,
+            contents,
+            path,
+            parent_module,
+            file,
+            depth.saturating_add(1),
+        );
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "module parsing keeps one Tree-sitter traversal and its state transitions together"
+)]
 fn parse_module(
     node: Node<'_>,
     contents: &str,
@@ -750,7 +763,10 @@ fn parse_module(
         SymbolKind::Module
     };
     module_relationships.extend(body.relationships.clone());
-    file.symbols[symbol_index] = module_symbol(
+    let Some(symbol) = file.symbols.get_mut(symbol_index) else {
+        return;
+    };
+    *symbol = module_symbol(
         path,
         owner.clone(),
         display_name.clone(),
@@ -846,7 +862,7 @@ impl ModuleBodyWalk<'_> {
 
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
-            self.collect(child, file, body, depth + 1);
+            self.collect(child, file, body, depth.saturating_add(1));
         }
     }
 }
@@ -967,7 +983,7 @@ fn parse_directive(
             };
             Import {
                 module,
-                line: node.start_position().row + 1,
+                line: node.start_position().row.saturating_add(1),
                 site: node.start_byte(),
                 kind,
                 owner: Some(owner.clone()),
@@ -1090,7 +1106,7 @@ fn collect_attribute(node: Node<'_>, contents: &str, module_name: &str, body: &m
                         module,
                         role: ModuleRelationshipRole::Behaviour,
                     },
-                    line: node.start_position().row + 1,
+                    line: node.start_position().row.saturating_add(1),
                     site: node.start_byte(),
                 });
             }
@@ -1268,6 +1284,10 @@ fn collect_expression_relationships(
     collect_expression_relationships_depth(node, contents, path, module_name, relationships, 0);
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "expression traversal keeps all Elixir syntax cases in one exhaustive dispatcher"
+)]
 fn collect_expression_relationships_depth(
     node: Node<'_>,
     contents: &str,
@@ -1295,7 +1315,7 @@ fn collect_expression_relationships_depth(
                 path,
                 module_name,
                 relationships,
-                depth + 1,
+                depth.saturating_add(1),
             );
         }
         if let Some(right) = node.child_by_field_name("right") {
@@ -1308,7 +1328,7 @@ fn collect_expression_relationships_depth(
                     path,
                     module_name,
                     relationships,
-                    depth + 1,
+                    depth.saturating_add(1),
                 );
             }
         }
@@ -1326,7 +1346,7 @@ fn collect_expression_relationships_depth(
                 name: operator,
                 arity: 2,
             },
-            line: node.start_position().row + 1,
+            line: node.start_position().row.saturating_add(1),
             site: node.start_byte(),
         });
         for field in ["left", "right"] {
@@ -1337,7 +1357,7 @@ fn collect_expression_relationships_depth(
                     path,
                     module_name,
                     relationships,
-                    depth + 1,
+                    depth.saturating_add(1),
                 );
             }
         }
@@ -1355,7 +1375,7 @@ fn collect_expression_relationships_depth(
                 name: operator,
                 arity: 1,
             },
-            line: node.start_position().row + 1,
+            line: node.start_position().row.saturating_add(1),
             site: node.start_byte(),
         });
         if let Some(operand) = node
@@ -1368,7 +1388,7 @@ fn collect_expression_relationships_depth(
                 path,
                 module_name,
                 relationships,
-                depth + 1,
+                depth.saturating_add(1),
             );
         }
         return;
@@ -1387,7 +1407,7 @@ fn collect_expression_relationships_depth(
             path,
             module_name,
             relationships,
-            depth + 1,
+            depth.saturating_add(1),
         );
     }
 }
@@ -1408,7 +1428,9 @@ fn collect_call_relationship(
         return;
     }
     let arguments = direct_child_kind(node, "arguments");
-    let arity = arguments.map_or(0, named_child_count) + pipeline_arguments;
+    let arity = arguments
+        .map_or(0, named_child_count)
+        .saturating_add(pipeline_arguments);
 
     if target_text == "apply" && pipeline_arguments == 0 {
         relationships.push(apply_relationship(node, contents, path, module_name));
@@ -1423,7 +1445,7 @@ fn collect_call_relationship(
                 arity,
                 node,
             ),
-            line: node.start_position().row + 1,
+            line: node.start_position().row.saturating_add(1),
             site: node.start_byte(),
         });
     }
@@ -1518,7 +1540,7 @@ fn capture_relationship(
     Some(Relationship {
         kind: RelationshipKind::Capture,
         target,
-        line: node.start_position().row + 1,
+        line: node.start_position().row.saturating_add(1),
         site: node.start_byte(),
     })
 }
@@ -1554,7 +1576,7 @@ fn delegate_relationship(
     Relationship {
         kind: RelationshipKind::Delegate,
         target,
-        line: node.start_position().row + 1,
+        line: node.start_position().row.saturating_add(1),
         site: node.start_byte(),
     }
 }
@@ -1588,7 +1610,7 @@ fn apply_relationship(
     Relationship {
         kind: RelationshipKind::Call,
         target,
-        line: node.start_position().row + 1,
+        line: node.start_position().row.saturating_add(1),
         site: node.start_byte(),
     }
 }
@@ -1613,11 +1635,11 @@ fn static_list_arity(node: Node<'_>, contents: &str) -> Option<usize> {
         {
             return None;
         }
-        arity += if child.kind() == "keywords" {
+        arity = arity.saturating_add(if child.kind() == "keywords" {
             named_child_count(child)
         } else {
             1
-        };
+        });
     }
     Some(arity)
 }
@@ -1626,7 +1648,7 @@ fn dynamic_target(path: &str, node: Node<'_>, label: String, arity: usize) -> Re
     RelationshipTarget::Dynamic {
         id: format!(
             "{path}:{}:{}",
-            node.start_position().row + 1,
+            node.start_position().row.saturating_add(1),
             node.start_byte()
         ),
         label,
@@ -1700,6 +1722,10 @@ fn is_excluded_call_tree(target: &str) -> bool {
     )
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "callable aggregation requires one pass over each normalized clause group"
+)]
 fn emit_callables(
     path: &str,
     module_name: &str,
@@ -1770,7 +1796,13 @@ fn emit_callables(
         let inputs = clauses
             .iter()
             .enumerate()
-            .map(|(index, clause)| format!("clause {}: {}", index + 1, clause.params.join(", ")))
+            .map(|(index, clause)| {
+                format!(
+                    "clause {}: {}",
+                    index.saturating_add(1),
+                    clause.params.join(", ")
+                )
+            })
             .chain(
                 body.default_heads
                     .iter()
@@ -1808,9 +1840,12 @@ fn emit_callables(
         }
         relationships.sort();
         relationships.dedup();
-        let range = ranges[0];
-        let selector =
-            symbol_selector(kind, owner, &name, Some(arity)).expect("Elixir callable selector");
+        let Some(range) = ranges.first().copied() else {
+            continue;
+        };
+        let Some(selector) = symbol_selector(kind, owner, &name, Some(arity)) else {
+            continue;
+        };
         file.symbols.push(Symbol {
             id: SymbolId {
                 path: path.into(),
@@ -1867,8 +1902,11 @@ fn emit_callbacks(
     file: &mut SourceFile,
 ) {
     for callback in &body.callbacks {
-        let selector = symbol_selector(callback.kind, owner, &callback.name, Some(callback.arity))
-            .expect("Elixir callback selector");
+        let Some(selector) =
+            symbol_selector(callback.kind, owner, &callback.name, Some(callback.arity))
+        else {
+            continue;
+        };
         let optional = body
             .optional_callbacks
             .contains(&(callback.name.clone(), callback.arity));
@@ -1917,7 +1955,9 @@ fn module_symbol(
 ) -> Symbol {
     fields.sort();
     fields.dedup();
-    let selector = symbol_selector(kind, &owner, &name, None).expect("Elixir module selector");
+    let selector = symbol_selector(kind, &owner, &name, None).unwrap_or_else(|| {
+        SourceSelector::elixir(ElixirSelector::owner(shared_owner(&owner))).to_string()
+    });
     Symbol {
         id: SymbolId {
             path: path.into(),

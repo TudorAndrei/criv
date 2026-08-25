@@ -876,8 +876,7 @@ impl SourceGraph {
         caller: &SymbolId,
         relationship: &Relationship,
     ) -> String {
-        self.elixir_relationships
-            .target_label(&self.files, caller, relationship)
+        elixir::ElixirRelationships::target_label(&self.files, caller, relationship)
     }
 
     pub(crate) fn interface_hash(&self, query: &str) -> Option<String> {
