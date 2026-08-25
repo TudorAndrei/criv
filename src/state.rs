@@ -22,6 +22,8 @@ use crate::structural;
 use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
 
+mod partitions;
+mod projection;
 mod publication;
 mod snapshots;
 
@@ -212,7 +214,7 @@ impl State {
         if let Some(error) = policy_plan.state_definition_error() {
             return Err(CrivError::new(error));
         }
-        let partitions = StatePartitions::build(vault, previous, changed_files, policy_plan)?;
+        let partitions = partitions::build(vault, previous, changed_files, policy_plan)?;
         let mut state = Self::from_partitions(partitions);
         state.wire.asset_index = vault
             .documentation_assets()
@@ -225,7 +227,7 @@ impl State {
             })
             .collect();
         state.wire.architecture = vault.likec4_workspace.model.clone().map(|model| {
-            add_likec4_model_to_graph(&mut state.wire.graph, vault, &model);
+            projection::add_likec4_model_to_graph(&mut state.wire.graph, vault, &model);
             LikeC4ArchitectureState {
                 protocol_version: 1,
                 likec4_version: vault
@@ -450,106 +452,6 @@ impl ReverseDependencies {
 }
 
 impl StatePartitions {
-    fn build(
-        vault: &Vault,
-        previous: Option<&State>,
-        changed_files: &[String],
-        policy_plan: &PolicyScanPlan,
-    ) -> Result<Self> {
-        let previous = previous.map(|state| &state.partitions);
-        let policy_fingerprints = policy_fingerprints(policy_plan);
-        let note_catalog_fingerprint = note_catalog_fingerprint(vault);
-        let invalidation = InvalidationFacts::collect(
-            vault,
-            previous,
-            changed_files,
-            &policy_fingerprints,
-            &note_catalog_fingerprint,
-        );
-        let mut partitions = Self::default();
-
-        for file in vault.source_graph().files.values() {
-            let key = PartitionKey::Source(file.path.clone());
-            let partition = previous
-                .and_then(|previous| previous.sources.get(&file.path))
-                .filter(|_| {
-                    !invalidation.changed_source_paths.contains(&file.path)
-                        && !invalidation.affects(&key)
-                })
-                .cloned()
-                .unwrap_or_else(|| {
-                    record_partition_rebuilt(PartitionKind::Source);
-                    Arc::new(build_source_partition(vault, file))
-                });
-            partitions.sources.insert(file.path.clone(), partition);
-        }
-
-        for note in &vault.notes {
-            let key = PartitionKey::Note(note.rel_path.clone());
-            let fingerprint = note_input_fingerprint(vault, note);
-            let partition = previous
-                .and_then(|previous| previous.notes.get(&note.rel_path))
-                .filter(|partition| {
-                    partition.meta.input_fingerprint == fingerprint && !invalidation.affects(&key)
-                })
-                .cloned()
-                .unwrap_or_else(|| {
-                    record_partition_rebuilt(PartitionKind::Note);
-                    Arc::new(build_note_partition(vault, note))
-                });
-            partitions.notes.insert(note.rel_path.clone(), partition);
-        }
-
-        for artifact in &vault.c4_artifacts {
-            let key = PartitionKey::C4Artifact(artifact.rel_path.clone());
-            let fingerprint = c4_artifact_input_fingerprint(artifact);
-            let partition = previous
-                .and_then(|previous| previous.c4_artifacts.get(&artifact.rel_path))
-                .filter(|partition| {
-                    partition.meta.input_fingerprint == fingerprint && !invalidation.affects(&key)
-                })
-                .cloned()
-                .unwrap_or_else(|| {
-                    record_partition_rebuilt(PartitionKind::C4Artifact);
-                    Arc::new(build_c4_artifact_partition(artifact))
-                });
-            partitions
-                .c4_artifacts
-                .insert(artifact.rel_path.clone(), partition);
-        }
-
-        for entry in vault.source_entries() {
-            let state_entry = SourceIndexEntry {
-                mime: source_mime(&entry.path),
-                path: entry.path.clone(),
-            };
-            let fingerprint = source_index_input_fingerprint(&state_entry);
-            let partition = previous
-                .and_then(|previous| previous.source_index.get(&entry.path))
-                .filter(|partition| partition.meta.input_fingerprint == fingerprint)
-                .cloned()
-                .unwrap_or_else(|| {
-                    record_partition_rebuilt(PartitionKind::SourceIndex);
-                    Arc::new(SourceIndexPartition {
-                        meta: PartitionMeta {
-                            key: PartitionKey::SourceIndex(entry.path.clone()),
-                            input_fingerprint: fingerprint,
-                            dependencies: PartitionDependencies::default(),
-                        },
-                        entry: state_entry,
-                    })
-                });
-            partitions
-                .source_index
-                .insert(entry.path.clone(), partition);
-        }
-
-        partitions.policies = build_policy_partitions(vault, previous, changed_files, policy_plan)?;
-        partitions.reverse_dependencies = ReverseDependencies::index(&partitions);
-        partitions.note_catalog_fingerprint = note_catalog_fingerprint;
-        Ok(partitions)
-    }
-
     fn flatten(
         &self,
     ) -> (
@@ -1454,124 +1356,6 @@ impl State {
             .map(|node| (node.id.clone(), node.label.clone()))
             .collect()
     }
-}
-
-fn add_likec4_model_to_graph(graph: &mut Graph, vault: &Vault, model: &serde_json::Value) {
-    let mut seen_nodes = graph
-        .nodes
-        .iter()
-        .map(|node| node.id.clone())
-        .collect::<BTreeSet<_>>();
-    let mut seen_edges = graph
-        .edges
-        .iter()
-        .map(|edge| format!("{}\0{}\0{}", edge.from, edge.to, edge.kind))
-        .collect::<BTreeSet<_>>();
-    let workspace_id = "architecture:likec4";
-    add_node(
-        graph,
-        &mut seen_nodes,
-        Node {
-            id: workspace_id.into(),
-            hash: String::new(),
-            kind: "architecture-workspace".into(),
-            label: "LikeC4 architecture".into(),
-            path: Some(vault.likec4_workspace.path.clone()),
-        },
-    );
-
-    for element in model_array(model, "elements") {
-        let Some(id) = element.get("id").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        let element_id = likec4_element_node_id(id);
-        add_node(
-            graph,
-            &mut seen_nodes,
-            Node {
-                id: element_id.clone(),
-                hash: String::new(),
-                kind: "architecture-element".into(),
-                label: element
-                    .get("title")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or(id)
-                    .to_string(),
-                path: Some(vault.likec4_workspace.path.clone()),
-            },
-        );
-        add_edge(
-            graph,
-            &mut seen_edges,
-            workspace_id,
-            &element_id,
-            "contains",
-        );
-    }
-
-    for relationship in model_array(model, "relationships") {
-        let Some(source) = relationship_endpoint(relationship, "source") else {
-            continue;
-        };
-        let Some(target) = relationship_endpoint(relationship, "target") else {
-            continue;
-        };
-        add_edge(
-            graph,
-            &mut seen_edges,
-            &likec4_element_node_id(source),
-            &likec4_element_node_id(target),
-            "relates",
-        );
-    }
-
-    for link in model_array(model, "sourceLinks") {
-        let Some(element) = link.get("element").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        let Some(target) = link.get("target").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        let SourceTargetResolution::Resolved { path, .. } = vault.resolve_source_target(target)
-        else {
-            continue;
-        };
-        let element_id = likec4_element_node_id(element);
-        add_edge(
-            graph,
-            &mut seen_edges,
-            &element_id,
-            &code_node_id(&path),
-            "references",
-        );
-        if let Some((target, interface_hash)) = interface_anchor_hash(vault, target, &path) {
-            let interface_id = likec4_interface_node_id(element);
-            add_node(
-                graph,
-                &mut seen_nodes,
-                Node {
-                    id: interface_id.clone(),
-                    hash: String::new(),
-                    kind: "architecture-interface".into(),
-                    label: interface_hash,
-                    path: Some(target),
-                },
-            );
-            add_edge(
-                graph,
-                &mut seen_edges,
-                &element_id,
-                &interface_id,
-                "tracks-interface",
-            );
-        }
-    }
-
-    graph.nodes.sort_by(|left, right| left.id.cmp(&right.id));
-    graph.edges.sort_by(|left, right| {
-        (&left.from, &left.to, &left.kind).cmp(&(&right.from, &right.to, &right.kind))
-    });
-    graph.root = graph_root(graph);
 }
 
 fn collect_likec4_interface_hashes(
