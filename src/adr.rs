@@ -117,7 +117,7 @@ pub fn run(root: &Path, options: AdrOptions) -> Result<()> {
     RepositoryFiles::open_vault(root)?;
     match options.command {
         AdrCommand::Reconcile(options) => reconcile(root, options),
-        AdrCommand::ReconcileSources(options) => source_reconcile::run(root, options),
+        AdrCommand::ReconcileSources(options) => source_reconcile::run(root, &options),
     }
 }
 
