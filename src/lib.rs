@@ -194,7 +194,7 @@ fn run_command(args: &[String], cwd: &std::path::Path) -> Result<()> {
         }
         Some(Command::Init(options)) => init::run(cwd, &options),
         Some(Command::InstallEditor(options)) => install::install_editor(&options),
-        Some(Command::Adr(options)) => adr::run(cwd, options),
+        Some(Command::Adr(options)) => adr::run(cwd, &options),
         Some(Command::Check(options)) => check::run(cwd, &options),
         Some(Command::Query(options)) => query::run(cwd, options),
         Some(Command::Watch(options)) => watch::run(cwd, &options),

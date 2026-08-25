@@ -113,11 +113,11 @@ struct ReceiptSource {
     before_mode: String,
 }
 
-pub fn run(root: &Path, options: AdrOptions) -> Result<()> {
+pub fn run(root: &Path, options: &AdrOptions) -> Result<()> {
     RepositoryFiles::open_vault(root)?;
-    match options.command {
+    match &options.command {
         AdrCommand::Reconcile(options) => reconcile(root, options),
-        AdrCommand::ReconcileSources(options) => source_reconcile::run(root, &options),
+        AdrCommand::ReconcileSources(options) => source_reconcile::run(root, options),
     }
 }
 
@@ -125,7 +125,7 @@ pub fn run(root: &Path, options: AdrOptions) -> Result<()> {
 pub fn check_base(root: &Path, base_ref: &str) -> Result<()> {
     reconcile(
         root,
-        ReconcileOptions {
+        &ReconcileOptions {
             base: base_ref.to_owned(),
             check: true,
         },
@@ -317,7 +317,7 @@ fn receipt_paths_match(receipt: &Receipt, entries: &[git::ChangedEntry]) -> bool
     actual == expected
 }
 
-fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
+fn reconcile(root: &Path, options: &ReconcileOptions) -> Result<()> {
     let files = RepositoryFiles::open(root)?;
     if !git::is_repository(root)? {
         return Err(CrivError::new(
@@ -406,6 +406,10 @@ fn reconcile(root: &Path, options: ReconcileOptions) -> Result<()> {
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the reconciliation plan validates one complete Git and vault snapshot"
+)]
 fn build_plan_from(
     files: &RepositoryFiles,
     base_ref: &str,
@@ -1124,6 +1128,10 @@ fn superseded_paths(mappings: &[Mapping]) -> Vec<&str> {
         .collect()
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "candidate rewriting keeps file safety checks with their rewrite decisions"
+)]
 fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<String, String>> {
     let changed_paths = git::changes_between(root, &plan.merge_base, "HEAD")?
         .entries
@@ -1146,9 +1154,7 @@ fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<Stri
         if !files.file_exists(Path::new(&path))? {
             continue;
         }
-        let contents = if let Ok(contents) = files.read_string(Path::new(&path)) {
-            contents
-        } else {
+        let Ok(contents) = files.read_string(Path::new(&path)) else {
             let bytes = files.read(Path::new(&path))?;
             if contains_reference(&bytes, &plan.mappings) {
                 return Err(CrivError::new(format!(
