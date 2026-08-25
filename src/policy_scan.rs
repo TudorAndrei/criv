@@ -279,16 +279,17 @@ impl PolicyScanPlan {
         let scan_paths = self
             .owners
             .iter()
-            .map(|owner| match changed_files {
-                None => ScanPaths::Borrowed(&owner.paths),
-                Some(changed) => ScanPaths::Filtered(
-                    owner
-                        .paths
-                        .iter()
-                        .filter(|path| changed.contains(*path))
-                        .cloned()
-                        .collect(),
-                ),
+            .map(|owner| {
+                changed_files.map_or(ScanPaths::Borrowed(&owner.paths), |changed| {
+                    ScanPaths::Filtered(
+                        owner
+                            .paths
+                            .iter()
+                            .filter(|path| changed.contains(*path))
+                            .cloned()
+                            .collect(),
+                    )
+                })
             })
             .collect::<Vec<_>>();
 
@@ -301,7 +302,9 @@ impl PolicyScanPlan {
                 requests.push(PolicyScanRequest {
                     key,
                     policy: &policy.compiled,
-                    paths: scan_paths[owner_index].as_set(),
+                    paths: scan_paths
+                        .get(owner_index)
+                        .map_or(&owner.paths, ScanPaths::as_set),
                 });
             }
         }
