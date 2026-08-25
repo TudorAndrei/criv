@@ -1747,7 +1747,8 @@ roots = ["src"]
             .location
             .as_ref()
             .expect("parsed wiki-link has an exact location")
-            .lsp_range();
+            .lsp_range()
+            .expect("the validated source location has an LSP range");
         assert_eq!((exact.start.line, exact.start.character), (8, 4));
         assert_eq!((exact.end.line, exact.end.character), (8, 18));
     }

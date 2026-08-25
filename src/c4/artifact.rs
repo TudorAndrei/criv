@@ -160,7 +160,8 @@ mod tests {
                 .location
                 .as_ref()
                 .expect("the non-empty source line has an exact location")
-                .lsp_range();
+                .lsp_range()
+                .expect("the validated source location has an LSP range");
             assert_eq!((exact.start.line, exact.start.character), (0, 0));
             assert_eq!(exact.end.line, 0);
             assert!(exact.end.character > 0);

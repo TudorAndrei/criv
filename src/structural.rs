@@ -373,7 +373,7 @@ mod tests {
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].line, 1);
         assert_eq!(matches[0].range, "L1:C1-L3:C2");
-        let exact = matches[0].location.as_ref().unwrap().lsp_range();
+        let exact = matches[0].location.as_ref().unwrap().lsp_range().unwrap();
         assert_eq!((exact.start.line, exact.start.character), (0, 0));
         assert_eq!((exact.end.line, exact.end.character), (2, 1));
         assert_eq!(

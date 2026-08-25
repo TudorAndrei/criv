@@ -108,7 +108,7 @@ impl Diagnostic {
             path: &self.path,
             line: self.line,
             message: &self.message,
-            range: self.location.as_ref().map(SourceLocation::lsp_range),
+            range: self.location.as_ref().and_then(SourceLocation::lsp_range),
             fix: fix_for(self.code),
         }
     }
@@ -1266,8 +1266,11 @@ fn github_annotation(diag: &Diagnostic) -> String {
         Severity::Error => "error",
         Severity::Warning => "warning",
     };
-    let location = if let Some(location) = &diag.location {
-        let location = location.github_location();
+    let location = if let Some(location) = diag
+        .location
+        .as_ref()
+        .and_then(SourceLocation::github_location)
+    {
         match (location.column, location.end_column) {
             (Some(column), Some(end_column)) => format!(
                 ",line={},col={column},endLine={},endColumn={end_column}",
@@ -1318,7 +1321,7 @@ fn error_with_location(
     location: Option<SourceLocation>,
     message: impl Into<String>,
 ) -> Diagnostic {
-    let line = location.as_ref().map(SourceLocation::line).or(line);
+    let line = location.as_ref().and_then(SourceLocation::line).or(line);
     Diagnostic {
         severity: Severity::Error,
         code,
@@ -1345,7 +1348,7 @@ fn warning_with_location(
     location: Option<SourceLocation>,
     message: impl Into<String>,
 ) -> Diagnostic {
-    let line = location.as_ref().map(SourceLocation::line).or(line);
+    let line = location.as_ref().and_then(SourceLocation::line).or(line);
     Diagnostic {
         severity: Severity::Warning,
         code,

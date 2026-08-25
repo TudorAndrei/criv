@@ -144,65 +144,63 @@ impl SourceLocation {
         Self::new(source, start..end)
     }
 
-    pub(crate) fn line(&self) -> usize {
-        self.lsp_range().start.line + 1
+    pub(crate) fn line(&self) -> Option<usize> {
+        self.lsp_range()?.start.line.checked_add(1)
     }
 
-    pub(crate) fn lsp_range(&self) -> LspRange {
-        LspRange {
-            start: byte_to_lsp_position(&self.source, self.span.start)
-                .expect("validated byte-span start"),
-            end: byte_to_lsp_position(&self.source, self.span.end)
-                .expect("validated byte-span end"),
-        }
+    pub(crate) fn lsp_range(&self) -> Option<LspRange> {
+        Some(LspRange {
+            start: byte_to_lsp_position(&self.source, self.span.start)?,
+            end: byte_to_lsp_position(&self.source, self.span.end)?,
+        })
     }
 
-    pub(crate) fn github_location(&self) -> GithubLocation {
-        let start = byte_to_character_position(&self.source, self.span.start)
-            .expect("validated byte-span start");
+    pub(crate) fn github_location(&self) -> Option<GithubLocation> {
+        let start = byte_to_character_position(&self.source, self.span.start)?;
         let end = if self.span.start == self.span.end {
             start
         } else {
-            inclusive_end_position(&self.source, self.span.end)
+            inclusive_end_position(&self.source, self.span.end)?
         };
         let same_line = start.line == end.line;
-        GithubLocation {
-            line: start.line + 1,
-            column: same_line.then_some(start.character + 1),
-            end_line: end.line + 1,
-            end_column: same_line.then_some(end.character + 1),
-        }
+        Some(GithubLocation {
+            line: start.line.checked_add(1)?,
+            column: same_line.then(|| start.character.checked_add(1)).flatten(),
+            end_line: end.line.checked_add(1)?,
+            end_column: same_line.then(|| end.character.checked_add(1)).flatten(),
+        })
     }
 }
 
-fn inclusive_end_position(source: &str, end: usize) -> LspPosition {
-    let (offset, character) = source[..end]
-        .char_indices()
-        .next_back()
-        .expect("a non-empty span has a preceding character");
-    if character == '\n' || character == '\r' && source.as_bytes().get(offset + 1) == Some(&b'\n') {
-        let line = source[..offset]
+fn inclusive_end_position(source: &str, end: usize) -> Option<LspPosition> {
+    let (offset, character) = source.get(..end)?.char_indices().next_back()?;
+    if character == '\n'
+        || character == '\r' && source.as_bytes().get(offset.checked_add(1)?) == Some(&b'\n')
+    {
+        let line = source
+            .get(..offset)?
             .bytes()
             .filter(|byte| *byte == b'\n')
             .count();
-        let (line_start, line_end) = line_bounds(source, line).expect("newline owns a line");
-        return LspPosition {
+        let (line_start, line_end) = line_bounds(source, line)?;
+        return Some(LspPosition {
             line,
-            character: source[line_start..line_end]
+            character: source
+                .get(line_start..line_end)?
                 .chars()
                 .count()
                 .saturating_sub(1),
-        };
+        });
     }
-    byte_to_character_position(source, offset).expect("char index is a character boundary")
+    byte_to_character_position(source, offset)
 }
 
 fn byte_to_lsp_position(source: &str, offset: usize) -> Option<LspPosition> {
     let position = byte_to_character_position(source, offset)?;
     let (line_start, _) = line_bounds(source, position.line)?;
-    let mut prefix = &source[line_start..offset];
+    let mut prefix = source.get(line_start..offset)?;
     if prefix.ends_with('\r') && source.as_bytes().get(offset) == Some(&b'\n') {
-        prefix = &prefix[..prefix.len() - 1];
+        prefix = prefix.strip_suffix('\r')?;
     }
     Some(LspPosition {
         line: position.line,
@@ -214,12 +212,14 @@ fn byte_to_character_position(source: &str, offset: usize) -> Option<LspPosition
     if offset > source.len() || !source.is_char_boundary(offset) {
         return None;
     }
-    let prefix = &source[..offset];
+    let prefix = source.get(..offset)?;
     let line = prefix.bytes().filter(|byte| *byte == b'\n').count();
-    let line_start = prefix.rfind('\n').map_or(0, |newline| newline + 1);
-    let mut line_prefix = &source[line_start..offset];
+    let line_start = prefix
+        .rfind('\n')
+        .map_or(Some(0), |newline| newline.checked_add(1))?;
+    let mut line_prefix = source.get(line_start..offset)?;
     if line_prefix.ends_with('\r') && source.as_bytes().get(offset) == Some(&b'\n') {
-        line_prefix = &line_prefix[..line_prefix.len() - 1];
+        line_prefix = line_prefix.strip_suffix('\r')?;
     }
     Some(LspPosition {
         line,
@@ -229,13 +229,13 @@ fn byte_to_character_position(source: &str, offset: usize) -> Option<LspPosition
 
 fn lsp_position_to_byte(source: &str, position: LspPosition) -> Option<usize> {
     let (line_start, line_end) = line_bounds(source, position.line)?;
-    let line = &source[line_start..line_end];
+    let line = source.get(line_start..line_end)?;
     let mut utf16 = 0;
     for (offset, character) in line.char_indices() {
         if utf16 == position.character {
-            return Some(line_start + offset);
+            return line_start.checked_add(offset);
         }
-        utf16 += character.len_utf16();
+        utf16 = utf16.checked_add(character.len_utf16())?;
         if utf16 > position.character {
             return None;
         }
@@ -247,29 +247,30 @@ fn one_based_character_position_to_byte(source: &str, line: usize, column: usize
     if line == 0 || column == 0 {
         return None;
     }
-    let (line_start, line_end) = line_bounds(source, line - 1)?;
-    let line = &source[line_start..line_end];
-    let character = column - 1;
+    let (line_start, line_end) = line_bounds(source, line.checked_sub(1)?)?;
+    let line = source.get(line_start..line_end)?;
+    let character = column.checked_sub(1)?;
     line.char_indices()
         .map(|(offset, _)| offset)
         .chain(std::iter::once(line.len()))
         .nth(character)
-        .map(|offset| line_start + offset)
+        .and_then(|offset| line_start.checked_add(offset))
 }
 
 fn line_bounds(source: &str, target_line: usize) -> Option<(usize, usize)> {
     let mut line = 0;
     let mut start = 0;
     while line < target_line {
-        let newline = source[start..].find('\n')?;
-        start += newline + 1;
-        line += 1;
+        let newline = source.get(start..)?.find('\n')?;
+        start = start.checked_add(newline)?.checked_add(1)?;
+        line = line.checked_add(1)?;
     }
-    let mut end = source[start..]
+    let mut end = source
+        .get(start..)?
         .find('\n')
-        .map_or(source.len(), |newline| start + newline);
-    if end > start && source.as_bytes()[end - 1] == b'\r' {
-        end -= 1;
+        .map_or(Some(source.len()), |newline| start.checked_add(newline))?;
+    if end > start && source.as_bytes().get(end.checked_sub(1)?) == Some(&b'\r') {
+        end = end.checked_sub(1)?;
     }
     Some((start, end))
 }
@@ -293,7 +294,7 @@ mod tests {
         let same_line = SourceLocation::new(source.clone(), 1..6).unwrap();
         assert_eq!(
             same_line.lsp_range(),
-            LspRange {
+            Some(LspRange {
                 start: LspPosition {
                     line: 0,
                     character: 1,
@@ -302,22 +303,22 @@ mod tests {
                     line: 0,
                     character: 4,
                 },
-            }
+            })
         );
         assert_eq!(
             same_line.github_location(),
-            GithubLocation {
+            Some(GithubLocation {
                 line: 1,
                 column: Some(2),
                 end_line: 1,
                 end_column: Some(3),
-            }
+            })
         );
 
         let multiline = SourceLocation::new(source.clone(), 5..11).unwrap();
         assert_eq!(
             multiline.lsp_range(),
-            LspRange {
+            Some(LspRange {
                 start: LspPosition {
                     line: 0,
                     character: 3,
@@ -326,28 +327,29 @@ mod tests {
                     line: 1,
                     character: 2,
                 },
-            }
+            })
         );
         assert_eq!(
             multiline.github_location(),
-            GithubLocation {
+            Some(GithubLocation {
                 line: 1,
                 column: None,
                 end_line: 2,
                 end_column: None,
-            }
+            })
         );
 
         let empty = SourceLocation::new(source, 8..8).unwrap();
-        assert_eq!(empty.lsp_range().start, empty.lsp_range().end);
+        let range = empty.lsp_range().unwrap();
+        assert_eq!(range.start, range.end);
         assert_eq!(
             empty.github_location(),
-            GithubLocation {
+            Some(GithubLocation {
                 line: 2,
                 column: Some(1),
                 end_line: 2,
                 end_column: Some(1),
-            }
+            })
         );
     }
 
@@ -365,7 +367,7 @@ mod tests {
             },
         };
         let location = SourceLocation::from_lsp_range(source.clone(), lsp).unwrap();
-        assert_eq!(location.lsp_range(), lsp);
+        assert_eq!(location.lsp_range(), Some(lsp));
         assert!(
             SourceLocation::from_lsp_range(
                 source.clone(),
@@ -388,7 +390,7 @@ mod tests {
             SourceLocation::from_one_based_character_range(source, 1, 2, 1, 4).unwrap();
         assert_eq!(
             character_range.lsp_range(),
-            LspRange {
+            Some(LspRange {
                 start: LspPosition {
                     line: 0,
                     character: 1,
@@ -397,7 +399,7 @@ mod tests {
                     line: 0,
                     character: 4,
                 },
-            }
+            })
         );
     }
 }

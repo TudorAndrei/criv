@@ -434,7 +434,12 @@ mod tests {
 
         assert_eq!(structural::work_counts().policy_compilations, 2);
         assert_eq!(structural::work_counts().ast_parses, 2);
-        let exact = violations[0].location.as_ref().unwrap().lsp_range();
+        let exact = violations[0]
+            .location
+            .as_ref()
+            .unwrap()
+            .lsp_range()
+            .unwrap();
         assert_eq!((exact.start.line, exact.start.character), (0, 0));
         assert_eq!((exact.end.line, exact.end.character), (0, 12));
         assert_eq!(

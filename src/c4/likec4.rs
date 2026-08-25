@@ -291,7 +291,7 @@ pub(super) fn load(root: &Path, docs_path: &Path, sources: &[LikeC4Source]) -> L
                 path,
                 line: location
                     .as_ref()
-                    .map(SourceLocation::line)
+                    .and_then(SourceLocation::line)
                     .or_else(|| diagnostic.line.map(|line| line + 1)),
                 message: diagnostic.message,
                 location,
