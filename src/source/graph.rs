@@ -449,7 +449,9 @@ impl SourceGraphBuild {
         workers: usize,
     ) -> Result<Self> {
         let files = RepositoryFiles::open(root)?;
-        assert!(workers > 0, "Source test worker count must be positive");
+        if workers == 0 {
+            return Err(CrivError::new("Source test worker count must be positive"));
+        }
         Self::build_incremental_with_workers_inner(&files, source_files, previous, workers)
     }
 
@@ -520,7 +522,7 @@ fn load_cached(root: &Path) -> Option<SourceGraphBuild> {
 
 pub(super) fn load_cached_from(files: &RepositoryFiles) -> Option<SourceGraphBuild> {
     #[cfg(test)]
-    record_work(|counts| counts.cache_loads += 1);
+    record_work(|counts| counts.cache_loads = counts.cache_loads.saturating_add(1));
 
     let contents = files
         .read_optional_string(Path::new(".criv/source-graph.json"))
@@ -540,7 +542,9 @@ fn store_cached(files: &RepositoryFiles, graph: &SourceGraph) -> Result<()> {
         graph,
     };
     #[cfg(test)]
-    record_work(|counts| counts.cache_serializations += 1);
+    record_work(|counts| {
+        counts.cache_serializations = counts.cache_serializations.saturating_add(1);
+    });
     let contents = serde_json::to_string_pretty(&cache)
         .map_err(|err| CrivError::new(format!("failed to serialize source graph cache: {err}")))?;
     let contents = format!("{contents}\n");
@@ -549,8 +553,8 @@ fn store_cached(files: &RepositoryFiles, graph: &SourceGraph) -> Result<()> {
         .write_atomic(Path::new(".criv/source-graph.json"), &contents)?;
     #[cfg(test)]
     record_work(|counts| {
-        counts.cache_publications += 1;
-        counts.published_bytes += contents.len();
+        counts.cache_publications = counts.cache_publications.saturating_add(1);
+        counts.published_bytes = counts.published_bytes.saturating_add(contents.len());
     });
     Ok(())
 }
@@ -644,16 +648,16 @@ impl SourceGraph {
         let mut graph = Self::default();
         for processed in process_source_files(files, source_files, previous, workers)? {
             #[cfg(test)]
-            record_work(|counts| counts.source_reads += 1);
+            record_work(|counts| counts.source_reads = counts.source_reads.saturating_add(1));
             let Some(processed) = processed else {
                 continue;
             };
             if processed.reused {
                 #[cfg(test)]
-                record_work(|counts| counts.reused_files += 1);
+                record_work(|counts| counts.reused_files = counts.reused_files.saturating_add(1));
             } else {
                 #[cfg(test)]
-                record_work(|counts| counts.parsed_files += 1);
+                record_work(|counts| counts.parsed_files = counts.parsed_files.saturating_add(1));
                 graph.changed_files.push(processed.path.clone());
             }
             for symbol in &processed.parsed.symbols {
