@@ -413,7 +413,7 @@ mod tests {
             import { pathToFileURL } from 'node:url';
             const root = process.argv[1];
             const url = pathToFileURL(join(root, 'package.json'));
-            if (url.pathname !== '/tmp/criv%23percent%25/package.json') process.exit(1);
+            if (!url.pathname.endsWith('/criv%23percent%25/package.json')) process.exit(1);
         "#;
         let status = Command::new(resolve_node())
             .args([
