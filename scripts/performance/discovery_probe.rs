@@ -129,10 +129,14 @@ fn selected_bytes(root: &Path, paths: &[String]) -> Result<u64> {
 fn path_digest(domain: &str, paths: &[String]) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(PROBE_SCHEMA.as_bytes());
-    hasher.update(&(domain.len() as u64).to_le_bytes());
+    hasher.update(
+        &u64::try_from(domain.len())
+            .unwrap_or(u64::MAX)
+            .to_le_bytes(),
+    );
     hasher.update(domain.as_bytes());
     for path in paths {
-        hasher.update(&(path.len() as u64).to_le_bytes());
+        hasher.update(&u64::try_from(path.len()).unwrap_or(u64::MAX).to_le_bytes());
         hasher.update(path.as_bytes());
     }
     hasher.finalize().to_hex().to_string()
