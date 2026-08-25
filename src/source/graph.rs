@@ -972,12 +972,13 @@ fn process_source_file(
     let reused = previous
         .filter(|previous| previous.file_fingerprints.get(source_file) == Some(&fingerprint))
         .and_then(|previous| previous.files.get(source_file).cloned());
-    let (parsed, reused) = if let Some(parsed) = reused {
-        (parsed, true)
-    } else {
-        let contents = String::from_utf8_lossy(&bytes);
-        (extract::parse_source_file(source_file, &contents), false)
-    };
+    let (parsed, reused) = reused.map_or_else(
+        || {
+            let contents = String::from_utf8_lossy(&bytes);
+            (extract::parse_source_file(source_file, &contents), false)
+        },
+        |parsed| (parsed, true),
+    );
     Ok(Some(ProcessedSource {
         path: source_file.to_string(),
         fingerprint,
@@ -996,7 +997,9 @@ fn symbol_resolution(mut matches: Vec<SymbolId>) -> SymbolResolution {
     matches.dedup();
     match matches.len() {
         0 => SymbolResolution::Missing,
-        1 => SymbolResolution::Resolved(matches.pop().expect("one symbol match")),
+        1 => matches
+            .pop()
+            .map_or(SymbolResolution::Missing, SymbolResolution::Resolved),
         _ => SymbolResolution::Ambiguous(matches),
     }
 }
@@ -1183,13 +1186,19 @@ fn typescript_members(source: &str) -> Vec<FieldSignature> {
 fn paren_contents(source: &str) -> Option<&str> {
     let start = source.find('(')?;
     let end = source.rfind(')')?;
-    (end > start).then_some(&source[start + 1..end])
+    (end > start)
+        .then(|| start.checked_add(1))
+        .flatten()
+        .and_then(|body_start| source.get(body_start..end))
 }
 
 fn brace_contents(source: &str) -> Option<&str> {
     let start = source.find('{')?;
     let end = source.rfind('}')?;
-    (end > start).then_some(&source[start + 1..end])
+    (end > start)
+        .then(|| start.checked_add(1))
+        .flatten()
+        .and_then(|body_start| source.get(body_start..end))
 }
 
 fn split_signature_list(value: &str) -> Vec<String> {
@@ -1214,7 +1223,11 @@ fn node_text(node: Node<'_>, contents: &str) -> Option<String> {
 }
 
 fn first_named_child(node: Node<'_>) -> Option<Node<'_>> {
-    (0..node.named_child_count()).find_map(|index| node.named_child(index as u32))
+    (0..node.named_child_count()).find_map(|index| {
+        u32::try_from(index)
+            .ok()
+            .and_then(|index| node.named_child(index))
+    })
 }
 
 fn descendant_of_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
@@ -1333,9 +1346,18 @@ fn expand_rust_import(prefix: &str, body: &str) -> Vec<String> {
     }
 
     if let Some((open, close)) = rust_group_bounds(body) {
-        let head = body[..open].trim().trim_end_matches("::");
+        let Some(head) = body.get(..open).map(str::trim) else {
+            return Vec::new();
+        };
+        let head = head.trim_end_matches("::");
         let base = join_rust_import(prefix, head);
-        return split_top_level_commas(&body[open + 1..close])
+        let Some(body_start) = open.checked_add(1) else {
+            return Vec::new();
+        };
+        let Some(children) = body.get(body_start..close) else {
+            return Vec::new();
+        };
+        return split_top_level_commas(children)
             .into_iter()
             .flat_map(|part| expand_rust_import(&base, part))
             .collect();
@@ -1362,7 +1384,7 @@ fn rust_group_bounds(value: &str) -> Option<(usize, usize)> {
                 if depth == 0 {
                     open = Some(index);
                 }
-                depth += 1;
+                depth = depth.saturating_add(1);
             }
             '}' => {
                 depth = depth.saturating_sub(1);
@@ -1382,16 +1404,20 @@ fn split_top_level_commas(value: &str) -> Vec<&str> {
     let mut start = 0usize;
     for (index, ch) in value.char_indices() {
         match ch {
-            '{' => depth += 1,
+            '{' => depth = depth.saturating_add(1),
             '}' => depth = depth.saturating_sub(1),
             ',' if depth == 0 => {
-                rows.push(value[start..index].trim());
-                start = index + 1;
+                if let Some(row) = value.get(start..index) {
+                    rows.push(row.trim());
+                }
+                start = index.saturating_add(1);
             }
             _ => {}
         }
     }
-    rows.push(value[start..].trim());
+    if let Some(row) = value.get(start..) {
+        rows.push(row.trim());
+    }
     rows.into_iter().filter(|row| !row.is_empty()).collect()
 }
 
@@ -1414,40 +1440,34 @@ fn parse_symbol(
     in_rust_impl: bool,
 ) -> Option<(String, SymbolKind)> {
     match language {
-        Language::Rust => {
-            if let Some(name) = after_keyword(line, "fn ") {
-                Some((
+        Language::Rust => after_keyword(line, "fn ")
+            .map(|name| {
+                (
                     name,
                     if in_rust_impl {
                         SymbolKind::Method
                     } else {
                         SymbolKind::Function
                     },
-                ))
-            } else if line.starts_with("struct ") || line.starts_with("pub struct ") {
-                after_keyword(line, "struct ").map(|name| (name, SymbolKind::Class))
-            } else if line.starts_with("enum ") || line.starts_with("pub enum ") {
-                after_keyword(line, "enum ").map(|name| (name, SymbolKind::Class))
-            } else {
-                None
-            }
-        }
-        Language::TypeScript | Language::JavaScript => {
-            if let Some(name) = after_keyword(line, "function ") {
-                Some((name, SymbolKind::Function))
-            } else if let Some(name) = const_function_name(line) {
-                Some((name, SymbolKind::Function))
-            } else {
-                after_keyword(line, "class ").map(|name| (name, SymbolKind::Class))
-            }
-        }
-        Language::Python => {
-            if let Some(name) = after_keyword(line, "def ") {
-                Some((name, SymbolKind::Function))
-            } else {
-                after_keyword(line, "class ").map(|name| (name, SymbolKind::Class))
-            }
-        }
+                )
+            })
+            .or_else(|| {
+                (line.starts_with("struct ") || line.starts_with("pub struct "))
+                    .then(|| after_keyword(line, "struct ").map(|name| (name, SymbolKind::Class)))
+                    .flatten()
+            })
+            .or_else(|| {
+                (line.starts_with("enum ") || line.starts_with("pub enum "))
+                    .then(|| after_keyword(line, "enum ").map(|name| (name, SymbolKind::Class)))
+                    .flatten()
+            }),
+        Language::TypeScript | Language::JavaScript => after_keyword(line, "function ")
+            .map(|name| (name, SymbolKind::Function))
+            .or_else(|| const_function_name(line).map(|name| (name, SymbolKind::Function)))
+            .or_else(|| after_keyword(line, "class ").map(|name| (name, SymbolKind::Class))),
+        Language::Python => after_keyword(line, "def ")
+            .map(|name| (name, SymbolKind::Function))
+            .or_else(|| after_keyword(line, "class ").map(|name| (name, SymbolKind::Class))),
         Language::Go => {
             if let Some(name) = after_keyword(line, "func ") {
                 let name = if name.starts_with('(') {
@@ -1471,7 +1491,7 @@ fn parse_symbol(
 fn parse_calls(line: &str, language: Language) -> Vec<String> {
     let mut calls = Vec::new();
     let mut token = String::new();
-    let mut chars = line.chars().peekable();
+    let mut chars = line.chars();
     while let Some(ch) = chars.next() {
         if ch.is_ascii_alphanumeric() || ch == '_' {
             token.push(ch);
@@ -1510,8 +1530,8 @@ fn parse_rust_impl_target(line: &str) -> Option<String> {
 }
 
 fn after_keyword(line: &str, keyword: &str) -> Option<String> {
-    let start = line.find(keyword)? + keyword.len();
-    let rest = &line[start..];
+    let start = line.find(keyword)?.checked_add(keyword.len())?;
+    let rest = line.get(start..)?;
     identifier_before(rest, '(')
         .or_else(|| identifier_before(rest, '<'))
         .or_else(|| identifier_before(rest, '{'))
