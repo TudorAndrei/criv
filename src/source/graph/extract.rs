@@ -12,23 +12,23 @@ use super::{
 const MAX_AST_DEPTH: usize = 512;
 
 pub(super) fn parse_source_file(path: &str, contents: &str) -> SourceFile {
-    parse_tree_sitter_file(path, contents).unwrap_or_else(|| {
-        if Language::from_path(path) == Language::Elixir {
+    let language = Language::from_path(path);
+    parse_tree_sitter_file(path, contents, language).unwrap_or_else(|| {
+        if language == Language::Elixir {
             SourceFile {
                 path: path.into(),
-                language: Language::Elixir,
+                language,
                 imports: Vec::new(),
                 modules: Vec::new(),
                 symbols: Vec::new(),
             }
         } else {
-            parse_source_file_fallback(path, contents)
+            parse_source_file_fallback(path, contents, language)
         }
     })
 }
 
-fn parse_source_file_fallback(path: &str, contents: &str) -> SourceFile {
-    let language = Language::from_path(path);
+fn parse_source_file_fallback(path: &str, contents: &str, language: Language) -> SourceFile {
     let mut file = SourceFile {
         path: path.into(),
         language,
@@ -240,8 +240,7 @@ impl FallbackSymbolContext<'_> {
     }
 }
 
-fn parse_tree_sitter_file(path: &str, contents: &str) -> Option<SourceFile> {
-    let language = Language::from_path(path);
+fn parse_tree_sitter_file(path: &str, contents: &str, language: Language) -> Option<SourceFile> {
     let tree_sitter_language = tree_sitter_language(language)?;
     let mut parser = Parser::new();
     parser.set_language(&tree_sitter_language).ok()?;

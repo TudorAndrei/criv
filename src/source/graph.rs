@@ -1612,14 +1612,21 @@ fn is_exported_symbol(line: &str, language: Language) -> bool {
 }
 
 impl Language {
-    pub(crate) fn from_path(path: &str) -> Self {
-        match Path::new(path).extension().and_then(|ext| ext.to_str()) {
-            Some("rs") => Self::Rust,
-            Some("ts" | "tsx") => Self::TypeScript,
-            Some("js" | "jsx" | "mjs" | "cjs") => Self::JavaScript,
-            Some("py") => Self::Python,
-            Some("go") => Self::Go,
-            Some("ex" | "exs") => Self::Elixir,
+    pub(crate) fn from_path(path: impl AsRef<Path>) -> Self {
+        path.as_ref()
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map_or(Self::Unknown, Self::from_extension)
+    }
+
+    fn from_extension(extension: &str) -> Self {
+        match extension {
+            "rs" => Self::Rust,
+            "ts" | "tsx" => Self::TypeScript,
+            "js" | "jsx" | "mjs" | "cjs" => Self::JavaScript,
+            "py" => Self::Python,
+            "go" => Self::Go,
+            "ex" | "exs" => Self::Elixir,
             _ => Self::Unknown,
         }
     }
@@ -1630,6 +1637,23 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn language_detection_uses_the_file_extension() {
+        let cases = [
+            ("src/lib.rs", Language::Rust),
+            ("web/app.tsx", Language::TypeScript),
+            ("web/app.mjs", Language::JavaScript),
+            ("tools/task.py", Language::Python),
+            ("cmd/main.go", Language::Go),
+            ("lib/app.exs", Language::Elixir),
+            ("docs/guide.md", Language::Unknown),
+        ];
+
+        for (path, language) in cases {
+            assert_eq!(Language::from_path(path), language, "{path}");
+        }
+    }
 
     fn graph_with_file(file: SourceFile) -> SourceGraph {
         let mut graph = SourceGraph::default();
