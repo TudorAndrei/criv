@@ -380,7 +380,9 @@ impl Vault {
 
     fn resolve_source_link(&self, target: &str) -> ResolvedLink {
         #[cfg(test)]
-        record_work(|counts| counts.link_source_resolutions += 1);
+        record_work(|counts| {
+            counts.link_source_resolutions = counts.link_source_resolutions.saturating_add(1);
+        });
 
         match self.resolve_source_target(target) {
             SourceTargetResolution::Resolved { path, ambiguous } => {
@@ -413,7 +415,9 @@ impl Vault {
 
     pub(crate) fn resolve_source_target(&self, target: &str) -> SourceTargetResolution {
         #[cfg(test)]
-        record_work(|counts| counts.source_target_resolutions += 1);
+        record_work(|counts| {
+            counts.source_target_resolutions = counts.source_target_resolutions.saturating_add(1);
+        });
 
         let target = source_target_body(target);
         let Some((path, ambiguous)) = self.resolve_source_path(source_fragment_path(target)) else {
@@ -1097,15 +1101,15 @@ mod tests {
                 "docs/assets/b.png".into(),
                 "docs/assets/a.png".into(),
             ],
-            png.len() as u64,
-            png.len() as u64,
+            u64::try_from(png.len()).unwrap(),
+            u64::try_from(png.len()).unwrap(),
         )
         .unwrap();
 
         assert_eq!(assets.len(), 1);
         assert_eq!(assets[0].path, "docs/assets/a.png");
         assert_eq!(assets[0].mime, "image/png");
-        assert_eq!(assets[0].bytes, png.len() as u64);
+        assert_eq!(assets[0].bytes, u64::try_from(png.len()).unwrap());
         assert_eq!(assets[0].hash.len(), 64);
 
         std::fs::remove_file(root.path().join("docs/assets/0-oversized.png")).unwrap();
@@ -1143,7 +1147,7 @@ mod tests {
                 "docs/assets/b.png".into(),
                 "docs/assets/a.png".into(),
             ],
-            ten_byte_png.len() as u64,
+            u64::try_from(ten_byte_png.len()).unwrap(),
             18,
         )
         .unwrap();
@@ -1732,7 +1736,7 @@ roots = ["src"]
             .lines()
             .position(|line| line.trim_end() == needle)
             .expect("needle must appear in the fixture")
-            + 1
+            .saturating_add(1)
     }
 
     fn parsed_note(prefix: &str, contents: &str) -> Note {
