@@ -253,11 +253,13 @@ fn receipt_common_matches(root: &Path, receipt: &Receipt) -> bool {
 
 fn receipt_tree_matches(root: &Path, receipt: &Receipt, tree: &str) -> bool {
     receipt.files.iter().all(|file| {
-        let before_matches = match &file.before_hash {
-            Some(before_hash) => git::blob(root, &receipt.head_sha, &file.path)
-                .is_ok_and(|contents| hash(&contents) == *before_hash),
-            None => git::blob(root, &receipt.head_sha, &file.path).is_err(),
-        };
+        let before_matches = file.before_hash.as_ref().map_or_else(
+            || git::blob(root, &receipt.head_sha, &file.path).is_err(),
+            |before_hash| {
+                git::blob(root, &receipt.head_sha, &file.path)
+                    .is_ok_and(|contents| hash(&contents) == *before_hash)
+            },
+        );
         before_matches
             && git::file_mode(root, &receipt.head_sha, &file.path)
                 .ok()
@@ -652,7 +654,11 @@ fn ensure_proven_new_adr(
         .map(|path| (merge_base, path))
         .chain(target_paths.iter().map(|path| (target_sha, path)));
     for (revision, candidate) in candidates {
-        if candidate == path || !candidate.ends_with(".md") {
+        if candidate == path
+            || !Path::new(candidate)
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+        {
             continue;
         }
         let source = git::blob(root, revision, candidate)?;
@@ -767,7 +773,10 @@ fn allocation_mappings(
     let mut ordered = branch_adrs.to_vec();
     ordered.sort_by_key(|adr| adr.id);
     let allocation_end = target_max
-        .checked_add(ordered.len() as u32)
+        .checked_add(
+            u32::try_from(ordered.len())
+                .map_err(|_| CrivError::new("ADR ID allocation count exceeds u32"))?,
+        )
         .ok_or_else(|| CrivError::new("ADR ID allocation overflow"))?;
     if allocation_end > 9999 {
         return Err(CrivError::new(
@@ -779,9 +788,13 @@ fn allocation_mappings(
         .enumerate()
         .map(|(offset, adr)| {
             let new_id = target_max
-                .checked_add(offset as u32 + 1)
+                .checked_add(
+                    u32::try_from(offset)
+                        .map_err(|_| CrivError::new("ADR ID allocation offset exceeds u32"))?
+                        .saturating_add(1),
+                )
                 .ok_or_else(|| CrivError::new("ADR ID allocation overflow"))?;
-            let new_name = filename(&new_id, &adr.slug);
+            let new_name = filename(new_id, &adr.slug);
             let parent = Path::new(&adr.path)
                 .parent()
                 .unwrap_or_else(|| Path::new(""));
@@ -796,7 +809,11 @@ fn allocation_mappings(
 }
 
 fn is_adr_path(prefix: &str, path: &str) -> bool {
-    path.starts_with(prefix) && path != format!("{prefix}README.md") && path.ends_with(".md")
+    path.starts_with(prefix)
+        && path != format!("{prefix}README.md")
+        && Path::new(path)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
 }
 
 fn same_adr_slug(first: &str, second: &str) -> bool {
@@ -809,7 +826,12 @@ fn same_adr_slug(first: &str, second: &str) -> bool {
                 .and_then(|stem| stem.split_once('-').map(|(_, slug)| slug))
         })
         .collect::<Option<Vec<_>>>()
-        .is_some_and(|slugs| slugs[0] == slugs[1])
+        .is_some_and(|slugs| {
+            slugs
+                .first()
+                .zip(slugs.get(1))
+                .is_some_and(|(first, second)| first == second)
+        })
 }
 
 fn parse_adr(path: &str, contents: String) -> Result<AdrFile> {
@@ -830,7 +852,9 @@ fn parse_adr(path: &str, contents: String) -> Result<AdrFile> {
             "branch-local ADR `{path}` has a malformed filename"
         )));
     }
-    let id = number.parse::<u32>().unwrap();
+    let id = number
+        .parse::<u32>()
+        .map_err(|error| CrivError::new(format!("ADR `{path}` has an invalid ID: {error}")))?;
     let normalized = contents.replace("\r\n", "\n");
     let frontmatter = normalized
         .strip_prefix("---\n")
@@ -871,7 +895,7 @@ fn ensure_unique(adrs: &[AdrFile], owner: &str) -> Result<()> {
     Ok(())
 }
 
-fn filename(id: &u32, slug: &str) -> String {
+fn filename(id: u32, slug: &str) -> String {
     format!("{id:04}-{slug}.md")
 }
 
@@ -1390,7 +1414,11 @@ fn reference_edits(contents: &str, mappings: &[Mapping]) -> Result<Vec<TextEdit>
         let [left, right] = pair else {
             continue;
         };
-        if right.start < left.end
+        let overlaps = left
+            .end
+            .checked_sub(right.start)
+            .is_some_and(|distance| distance > 0);
+        if overlaps
             && (left.start != right.start
                 || left.end != right.end
                 || left.replacement != right.replacement)
