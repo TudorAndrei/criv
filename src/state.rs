@@ -273,7 +273,6 @@ impl State {
     }
 
     fn publish_snapshot_with_check(
-        &self,
         vault: &Vault,
         serialized: &SerializedState,
         keep: usize,
@@ -405,7 +404,8 @@ fn source_index_input_fingerprint(entry: &SourceIndexEntry) -> String {
 }
 
 fn fingerprint_str(hasher: &mut blake3::Hasher, value: &str) {
-    hasher.update(&(value.len() as u64).to_le_bytes());
+    let length = u64::try_from(value.len()).unwrap_or(u64::MAX);
+    hasher.update(&length.to_le_bytes());
     hasher.update(value.as_bytes());
 }
 
@@ -422,7 +422,8 @@ fn fingerprint_option_str(hasher: &mut blake3::Hasher, value: Option<&str>) {
 }
 
 fn fingerprint_usize(hasher: &mut blake3::Hasher, value: usize) {
-    hasher.update(&(value as u64).to_le_bytes());
+    let value = u64::try_from(value).unwrap_or(u64::MAX);
+    hasher.update(&value.to_le_bytes());
 }
 
 fn fingerprint_option_usize(hasher: &mut blake3::Hasher, value: Option<usize>) {
@@ -488,7 +489,7 @@ pub fn write_state_with_policy_plan_and_check(
 ) -> Result<(String, State)> {
     let state = State::build_with_policy_plan(vault, None, &[], policy_plan)?;
     let serialized = state.serialize()?;
-    let snapshot = state.publish_snapshot_with_check(
+    let snapshot = State::publish_snapshot_with_check(
         vault,
         &serialized,
         vault.config.state_keep,
@@ -522,7 +523,7 @@ pub fn write_state_incremental_with_policy_plan_and_check(
 ) -> Result<(String, State)> {
     let state = State::build_with_policy_plan(vault, previous, changed_files, policy_plan)?;
     let serialized = state.serialize()?;
-    let snapshot = state.publish_snapshot_with_check(
+    let snapshot = State::publish_snapshot_with_check(
         vault,
         &serialized,
         vault.config.state_keep,
