@@ -69,7 +69,7 @@ pub type Result<T> = std::result::Result<T, CrivError>;
 pub enum CrivError {
     #[error("{0}")]
     Message(String),
-    #[error("[{code}] {message}{}", fix_suffix(.fix))]
+    #[error("[{code}] {message}{}", fix_suffix(.fix.as_deref()))]
     Coded {
         code: &'static str,
         message: String,
@@ -83,11 +83,8 @@ pub enum CrivError {
     Io(#[from] std::io::Error),
 }
 
-fn fix_suffix(fix: &Option<String>) -> String {
-    match fix {
-        Some(fix) => format!("\nfix: {fix}"),
-        None => String::new(),
-    }
+fn fix_suffix(fix: Option<&str>) -> String {
+    fix.map_or_else(String::new, |fix| format!("\nfix: {fix}"))
 }
 
 impl CrivError {
@@ -150,16 +147,16 @@ enum Command {
 /// # Errors
 ///
 /// Returns an error when parsing, output, or the selected command fails.
-pub fn run(args: Vec<String>) -> Result<()> {
+pub fn run(args: &[String]) -> Result<()> {
     let cwd = std::env::current_dir()?;
     run_command(args, &cwd)
 }
 
-fn run_command(args: Vec<String>, cwd: &std::path::Path) -> Result<()> {
+fn run_command(args: &[String], cwd: &std::path::Path) -> Result<()> {
     let owned: Vec<OsString> = args.iter().map(OsString::from).collect();
-    let argv: Vec<&OsStr> = owned.iter().map(OsString::as_os_str).collect();
+    let os_args: Vec<&OsStr> = owned.iter().map(OsString::as_os_str).collect();
 
-    let cli = match CrivCli::parse_from(&argv) {
+    let cli = match CrivCli::parse_from(&os_args) {
         Ok(cli) => cli,
         Err(Error::Help { cmd, long }) => {
             print!("{}", render_help(cmd, long)?);
@@ -170,13 +167,13 @@ fn run_command(args: Vec<String>, cwd: &std::path::Path) -> Result<()> {
             return Ok(());
         }
         Err(err @ (Error::MissingSubcommand | Error::MissingArgsHelp { .. })) => {
-            eprint!("{}", usage::render_failure(CrivCli::spec(), &argv, &err));
+            eprint!("{}", usage::render_failure(CrivCli::spec(), &os_args, &err));
             return Err(CrivError::UsageReported);
         }
         Err(err) => {
             return Err(CrivError::usage(usage::render_failure(
                 CrivCli::spec(),
-                &argv,
+                &os_args,
                 &err,
             )));
         }
@@ -200,7 +197,7 @@ fn run_command(args: Vec<String>, cwd: &std::path::Path) -> Result<()> {
         Some(Command::Adr(options)) => adr::run(cwd, options),
         Some(Command::Check(options)) => check::run(cwd, options),
         Some(Command::Query(options)) => query::run(cwd, options),
-        Some(Command::Watch(options)) => watch::run(cwd, options),
+        Some(Command::Watch(options)) => watch::run(cwd, &options),
         Some(Command::Enforce(options)) => enforce::run(cwd, options),
     }
 }

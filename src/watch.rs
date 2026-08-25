@@ -34,7 +34,7 @@ pub struct WatchOptions {
     format: Format,
 }
 
-pub fn run(root: &Path, options: WatchOptions) -> Result<()> {
+pub fn run(root: &Path, options: &WatchOptions) -> Result<()> {
     let files = RepositoryFiles::open_vault(root)?;
     let mode = if options.once {
         WatchMode::Once
@@ -537,10 +537,8 @@ impl LiveWatchSession {
         if !matches!(signal, WatchSignal::Paths(_)) {
             return false;
         }
-        let config_changed = match read_config_source(&self.files) {
-            Ok(source) => source != self.active.config_source,
-            Err(_) => true,
-        };
+        let config_changed = read_config_source(&self.files)
+            .map_or(true, |source| source != self.active.config_source);
         config_changed
             || WatchTopology::observe(&self.root, &self.active.config) != self.active.topology
             || WatchSet::active(&self.root, &self.active.config) != self.active.watcher.set
@@ -652,9 +650,8 @@ fn exact_path_kind(path: &Path) -> PathKind {
         Ok(metadata) if metadata.file_type().is_symlink() || is_junction(path) => PathKind::Unsafe,
         Ok(metadata) if metadata.is_file() => PathKind::File,
         Ok(metadata) if metadata.is_dir() => PathKind::Directory,
-        Ok(_) => PathKind::Unsafe,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => PathKind::Missing,
-        Err(_) => PathKind::Unsafe,
+        Err(_) | Ok(_) => PathKind::Unsafe,
     }
 }
 
