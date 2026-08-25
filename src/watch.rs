@@ -823,7 +823,9 @@ mod tests {
     use super::*;
 
     fn watcher_reports_path(mut watcher: NotifyWatcherAdapter, expected: &Path) -> bool {
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(3))
+            .unwrap_or_else(Instant::now);
         while Instant::now() < deadline {
             if let WatcherPoll::Paths(paths) = watcher.poll(Duration::from_millis(250))
                 && paths.iter().any(|path| path == expected)
