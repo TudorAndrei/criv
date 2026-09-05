@@ -568,7 +568,10 @@ fn is_branch_local_ci_change(root: &Path, entry: &ChangedEntry) -> bool {
 
 fn read_changed_content(root: &Path, git_ref: Option<&str>, path: &str) -> Option<String> {
     let Some(git_ref) = git_ref else {
-        return std::fs::read_to_string(root.join(path)).ok();
+        return crate::repository::RepositoryFiles::open(root)
+            .ok()?
+            .read_string(Path::new(path))
+            .ok();
     };
     git::blob(root, git_ref, path).ok()
 }
@@ -913,6 +916,38 @@ mod tests {
         assert_eq!(violations.len(), 2);
         assert!(violations[0].contains("0002-existing"));
         assert!(violations[1].contains("0003-existing"));
+    }
+
+    #[test]
+    fn working_tree_migration_requires_regular_readable_content() {
+        let root = tempfile::TempDir::new().unwrap();
+        git(root.path(), &["init"]);
+        git(root.path(), &["config", "user.email", "criv@example.com"]);
+        git(root.path(), &["config", "user.name", "criv"]);
+        let path = "docs/adr/0001-test.md";
+        std::fs::create_dir_all(root.path().join("docs/adr")).unwrap();
+        std::fs::write(root.path().join(path), "See [[ADR-0010]].\n").unwrap();
+        git(root.path(), &["add", "."]);
+        git(root.path(), &["commit", "-m", "add adr"]);
+        let entry = ChangedEntry {
+            path: path.into(),
+            previous_path: None,
+            status: ChangeStatus::Modified,
+            old_ref: Some("HEAD".into()),
+            new_ref: None,
+        };
+        let migrated = "See [[0010-example|ADR-0010]].\n";
+        std::fs::write(root.path().join(path), migrated).unwrap();
+        assert!(is_allowed_adr_change(root.path(), None, &entry));
+        std::fs::remove_file(root.path().join(path)).unwrap();
+        assert!(!is_allowed_adr_change(root.path(), None, &entry));
+        #[cfg(unix)]
+        {
+            let external = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(external.path(), migrated).unwrap();
+            std::os::unix::fs::symlink(external.path(), root.path().join(path)).unwrap();
+            assert!(!is_allowed_adr_change(root.path(), None, &entry));
+        }
     }
 
     #[test]
