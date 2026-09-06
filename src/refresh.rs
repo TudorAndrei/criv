@@ -32,6 +32,8 @@ pub struct RefreshSession {
     config: Config,
     source_refresh_pending: bool,
     previous: Option<RefreshResult>,
+    #[cfg(test)]
+    precommit_checkpoint: Option<fn(&RepositoryFiles)>,
 }
 
 impl RefreshSession {
@@ -48,6 +50,8 @@ impl RefreshSession {
             config,
             source_refresh_pending: false,
             previous: None,
+            #[cfg(test)]
+            precommit_checkpoint: None,
         })
     }
 
@@ -63,7 +67,19 @@ impl RefreshSession {
             config: config.clone(),
             source_refresh_pending: false,
             previous: None,
+            #[cfg(test)]
+            precommit_checkpoint: None,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn before_next_publication(&mut self, checkpoint: fn(&RepositoryFiles)) {
+        self.precommit_checkpoint = Some(checkpoint);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn previous_snapshot(&self) -> Option<&str> {
+        self.previous.as_ref().map(RefreshResult::snapshot)
     }
 
     pub(crate) fn refresh(&mut self, cause: RefreshCause) -> Result<&RefreshResult> {
@@ -89,6 +105,15 @@ impl RefreshSession {
         let source = match (cause, previous_source, self.source_refresh_pending) {
             (RefreshCause::DocsChanged, Some(source), false) => source.reuse_for_docs(),
             _ => SourceState::refresh_from(&self.files, &self.config, previous_source)?,
+        };
+        #[cfg(test)]
+        let checkpoint = self.precommit_checkpoint.take();
+        #[cfg(test)]
+        let precommit_check = || {
+            if let Some(checkpoint) = checkpoint {
+                checkpoint(&self.files);
+            }
+            precommit_check()
         };
         let next = execute(
             &self.files,

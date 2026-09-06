@@ -3,7 +3,7 @@ views {
 
   dynamic view refreshSession {
     title 'Dynamic / CLI / Refresh and publication'
-    description 'How one file change becomes a checked state publication for downstream tools.'
+    description 'How an ordinary content change becomes a checked State publication in the active Watch generation.'
 
     codingAgent -> repository 'Changes source code or vault content'
     criv.cli.refreshCoordinator -> criv.cli.sourceIntelligence 'Builds or reuses one Source state'
@@ -12,6 +12,11 @@ views {
     criv.cli.architectureService -> criv.cli.vaultModel 'Returns the model and diagnostics'
     criv.cli.refreshCoordinator -> criv.cli.governanceEngine 'Checks publication blockers and vault drift'
     criv.cli.refreshCoordinator -> criv.cli.statePublisher 'Builds the next state envelope'
-    criv.cli.statePublisher -> criv.stateStore 'Writes state and retained snapshots'
+    criv.cli.statePublisher -> criv.cli.refreshCoordinator 'Runs the generation precommit check'
+    criv.cli.refreshCoordinator -> criv.cli.repositoryFiles 'Compares the active configuration before commit'
+    criv.cli.statePublisher -> criv.stateStore 'Commits State and retained snapshots'
+    criv.cli.refreshCoordinator -> criv.cli.repositoryFiles 'Compares configuration after the refresh attempt' {
+      notes 'Changed or unreadable configuration requests reconfiguration before the session reports the refresh result.'
+    }
   }
 }

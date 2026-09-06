@@ -180,7 +180,7 @@ model {
   extend criv.cli.refreshCoordinator {
     rustWatch = module 'criv::watch' {
       technology 'Rust and notify'
-      description 'Receives file changes and schedules incremental refresh sessions.'
+      description 'Owns Watch generations, ordinary refresh checks, event polling, and recovery.'
       link ../../src/watch.rs 'source'
     }
     rustRefresh = module 'criv::refresh' {
@@ -238,9 +238,9 @@ model {
   criv.cli.commandInterface.rustCriv -> criv.cli.knowledgeQueries.rustQuery 'Sends query requests'
 
   // Refresh pipeline.
-  criv.cli.refreshCoordinator.rustWatch -> criv.cli.refreshCoordinator.rustRefresh 'Schedules refresh sessions'
+  criv.cli.refreshCoordinator.rustWatch -> criv.cli.refreshCoordinator.rustRefresh 'Runs generation refresh with its configuration guard'
   criv.cli.refreshCoordinator.rustWatch -> criv.cli.sourceIntelligence.rustDiscovery 'Classifies Source events'
-  criv.cli.refreshCoordinator.rustWatch -> criv.cli.vaultModel.rustConfig 'Reads the watch configuration'
+  criv.cli.refreshCoordinator.rustWatch -> criv.cli.vaultModel.rustConfig 'Reads candidate snapshots and checks active configuration'
   criv.cli.refreshCoordinator.rustRefresh -> criv.cli.vaultModel.rustVault 'Loads the repository model'
   criv.cli.refreshCoordinator.rustRefresh -> criv.cli.vaultModel.rustConfig 'Reads the refresh configuration'
   criv.cli.refreshCoordinator.rustRefresh -> criv.cli.sourceIntelligence.rustSource 'Refreshes or reuses one Source state'
