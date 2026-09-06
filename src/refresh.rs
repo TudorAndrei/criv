@@ -43,6 +43,7 @@ impl RefreshSession {
         Self::one_shot_from(&files)
     }
 
+    /// Load configuration through the supplied repository handle for one refresh.
     pub(crate) fn one_shot_from(files: &RepositoryFiles) -> Result<Self> {
         let config = Config::load_from(files)?;
         Ok(Self {
@@ -61,6 +62,7 @@ impl RefreshSession {
         Ok(Self::live_from(&files, config))
     }
 
+    /// Retain the supplied configuration snapshot for all refreshes in this session.
     pub(crate) fn live_from(files: &RepositoryFiles, config: &Config) -> Self {
         Self {
             files: files.clone(),
@@ -84,10 +86,12 @@ impl RefreshSession {
         self.previous.as_ref().map(RefreshResult::snapshot)
     }
 
+    /// Refresh with no caller guard, retaining the result only after publication succeeds.
     pub(crate) fn refresh(&mut self, cause: RefreshCause) -> Result<&RefreshResult> {
         self.refresh_with_precommit_check(cause, || Ok(()))
     }
 
+    /// Run the caller guard before publication commits; retain source retry work on failure.
     pub(crate) fn refresh_with_precommit_check(
         &mut self,
         cause: RefreshCause,
@@ -134,6 +138,7 @@ impl RefreshSession {
         Ok(result)
     }
 }
+/// Validate the prepared vault and publish its State through the guarded transaction.
 fn execute(
     files: &RepositoryFiles,
     config: &Config,

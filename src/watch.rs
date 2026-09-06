@@ -34,6 +34,7 @@ pub struct WatchOptions {
     format: Format,
 }
 
+/// Acquire the Watch lock before starting a single refresh or a live session.
 pub fn run(root: &Path, options: &WatchOptions) -> Result<()> {
     let files = RepositoryFiles::open_vault(root)?;
     let mode = if options.once {
@@ -409,6 +410,7 @@ impl ActiveWatchGeneration {
         }
     }
 
+    /// Start watching before the initial refresh so changes during its build stay queued.
     fn candidate(
         files: &RepositoryFiles,
         root: &Path,
@@ -484,6 +486,7 @@ impl LiveWatchSession {
         })
     }
 
+    /// Process one event batch, replacing stale configuration before ordinary refreshes.
     fn step(&mut self, timeout: Duration) -> Result<()> {
         let signal = self.poll(timeout)?;
         if self.must_reconfigure(&signal) {
@@ -614,6 +617,7 @@ impl LiveWatchSession {
     }
 }
 
+/// Read the exact configuration text so a generation can detect any replacement.
 fn read_config_source(files: &RepositoryFiles) -> Result<Option<String>> {
     files.read_optional_string(Path::new("criv.toml"))
 }

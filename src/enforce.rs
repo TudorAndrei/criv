@@ -46,6 +46,7 @@ pub struct EnforceOptions {
     clippy::too_many_lines,
     reason = "enforcement assembles one stage report from related vault and policy checks"
 )]
+/// Validate the selected Git transaction and report stage-specific failures.
 pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
     if options.pre_push && options.stage != Stage::Push {
         return Err(CrivError::usage(
