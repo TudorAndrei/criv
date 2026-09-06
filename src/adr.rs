@@ -69,6 +69,7 @@ pub fn change_violations(
     adr_violations
 }
 
+/// Report protected ADR edits in Git entry order, after testing allowed exceptions.
 fn adr_immutability_violations(
     docs_dir: &str,
     adr_dir: &str,
@@ -104,6 +105,7 @@ fn adr_immutability_violations(
     violations
 }
 
+/// Accept receipt-proven changes or an exact portable-link migration.
 fn is_allowed_adr_change(
     files: &RepositoryFiles,
     changes: Option<&ChangedSet>,
@@ -158,6 +160,7 @@ fn is_branch_local_ci_change(root: &Path, entry: &ChangedEntry) -> bool {
         .is_ok_and(|paths| !paths.iter().any(|candidate| candidate == path))
 }
 
+/// Read proof from Git or from a confined, regular working-tree file.
 fn read_changed_content(
     files: &RepositoryFiles,
     git_ref: Option<&str>,
@@ -169,10 +172,12 @@ fn read_changed_content(
     git::blob(files.root(), git_ref, path).ok()
 }
 
+/// Require the new text to differ only by equivalent portable ADR links.
 fn is_mechanical_wikilink_portability_migration(old: &str, new: &str) -> bool {
     old != new && normalize_portable_adr_links(new) == old
 }
 
+/// Restore short ADR aliases while preserving all text outside matching links.
 fn normalize_portable_adr_links(markdown: &str) -> String {
     let mut normalized = String::with_capacity(markdown.len());
     let mut start = 0;
@@ -219,6 +224,7 @@ fn normalize_portable_adr_links(markdown: &str) -> String {
     normalized
 }
 
+/// Return the ADR alias only when its ID and fragment match the target.
 fn portable_adr_link_alias(body: &str) -> Option<&str> {
     let (target, alias) = body.split_once('|')?;
     let alias = alias.trim();
@@ -241,6 +247,7 @@ fn portable_adr_link_alias(body: &str) -> Option<&str> {
     (basename == number || basename.starts_with(&format!("{number}-"))).then_some(alias)
 }
 
+/// Reject a decision edit that also moves the configured decision directory.
 fn config_scope_violations(
     root: &Path,
     changes: Option<&ChangedSet>,
@@ -279,6 +286,7 @@ fn config_scope_violations(
     )]
 }
 
+/// Recognize decision-shaped Markdown paths independently of the current scope.
 fn looks_like_decision(path: &str) -> bool {
     Path::new(path)
         .extension()
@@ -287,6 +295,7 @@ fn looks_like_decision(path: &str) -> bool {
         && !path.ends_with("/README.md")
 }
 
+/// Match Markdown decisions under the configured scope, excluding its index.
 fn is_adr_file(docs_dir: &str, adr_dir: &str, path: &str) -> bool {
     let adr_prefix = format!("{docs_dir}/{adr_dir}/");
     path.starts_with(&adr_prefix)
@@ -1871,6 +1880,7 @@ fn read_receipt(root: &Path) -> Result<Receipt> {
 mod tests {
     use super::*;
 
+    /// Create a committed ADR fixture so receipt tests compare real Git trees.
     fn decision_repository() -> tempfile::TempDir {
         let root = tempfile::TempDir::new().unwrap();
         git(root.path(), &["init", "-b", "main"]);
@@ -1889,6 +1899,7 @@ mod tests {
     }
 
     #[test]
+    /// Keep file errors before receipt errors and report scope changes last.
     fn current_receipt_failures_follow_file_order_and_precede_scope_failure() {
         let root = decision_repository();
         let files = RepositoryFiles::open(root.path()).unwrap();
@@ -1943,6 +1954,7 @@ mod tests {
     }
 
     #[test]
+    /// Require a valid complete transaction before a receipt grants permission.
     fn absent_comparison_and_invalid_receipt_do_not_prove_changes() {
         let root = decision_repository();
         let files = RepositoryFiles::open(root.path()).unwrap();
@@ -1970,6 +1982,7 @@ mod tests {
     }
 
     #[test]
+    /// Detect an ADR edit using the old scope when configuration moves it.
     fn scope_change_is_rejected_even_when_new_scope_hides_the_adr() {
         let root = decision_repository();
         let files = RepositoryFiles::open(root.path()).unwrap();
@@ -1993,6 +2006,7 @@ mod tests {
     }
 
     #[test]
+    /// Distinguish a branch allocation conflict from a published ADR edit.
     fn ci_allows_branch_local_deletion_but_rejects_a_published_edit() {
         let root = decision_repository();
         let files = RepositoryFiles::open(root.path()).unwrap();
@@ -2024,6 +2038,7 @@ mod tests {
     }
 
     #[test]
+    /// Keep scope detection limited to decision Markdown, excluding the index.
     fn only_a_decision_file_looks_like_a_decision() {
         assert!(looks_like_decision("docs/adr/0001-example.md"));
         assert!(looks_like_decision("documentation/adr/0002-other.md"));
@@ -2033,6 +2048,7 @@ mod tests {
     }
 
     #[test]
+    /// Allow new decisions while preserving the published decision contract.
     fn adr_immutability_allows_new_adrs_but_blocks_existing_changes() {
         let entries = vec![
             ChangedEntry {
@@ -2086,6 +2102,7 @@ mod tests {
     }
 
     #[test]
+    /// Accept equivalent ADR links with matching targets and fragments.
     fn mechanical_adr_link_migrations_are_allowed() {
         let old = "See [[ADR-0010]] and [[ADR-0001#Context]].\n";
         let new = "See [[0010-criv-init-installs-agent-runtime-skills|ADR-0010]] and [[docs/adr/0001-local-cli-vault-architecture#Context|ADR-0001#Context]].\n";
@@ -2094,6 +2111,7 @@ mod tests {
     }
 
     #[test]
+    /// Keep a content edit from using the portable-link migration exception.
     fn mechanical_adr_link_migrations_reject_content_edits() {
         let old = "See [[ADR-0010]].\n";
         let new = "Changed decision text and see [[0010-criv-init-installs-agent-runtime-skills|ADR-0010]].\n";
@@ -2102,6 +2120,7 @@ mod tests {
     }
 
     #[test]
+    /// Reject portable links whose target changes the referenced decision.
     fn mechanical_adr_link_migrations_reject_mismatched_targets() {
         let old = "See [[ADR-0010]].\n";
         let new = "See [[0011-embed-runtime-skill-templates-as-assets|ADR-0010]].\n";

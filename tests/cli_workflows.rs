@@ -2698,6 +2698,7 @@ policy:
 }
 
 #[test]
+/// Keep ADR diagnostics, repair commands, and exit priority stable in both formats.
 fn adr_enforcement_preserves_text_json_repairs_and_failure_priority() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

@@ -53,7 +53,7 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
         ));
     }
     let files = crate::repository::RepositoryFiles::open_vault(root)?;
-    let vault = Vault::load(root)?;
+    let vault = Vault::load_from(&files)?;
     let policy_plan = PolicyScanPlan::new(&vault);
     if !vault
         .config

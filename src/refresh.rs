@@ -73,11 +73,13 @@ impl RefreshSession {
     }
 
     #[cfg(test)]
+    /// Run a test checkpoint once, immediately before the publication guard.
     pub(crate) fn before_next_publication(&mut self, checkpoint: fn(&RepositoryFiles)) {
         self.precommit_checkpoint = Some(checkpoint);
     }
 
     #[cfg(test)]
+    /// Expose the last successful snapshot so tests can check rollback.
     pub(crate) fn previous_snapshot(&self) -> Option<&str> {
         self.previous.as_ref().map(RefreshResult::snapshot)
     }

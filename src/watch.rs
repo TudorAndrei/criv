@@ -387,6 +387,8 @@ enum GenerationRefresh {
 }
 
 impl ActiveWatchGeneration {
+    /// Guard publication with this generation's config and prefer reconfiguration
+    /// if a second read detects a change, even when the refresh failed.
     fn refresh(&mut self, files: &RepositoryFiles, cause: RefreshCause) -> GenerationRefresh {
         let expected_config_source = self.config_source.clone();
         let result = self
@@ -1005,6 +1007,7 @@ mod tests {
         }
     }
 
+    /// Start a real refresh session with scripted events and published output.
     fn refresh_fixture() -> (TempDir, RepositoryFiles, LiveWatchSession) {
         let temp = TempDir::new().unwrap();
         let root = temp.path();
@@ -1030,6 +1033,7 @@ mod tests {
         (temp, files, session)
     }
 
+    /// Capture all published bytes to detect partial writes after a failed refresh.
     fn published_artifacts(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
         let mut paths = vec![root.join(".criv/state.json"), root.join(".criv/latest")];
         paths.extend(
@@ -1046,6 +1050,7 @@ mod tests {
             .collect()
     }
 
+    /// Verify that replacement files are installed before the final commit guard.
     fn assert_publication_checkpoint(files: &RepositoryFiles) {
         let record: serde_json::Value = serde_json::from_str(
             &files
@@ -1057,6 +1062,7 @@ mod tests {
     }
 
     #[test]
+    /// Keep the returned summary valid after the generation advances.
     fn ordinary_refresh_publishes_an_owned_summary() {
         let (_temp, files, mut session) = refresh_fixture();
         let before = session
@@ -1086,6 +1092,7 @@ mod tests {
     }
 
     #[test]
+    /// Reject stale configuration and retain pending source work for the retry.
     fn changed_configuration_rejects_publication_and_preserves_source_retry() {
         let (_temp, files, mut session) = refresh_fixture();
         let before = published_artifacts(files.root());
@@ -1135,6 +1142,7 @@ mod tests {
     }
 
     #[test]
+    /// Preserve published output when configuration cannot be read at commit.
     fn unreadable_configuration_requests_reconfiguration_and_rolls_back() {
         let (_temp, files, mut session) = refresh_fixture();
         let before = published_artifacts(files.root());
@@ -1161,6 +1169,7 @@ mod tests {
     }
 
     #[test]
+    /// Return the refresh error when the active configuration still matches.
     fn unchanged_configuration_reports_refresh_failure() {
         let (_temp, files, mut session) = refresh_fixture();
         let previous = session
@@ -1190,6 +1199,7 @@ mod tests {
     }
 
     #[test]
+    /// Give configuration replacement priority over an obsolete refresh error.
     fn session_reconfigures_before_reporting_refresh_failure_and_recovers() {
         let (_temp, files, initial) = refresh_fixture();
         let factory = Arc::new(ScriptedWatcherFactory::new(vec![
@@ -1270,6 +1280,7 @@ mod tests {
     }
 
     #[test]
+    /// Build the candidate from its snapshot, then process queued config changes.
     fn candidate_uses_its_snapshot_then_observes_the_queued_configuration_event() {
         let (_temp, files, _initial) = refresh_fixture();
         let original = read_config_source(&files).unwrap();
