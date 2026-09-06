@@ -7,11 +7,8 @@ use serde::Serialize;
 use usage::{Args as UsageArgs, ValueEnum};
 
 use crate::check;
-use crate::config::Config;
 use crate::diagnostic;
-use crate::git::{
-    self, ChangeStatus, ChangedEntry, ChangedSet, ChangedSetComparison, GitRepository,
-};
+use crate::git::{ChangedSet, ChangedSetComparison, GitRepository};
 use crate::policy_scan::PolicyScanPlan;
 use crate::vault::Vault;
 use crate::{CrivError, Result};
@@ -49,14 +46,15 @@ pub struct EnforceOptions {
     clippy::too_many_lines,
     reason = "enforcement assembles one stage report from related vault and policy checks"
 )]
+/// Validate the selected Git transaction and report stage-specific failures.
 pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
     if options.pre_push && options.stage != Stage::Push {
         return Err(CrivError::usage(
             "--pre-push is only valid with --stage push",
         ));
     }
-    crate::repository::RepositoryFiles::open_vault(root)?;
-    let vault = Vault::load(root)?;
+    let files = crate::repository::RepositoryFiles::open_vault(root)?;
+    let vault = Vault::load_from(&files)?;
     let policy_plan = PolicyScanPlan::new(&vault);
     if !vault
         .config
@@ -103,44 +101,16 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
         })
         .collect::<Vec<_>>();
     let import_violations = import_policy_violations(&vault, changed_files.as_ref());
-    let receipt_is_current = crate::adr::receipt_is_current(root);
-    let receipt_allows_transaction = options.stage == Stage::Commit
-        && changed_entries
-            .as_ref()
-            .is_some_and(|changes| crate::adr::receipt_allows_transaction(root, &changes.entries));
-    let source_receipt_is_current = crate::adr::source_receipt_is_current(root);
-    let source_receipt_allows_transaction = options.stage == Stage::Commit
-        && changed_entries.as_ref().is_some_and(|changes| {
-            crate::adr::source_receipt_allows_transaction(root, &changes.entries)
-        });
-    let mut adr_violations = adr_immutability_violations(
-        &vault.config.docs_dir,
-        &vault.config.adr_dir,
-        changed_entries
-            .as_ref()
-            .map(|changes| changes.entries.as_slice()),
-        |entry| {
-            (receipt_allows_transaction
-                || source_receipt_allows_transaction
-                || is_allowed_adr_change(root, changed_entries.as_ref(), entry))
-                || (options.stage == Stage::Ci && is_branch_local_ci_change(root, entry))
+    let adr_violations = crate::adr::change_violations(
+        &files,
+        &vault.config,
+        changed_entries.as_ref(),
+        match options.stage {
+            Stage::Commit => crate::adr::ChangeMode::Commit,
+            Stage::Push => crate::adr::ChangeMode::Push,
+            Stage::Ci => crate::adr::ChangeMode::Ci,
         },
     );
-    if receipt_is_current && !receipt_allows_transaction {
-        adr_violations.push(
-            "ADR reconciliation receipt does not prove the complete staged transaction".into(),
-        );
-    }
-    if source_receipt_is_current && !source_receipt_allows_transaction {
-        adr_violations.push(
-            "source reconciliation receipt does not prove the complete staged transaction".into(),
-        );
-    }
-    adr_violations.extend(config_scope_violations(
-        root,
-        changed_entries.as_ref(),
-        &vault.config,
-    ));
     let changed_count = changed_files.as_ref().map_or(0, Vec::len);
     let basis = changed_entries
         .as_ref()
@@ -478,228 +448,6 @@ fn is_zero_oid(oid: &str) -> bool {
     oid.bytes().all(|byte| byte == b'0')
 }
 
-fn adr_immutability_violations(
-    docs_dir: &str,
-    adr_dir: &str,
-    changed_entries: Option<&[ChangedEntry]>,
-    mut is_allowed_change: impl FnMut(&ChangedEntry) -> bool,
-) -> Vec<String> {
-    let Some(entries) = changed_entries else {
-        return Vec::new();
-    };
-
-    let mut violations = Vec::new();
-    for entry in entries {
-        if matches!(entry.status, ChangeStatus::Added | ChangeStatus::Copied) {
-            continue;
-        }
-
-        let path = entry.previous_path.as_deref().unwrap_or(&entry.path);
-        if !is_adr_file(docs_dir, adr_dir, path) {
-            continue;
-        }
-        if is_allowed_change(entry) {
-            continue;
-        }
-
-        let display_path = entry.previous_path.as_ref().map_or_else(
-            || entry.path.clone(),
-            |previous| format!("{previous} -> {}", entry.path),
-        );
-        violations.push(format!(
-            "{display_path}: ADR files are immutable; add a new ADR with `supersedes` instead of modifying an existing one"
-        ));
-    }
-    violations
-}
-
-fn is_allowed_adr_change(root: &Path, changes: Option<&ChangedSet>, entry: &ChangedEntry) -> bool {
-    if changes
-        .is_some_and(|changes| crate::adr::source_history_change_is_allowed(root, changes, entry))
-    {
-        return true;
-    }
-    // A committed receipt proves the entire tree transition, including paths
-    // that Git reports as modifications when ADR mappings overlap.
-    if entry
-        .new_ref
-        .as_deref()
-        .is_some_and(|commit| crate::adr::receipt_allows_commit(root, commit))
-    {
-        return true;
-    }
-    if changes
-        .is_some_and(|changes| crate::adr::receipt_allows_history_change(root, changes, entry))
-    {
-        return true;
-    }
-    if matches!(entry.status, ChangeStatus::Renamed | ChangeStatus::Deleted)
-        && crate::adr::receipt_allows_change(root, entry)
-    {
-        return true;
-    }
-    if entry.status != ChangeStatus::Modified {
-        return false;
-    }
-    let Some(old) = read_changed_content(root, entry.old_ref.as_deref(), &entry.path) else {
-        return false;
-    };
-    let Some(new) = read_changed_content(root, entry.new_ref.as_deref(), &entry.path) else {
-        return false;
-    };
-    is_mechanical_wikilink_portability_migration(&old, &new)
-}
-
-/// A CI comparison can contain a deletion for a target path that did not exist
-/// at the branch/target merge base: that is the same-path allocation race, not
-/// an edit of a published ADR. The merge-base proof is deliberately narrow;
-/// anything present at that base stays immutable.
-fn is_branch_local_ci_change(root: &Path, entry: &ChangedEntry) -> bool {
-    let Some(target) = entry.old_ref.as_deref() else {
-        return false;
-    };
-    let path = entry.previous_path.as_deref().unwrap_or(&entry.path);
-    let Ok(merge_base) = git::merge_base(root, target, "HEAD") else {
-        return false;
-    };
-    git::tree_paths(root, &merge_base, path)
-        .is_ok_and(|paths| !paths.iter().any(|candidate| candidate == path))
-}
-
-fn read_changed_content(root: &Path, git_ref: Option<&str>, path: &str) -> Option<String> {
-    let Some(git_ref) = git_ref else {
-        return std::fs::read_to_string(root.join(path)).ok();
-    };
-    git::blob(root, git_ref, path).ok()
-}
-
-fn is_mechanical_wikilink_portability_migration(old: &str, new: &str) -> bool {
-    old != new && normalize_portable_adr_links(new) == old
-}
-
-fn normalize_portable_adr_links(markdown: &str) -> String {
-    let mut normalized = String::with_capacity(markdown.len());
-    let mut start = 0;
-    while let Some(tail) = markdown.get(start..) {
-        let Some(relative_open) = tail.find("[[") else {
-            break;
-        };
-        let Some(open) = start.checked_add(relative_open) else {
-            break;
-        };
-        let Some(body_start) = open.checked_add(2) else {
-            break;
-        };
-        let Some(body_tail) = markdown.get(body_start..) else {
-            break;
-        };
-        let Some(relative_close) = body_tail.find("]]") else {
-            break;
-        };
-        let Some(close) = body_start.checked_add(relative_close) else {
-            break;
-        };
-        let Some(end) = close.checked_add(2) else {
-            break;
-        };
-        let (Some(prefix), Some(body), Some(link)) = (
-            markdown.get(start..open),
-            markdown.get(body_start..close),
-            markdown.get(open..end),
-        ) else {
-            break;
-        };
-        normalized.push_str(prefix);
-        if let Some(alias) = portable_adr_link_alias(body) {
-            normalized.push_str("[[");
-            normalized.push_str(alias);
-            normalized.push_str("]]");
-        } else {
-            normalized.push_str(link);
-        }
-        start = end;
-    }
-    normalized.push_str(markdown.get(start..).unwrap_or_default());
-    normalized
-}
-
-fn portable_adr_link_alias(body: &str) -> Option<&str> {
-    let (target, alias) = body.split_once('|')?;
-    let alias = alias.trim();
-    let alias_base = alias.split('#').next().unwrap_or(alias);
-    if !crate::identity::is_adr_id(alias_base) {
-        return None;
-    }
-    let target_fragment = target.split_once('#').map(|(_, fragment)| fragment);
-    let alias_fragment = alias.split_once('#').map(|(_, fragment)| fragment);
-    if target_fragment != alias_fragment {
-        return None;
-    }
-    let number = alias_base.get(4..)?;
-    let target_base = target.split('#').next().unwrap_or(target).trim();
-    let basename = target_base
-        .trim_end_matches(".md")
-        .split('/')
-        .next_back()
-        .unwrap_or(target_base);
-    (basename == number || basename.starts_with(&format!("{number}-"))).then_some(alias)
-}
-
-fn config_scope_violations(
-    root: &Path,
-    changes: Option<&ChangedSet>,
-    current: &Config,
-) -> Vec<String> {
-    let Some(changes) = changes else {
-        return Vec::new();
-    };
-    let paths = || {
-        changes
-            .entries
-            .iter()
-            .flat_map(|entry| [Some(entry.path.as_str()), entry.previous_path.as_deref()])
-            .flatten()
-    };
-    if !paths().any(|path| path == "criv.toml") {
-        return Vec::new();
-    }
-    if !paths().any(looks_like_decision) {
-        return Vec::new();
-    }
-    let Some(old_ref) = changes.old_ref.as_deref() else {
-        return Vec::new();
-    };
-    let Ok(previous) =
-        git::blob(root, old_ref, "criv.toml").and_then(|contents| Config::parse(Some(&contents)))
-    else {
-        return Vec::new();
-    };
-    if previous.docs_dir == current.docs_dir && previous.adr_dir == current.adr_dir {
-        return Vec::new();
-    }
-    vec![format!(
-        "criv.toml moves the decision scope from `{}/{}` to `{}/{}` in the same transaction as a decision change; the immutability gate would read the new scope",
-        previous.docs_dir, previous.adr_dir, current.docs_dir, current.adr_dir
-    )]
-}
-
-fn looks_like_decision(path: &str) -> bool {
-    Path::new(path)
-        .extension()
-        .is_some_and(|extension| extension == "md")
-        && path.split('/').any(|component| component == "adr")
-        && !path.ends_with("/README.md")
-}
-
-fn is_adr_file(docs_dir: &str, adr_dir: &str, path: &str) -> bool {
-    let adr_prefix = format!("{docs_dir}/{adr_dir}/");
-    path.starts_with(&adr_prefix)
-        && path != format!("{adr_prefix}README.md")
-        && Path::new(path)
-            .extension()
-            .is_some_and(|extension| extension == "md")
-}
-
 fn import_matches(pattern: &str, matcher: Option<&crate::glob::GlobMatcher>, module: &str) -> bool {
     if let Some(matcher) = matcher {
         let normalized = module.replace("::", "/");
@@ -721,15 +469,55 @@ impl Stage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::ChangeStatus;
     use std::process::Command;
 
     #[test]
-    fn only_a_decision_file_looks_like_a_decision() {
-        assert!(looks_like_decision("docs/adr/0001-example.md"));
-        assert!(looks_like_decision("documentation/adr/0002-other.md"));
-        assert!(!looks_like_decision("docs/adr/README.md"));
-        assert!(!looks_like_decision("docs/guide.md"));
-        assert!(!looks_like_decision("src/adr.rs"));
+    fn working_tree_migration_requires_regular_readable_content() {
+        let root = tempfile::TempDir::new().unwrap();
+        git(root.path(), &["init"]);
+        git(root.path(), &["config", "user.email", "criv@example.com"]);
+        git(root.path(), &["config", "user.name", "criv"]);
+        let path = "docs/adr/0001-test.md";
+        std::fs::create_dir_all(root.path().join("docs/adr")).unwrap();
+        std::fs::write(root.path().join(path), "See [[ADR-0010]].\n").unwrap();
+        git(root.path(), &["add", "."]);
+        git(root.path(), &["commit", "-m", "add adr"]);
+        let entry = crate::git::ChangedEntry {
+            path: path.into(),
+            previous_path: None,
+            status: ChangeStatus::Modified,
+            old_ref: Some("HEAD".into()),
+            new_ref: None,
+        };
+        let files = crate::repository::RepositoryFiles::open(root.path()).unwrap();
+        let changes = ChangedSet {
+            entries: vec![entry],
+            old_ref: Some("HEAD".into()),
+            new_ref: None,
+            basis: "test".into(),
+        };
+        let permitted = || {
+            crate::adr::change_violations(
+                &files,
+                &crate::config::Config::default(),
+                Some(&changes),
+                crate::adr::ChangeMode::Commit,
+            )
+            .is_empty()
+        };
+        let migrated = "See [[0010-example|ADR-0010]].\n";
+        std::fs::write(root.path().join(path), migrated).unwrap();
+        assert!(permitted());
+        std::fs::remove_file(root.path().join(path)).unwrap();
+        assert!(!permitted());
+        #[cfg(unix)]
+        {
+            let external = tempfile::NamedTempFile::new().unwrap();
+            std::fs::write(external.path(), migrated).unwrap();
+            std::os::unix::fs::symlink(external.path(), root.path().join(path)).unwrap();
+            assert!(!permitted());
+        }
     }
 
     #[test]
@@ -787,10 +575,13 @@ mod tests {
             }],
         )
         .unwrap();
-        let violations =
-            adr_immutability_violations("docs", "adr", Some(&changes.entries), |entry| {
-                is_allowed_adr_change(root.path(), Some(&changes), entry)
-            });
+        let files = crate::repository::RepositoryFiles::open(root.path()).unwrap();
+        let violations = crate::adr::change_violations(
+            &files,
+            &crate::config::Config::default(),
+            Some(&changes),
+            crate::adr::ChangeMode::Push,
+        );
 
         assert_eq!(violations.len(), 1);
         assert!(violations[0].contains("0001-test.md"));
@@ -873,85 +664,6 @@ mod tests {
 
         assert_eq!(changes.entries[0].path, "tracked.txt");
         assert!(changes.basis.contains("HEAD~1..HEAD"));
-    }
-
-    #[test]
-    fn adr_immutability_allows_new_adrs_but_blocks_existing_changes() {
-        let entries = vec![
-            ChangedEntry {
-                status: ChangeStatus::Added,
-                path: "docs/adr/0012-new.md".into(),
-                previous_path: None,
-                old_ref: None,
-                new_ref: None,
-            },
-            ChangedEntry {
-                status: ChangeStatus::Modified,
-                path: "docs/adr/0002-existing.md".into(),
-                previous_path: None,
-                old_ref: None,
-                new_ref: None,
-            },
-            ChangedEntry {
-                status: ChangeStatus::Renamed,
-                path: "docs/adr/0003-renamed.md".into(),
-                previous_path: Some("docs/adr/0003-existing.md".into()),
-                old_ref: None,
-                new_ref: None,
-            },
-            ChangedEntry {
-                status: ChangeStatus::Modified,
-                path: "docs/adr/README.md".into(),
-                previous_path: None,
-                old_ref: None,
-                new_ref: None,
-            },
-        ];
-
-        let violations = adr_immutability_violations("docs", "adr", Some(&entries), |_| false);
-
-        assert_eq!(violations.len(), 2);
-        assert!(violations[0].contains("0002-existing"));
-        assert!(violations[1].contains("0003-existing"));
-    }
-
-    #[test]
-    fn mechanical_adr_link_migrations_are_allowed() {
-        let old = "See [[ADR-0010]] and [[ADR-0001#Context]].\n";
-        let new = "See [[0010-criv-init-installs-agent-runtime-skills|ADR-0010]] and [[docs/adr/0001-local-cli-vault-architecture#Context|ADR-0001#Context]].\n";
-
-        assert!(is_mechanical_wikilink_portability_migration(old, new));
-    }
-
-    #[test]
-    fn mechanical_adr_link_migrations_reject_content_edits() {
-        let old = "See [[ADR-0010]].\n";
-        let new = "Changed decision text and see [[0010-criv-init-installs-agent-runtime-skills|ADR-0010]].\n";
-
-        assert!(!is_mechanical_wikilink_portability_migration(old, new));
-    }
-
-    #[test]
-    fn mechanical_adr_link_migrations_reject_mismatched_targets() {
-        let old = "See [[ADR-0010]].\n";
-        let new = "See [[0011-embed-runtime-skill-templates-as-assets|ADR-0010]].\n";
-
-        assert!(!is_mechanical_wikilink_portability_migration(old, new));
-    }
-
-    #[test]
-    fn adr_immutability_gate_can_allow_proven_link_migration() {
-        let entries = vec![ChangedEntry {
-            status: ChangeStatus::Modified,
-            path: "docs/adr/0002-existing.md".into(),
-            previous_path: None,
-            old_ref: None,
-            new_ref: None,
-        }];
-
-        let violations = adr_immutability_violations("docs", "adr", Some(&entries), |_| true);
-
-        assert!(violations.is_empty());
     }
 
     fn git(root: &Path, args: &[&str]) {

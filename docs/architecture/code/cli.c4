@@ -146,7 +146,7 @@ model {
     }
     rustAdr = module 'criv::adr' {
       technology 'Rust'
-      description 'Resolves effective decision governance for each source scope.'
+      description 'Owns ADR reconciliation and the complete stage-specific ADR change decision.'
       link ../../src/adr.rs 'source'
     }
     rustSourceReconcile = module 'criv::adr::source_reconcile' {
@@ -172,7 +172,7 @@ model {
   extend criv.cli.governanceEngine {
     rustEnforce = module 'criv::enforce' {
       technology 'Rust'
-      description 'Selects the change scope for each enforcement stage and fails closed.'
+      description 'Selects stage comparisons, runs checks, and reports enforcement failures.'
       link ../../src/enforce.rs 'source'
     }
   }
@@ -180,7 +180,7 @@ model {
   extend criv.cli.refreshCoordinator {
     rustWatch = module 'criv::watch' {
       technology 'Rust and notify'
-      description 'Receives file changes and schedules incremental refresh sessions.'
+      description 'Owns Watch generations, ordinary refresh checks, event polling, and recovery.'
       link ../../src/watch.rs 'source'
     }
     rustRefresh = module 'criv::refresh' {
@@ -238,9 +238,9 @@ model {
   criv.cli.commandInterface.rustCriv -> criv.cli.knowledgeQueries.rustQuery 'Sends query requests'
 
   // Refresh pipeline.
-  criv.cli.refreshCoordinator.rustWatch -> criv.cli.refreshCoordinator.rustRefresh 'Schedules refresh sessions'
+  criv.cli.refreshCoordinator.rustWatch -> criv.cli.refreshCoordinator.rustRefresh 'Runs generation refresh with its configuration guard'
   criv.cli.refreshCoordinator.rustWatch -> criv.cli.sourceIntelligence.rustDiscovery 'Classifies Source events'
-  criv.cli.refreshCoordinator.rustWatch -> criv.cli.vaultModel.rustConfig 'Reads the watch configuration'
+  criv.cli.refreshCoordinator.rustWatch -> criv.cli.vaultModel.rustConfig 'Reads candidate snapshots and checks active configuration'
   criv.cli.refreshCoordinator.rustRefresh -> criv.cli.vaultModel.rustVault 'Loads the repository model'
   criv.cli.refreshCoordinator.rustRefresh -> criv.cli.vaultModel.rustConfig 'Reads the refresh configuration'
   criv.cli.refreshCoordinator.rustRefresh -> criv.cli.sourceIntelligence.rustSource 'Refreshes or reuses one Source state'
@@ -283,7 +283,7 @@ model {
   criv.cli.refreshCoordinator.rustWatch -> criv.cli.repositoryFiles.rustRepository 'Keeps the watch lock and generation handle'
   criv.cli.refreshCoordinator.rustRefresh -> criv.cli.repositoryFiles.rustRepository 'Keeps one refresh handle'
   criv.cli.governanceEngine.rustCheck -> criv.cli.repositoryFiles.rustRepository 'Reads and fixes checked files'
-  criv.cli.governanceEngine.rustAdr -> criv.cli.repositoryFiles.rustRepository 'Writes ADR reconciliation files'
+  criv.cli.governanceEngine.rustAdr -> criv.cli.repositoryFiles.rustRepository 'Reads ADR proof and writes reconciliation files'
   criv.cli.governanceEngine.rustSourceReconcile -> criv.cli.repositoryFiles.rustRepository 'Writes source reconciliation files'
   criv.cli.governanceEngine.rustReconcileTransaction -> criv.cli.repositoryFiles.rustRepository 'Captures and restores worktree files'
   criv.cli.repositoryHistory.rustGit -> criv.cli.repositoryFiles.rustRepository 'Captures and restores raw Git index bytes'
@@ -313,7 +313,7 @@ model {
   criv.cli.governanceEngine.rustReconcileTransaction -> criv.cli.repositoryHistory.rustGit 'Restores the Git index'
   criv.cli.governanceEngine.rustEnforce -> criv.cli.governanceEngine.rustCheck 'Runs the staged checks'
   criv.cli.governanceEngine.rustEnforce -> criv.cli.governanceEngine.rustPolicyScan 'Runs the staged policy scan'
-  criv.cli.governanceEngine.rustEnforce -> criv.cli.governanceEngine.rustAdr 'Reads effective governance'
+  criv.cli.governanceEngine.rustEnforce -> criv.cli.governanceEngine.rustAdr 'Validates the complete ADR change decision'
   criv.cli.governanceEngine.rustEnforce -> criv.cli.repositoryHistory.rustGit 'Selects the staged change scope'
   criv.cli.governanceEngine.rustEnforce -> criv.cli.vaultModel.rustVault 'Loads the changed vault scope'
 

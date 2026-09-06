@@ -32,6 +32,8 @@ pub struct RefreshSession {
     config: Config,
     source_refresh_pending: bool,
     previous: Option<RefreshResult>,
+    #[cfg(test)]
+    precommit_checkpoint: Option<fn(&RepositoryFiles)>,
 }
 
 impl RefreshSession {
@@ -41,6 +43,7 @@ impl RefreshSession {
         Self::one_shot_from(&files)
     }
 
+    /// Load configuration through the supplied repository handle for one refresh.
     pub(crate) fn one_shot_from(files: &RepositoryFiles) -> Result<Self> {
         let config = Config::load_from(files)?;
         Ok(Self {
@@ -48,6 +51,8 @@ impl RefreshSession {
             config,
             source_refresh_pending: false,
             previous: None,
+            #[cfg(test)]
+            precommit_checkpoint: None,
         })
     }
 
@@ -57,19 +62,36 @@ impl RefreshSession {
         Ok(Self::live_from(&files, config))
     }
 
+    /// Retain the supplied configuration snapshot for all refreshes in this session.
     pub(crate) fn live_from(files: &RepositoryFiles, config: &Config) -> Self {
         Self {
             files: files.clone(),
             config: config.clone(),
             source_refresh_pending: false,
             previous: None,
+            #[cfg(test)]
+            precommit_checkpoint: None,
         }
     }
 
+    #[cfg(test)]
+    /// Run a test checkpoint once, immediately before the publication guard.
+    pub(crate) fn before_next_publication(&mut self, checkpoint: fn(&RepositoryFiles)) {
+        self.precommit_checkpoint = Some(checkpoint);
+    }
+
+    #[cfg(test)]
+    /// Expose the last successful snapshot so tests can check rollback.
+    pub(crate) fn previous_snapshot(&self) -> Option<&str> {
+        self.previous.as_ref().map(RefreshResult::snapshot)
+    }
+
+    /// Refresh with no caller guard, retaining the result only after publication succeeds.
     pub(crate) fn refresh(&mut self, cause: RefreshCause) -> Result<&RefreshResult> {
         self.refresh_with_precommit_check(cause, || Ok(()))
     }
 
+    /// Run the caller guard before publication commits; retain source retry work on failure.
     pub(crate) fn refresh_with_precommit_check(
         &mut self,
         cause: RefreshCause,
@@ -90,6 +112,15 @@ impl RefreshSession {
             (RefreshCause::DocsChanged, Some(source), false) => source.reuse_for_docs(),
             _ => SourceState::refresh_from(&self.files, &self.config, previous_source)?,
         };
+        #[cfg(test)]
+        let checkpoint = self.precommit_checkpoint.take();
+        #[cfg(test)]
+        let precommit_check = || {
+            if let Some(checkpoint) = checkpoint {
+                checkpoint(&self.files);
+            }
+            precommit_check()
+        };
         let next = execute(
             &self.files,
             &self.config,
@@ -107,6 +138,7 @@ impl RefreshSession {
         Ok(result)
     }
 }
+/// Validate the prepared vault and publish its State through the guarded transaction.
 fn execute(
     files: &RepositoryFiles,
     config: &Config,

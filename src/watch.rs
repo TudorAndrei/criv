@@ -34,6 +34,7 @@ pub struct WatchOptions {
     format: Format,
 }
 
+/// Acquire the Watch lock before starting a single refresh or a live session.
 pub fn run(root: &Path, options: &WatchOptions) -> Result<()> {
     let files = RepositoryFiles::open_vault(root)?;
     let mode = if options.once {
@@ -379,7 +380,37 @@ impl From<CrivError> for CandidateFailure {
     }
 }
 
+#[derive(Debug)]
+enum GenerationRefresh {
+    Summary(String),
+    Failed(CrivError),
+    Reconfigure,
+}
+
 impl ActiveWatchGeneration {
+    /// Guard publication with this generation's config and prefer reconfiguration
+    /// if a second read detects a change, even when the refresh failed.
+    fn refresh(&mut self, files: &RepositoryFiles, cause: RefreshCause) -> GenerationRefresh {
+        let expected_config_source = self.config_source.clone();
+        let result = self
+            .refresh
+            .refresh_with_precommit_check(cause, || match read_config_source(files) {
+                Ok(source) if source == expected_config_source => Ok(()),
+                Ok(_) => Err(CrivError::new(
+                    "watch configuration changed before State publication",
+                )),
+                Err(err) => Err(err),
+            });
+        if read_config_source(files).ok() != Some(self.config_source.clone()) {
+            return GenerationRefresh::Reconfigure;
+        }
+        match result {
+            Ok(refreshed) => GenerationRefresh::Summary(refreshed.text_summary()),
+            Err(err) => GenerationRefresh::Failed(err),
+        }
+    }
+
+    /// Start watching before the initial refresh so changes during its build stay queued.
     fn candidate(
         files: &RepositoryFiles,
         root: &Path,
@@ -455,6 +486,7 @@ impl LiveWatchSession {
         })
     }
 
+    /// Process one event batch, replacing stale configuration before ordinary refreshes.
     fn step(&mut self, timeout: Duration) -> Result<()> {
         let signal = self.poll(timeout)?;
         if self.must_reconfigure(&signal) {
@@ -468,25 +500,10 @@ impl LiveWatchSession {
         let docs_changed = self.docs_changed(&signal);
         let source_changed = self.source_changed(&signal);
         if let WatchDecision::Rebuild { cause } = watch_decision(docs_changed, source_changed) {
-            let expected_config_source = self.active.config_source.clone();
-            let result =
-                self.active.refresh.refresh_with_precommit_check(
-                    cause,
-                    || match read_config_source(&self.files) {
-                        Ok(source) if source == expected_config_source => Ok(()),
-                        Ok(_) => Err(CrivError::new(
-                            "watch configuration changed before State publication",
-                        )),
-                        Err(err) => Err(err),
-                    },
-                );
-            if read_config_source(&self.files).ok() != Some(self.active.config_source.clone()) {
-                self.reconfigure();
-                return Ok(());
-            }
-            match result {
-                Ok(refreshed) => println!("{}", refreshed.text_summary()),
-                Err(err) => eprintln!("criv watch: {err}"),
+            match self.active.refresh(&self.files, cause) {
+                GenerationRefresh::Summary(summary) => println!("{summary}"),
+                GenerationRefresh::Failed(err) => eprintln!("criv watch: {err}"),
+                GenerationRefresh::Reconfigure => self.reconfigure(),
             }
         }
         Ok(())
@@ -600,6 +617,7 @@ impl LiveWatchSession {
     }
 }
 
+/// Read the exact configuration text so a generation can detect any replacement.
 fn read_config_source(files: &RepositoryFiles) -> Result<Option<String>> {
     files.read_optional_string(Path::new("criv.toml"))
 }
@@ -991,6 +1009,309 @@ mod tests {
         fn poll(&mut self, _timeout: Duration) -> WatcherPoll {
             self.polls.pop_front().unwrap_or(WatcherPoll::Idle)
         }
+    }
+
+    /// Start a real refresh session with scripted events and published output.
+    fn refresh_fixture() -> (TempDir, RepositoryFiles, LiveWatchSession) {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("docs/adr")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/lib.rs"), "pub fn initial() {}\n").unwrap();
+        fs::write(
+            root.join("docs/note.md"),
+            "---\nid: note\nkind: doc\ntitle: Note\n---\n\nInitial note.\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("criv.toml"),
+            "[source]\nroots = [\"src\"]\n[index]\nsource = true\n",
+        )
+        .unwrap();
+        let files = RepositoryFiles::open(root).unwrap();
+        let session = LiveWatchSession::start_with_factory(
+            &files,
+            Arc::new(ScriptedWatcherFactory::new(vec![vec![]])),
+        )
+        .unwrap();
+        (temp, files, session)
+    }
+
+    /// Capture all published bytes to detect partial writes after a failed refresh.
+    fn published_artifacts(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
+        let mut paths = vec![root.join(".criv/state.json"), root.join(".criv/latest")];
+        paths.extend(
+            fs::read_dir(root.join(".criv/snapshots"))
+                .unwrap()
+                .map(|entry| entry.unwrap().path()),
+        );
+        paths
+            .into_iter()
+            .map(|path| {
+                let bytes = fs::read(&path).unwrap();
+                (path, bytes)
+            })
+            .collect()
+    }
+
+    /// Verify that replacement files are installed before the final commit guard.
+    fn assert_publication_checkpoint(files: &RepositoryFiles) {
+        let record: serde_json::Value = serde_json::from_str(
+            &files
+                .read_string(Path::new(".criv/state-transaction.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record["phase"], "installed");
+    }
+
+    #[test]
+    /// Keep the returned summary valid after the generation advances.
+    fn ordinary_refresh_publishes_an_owned_summary() {
+        let (_temp, files, mut session) = refresh_fixture();
+        let before = session
+            .active
+            .refresh
+            .previous_snapshot()
+            .unwrap()
+            .to_owned();
+        fs::write(
+            files.root().join("docs/note.md"),
+            "---\nid: note\nkind: doc\ntitle: Changed\n---\n",
+        )
+        .unwrap();
+        let outcome = session.active.refresh(&files, RefreshCause::DocsChanged);
+        let GenerationRefresh::Summary(summary) = outcome else {
+            panic!("{outcome:?}")
+        };
+        let after = session.active.refresh.previous_snapshot().unwrap();
+        assert_ne!(before, after);
+        assert!(summary.contains(after));
+        assert_eq!(
+            fs::read_to_string(files.root().join(".criv/latest"))
+                .unwrap()
+                .trim(),
+            after
+        );
+    }
+
+    #[test]
+    /// Reject stale configuration and retain pending source work for the retry.
+    fn changed_configuration_rejects_publication_and_preserves_source_retry() {
+        let (_temp, files, mut session) = refresh_fixture();
+        let before = published_artifacts(files.root());
+        let previous = session
+            .active
+            .refresh
+            .previous_snapshot()
+            .unwrap()
+            .to_owned();
+        fs::write(
+            files.root().join("src/lib.rs"),
+            "pub fn recovered_source() {}\n",
+        )
+        .unwrap();
+        session.active.refresh.before_next_publication(|files| {
+            assert_publication_checkpoint(files);
+            let path = files.root().join("criv.toml");
+            let config = fs::read_to_string(&path).unwrap();
+            fs::write(path, format!("{config}# changed during publication\n")).unwrap();
+        });
+        assert!(matches!(
+            session.active.refresh(&files, RefreshCause::SourceChanged),
+            GenerationRefresh::Reconfigure
+        ));
+        assert_eq!(published_artifacts(files.root()), before);
+        assert_eq!(
+            session.active.refresh.previous_snapshot(),
+            Some(previous.as_str())
+        );
+        fs::write(
+            files.root().join("criv.toml"),
+            session.active.config_source.as_ref().unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            session.active.refresh(&files, RefreshCause::DocsChanged),
+            GenerationRefresh::Summary(_)
+        ));
+        let live = fs::read_to_string(files.root().join(".criv/state.json")).unwrap();
+        assert!(live.contains("recovered_source"));
+        let mut one_shot = RefreshSession::one_shot_from(&files).unwrap();
+        one_shot.refresh(RefreshCause::Initial).unwrap();
+        assert_eq!(
+            fs::read_to_string(files.root().join(".criv/state.json")).unwrap(),
+            live
+        );
+    }
+
+    #[test]
+    /// Preserve published output when configuration cannot be read at commit.
+    fn unreadable_configuration_requests_reconfiguration_and_rolls_back() {
+        let (_temp, files, mut session) = refresh_fixture();
+        let before = published_artifacts(files.root());
+        let previous = session
+            .active
+            .refresh
+            .previous_snapshot()
+            .unwrap()
+            .to_owned();
+        session.active.refresh.before_next_publication(|files| {
+            assert_publication_checkpoint(files);
+            fs::remove_file(files.root().join("criv.toml")).unwrap();
+            fs::create_dir(files.root().join("criv.toml")).unwrap();
+        });
+        assert!(matches!(
+            session.active.refresh(&files, RefreshCause::DocsChanged),
+            GenerationRefresh::Reconfigure
+        ));
+        assert_eq!(published_artifacts(files.root()), before);
+        assert_eq!(
+            session.active.refresh.previous_snapshot(),
+            Some(previous.as_str())
+        );
+    }
+
+    #[test]
+    /// Return the refresh error when the active configuration still matches.
+    fn unchanged_configuration_reports_refresh_failure() {
+        let (_temp, files, mut session) = refresh_fixture();
+        let previous = session
+            .active
+            .refresh
+            .previous_snapshot()
+            .unwrap()
+            .to_owned();
+        fs::write(
+            files
+                .root()
+                .join(".criv/snapshots")
+                .join(format!("{}.json", "a".repeat(64))),
+            "{}\n",
+        )
+        .unwrap();
+        let before = published_artifacts(files.root());
+        assert!(matches!(
+            session.active.refresh(&files, RefreshCause::DocsChanged),
+            GenerationRefresh::Failed(_)
+        ));
+        assert_eq!(published_artifacts(files.root()), before);
+        assert_eq!(
+            session.active.refresh.previous_snapshot(),
+            Some(previous.as_str())
+        );
+    }
+
+    #[test]
+    /// Give configuration replacement priority over an obsolete refresh error.
+    fn session_reconfigures_before_reporting_refresh_failure_and_recovers() {
+        let (_temp, files, initial) = refresh_fixture();
+        let factory = Arc::new(ScriptedWatcherFactory::new(vec![
+            vec![WatcherPoll::Paths(vec![files.root().join("docs/note.md")])],
+            vec![],
+            vec![],
+        ]));
+        let mut session = LiveWatchSession::start_with_factory(&files, factory).unwrap();
+        let before = published_artifacts(files.root());
+        let previous = session
+            .active
+            .refresh
+            .previous_snapshot()
+            .unwrap()
+            .to_owned();
+        fs::write(
+            files.root().join("docs/note.md"),
+            "---\nid: note\nkind: doc\ntitle: Recovered\n---\n",
+        )
+        .unwrap();
+        session.active.refresh.before_next_publication(|files| {
+            assert_publication_checkpoint(files);
+            fs::write(files.root().join("criv.toml"), "[index").unwrap();
+        });
+        session.step(Duration::ZERO).unwrap();
+        assert!(session.suspended);
+        assert!(
+            session
+                .failure
+                .as_ref()
+                .unwrap()
+                .contains("failed to parse criv.toml")
+        );
+        assert_eq!(published_artifacts(files.root()), before);
+        assert_eq!(
+            session.active.refresh.previous_snapshot(),
+            Some(previous.as_str())
+        );
+        fs::write(
+            files.root().join("criv.toml"),
+            initial.active.config_source.unwrap(),
+        )
+        .unwrap();
+        session.next_retry = Instant::now();
+        session.step(Duration::ZERO).unwrap();
+        assert!(!session.suspended);
+        assert!(session.failure.is_none());
+        assert_ne!(
+            session.active.refresh.previous_snapshot(),
+            Some(previous.as_str())
+        );
+        let live = fs::read_to_string(files.root().join(".criv/state.json")).unwrap();
+        let mut one_shot = RefreshSession::one_shot_from(&files).unwrap();
+        one_shot.refresh(RefreshCause::Initial).unwrap();
+        assert_eq!(
+            fs::read_to_string(files.root().join(".criv/state.json")).unwrap(),
+            live
+        );
+    }
+
+    #[derive(Debug)]
+    struct ConfigurationDuringCandidate {
+        path: PathBuf,
+        starts: AtomicUsize,
+    }
+
+    impl WatcherFactory for ConfigurationDuringCandidate {
+        fn start(&self, _set: &WatchSet) -> Result<Box<dyn WatcherAdapter>> {
+            let first = self.starts.fetch_add(1, Ordering::SeqCst) == 0;
+            let polls = if first {
+                fs::write(&self.path, "[index]\nsource = false\n").unwrap();
+                VecDeque::from([WatcherPoll::Paths(vec![self.path.clone()])])
+            } else {
+                VecDeque::new()
+            };
+            Ok(Box::new(ScriptedWatcher { polls }))
+        }
+    }
+
+    #[test]
+    /// Build the candidate from its snapshot, then process queued config changes.
+    fn candidate_uses_its_snapshot_then_observes_the_queued_configuration_event() {
+        let (_temp, files, _initial) = refresh_fixture();
+        let original = read_config_source(&files).unwrap();
+        let factory = Arc::new(ConfigurationDuringCandidate {
+            path: files.root().join("criv.toml"),
+            starts: AtomicUsize::new(0),
+        });
+        let mut session = LiveWatchSession::start_with_factory(&files, factory.clone()).unwrap();
+        assert_eq!(session.active.config_source, original);
+        assert!(
+            fs::read_to_string(files.root().join(".criv/state.json"))
+                .unwrap()
+                .contains("src/lib.rs")
+        );
+        session.step(Duration::ZERO).unwrap();
+        assert_eq!(factory.starts.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            session.active.config_source,
+            read_config_source(&files).unwrap()
+        );
+        let live = fs::read_to_string(files.root().join(".criv/state.json")).unwrap();
+        let mut one_shot = RefreshSession::one_shot_from(&files).unwrap();
+        one_shot.refresh(RefreshCause::Initial).unwrap();
+        assert_eq!(
+            fs::read_to_string(files.root().join(".criv/state.json")).unwrap(),
+            live
+        );
     }
 
     #[test]

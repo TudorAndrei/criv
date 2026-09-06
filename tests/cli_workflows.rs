@@ -2698,6 +2698,70 @@ policy:
 }
 
 #[test]
+/// Keep ADR diagnostics, repair commands, and exit priority stable in both formats.
+fn adr_enforcement_preserves_text_json_repairs_and_failure_priority() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "criv@example.com"]);
+    git(root, &["config", "user.name", "criv"]);
+    init(root);
+    write_criv_config(root, vec!["src"], vec![], true);
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn base() {}\n").unwrap();
+    fs::write(
+        root.join("docs/adr/0001-base.md"),
+        adr("0001", "Base", "base"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    criv(root)
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .success();
+    git(root, &["commit", "-m", "base"]);
+    fs::write(
+        root.join("docs/adr/0001-base.md"),
+        adr("0001", "Base", "edited"),
+    )
+    .unwrap();
+    fs::write(
+        root.join("docs/broken.md"),
+        "---\nid: broken\nkind: doc\ntitle: Broken\n---\n\nSee [[missing]].\n",
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    let violation = "docs/adr/0001-base.md: ADR files are immutable; add a new ADR with `supersedes` instead of modifying an existing one";
+    let repair = "Restore the accepted ADR, and record the change in a new ADR with `supersedes:`.";
+    let text = criv(root)
+        .args(["enforce", "--stage", "commit"])
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8(text.stdout).unwrap();
+    assert!(stdout.contains("2 staged files (Git comparison HEAD..:)"));
+    assert!(stdout.ends_with(&format!("{violation}\n")));
+    let stderr = String::from_utf8(text.stderr).unwrap();
+    assert!(stderr.contains("[adr-immutability-violation] 1 ADR immutability violation(s) found"));
+    assert!(stderr.contains(&format!("fix: {repair}")));
+    let output = criv(root)
+        .args(["enforce", "--stage", "commit", "--format", "json"])
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["stage"], "commit");
+    assert_eq!(report["changed_files"], 2);
+    assert!(report["errors"].as_u64().unwrap() > 0);
+    assert_eq!(report["code"], "adr-immutability-violation");
+    assert_eq!(report["fix"], repair);
+    assert_eq!(report["violations"], serde_json::json!([violation]));
+}
+
+#[test]
 fn commit_enforcement_scans_staged_governed_policy_files() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
