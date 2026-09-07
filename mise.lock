@@ -183,6 +183,47 @@ url = "https://github.com/astral-sh/hawk/releases/download/0.1.9/source.tar.gz"
 url_api = "https://api.github.com/repos/astral-sh/hawk/releases/assets/483928275"
 provenance = "github-attestations"
 
+[[tools."github:jdx/mr-boxington"]]
+version = "1.9.0"
+backend = "github:jdx/mr-boxington"
+
+[tools."github:jdx/mr-boxington"."platforms.linux-arm64"]
+checksum = "sha256:ae29794ecfd2888fa12bbcd591e10fd9d2d3d8ec41ceb8a1c3e1990110ed6557"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.9.0/mbx-aarch64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/jdx/mr-boxington/releases/assets/547392632"
+provenance = "github-attestations"
+
+[tools."github:jdx/mr-boxington"."platforms.linux-arm64-musl"]
+checksum = "sha256:e3cb0c600ae829fee503fc572bb88588e5ffd557581833b64e73d961fb63f18f"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.9.0/mbx-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/jdx/mr-boxington/releases/assets/547392633"
+provenance = "github-attestations"
+
+[tools."github:jdx/mr-boxington"."platforms.linux-x64"]
+checksum = "sha256:7e44a912962c68ef90616315dc3b62f4bdab3407569b6db2704410f020dc19ac"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.9.0/mbx-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/jdx/mr-boxington/releases/assets/547392646"
+provenance = "github-attestations"
+
+[tools."github:jdx/mr-boxington"."platforms.linux-x64-musl"]
+checksum = "sha256:b3f69c48845d93f42ed6a354bd53a3917d0e9cc24c8cdb46b28295b0b5769c11"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.9.0/mbx-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/jdx/mr-boxington/releases/assets/547392648"
+provenance = "github-attestations"
+
+[tools."github:jdx/mr-boxington"."platforms.macos-arm64"]
+checksum = "sha256:405ff4c3fd007c6eb980a39409f102a9ad6d6582dfa92a0bf8ec90b76903d780"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.9.0/mbx-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/jdx/mr-boxington/releases/assets/547392635"
+provenance = "github-attestations"
+provenance_verified = true
+
+[tools."github:jdx/mr-boxington"."platforms.windows-x64"]
+checksum = "sha256:37ddcad90564f36697e1c3520a004fa420dc13b2455d305f6a3cc7ac302ae5e3"
+url = "https://github.com/jdx/mr-boxington/releases/download/v1.9.0/mbx-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/jdx/mr-boxington/releases/assets/547392640"
+provenance = "github-attestations"
+
 [[tools.hk]]
 version = "1.45.0"
 backend = "aqua:jdx/hk"

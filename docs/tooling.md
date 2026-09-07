@@ -39,6 +39,69 @@ Workflow YAML under `.github/workflows/` is checked with actionlint in
 hooks so local validation does not require a GitHub token or network access.
 This follow-up hook decision is [[0018-offline-zizmor-actions-security-check|ADR-0018]].
 
+## Local Rust cache
+
+Mise 2026.8.16 or later routes this project's `cargo` commands through
+Mr. Boxington `mbx` 1.9.0. Run these commands after pulling the configuration:
+
+```sh
+mise install
+mise reshim
+mise exec -- cargo test --locked --workspace
+```
+
+An active mise shell also wraps plain `cargo` commands. Git hooks use the same
+wrapper through `hk install --mise`. Do not run `mbx setup --global` for this
+project. The checked-in configuration supplies the wrapper.
+
+mbx shares compiler results between local worktrees. Its default cache policy
+controls incremental compilation. Worktrunk still copies `target/` with shared
+filesystem blocks, and its removal hook still deletes each worktree's copy.
+The wrapper sets `MBX_TARGET_VIEWS=0` to keep these independent directories.
+Do not migrate a criv worktree to an mbx-managed target while this copy policy
+is in use. Give simultaneous Cargo builds separate output directories, for
+example `--target-dir target/clippy` for Clippy beside workspace tests.
+
+The wrapper bypasses mbx when `CI` or `GITHUB_ACTIONS` is nonempty. Hosted builds
+keep the compiler cache policy from
+[[0108-bounded-hosted-rust-compilation|ADR-0108]]. Hawk also sets `MBX_DISABLE=1`,
+clears `RUSTC_WRAPPER`, and keeps `target/hawk` for its build files.
+
+Inspect the shared cache and preview its cleanup with:
+
+```sh
+mise exec -- mbx cache stats
+mise exec -- mbx gc --dry-run
+```
+
+Deleting a worktree does not delete the shared compiler cache. mbx collects
+eligible cache entries under its own retention policy. Cache byte counts do
+not measure physical space saved by filesystem block sharing.
+
+To bypass mbx for one command, including a local release or debugger build:
+
+```sh
+MBX_DISABLE=1 mise exec -- cargo build --release
+```
+
+To remove automatic wrapping, remove `[wrappers.cargo]` and
+`[wrappers.cargo.env]` and the `[env]` entry for `MBX_DISABLE` from `mise.toml`.
+Then run `mise reshim`. Existing
+`target/` directories remain valid Cargo output directories. The mbx tool pin
+and shared cache can be removed separately.
+
+[[0142-use-mbx-for-local-cargo-caching|ADR-0142]] records this integration.
+[Issue #196](https://github.com/TudorAndrei/criv/issues/196) holds the proposed
+performance comparison. A local trial on 8 September 2026 used three runs per
+case on macOS/APFS, Rust 1.97.1, and mbx 1.9.0, before integration with PR #197.
+The values below are medians.
+Estimated disk allocation fell from 2.47 GiB to 2.04 GiB, including the mbx
+cache. Empty-cache tests took 275 s with mbx versus 78 s with plain Cargo;
+simultaneous tests and Clippy took 238 s versus 46 s. Warm and small-edit test
+times showed no clear gain. Disk estimates used free-space changes after
+deleting isolated trial outputs; they do not predict long-term cache growth.
+Use `MBX_DISABLE=1` when build speed is the priority for these workloads.
+
 ## Running criv from a hook runner
 
 criv does not install Git hooks and does not set `core.hooksPath`, per

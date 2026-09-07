@@ -49,6 +49,7 @@ local hawk = new Step {
   )
   check = "cargo hawk check --manifest-path Cargo.toml --target-dir target/hawk --exclude-crate criv_wasm -D warnings"
   env {
+    ["MBX_DISABLE"] = "1"
     ["RUSTC_WRAPPER"] = ""
     ["SCCACHE_GHA_ENABLED"] = "false"
   }

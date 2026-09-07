@@ -1,3 +1,5 @@
+min_version = "2026.8.16"
+
 [tools]
 rust = "1.97.1"
 node = "26.5.1"
@@ -13,10 +15,22 @@ cocogitto = "7.0.0"
 "cargo:mdbook" = "0.5.4"
 taplo = "0.10.0"
 "github:astral-sh/hawk" = "0.1.9"
+"github:jdx/mr-boxington" = "1.9.0"
 
 [env]
 HK_MISE = "1"
 HK_PKL_BACKEND = "pklr"
+# Hosted builds keep their existing compiler cache. Preserve local bypasses,
+# including Hawk's step environment, when mise dispatches Cargo again.
+MBX_DISABLE = "{% if env.CI | default(value='') != '' or env.GITHUB_ACTIONS | default(value='') != '' %}1{% else %}{{ env.MBX_DISABLE | default(value='0') }}{% endif %}"
+
+[wrappers.cargo]
+command = "mbx"
+
+[wrappers.cargo.env]
+MBX_CARGO_SHIM_MODE = "1"
+# Keep Worktrunk's independent, reflink-copied target directories.
+MBX_TARGET_VIEWS = "0"
 
 [hooks]
 postinstall = "hk install --mise"
