@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en" data-resolution="landscape">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=1920, height=1080">
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <script src="assets/music/audio-data.js"></script>
+    <style>
+      :root { color-scheme: dark; --bg: #101010; --surface: #171717; --surface-2: #202020; --fg: #d8d8d8; --muted: #9a9a9a; --line: #343434; --brand: #d8d8d8; --ok: #9ad5a5; --danger: #f28b82; --audio-bass: 0; --audio-rms: 0; --font-display: ui-monospace, "SF Mono", Menlo, Consolas, monospace; --font-body: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body { width: 1920px; height: 1080px; overflow: hidden; background: var(--bg); }
+      body { color: var(--fg); font-family: var(--font-body); }
+      #root { position: relative; width: 100%; height: 100%; overflow: hidden; background: var(--bg); }
+      .ambient-grid { position: absolute; inset: 0; z-index: 0; opacity: calc(0.13 + var(--audio-rms) * 0.08); background-image: linear-gradient(rgb(216 216 216 / 0.09) 1px, transparent 1px), linear-gradient(90deg, rgb(216 216 216 / 0.09) 1px, transparent 1px); background-size: 96px 96px; mask-image: radial-gradient(circle at 65% 45%, black 0%, transparent 72%); }
+      .ambient-glow { position: absolute; right: -160px; top: 120px; z-index: 0; width: 900px; height: 900px; border-radius: 50%; opacity: calc(0.08 + var(--audio-bass) * 0.09); background: radial-gradient(circle, rgb(216 216 216 / 0.48), transparent 68%); filter: blur(20px); }
+      .scene { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; }
+      .scene-inner { position: absolute; inset: 0; padding: 96px 112px; }
+      .eyebrow { color: var(--muted); font-size: 22px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; }
+      .hook-layout { display: grid; grid-template-columns: 0.92fr 1.08fr; gap: 88px; align-items: center; height: 100%; }
+      .hook-copy h1 { max-width: 760px; font-size: 112px; font-weight: 750; line-height: 0.98; letter-spacing: -0.07em; }
+      .hook-copy p { max-width: 690px; margin-top: 34px; color: var(--muted); font-size: 30px; line-height: 1.45; }
+      .drift-stage { position: relative; height: 620px; }
+      .drift-card { position: absolute; top: 185px; width: 300px; min-height: 210px; padding: 30px; border: 2px solid var(--line); background: rgb(23 23 23 / 0.96); box-shadow: 0 28px 80px rgb(0 0 0 / 0.32); }
+      .drift-card.note { left: 45px; }
+      .drift-card.source { right: 45px; }
+      .card-kicker { color: var(--muted); font-size: 19px; letter-spacing: 0.12em; text-transform: uppercase; }
+      .card-title { margin-top: 20px; font-size: 35px; font-weight: 700; }
+      .card-code { margin-top: 25px; color: var(--muted); font-size: 18px; line-height: 1.45; overflow-wrap: anywhere; }
+      .drift-link { position: absolute; left: 342px; top: 287px; width: 260px; height: 2px; }
+      .drift-link span { position: absolute; top: 0; width: 120px; height: 2px; background: var(--fg); box-shadow: 0 0 calc(8px + var(--audio-bass) * 10px) rgb(216 216 216 / 0.45); }
+      .drift-link .left-half { left: 0; transform-origin: left center; }
+      .drift-link .right-half { right: 0; transform-origin: right center; }
+      .broken-label { position: absolute; left: 330px; top: 470px; width: 280px; color: var(--danger); font-size: 21px; text-align: center; }
+      .terminal-layout { display: grid; grid-template-columns: 1.25fr 0.75fr; gap: 78px; align-items: center; height: 100%; }
+      .terminal-window { width: 100%; overflow: hidden; border: 2px solid #3a3a3a; background: #0c0c0c; box-shadow: 0 40px 120px rgb(0 0 0 / 0.45); }
+      .terminal-chrome { display: flex; align-items: center; justify-content: space-between; height: 60px; padding: 0 24px; border-bottom: 2px solid #303030; color: var(--muted); font-size: 20px; }
+      .terminal-dots { display: flex; gap: 10px; }
+      .terminal-dots span { width: 12px; height: 12px; border-radius: 50%; background: #555; }
+      .terminal-body { min-height: 520px; padding: 44px; font-size: 34px; line-height: 1.7; }
+      .terminal-command { min-height: 58px; color: var(--fg); }
+      .prompt { color: var(--muted); }
+      .caret { display: inline-block; width: 16px; height: 34px; margin-left: 8px; vertical-align: -5px; background: var(--fg); }
+      .terminal-result { margin-top: 26px; color: var(--ok); font-weight: 700; }
+      .terminal-side h2 { margin-top: 26px; font-size: 64px; line-height: 1.04; letter-spacing: -0.05em; }
+      .terminal-side p { margin-top: 30px; color: var(--muted); font-size: 28px; line-height: 1.5; }
+      .coverage-layout { display: grid; grid-template-columns: 0.7fr 1.3fr; gap: 90px; align-items: center; height: 100%; }
+      .coverage-intro h2 { margin-top: 30px; font-size: 78px; line-height: 1.02; letter-spacing: -0.06em; }
+      .coverage-command { margin-top: 38px; color: var(--muted); font-size: 24px; }
+      .coverage-panel { padding: 50px 56px; border: 2px solid var(--line); background: rgb(23 23 23 / 0.94); box-shadow: 0 36px 100px rgb(0 0 0 / 0.38); }
+      .coverage-row { display: grid; grid-template-columns: 1fr auto; align-items: baseline; gap: 40px; padding: 26px 0; border-bottom: 2px solid var(--line); }
+      .coverage-row:last-child { border-bottom: 0; }
+      .coverage-label { color: var(--muted); font-size: 27px; }
+      .coverage-value { min-width: 190px; font-size: 78px; font-variant-numeric: tabular-nums; font-weight: 750; line-height: 1; text-align: right; }
+      .coverage-row:last-child .coverage-value { color: var(--ok); }
+      .adr-layout { display: grid; grid-template-columns: 0.58fr 1.42fr; gap: 78px; align-items: center; height: 100%; }
+      .adr-copy h2 { margin-top: 28px; max-width: 610px; font-size: 72px; line-height: 1.02; letter-spacing: -0.055em; }
+      .adr-copy p { margin-top: 30px; max-width: 590px; color: var(--muted); font-size: 26px; line-height: 1.48; }
+      .adr-rule { margin-top: 38px; padding: 22px 24px; border-left: 3px solid var(--ok); color: var(--ok); font-size: 21px; line-height: 1.4; background: rgb(154 213 165 / 0.06); }
+      .adr-timeline { position: relative; height: 760px; padding: 38px 42px; overflow: hidden; border: 2px solid var(--line); background: rgb(23 23 23 / 0.94); box-shadow: 0 36px 100px rgb(0 0 0 / 0.38); }
+      .adr-track { position: absolute; left: 86px; top: 78px; width: 4px; height: 580px; background: var(--line); transform-origin: top center; }
+      .adr-track-live { position: absolute; left: 86px; top: 78px; width: 4px; height: 580px; background: var(--fg); transform-origin: top center; box-shadow: 0 0 16px rgb(216 216 216 / 0.28); }
+      .adr-node { position: absolute; left: 65px; display: grid; grid-template-columns: 44px 1fr auto; gap: 20px; align-items: center; width: calc(100% - 108px); min-height: 84px; }
+      .adr-node:nth-of-type(3) { top: 48px; }
+      .adr-node:nth-of-type(4) { top: 150px; }
+      .adr-node:nth-of-type(5) { top: 252px; }
+      .adr-node:nth-of-type(6) { top: 354px; }
+      .adr-node:nth-of-type(7) { top: 456px; }
+      .adr-node:nth-of-type(8) { top: 558px; }
+      .adr-dot { position: relative; z-index: 2; width: 44px; height: 44px; border: 4px solid var(--fg); border-radius: 50%; background: var(--surface); }
+      .adr-label { min-width: 0; }
+      .adr-id { color: var(--fg); font-size: 20px; font-weight: 750; }
+      .adr-title { margin-top: 5px; overflow: hidden; color: var(--muted); font-size: 18px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+      .adr-status { padding: 8px 12px; border: 1px solid var(--line); color: var(--muted); font-size: 16px; text-transform: uppercase; letter-spacing: 0.08em; }
+      .adr-node.is-old .adr-dot { border-color: #686868; }
+      .adr-node.is-old .adr-id, .adr-node.is-old .adr-title { color: #888; }
+      .adr-node.is-current .adr-dot { border-color: var(--ok); background: var(--ok); box-shadow: 0 0 24px rgb(154 213 165 / 0.35); }
+      .adr-node.is-current .adr-id, .adr-node.is-current .adr-status { color: var(--ok); }
+      .adr-node.is-current .adr-status { border-color: rgb(154 213 165 / 0.45); }
+      .supersedes-tag { position: absolute; left: 126px; color: #888; font-size: 14px; letter-spacing: 0.1em; text-transform: uppercase; }
+      .tag-1 { top: 137px; } .tag-2 { top: 239px; } .tag-3 { top: 341px; } .tag-4 { top: 443px; } .tag-5 { top: 545px; }
+      .outro-inner { display: grid; grid-template-columns: 0.42fr 1.58fr; gap: 80px; align-items: center; }
+      .criv-mark { display: grid; place-items: center; width: 360px; height: 360px; border: 2px solid var(--fg); background: var(--bg); box-shadow: 0 0 calc(30px + var(--audio-bass) * 35px) rgb(216 216 216 / 0.16); font-size: 116px; font-weight: 700; letter-spacing: -0.08em; }
+      .outro-copy h2 { font-size: 128px; line-height: 0.9; letter-spacing: -0.08em; }
+      .outro-copy .tagline { max-width: 1120px; margin-top: 40px; font-size: 47px; line-height: 1.28; letter-spacing: -0.035em; }
+      .outro-copy .footer { margin-top: 48px; color: var(--muted); font-size: 24px; letter-spacing: 0.08em; }
+    </style>
+  </head>
+  <body>
+    <div data-hf-id="hf-f87d" id="root" data-composition-id="main" data-start="0" data-duration="25" data-width="1920" data-height="1080">
+      <div data-hf-id="hf-0h3w" class="ambient-grid" data-layout-ignore=""></div>
+      <div data-hf-id="hf-xra3" class="ambient-glow" data-layout-ignore=""></div>
+
+      <section data-hf-id="hf-85zf" id="scene-drift" class="clip scene" data-start="0" data-duration="4.4" data-track-index="1">
+        <div data-hf-id="hf-11wr" class="scene-inner hook-layout" data-layout-allow-overflow="">
+          <div data-hf-id="hf-xc1l" class="hook-copy">
+            <div data-hf-id="hf-yckw" class="eyebrow">repository knowledge / failure mode 01</div>
+            <h1 data-hf-id="hf-299y">Documentation drifts.</h1>
+            <p data-hf-id="hf-tdin">Code moves. Notes stay behind. The link breaks before anyone sees it.</p>
+          </div>
+          <div data-hf-id="hf-sojx" class="drift-stage" aria-label="A documentation note separates from its Rust source file">
+            <div data-hf-id="hf-8o5g" class="drift-card note"><div data-hf-id="hf-o847" class="card-kicker">docs / adr</div><div data-hf-id="hf-5n5k" class="card-title">decision.md</div><div data-hf-id="hf-fg96" class="card-code">[[src/check.rs#check_vault]]</div></div>
+            <div data-hf-id="hf-tlkf" class="drift-link" aria-hidden="true"><span data-hf-id="hf-7e8g" class="left-half"></span><span data-hf-id="hf-l1u5" class="right-half"></span></div>
+            <div data-hf-id="hf-bpd3" class="drift-card source"><div data-hf-id="hf-tmy6" class="card-kicker">source / rust</div><div data-hf-id="hf-yfk2" class="card-title">check.rs</div><div data-hf-id="hf-y58y" class="card-code">pub fn check_vault(...)<br data-hf-id="hf-x5px">Result&lt;Report&gt;</div></div>
+            <div data-hf-id="hf-ybi0" class="broken-label">reference no longer resolves</div>
+          </div>
+        </div>
+      </section>
+
+      <section data-hf-id="hf-3vb7" id="scene-check" class="clip scene" data-start="4.4" data-duration="4.9" data-track-index="1">
+        <div data-hf-id="hf-lw2g" class="scene-inner terminal-layout">
+          <div data-hf-id="hf-qawl" class="terminal-window">
+            <div data-hf-id="hf-ajxf" class="terminal-chrome"><div data-hf-id="hf-i1fl" class="terminal-dots"><span data-hf-id="hf-uckh"></span><span data-hf-id="hf-l73p"></span><span data-hf-id="hf-me0s"></span></div><span data-hf-id="hf-6lwn">repository / local</span></div>
+            <div data-hf-id="hf-vv39" class="terminal-body">
+              <div data-hf-id="hf-l7ck" class="terminal-command"><span data-hf-id="hf-99ip" class="prompt">$ </span><span data-hf-id="hf-vx32" id="check-command"></span><span data-hf-id="hf-uuxe" class="caret"></span></div>
+              <div data-hf-id="hf-qypw" id="check-result" class="terminal-result">criv check: ok</div>
+            </div>
+          </div>
+          <div data-hf-id="hf-6brw" class="terminal-side"><div data-hf-id="hf-iovh" class="eyebrow">one local command</div><h2 data-hf-id="hf-nimr">Catch drift before the change lands.</h2><p data-hf-id="hf-6lf9">Broken links, source references, ADR rules, and policy patterns become check results.</p></div>
+        </div>
+      </section>
+
+      <section data-hf-id="hf-sffc" id="scene-coverage" class="clip scene" data-start="9.3" data-duration="3.81" data-track-index="1">
+        <div data-hf-id="hf-l8ai" class="scene-inner coverage-layout">
+          <div data-hf-id="hf-5xmj" class="coverage-intro"><div data-hf-id="hf-g2qc" class="eyebrow">real repository result</div><h2 data-hf-id="hf-94c2">Coverage you can query.</h2><div data-hf-id="hf-ngm7" class="coverage-command">$ criv query coverage --format json</div></div>
+          <div data-hf-id="hf-4q67" class="coverage-panel">
+            <div data-hf-id="hf-bq0h" class="coverage-row"><div data-hf-id="hf-j35q" class="coverage-label">source_files</div><div data-hf-id="hf-yvzo" id="source-count" class="coverage-value">355</div></div>
+            <div data-hf-id="hf-w9yd" class="coverage-row"><div data-hf-id="hf-bw1l" class="coverage-label">governed_files</div><div data-hf-id="hf-8hmr" id="governed-count" class="coverage-value">355</div></div>
+            <div data-hf-id="hf-xgvg" class="coverage-row"><div data-hf-id="hf-fxjq" class="coverage-label">ungoverned_files</div><div data-hf-id="hf-gczj" id="ungoverned-count" class="coverage-value">0</div></div>
+          </div>
+        </div>
+      </section>
+
+      <section data-hf-id="hf-u9dn" id="scene-adrs" class="clip scene" data-start="13.11" data-duration="6.55" data-track-index="2">
+        <div data-hf-id="hf-b5ej" class="scene-inner adr-layout">
+          <div data-hf-id="hf-9cjz" class="adr-copy">
+            <div data-hf-id="hf-8kgc" class="eyebrow">decision history / enforced</div>
+            <h2 data-hf-id="hf-k2q4">Decisions change. History stays.</h2>
+            <p data-hf-id="hf-6yzy">A new ADR supersedes the old decision. criv keeps the full chain clear and checks the rules from the accepted decision.</p>
+            <div data-hf-id="hf-5lbb" class="adr-rule">ADR-0012 · accepted ADRs are immutable</div>
+          </div>
+          <div data-hf-id="hf-e64g" class="adr-timeline" aria-label="Six architecture decisions supersede each other in order">
+            <div data-hf-id="hf-4qmd" class="adr-track"></div><div data-hf-id="hf-7z4s" class="adr-track-live"></div>
+            <div data-hf-id="hf-rrus" class="adr-node is-old"><div data-hf-id="hf-kid1" class="adr-dot"></div><div data-hf-id="hf-kwre" class="adr-label"><div data-hf-id="hf-f4e4" class="adr-id">ADR-0038</div><div data-hf-id="hf-1rmj" class="adr-title">ADR Policy Rule Generation</div></div><div data-hf-id="hf-h7lm" class="adr-status">superseded</div></div>
+            <div data-hf-id="hf-3ksc" class="adr-node is-old"><div data-hf-id="hf-tyqx" class="adr-dot"></div><div data-hf-id="hf-vh1a" class="adr-label"><div data-hf-id="hf-eq33" class="adr-id">ADR-0039</div><div data-hf-id="hf-r2tn" class="adr-title">Inline ADR Policy Rules</div></div><div data-hf-id="hf-i53y" class="adr-status">superseded</div></div>
+            <div data-hf-id="hf-2dv9" class="adr-node is-old"><div data-hf-id="hf-v5o0" class="adr-dot"></div><div data-hf-id="hf-vvcb" class="adr-label"><div data-hf-id="hf-b6a3" class="adr-id">ADR-0040</div><div data-hf-id="hf-zqqj" class="adr-title">Inline Only ADR Policy Rules</div></div><div data-hf-id="hf-ijez" class="adr-status">superseded</div></div>
+            <div data-hf-id="hf-2s6a" class="adr-node is-old"><div data-hf-id="hf-urcz" class="adr-dot"></div><div data-hf-id="hf-w9nc" class="adr-label"><div data-hf-id="hf-bkl4" class="adr-id">ADR-0041</div><div data-hf-id="hf-9yt2" class="adr-title">ADR-Owned Policy Patterns</div></div><div data-hf-id="hf-ixq0" class="adr-status">superseded</div></div>
+            <div data-hf-id="hf-4rpf" class="adr-node is-old"><div data-hf-id="hf-srtu" class="adr-dot"></div><div data-hf-id="hf-thi5" class="adr-label"><div data-hf-id="hf-csgg" class="adr-id">ADR-0056</div><div data-hf-id="hf-ar2w" class="adr-title">ADR Policy Patterns Are The Only Registered Patterns</div></div><div data-hf-id="hf-g5kt" class="adr-status">superseded</div></div>
+            <div data-hf-id="hf-j2n8" class="adr-node is-current"><div data-hf-id="hf-sdit" class="adr-dot"></div><div data-hf-id="hf-tvt6" class="adr-label"><div data-hf-id="hf-6tv1" class="adr-id">ADR-0059</div><div data-hf-id="hf-fqk5" class="adr-title">Accepted Only ADR Policy State</div></div><div data-hf-id="hf-hj0n" class="adr-status">accepted</div></div>
+            <div data-hf-id="hf-tjna" class="supersedes-tag tag-1">supersedes ↓</div><div data-hf-id="hf-a201" class="supersedes-tag tag-2">supersedes ↓</div><div data-hf-id="hf-2gyg" class="supersedes-tag tag-3">supersedes ↓</div><div data-hf-id="hf-umnv" class="supersedes-tag tag-4">supersedes ↓</div><div data-hf-id="hf-caii" class="supersedes-tag tag-5">supersedes ↓</div>
+          </div>
+        </div>
+      </section>
+
+      <section data-hf-id="hf-zb9l" id="scene-outro" class="clip scene" data-start="19.66" data-duration="5.34" data-track-index="4">
+        <div data-hf-id="hf-bgx5" class="scene-inner outro-inner">
+          <div data-hf-id="hf-p73g" class="criv-mark" aria-label="terminal prompt">&gt;_</div>
+          <div data-hf-id="hf-0gt5" class="outro-copy"><h2 data-hf-id="hf-yuj9">criv</h2><div data-hf-id="hf-m34o" class="tagline">Keep repository documentation connected to the code it describes.</div><div data-hf-id="hf-0zmz" class="footer">local Rust CLI&#160;&#160;/&#160;&#160;no server&#160;&#160;/&#160;&#160;no network</div></div>
+        </div>
+      </section>
+
+      <audio data-hf-id="hf-k6iy" id="bg-music" data-timeline-role="music" data-start="0" data-duration="25" data-track-index="10" data-volume="0.24" data-automation="{&quot;version&quot;:1,&quot;lanes&quot;:[{&quot;target&quot;:&quot;volume&quot;,&quot;points&quot;:[{&quot;t&quot;:0,&quot;v&quot;:0.05},{&quot;t&quot;:0.8,&quot;v&quot;:0.24},{&quot;t&quot;:23.3,&quot;v&quot;:0.24},{&quot;t&quot;:25,&quot;v&quot;:0.1}]}]}" src="assets/music/happy-beats-business-moves-vol-12-by-ende-dot-app.mp3"></audio>
+      <audio data-hf-id="hf-7z46" id="sfx-break" data-start="2.19" data-duration="0.01" data-track-index="11" data-volume="0.42" src="assets/sfx/interface/click_003.ogg"></audio>
+      <audio data-hf-id="hf-dklw" id="sfx-result" data-start="8.74" data-duration="0.19" data-track-index="12" data-volume="0.44" src="assets/sfx/impact/impactSoft_medium_001.ogg"></audio>
+      <audio data-hf-id="hf-iaip" id="sfx-outro" data-start="19.66" data-duration="0.66" data-track-index="13" data-volume="0.38" src="assets/sfx/impact/impactBell_heavy_003.ogg"></audio>
+    </div>
+
+    <script>
+      const tl = gsap.timeline({ paused: true });
+      tl.fromTo("#scene-drift .hook-copy", { opacity: 0, x: -70 }, { opacity: 1, x: 0, duration: 0.72, ease: "power3.out" }, 0.18);
+      tl.fromTo("#scene-drift .note", { opacity: 0, x: 150 }, { opacity: 1, x: 0, duration: 0.8, ease: "expo.out" }, 0.34);
+      tl.fromTo("#scene-drift .source", { opacity: 0, x: -150 }, { opacity: 1, x: 0, duration: 0.8, ease: "expo.out" }, 0.34);
+      tl.fromTo("#scene-drift .drift-link span", { scaleX: 0 }, { scaleX: 1, duration: 0.5, ease: "power2.out" }, 0.68);
+      // beat-locked: connector break near 2.19s
+      tl.to("#scene-drift .left-half", { x: -22, rotation: -8, duration: 0.24, ease: "power3.in" }, 2.08);
+      tl.to("#scene-drift .right-half", { x: 22, rotation: 8, duration: 0.24, ease: "power3.in" }, 2.08);
+      tl.fromTo("#scene-drift .broken-label", { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.34, ease: "power2.out" }, 2.2);
+      tl.to("#scene-drift .scene-inner", { opacity: 0, x: -90, duration: 0.34, ease: "power3.in" }, 4.02);
+
+      tl.fromTo("#scene-check .terminal-window", { opacity: 0, scale: 0.95, x: 70 }, { opacity: 1, scale: 1, x: 0, duration: 0.62, ease: "power4.out" }, 4.55);
+      tl.fromTo("#scene-check .terminal-side", { opacity: 0, x: 65 }, { opacity: 1, x: 0, duration: 0.58, ease: "power2.out" }, 4.78);
+      const checkText = { count: 0 };
+      tl.to(checkText, { count: 10, duration: 0.9, ease: "steps(10)", onUpdate: () => { document.getElementById("check-command").textContent = "criv check".slice(0, Math.round(checkText.count)); } }, 5.34);
+      tl.fromTo("#scene-check .caret", { opacity: 1 }, { opacity: 0.2, duration: 0.28, ease: "steps(1)", yoyo: true, repeat: 7 }, 5.34);
+      // beat-locked: success result at 8.74s
+      tl.fromTo("#check-result", { opacity: 0, y: 24 }, { opacity: 1, y: 0, duration: 0.38, ease: "back.out(1.3)" }, 8.74);
+
+      tl.fromTo("#scene-coverage .coverage-intro", { opacity: 0, x: -60 }, { opacity: 1, x: 0, duration: 0.52, ease: "power3.out" }, 9.46);
+      tl.fromTo("#scene-coverage .coverage-panel", { opacity: 0, x: 90, scale: 0.97 }, { opacity: 1, x: 0, scale: 1, duration: 0.58, ease: "expo.out" }, 9.62);
+      tl.fromTo("#scene-coverage .coverage-row", { opacity: 0, y: 34 }, { opacity: 1, y: 0, duration: 0.42, stagger: 0.48, ease: "power2.out" }, 10.1);
+      const sourceCounter = { value: 0 };
+      const governedCounter = { value: 0 };
+      tl.to(sourceCounter, { value: 355, duration: 0.82, ease: "power2.out", onUpdate: () => { document.getElementById("source-count").textContent = String(Math.round(sourceCounter.value)); } }, 10.37);
+      tl.to(governedCounter, { value: 355, duration: 0.82, ease: "power2.out", onUpdate: () => { document.getElementById("governed-count").textContent = String(Math.round(governedCounter.value)); } }, 10.93);
+      tl.fromTo("#ungoverned-count", { scale: 0.65 }, { scale: 1, duration: 0.44, ease: "back.out(1.6)" }, 12.55);
+      tl.to("#scene-coverage .scene-inner", { opacity: 0, scale: 0.97, duration: 0.28, ease: "power2.in" }, 12.83);
+      // beat-locked: ADR history starts at 13.11s
+      tl.fromTo("#scene-adrs .adr-copy", { opacity: 0, x: -64 }, { opacity: 1, x: 0, duration: 0.58, ease: "power3.out" }, 13.2);
+      tl.fromTo("#scene-adrs .adr-timeline", { opacity: 0, x: 90, scale: 0.97 }, { opacity: 1, x: 0, scale: 1, duration: 0.62, ease: "expo.out" }, 13.28);
+      tl.fromTo("#scene-adrs .adr-track-live", { scaleY: 0 }, { scaleY: 1, duration: 4.05, ease: "power1.inOut" }, 13.52);
+      tl.fromTo("#scene-adrs .adr-node", { opacity: 0, x: 50 }, { opacity: 1, x: 0, duration: 0.36, stagger: 0.63, ease: "power2.out" }, 13.56);
+      tl.fromTo("#scene-adrs .supersedes-tag", { opacity: 0 }, { opacity: 1, duration: 0.22, stagger: 0.63, ease: "none" }, 14.0);
+      tl.fromTo("#scene-adrs .is-current .adr-dot", { scale: 0.5 }, { scale: 1, duration: 0.48, ease: "back.out(1.7)" }, 17.2);
+      tl.fromTo("#scene-adrs .adr-rule", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.46, ease: "power2.out" }, 17.82);
+      tl.to("#scene-adrs .scene-inner", { opacity: 0, x: -70, duration: 0.34, ease: "power3.in" }, 19.28);
+
+      // beat-locked: final lockup at 19.66s
+      tl.fromTo("#scene-outro .criv-mark", { opacity: 0, scale: 0.78, rotation: -4 }, { opacity: 1, scale: 1, rotation: 0, duration: 0.72, ease: "back.out(1.4)" }, 19.66);
+      tl.fromTo("#scene-outro h2", { opacity: 0, x: 80 }, { opacity: 1, x: 0, duration: 0.58, ease: "power4.out" }, 19.85);
+      tl.fromTo("#scene-outro .tagline", { opacity: 0, y: 34 }, { opacity: 1, y: 0, duration: 0.64, ease: "power2.out" }, 20.27);
+      tl.fromTo("#scene-outro .footer", { opacity: 0 }, { opacity: 1, duration: 0.8, ease: "sine.out" }, 20.75);
+      tl.to("#scene-outro .criv-mark", { scale: 1.025, duration: 1.6, ease: "sine.inOut", yoyo: true, repeat: 1 }, 21.29);
+
+      const audioData = window.CRIV_AUDIO_DATA;
+      if (audioData && audioData.frames) {
+        audioData.frames.forEach((frame, index) => {
+          tl.call(() => {
+            const bands = frame.bands || [];
+            const bass = Number(bands[0] || 0);
+            const rms = bands.length ? bands.reduce((sum, value) => sum + Number(value || 0), 0) / bands.length : 0;
+            document.documentElement.style.setProperty("--audio-bass", bass.toFixed(4));
+            document.documentElement.style.setProperty("--audio-rms", rms.toFixed(4));
+          }, [], index / audioData.fps);
+        });
+      }
+
+      window.__timelines["main"] = tl;
+      tl.seek(0);
+    </script>
+  </body>
+</html>

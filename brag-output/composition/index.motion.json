@@ -1,0 +1,13 @@
+{
+  "duration": 25,
+  "assertions": [
+    { "kind": "appearsBy", "selector": "#scene-drift h1", "bySec": 1.2 },
+    { "kind": "appearsBy", "selector": "#check-result", "bySec": 9.15 },
+    { "kind": "appearsBy", "selector": "#scene-adrs .is-current", "bySec": 18.0 },
+    { "kind": "appearsBy", "selector": "#scene-outro .tagline", "bySec": 21.2 },
+    { "kind": "staysInFrame", "selector": ".terminal-window" },
+    { "kind": "staysInFrame", "selector": ".coverage-panel" },
+    { "kind": "staysInFrame", "selector": ".adr-timeline" },
+    { "kind": "staysInFrame", "selector": ".criv-mark" }
+  ]
+}
