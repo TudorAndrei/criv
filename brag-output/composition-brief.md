@@ -57,15 +57,15 @@ Use `brag-output/brag-plan.md` as the creative contract.
 
 - Audio role: cinematic support
 - Audio arc: low at the hook, firmer under the terminal result, then reduced under the final hold
-- Music: `happy-beats-business-moves-vol-12-by-ende-dot-app.mp3`
-- Music treatment: baseline volume 0.24, short fade-in, and fade to 0.10 during the final second
-- Music cue guidance: `composition/assets/music/cues/happy-beats-business-moves-vol-12-by-ende-dot-app.music-cues.json`
+- Music: `spira-breakbeat-loop-gm-120bpm-by-ohpalmusic.mp3`
+- Music treatment: baseline volume 0.10, short fade-in, and fade to 0.04 during the final second
+- Music cue guidance: `composition/assets/music/cues/spira-breakbeat-loop-gm-120bpm-by-ohpalmusic.music-cues.json`
 - Audio-reactive treatment: extracted data at `composition/assets/music/audio-data.json`; use bass and RMS only for subtle connector glow and background depth
 - Audio-coupled moments:
-  - 2.19 seconds: connector break
-  - 8.74 seconds: terminal result
-  - 13.11 seconds: ADR history
-  - 19.66 seconds: final criv lockup
+  - 2.40 seconds: connector break
+  - 8.41 seconds: terminal result
+  - 13.40 seconds: ADR history
+  - 19.90 seconds: final criv lockup
 - SFX selection: low-risk click for the broken link, soft impact for terminal success, and restrained bell for the final lockup
 - SFX analysis guidance: `.agents/skills/brag/assets/sfx/sfx-analysis.md`
 - Audio files are local under `brag-output/composition/assets/`

@@ -65,12 +65,12 @@ Documentation drifts. criv keeps ADR history explicit, validates supersession, a
 ## Audio direction
 
 - Role: cinematic support
-- Music: `happy-beats-business-moves-vol-12-by-ende-dot-app.mp3`
-- Music treatment: 0.24 volume, short fade-in, and a fade under the final lockup
-- Music cue guidance: bundled preset at `composition/assets/music/cues/happy-beats-business-moves-vol-12-by-ende-dot-app.music-cues.json`, 109.96 BPM. Target 8.74 seconds for the terminal result, 13.11 seconds for the ADR history, and 19.66 seconds for the final brand reveal.
+- Music: `spira-breakbeat-loop-gm-120bpm-by-ohpalmusic.mp3`
+- Music treatment: 0.10 volume, short fade-in, and a fade under the final lockup
+- Music cue guidance: analyzed preset at `composition/assets/music/cues/spira-breakbeat-loop-gm-120bpm-by-ohpalmusic.music-cues.json`, 120.19 BPM. Target 8.41 seconds for the terminal result, 13.40 seconds for the ADR history, and 19.90 seconds for the final brand reveal.
 - Audio-reactive treatment: subtle connector and background response from extracted bass and RMS data
 - SFX posture: sparse and motion-matched
-- Audio-coupled moments: connector snap at 2.19 seconds, terminal result at 8.74 seconds, ADR history at 13.11 seconds, final criv lockup at 19.66 seconds
+- Audio-coupled moments: connector snap at 2.40 seconds, terminal result at 8.41 seconds, ADR history at 13.40 seconds, final criv lockup at 19.90 seconds
 - Restraint rule: no sound for every text line, no loud impacts, and no equalizer visuals
 
 ## Storyboard
@@ -83,7 +83,7 @@ Sequential or interaction: the two cards move apart, then the connector breaks.
 
 Audio intent: low music bed and one dry click when the link breaks.
 
-Audio-coupled idea: connector break near the 2.19 second beat.
+Audio-coupled idea: connector break near the 2.40 second beat.
 
 Transition mood: hard structural wipe into Scene 2.
 
@@ -95,11 +95,11 @@ Sequential or interaction: command types, the cursor waits, and the result appea
 
 Audio intent: music gains a little presence. A soft impact supports the result.
 
-Audio-coupled idea: result lands on the 8.74 second strong cue.
+Audio-coupled idea: result lands on the 8.41 second strong cue.
 
 Transition mood: clean push into Scene 3.
 
-### Scene 3: Proof, 3.81 seconds
+### Scene 3: Proof, 4.1 seconds
 
 The terminal queries coverage. The real current values appear: 355 source files, 355 governed files, and 0 ungoverned files.
 
@@ -107,11 +107,11 @@ Sequential or interaction: coverage rows arrive one by one with enough settled t
 
 Audio intent: this is the evidence peak. Use the bed and a restrained terminal click.
 
-Audio-coupled idea: the proof settles before the 13.11 second change.
+Audio-coupled idea: the proof settles before the 13.40 second change.
 
 Transition mood: focused push into Scene 4.
 
-### Scene 4: ADR history, 6.55 seconds
+### Scene 4: ADR history, 6.5 seconds
 
 A vertical decision timeline uses the real ADR-0038 → 0039 → 0040 → 0041 → 0056 → 0059 chain. Old decisions stay visible as superseded. ADR-0059 lands as the accepted decision. ADR-0012 names the immutable-history rule.
 
@@ -119,11 +119,11 @@ Sequential or interaction: the line grows, then each ADR and supersession label 
 
 Audio intent: the chain has a steady rise. The current decision gets one restrained emphasis.
 
-Audio-coupled idea: the timeline begins on the 13.11 second strong cue.
+Audio-coupled idea: the timeline begins on the 13.40 second strong cue.
 
 Transition mood: the history moves left into the final lockup.
 
-### Scene 5: Connected, 5.34 seconds
+### Scene 5: Connected, 5.1 seconds
 
 The criv mark and name land. The site line holds: "Keep repository documentation connected to the code it describes." A small footer reads "local Rust CLI / no server / no network".
 
@@ -131,7 +131,7 @@ Sequential or interaction: logo lands first, tagline follows, footer settles las
 
 Audio intent: one deep but quiet final accent. Music fades through the hold.
 
-Audio-coupled idea: final lockup lands at 19.66 seconds.
+Audio-coupled idea: final lockup lands at 19.90 seconds.
 
 Transition mood: hold on the final frame.
 
