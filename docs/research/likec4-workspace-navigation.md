@@ -1,3 +1,9 @@
+---
+id: likec4-workspace-navigation
+kind: doc
+title: LikeC4 workspace and navigation research
+---
+
 # LikeC4 Workspace and Navigation Research
 
 Date: 2026-08-04
@@ -45,8 +51,8 @@ nested projects only to organize C4 levels. See
 Criv already gives the complete `docs/architecture/` path to
 `LikeC4.fromWorkspace`, so a recursive file split fits the current compiler
 bridge. See
-[`assets/likec4-bridge.mjs`](../assets/likec4-bridge.mjs#L14) and
-[`src/c4/likec4.rs`](../src/c4/likec4.rs#L70).
+[`assets/likec4-bridge.mjs`](../../assets/likec4-bridge.mjs#L14) and
+[`src/c4/likec4.rs`](../../src/c4/likec4.rs#L70).
 
 ## Source folders and view folders are different
 
@@ -149,7 +155,7 @@ Criv uses `ReactLikeC4`, but it passes no `onNavigateTo` callback. It passes a
 `browser` property through an unsafe type cast, but `browser` belongs to
 `LikeC4View`, not `ReactLikeC4`. Thus, this property does not provide navigation.
 See
-[`packages/criv-likec4/src/renderer.ts`](../packages/criv-likec4/src/renderer.ts#L73)
+[`packages/criv-likec4/src/renderer.ts`](../../packages/criv-likec4/src/renderer.ts#L73)
 and the official
 [`ReactLikeC4` properties](https://github.com/likec4/likec4/blob/67b696e77ef8f97f43e435819a019ff8cc637cec/packages/diagram/src/ReactLikeC4.tsx#L12-L58).
 
@@ -164,12 +170,12 @@ The shared criv renderer needs these changes:
 
 The VS Code host already selects a view from the opened file's `sourcePath`.
 This makes one view per source file the safest initial layout. See
-[`previewModel.ts`](../extensions/vscode-criv/src/c4/previewModel.ts#L4).
+[`previewModel.ts`](../../extensions/vscode-criv/src/c4/previewModel.ts#L4).
 
 The Obsidian adapter currently opens the first view in the model and does not
 select by the opened file's `sourcePath`. It must supply the file-owned view when
 the workspace is split. See
-[`main.ts`](../.obsidian/plugins/criv/src/main.ts#L750).
+[`main.ts`](../../.obsidian/plugins/criv/src/main.ts#L750).
 
 ## Recommended file layout
 
