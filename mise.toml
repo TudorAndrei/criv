@@ -16,6 +16,7 @@ cocogitto = "7.0.0"
 taplo = "0.10.0"
 "github:astral-sh/hawk" = "0.1.9"
 "github:jdx/mr-boxington" = "1.9.0"
+vale = "3.22.0"
 
 [env]
 HK_MISE = "1"

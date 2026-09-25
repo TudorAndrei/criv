@@ -35,7 +35,7 @@ that installs into `.git/hooks` stops running, silently and with no diagnostic.
 This repository is the proof. [[0013-mise-managed-hk-hook-toolchain|ADR-0013]]
 gives hk ownership of hook behavior, and `hk install --mise` had written
 `.git/hooks/pre-commit`. `criv init` then set `core.hooksPath = .githooks`, so
-git never looked at `.git/hooks` again. Every hk `pre-commit` step — `cargo-fmt`,
+Git never looked at `.git/hooks` again. Every hk `pre-commit` step — `cargo-fmt`,
 `toml-fmt`, `actionlint`, `zizmor`, `vscode-lint`, `vscode-json-diagnostics` —
 and the `commit-msg` conventional-commit check stopped running at commit time.
 Nobody noticed, because `mise run check` and CI invoke hk directly and were
@@ -51,7 +51,7 @@ setting away from the tool whose actual job that is.
 
 ## Decision
 
-`criv init` does not create git hooks and does not read or write
+`criv init` does not create Git hooks and does not read or write
 `core.hooksPath`. The `--no-hooks` and `--force-hooks` flags are removed, because
 [[0021-audit-remediation-boundaries|ADR-0021]] requires user-facing flags to
 correspond to active behavior and these would control nothing.
@@ -84,6 +84,6 @@ automation and is the honest cost of this decision.
 This repository unsets `core.hooksPath` and deletes `.githooks/`, which activates
 the hk hooks that ADR-0013 always intended to run.
 
-`criv init` no longer needs to discover the git worktree, so the git subprocess
+`criv init` no longer needs to discover the Git worktree, so the Git subprocess
 calls, the bare-repository handling, and the executable-bit logic are removed
 with it.

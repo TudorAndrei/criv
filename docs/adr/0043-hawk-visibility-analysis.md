@@ -43,7 +43,7 @@ pre-commit hook because it performs whole-workspace compiler analysis.
 
 Invoke Hawk with `--target-dir target/hawk` and `--exclude-crate criv_wasm`.
 The dedicated target directory keeps its instrumented compiler artifacts apart
-from the other parallel checks. Its public WASM exports are consumed by
+from the other parallel checks. Its public Wasm exports are consumed by
 generated artifacts instead of the CLI binary, so treating that crate as an
 internal CLI library would produce false positives.
 
@@ -54,5 +54,5 @@ CLI product surface. Visibility changes must preserve all CLI, test, example,
 and doctest consumers modeled by Hawk.
 
 Updating Hawk requires updating its matching Rust toolchain at the same time.
-The project Rust pin also governs CI and the VS Code WASM build command, keeping
+The project Rust pin also governs CI and the VS Code Wasm build command, keeping
 all workspace Rust compilation on the same version.

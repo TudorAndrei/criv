@@ -26,7 +26,7 @@ The Rust ecosystem has several relevant tools:
   changelog generation, and tag creation.
 - release-plz creates release pull requests, can publish crates, and combines
   conventional commits with cargo-semver-checks.
-- git-cliff is strong changelog tooling, but it does not own the release
+- `git-cliff` is strong changelog tooling, but it does not own the release
   version and tag decision by itself.
 
 ## Decision
@@ -59,7 +59,7 @@ manually. The release level follows Conventional Commits: `fix` maps to patch,
 `feat` maps to minor, and `!` or `BREAKING CHANGE:` maps to major.
 
 The project keeps its existing tag-triggered binary workflow and its current
-root plus WASM tag naming scheme. Crates.io publishing remains manual so it can
+root plus Wasm tag naming scheme. Crates.io publishing remains manual so it can
 be decided separately from downloadable CLI binary releases.
 
 The release path now depends on Cocogitto and cargo-release being installed.

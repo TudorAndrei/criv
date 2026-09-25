@@ -378,6 +378,25 @@ jobs:
         if: needs.changes.outputs.site == 'true'
         run: npm run build:site
 
+  vale:
+    name: Vale prose lint
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Lint docs with Vale
+        uses: vale-cli/vale-action@518a9136acc6e6668ce7c00d367051e0941e87ff # v3.0.0
+        with:
+          version: 3.22.0
+          files: docs
+          sync: false
+          filter_mode: nofilter
+          fail_on_error: true
+
   performance-smoke:
     name: Performance tooling smoke tests
     needs: changes
@@ -443,6 +462,7 @@ jobs:
       - obsidian
       - performance-smoke
       - site
+      - vale
       - vscode
       - windows
       - macos-watch-lock
@@ -459,6 +479,7 @@ jobs:
           OBSIDIAN_RESULT: ${{ needs.obsidian.result }}
           PERFORMANCE_SMOKE_RESULT: ${{ needs.performance-smoke.result }}
           SITE_RESULT: ${{ needs.site.result }}
+          VALE_RESULT: ${{ needs.vale.result }}
           VSCODE_RESULT: ${{ needs.vscode.result }}
           WINDOWS_RESULT: ${{ needs.windows.result }}
           MACOS_WATCH_LOCK_RESULT: ${{ needs.macos-watch-lock.result }}
@@ -471,6 +492,7 @@ jobs:
           test "$OBSIDIAN_RESULT" = success
           test "$PERFORMANCE_SMOKE_RESULT" = success
           test "$SITE_RESULT" = success
+          test "$VALE_RESULT" = success
           test "$VSCODE_RESULT" = success
           test "$WINDOWS_RESULT" = success
           test "$MACOS_WATCH_LOCK_RESULT" = success

@@ -21,7 +21,7 @@ implementation of criv's graph logic.
 
 Ship an Obsidian sample-plugin-style scaffold from `src/init.rs`. The plugin
 reads `.criv/state.json`, validates schema version, renders state-derived source
-and pattern context, and delegates small shared helper logic to the WASM crate.
+and pattern context, and delegates small shared helper logic to the Wasm crate.
 
 The CLI and plugin share link-resolution fixture cases. New vaults initialized
 by criv receive the same fixture data in the generated plugin scaffold.
@@ -33,4 +33,4 @@ validation stay in the CLI.
 
 Generated plugin artifacts must be kept reproducible through the plugin build
 tooling. Release checks should include the plugin build when plugin templates or
-WASM helper behavior changes.
+Wasm helper behavior changes.

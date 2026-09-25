@@ -153,3 +153,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0140-own-the-complete-adr-change-decision|ADR-0140]] - Own the complete ADR change decision
 - [[0141-own-ordinary-refresh-checks-in-the-watch-generation|ADR-0141]] - Own ordinary refresh checks in the Watch generation
 - [[0142-use-mbx-for-local-cargo-caching|ADR-0142]] - Use mbx for local Cargo caching
+- [[0143-lint-docs-prose-with-vale|ADR-0143]] - Lint docs prose with Vale

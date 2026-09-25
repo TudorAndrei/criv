@@ -38,7 +38,7 @@ an empty cache and no network the failure is a hard error retrieving
 `model.onnx`.
 
 [[0001-local-cli-vault-architecture|ADR-0001]] warns explicitly against adding
-network-dependent assumptions to a tool that runs inside git hooks and CI. An
+network-dependent assumptions to a tool that runs inside Git hooks and CI. An
 embeddings-enabled release artifact would violate that on first use.
 
 The feature is not dead: it compiles, passes its feature-gated tests, and

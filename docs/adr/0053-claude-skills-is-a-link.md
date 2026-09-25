@@ -68,7 +68,7 @@ all.
 Collapsing an existing `.claude/skills` directory deletes the copies it holds, so
 it requires `criv init --force-skills`. A plain `criv init` reports the directory
 and leaves it alone. This follows the rule established by ADR-0051: criv nudges,
-the user acts, because these files are tracked by git and a silent rewrite would
+the user acts, because these files are tracked by Git and a silent rewrite would
 produce surprise working-tree changes.
 
 `criv check` reports a real `.claude/skills` directory as out of date, alongside

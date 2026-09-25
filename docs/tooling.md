@@ -39,6 +39,23 @@ Workflow YAML under `.github/workflows/` is checked with actionlint in
 hooks so local validation does not require a GitHub token or network access.
 This follow-up hook decision is [[0018-offline-zizmor-actions-security-check|ADR-0018]].
 
+## Prose lint
+
+Vale checks the prose in `docs/`. `.vale.ini` applies the built-in `Vale`
+style, so no `vale sync` step is necessary. The `pre-commit` hook runs Vale on
+changed files under `docs/`. The hosted `vale` CI job runs
+`vale-cli/vale-action` on all of `docs/`. To run it locally:
+
+```sh
+mise exec -- vale docs
+```
+
+If Vale flags a correct project word, add it to
+`.vale/styles/config/vocabularies/criv/accept.txt`. Add the `(?i)` prefix to a
+common word. Do not add it to a proper noun or an acronym, so Vale enforces the
+case.
+[[0143-lint-docs-prose-with-vale|ADR-0143]] records this decision.
+
 ## Local Rust cache
 
 Mise 2026.8.16 or later routes this project's `cargo` commands through
@@ -335,7 +352,7 @@ shell wrapper around `hk util check-conventional-commit`.
 
 The `hawk` hk step runs Hawk with warnings denied against the shipped `criv` CLI.
 The `criv-wasm` crate is excluded because its exported functions are consumed by
-the separately built WASM artifacts, outside the CLI binary's Cargo graph. The
+the separately built Wasm artifacts, outside the CLI binary's Cargo graph. The
 pre-push and full `check` hooks run Hawk whenever Rust sources, Cargo metadata,
 or its configuration change. Hawk uses `target/hawk` for its instrumented Cargo
 artifacts so its compiler work stays isolated from the other parallel checks.

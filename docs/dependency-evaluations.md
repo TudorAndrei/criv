@@ -93,7 +93,7 @@ older `git2 v0.20.4` remains an independent transitive dependency of
 `fff-search`; `cargo tree -i git2@0.21.0` and `cargo tree -i git2@0.20.4`
 distinguish the two paths.
 
-The locally installed `fff-search v0.10.1` source was inspected. Its git path
+The locally installed `fff-search v0.10.1` source was inspected. Its Git path
 uses `Repository::open`, status enumeration, `workdir`, and `status_file`; a
 source search found no invocation of `Remote::list`, `BlameHunk`, or blame APIs.
 That is evidence that the two advisory call paths are not reached by the

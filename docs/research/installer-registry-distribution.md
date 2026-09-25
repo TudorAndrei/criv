@@ -205,7 +205,7 @@ installation. [Mise lock-file contract](https://mise.jdx.dev/dev-tools/mise-lock
    container tests. [Official add-package
    process](https://github.com/aquaproj/aqua-registry/blob/main/docs/add_package.md).
 3. Review all generated versions and asset rules. The repository has both a
-   root CLI tag and a WASM tag, but only root CLI GitHub Releases are valid for
+   root CLI tag and a Wasm tag, but only root CLI GitHub Releases are valid for
    this package. Do not use an asset allow list unless the generator includes
    unrelated assets. An allow list can remove `SHA256SUMS.txt` by mistake.
 4. Add the four exact `supported_envs`, the `SHA256SUMS.txt` parser, and the

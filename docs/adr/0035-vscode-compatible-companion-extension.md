@@ -50,7 +50,7 @@ environment.
 
 The Rust CLI remains authoritative for generated state, validation, source
 selectors, C4 artifact checks, and enforcement. The VS Code-compatible extension
-is a state consumer and renderer. Rust/WASM helpers in
+is a state consumer and renderer. Rust/Wasm helpers in
 `crates/criv-wasm/src/lib.rs` may provide editor-independent parsing and
 summary functions, but they must not depend on VS Code APIs or perform
 filesystem or process operations.
@@ -73,4 +73,4 @@ that workflow becomes important.
 
 The extension will duplicate some editor UI behavior from the Obsidian plugin,
 but the authoritative graph and validation boundary stays in the CLI and shared
-WASM helpers.
+Wasm helpers.

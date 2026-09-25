@@ -383,8 +383,10 @@ Ruby differs from Java in the flag shape. Ruby names the formatter with
 
 ### Java
 
+<!-- vale Vale.Terms = NO -->
 `message` is a built-in plugin, described as "Logs cucumbers execution as a
 stream of json messages". See the
+<!-- vale Vale.Terms = YES -->
 [`cucumber-core` README plugin list](https://github.com/cucumber/cucumber-jvm/blob/0c59737eef646f8ce30d26ae6f3e40fb575342ba/cucumber-core/README.md#built-in-plugins).
 
 The plugin is selected with the `cucumber.plugin` property, which takes comma
@@ -684,12 +686,12 @@ Issue [#208](https://github.com/TudorAndrei/criv/issues/208) must decide what
 criv reports when a report is absent, old, or from a different revision. These
 contract facts constrain that design.
 
-1. **The report can carry a git revision, but only from CI.** `Meta.ci.git`
+1. **The report can carry a Git revision, but only from CI.** `Meta.ci.git`
    holds `remote`, `revision`, and optionally `branch` and `tag`. The
    compatibility kit `meta` sample shows a real one. But `Meta.ci` is
    **optional**, and the `@cucumber/ci-environment` library returns a value only
    when it detects a CI server. See the
-   [ci-environment README](https://github.com/cucumber/ci-environment/blob/main/README.md)
+   [`ci-environment` README](https://github.com/cucumber/ci-environment/blob/main/README.md)
    and [`Meta.ci`](https://github.com/cucumber/messages/blob/b9b8315eb7564ca350da5d4227dc02a192ec100c/jsonschema/messages.md#metaci).
    A revision match is therefore available for a CI-produced report and is
    **not** available for a developer's local run. A freshness rule that needs a
@@ -698,7 +700,7 @@ contract facts constrain that design.
    digest of the `.feature` file or of the step definition file. `Source.data`
    holds the complete feature text, so criv could hash `Source.data` itself and
    compare it to the working tree. That is a stronger staleness signal than the
-   git revision, because it works locally too, and it is per file.
+   Git revision, because it works locally too, and it is per file.
 3. **`TestRunStarted.timestamp` gives the run time.** It is required, so every
    report has a run time that does not depend on the file modification time.
 4. **The `UNDEFINED` signal is available without running anything past parse.**

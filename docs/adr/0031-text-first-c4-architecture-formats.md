@@ -22,7 +22,7 @@ kept generated Code architecture as Graphviz DOT because the exhaustive source
 graph exceeded practical Mermaid rendering limits.
 
 Future architecture viewers may live in Obsidian and VS Code, and may use
-browser libraries, WASM helpers, canvas formats, or whiteboard-style editors.
+browser libraries, Wasm helpers, canvas formats, or whiteboard-style editors.
 Those viewers are useful for human review, but they must not become the
 authoritative source of architecture truth.
 
@@ -52,7 +52,7 @@ verification should parse or normalize the artifact into criv's C4 model before
 running architecture checks such as duplicate aliases, unresolved relationships,
 invalid C4 levels, missing labels, and stale `criv:source` references.
 
-Editor viewers in Obsidian and future VS Code integrations may use WASM,
+Editor viewers in Obsidian and future VS Code integrations may use Wasm,
 JavaScript rendering libraries, canvas APIs, or whiteboard libraries. These
 viewers may improve layout, navigation, filtering, and review ergonomics, but
 they must not replace CLI-owned generation and validation.
@@ -70,4 +70,4 @@ reviewable text artifact, it is not a criv architecture source format.
 
 The CLI remains the authority for generated architecture freshness and
 validation. Obsidian and VS Code viewers remain consumers of criv state and
-artifacts, optionally sharing Rust logic through WASM.
+artifacts, optionally sharing Rust logic through Wasm.

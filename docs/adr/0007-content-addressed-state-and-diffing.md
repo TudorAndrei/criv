@@ -17,7 +17,7 @@ governs:
 The graph is useful only if criv can compare it across time. The original spec
 called for content-addressed snapshots under `.criv/snapshots/` and diff queries
 over graph nodes and edges. Early state writing existed, but snapshot identity
-needed stable hashes and git-ref resolution.
+needed stable hashes and Git ref resolution.
 
 ## Decision
 
@@ -26,7 +26,7 @@ node hashes, edge hashes, and graph root hashes. `criv watch --once` and watch
 rebuilds write the latest state and snapshot pointer.
 
 Make `src/query.rs` resolve `query diff <a> <b>` against local snapshots first
-and then git refs when a snapshot hash is not found.
+and then Git refs when a snapshot hash is not found.
 
 ## Consequences
 

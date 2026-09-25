@@ -30,6 +30,8 @@ roots = [
   "cog.toml",
   ".taplo.toml",
   ".rumdl.toml",
+  ".vale.ini",
+  ".vale",
   ".gitignore",
   ".worktreeinclude",
   "skills-lock.json",

@@ -81,7 +81,7 @@ release. While criv is still in `0.y.z`, Cocogitto will not automatically select
 `1.0.0`; cut that intentionally with a manual versioned release if needed. This
 decision is captured in [[0016-conventional-commit-semver-release-automation|ADR-0016]].
 
-Releases remain git-tag-only. Do not publish `criv` to crates.io until
+Releases remain Git-tag-only. Do not publish `criv` to crates.io until
 the CLI API, state schema compatibility policy, and installer story are stable
 enough to support registry consumers. The GitHub binary release is
 the authoritative distribution path for now.
@@ -107,7 +107,7 @@ the intentional file-selection corrections from ADR-0111.
 Current tag names use:
 
 - `vX.Y.Z` for the root CLI crate.
-- `criv-wasm-vX.Y.Z` for the WASM helper crate.
+- `criv-wasm-vX.Y.Z` for the Wasm helper crate.
 
 The workflow builds `criv` archives named by Rust target triple:
 

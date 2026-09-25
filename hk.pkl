@@ -24,6 +24,11 @@ local full_docs = new Step {
   fix = "cargo run --locked --quiet -- check --fix"
 }
 
+local vale = new Step {
+  glob = List("docs/**/*.md")
+  check = "vale {{files}}"
+}
+
 local enforce_commit = new Step {
   check = "cargo run --locked --quiet -- enforce --stage commit"
 }
@@ -118,6 +123,7 @@ hooks {
       ["shellcheck"] = shellcheck
       ["zizmor"] = zizmor
       ["criv-check"] = staged_docs
+      ["vale"] = vale
       ["criv-enforce"] = enforce_commit
     }
   }

@@ -122,7 +122,7 @@ repos:
 
 Then run `pre-commit install --hook-type pre-commit --hook-type pre-push`.
 
-## simple-git-hooks
+## `simple-git-hooks`
 
 Add hook commands to `package.json`:
 
