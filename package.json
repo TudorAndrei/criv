@@ -31,5 +31,10 @@
     "@oxfmt/binding-linux-x64-gnu": "0.72.0",
     "@oxlint/binding-linux-arm64-gnu": "1.71.0",
     "@oxlint/binding-linux-x64-gnu": "1.71.0"
+  },
+  "overrides": {
+    "vite-plugin-singlefile": {
+      "micromatch": "npm:picomatch@4.0.7"
+    }
   }
 }
