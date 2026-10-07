@@ -11,7 +11,7 @@ use super::{
     BTreeMap, EditorC4Artifact, EditorGraphNode, EditorInventory, EditorLikeC4Model,
     EditorSourceEntry, MAX_AMBIGUOUS_SOURCE_CANDIDATES, PatternMatch, PreparedSelector,
     PreparedState, SelectorEntry, SourceSelectorSuggestion, SourceTargetCandidate,
-    SourceTargetLookupResult, StateSummary,
+    SourceTargetLookupResult, StateSummary, SuggestionKind,
 };
 
 #[cfg(test)]
@@ -86,7 +86,7 @@ pub fn editor_graph_nodes(state: &StateDocument) -> Vec<EditorGraphNode> {
                 .map(Box::new);
             EditorGraphNode {
                 id: node.id.clone(),
-                kind: node.kind.clone(),
+                kind: node.kind,
                 label: if node.label.is_empty() {
                     node.id.clone()
                 } else {
@@ -396,7 +396,7 @@ impl PreparedSelector {
                 Some(SourceSelectorSuggestion {
                     target: source.path.clone(),
                     label: source.path.clone(),
-                    kind: "file".into(),
+                    kind: SuggestionKind::File,
                     path: source.path.clone(),
                     detail: "file".into(),
                 })
@@ -406,7 +406,7 @@ impl PreparedSelector {
                 Some(SourceSelectorSuggestion {
                     target: node.source_target.clone().unwrap_or_default(),
                     label: node.label.clone(),
-                    kind: node.kind.clone(),
+                    kind: SuggestionKind::Node(node.kind),
                     path: node.path.clone().unwrap_or_default(),
                     detail: node.id.clone(),
                 })
@@ -518,7 +518,7 @@ impl SourceTargetCandidate {
         Some(Self {
             canonical_target: canonical_source_target(node)?.to_string(),
             node_id: node.id.clone(),
-            kind: node.kind.clone(),
+            kind: node.kind,
             label: node.label.clone(),
         })
     }

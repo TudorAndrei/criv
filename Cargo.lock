@@ -438,6 +438,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "strum",
 ]
 
 [[package]]

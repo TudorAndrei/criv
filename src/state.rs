@@ -7,8 +7,8 @@ use std::{cell::Cell, thread_local};
 #[cfg(test)]
 use criv_state_wire::STATE_SCHEMA;
 use criv_state_wire::{
-    AssetIndexEntry, Edge, Graph, LikeC4ArchitectureState, Node, PatternMatch, SourceIndexEntry,
-    StateDocument, source_identity::SourceIdentity,
+    AssetIndexEntry, Edge, EdgeKind, Graph, LikeC4ArchitectureState, Node, NodeKind, PatternMatch,
+    SourceIndexEntry, StateDocument, source_identity::SourceIdentity,
 };
 use serde::{Serialize, Serializer};
 
@@ -487,7 +487,7 @@ fn append_graph_rows(
         add_node(graph, seen_nodes, node.clone());
     }
     for edge in &rows.edges {
-        add_edge(graph, seen_edges, &edge.from, &edge.to, &edge.kind);
+        add_edge(graph, seen_edges, &edge.from, &edge.to, edge.kind);
     }
 }
 
@@ -619,7 +619,7 @@ impl State {
             .graph
             .nodes
             .iter()
-            .filter(|node| node.kind == "architecture-interface")
+            .filter(|node| node.kind == NodeKind::ArchitectureInterface)
             .map(|node| (node.id.clone(), node.label.clone()))
             .collect()
     }
@@ -692,13 +692,13 @@ fn add_node(graph: &mut Graph, seen: &mut BTreeSet<String>, node: Node) {
     }
 }
 
-fn add_edge(graph: &mut Graph, seen: &mut BTreeSet<String>, from: &str, to: &str, kind: &str) {
+fn add_edge(graph: &mut Graph, seen: &mut BTreeSet<String>, from: &str, to: &str, kind: EdgeKind) {
     let key = format!("{from}\0{to}\0{kind}");
     if seen.insert(key) {
         let mut edge = Edge {
             from: from.into(),
             to: to.into(),
-            kind: kind.into(),
+            kind,
             hash: String::new(),
         };
         edge.hash = edge_hash(&edge);
@@ -936,7 +936,12 @@ end
             "external-module",
         ] {
             assert!(
-                first.wire.graph.nodes.iter().any(|node| node.kind == kind),
+                first
+                    .wire
+                    .graph
+                    .nodes
+                    .iter()
+                    .any(|node| node.kind.as_str() == kind),
                 "missing State node kind {kind}"
             );
         }
@@ -968,19 +973,21 @@ end
             "implements-behaviour",
         ] {
             assert!(
-                first.wire.graph.edges.iter().any(|edge| edge.kind == kind),
+                first
+                    .wire
+                    .graph
+                    .edges
+                    .iter()
+                    .any(|edge| edge.kind.as_str() == kind),
                 "missing State edge kind {kind}"
             );
         }
         let app = "symbol:lib/sample.ex#module:Demo.App";
         let run = "symbol:lib/sample.ex#module:Demo.App/fn:run/1";
         assert!(
-            first
-                .wire
-                .graph
-                .edges
-                .iter()
-                .any(|edge| { edge.from == app && edge.to == run && edge.kind == "contains" })
+            first.wire.graph.edges.iter().any(|edge| {
+                edge.from == app && edge.to == run && edge.kind == EdgeKind::Contains
+            })
         );
         assert!(
             first
@@ -1031,7 +1038,7 @@ end
         assert!(changed.wire.graph.edges.iter().any(|edge| {
             edge.from == run
                 && edge.to == "symbol:lib/sample.ex#module:Demo.Target/fn:other/1"
-                && edge.kind == "calls"
+                && edge.kind == EdgeKind::Calls
         }));
 
         let _ = std::fs::remove_dir_all(root);
