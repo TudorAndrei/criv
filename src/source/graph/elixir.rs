@@ -597,11 +597,8 @@ fn collect_modules(
     if depth >= super::MAX_AST_DEPTH {
         return;
     }
-    if declaration_target(node, contents)
-        .as_deref()
-        .is_some_and(is_module_declaration)
-    {
-        parse_module(node, contents, path, parent_module, file);
+    if let Some(Declaration::Module(module)) = declaration(node, contents) {
+        parse_module(node, module, contents, path, parent_module, file);
         return;
     }
     let mut cursor = node.walk();
@@ -623,14 +620,12 @@ fn collect_modules(
 )]
 fn parse_module(
     node: Node<'_>,
+    declaration: ModuleDeclaration,
     contents: &str,
     path: &str,
     parent_module: Option<&str>,
     file: &mut SourceFile,
 ) {
-    let Some(declaration) = declaration_target(node, contents) else {
-        return;
-    };
     let Some(arguments) = direct_child_kind(node, "arguments") else {
         return;
     };
@@ -647,7 +642,7 @@ fn parse_module(
         return;
     }
 
-    let (owner, display_name, initial_kind) = if declaration == "defimpl" {
+    let (owner, display_name, initial_kind) = if declaration == ModuleDeclaration::Implementation {
         let Some(protocol_text) = node_text(first_argument, contents) else {
             return;
         };
@@ -681,7 +676,7 @@ fn parse_module(
         let Some(name) = static_module_name(&name_text, parent_module) else {
             return;
         };
-        let kind = if declaration == "defprotocol" {
+        let kind = if declaration == ModuleDeclaration::Protocol {
             SymbolKind::Protocol
         } else {
             SymbolKind::Module
@@ -796,20 +791,16 @@ impl ModuleBodyWalk<'_> {
         if depth >= super::MAX_AST_DEPTH {
             return;
         }
-        if declaration_target(node, contents)
-            .as_deref()
-            .is_some_and(is_module_declaration)
-        {
-            parse_module(node, contents, path, Some(module_name), file);
-            return;
-        }
-        if let Some(target) = declaration_target(node, contents) {
-            match target.as_str() {
-                "def" | "defp" | "defmacro" | "defmacrop" | "defguard" | "defguardp"
-                | "defdelegate" => {
+        if let Some(declaration) = declaration(node, contents) {
+            match declaration {
+                Declaration::Module(module) => {
+                    parse_module(node, module, contents, path, Some(module_name), file);
+                    return;
+                }
+                Declaration::Callable(callable) => {
                     if !unsafe_subtree(node)
                         && let Some(clause) =
-                            callable_clause(node, contents, path, module_name, &target)
+                            callable_clause(node, contents, path, module_name, callable)
                     {
                         if !clause.has_body
                             && clause.defaults.is_empty()
@@ -834,21 +825,21 @@ impl ModuleBodyWalk<'_> {
                     }
                     return;
                 }
-                "defstruct" => {
+                Declaration::Struct => {
                     if !unsafe_subtree(node) {
                         body.has_struct = true;
                         body.fields.extend(struct_fields(node, contents));
                     }
                     return;
                 }
-                "defexception" => {
+                Declaration::Exception => {
                     if !unsafe_subtree(node) {
                         body.has_exception = true;
                         body.fields.extend(struct_fields(node, contents));
                     }
                     return;
                 }
-                _ => {}
+                Declaration::Directive(_) => {}
             }
         }
 
@@ -875,26 +866,22 @@ fn collect_directives(
     scope: LexicalScope,
     file: &mut SourceFile,
 ) {
-    if declaration_target(node, contents)
-        .as_deref()
-        .is_some_and(is_module_declaration)
-    {
-        return;
-    }
-    if let Some(target) = declaration_target(node, contents)
-        && let Some(kind) = directive_kind(&target)
-    {
-        if !unsafe_subtree(node) {
-            file.imports.extend(parse_directive(
-                node,
-                contents,
-                module_name,
-                owner,
-                scope,
-                kind,
-            ));
+    match declaration(node, contents) {
+        Some(Declaration::Module(_)) => return,
+        Some(Declaration::Directive(kind)) => {
+            if !unsafe_subtree(node) {
+                file.imports.extend(parse_directive(
+                    node,
+                    contents,
+                    module_name,
+                    owner,
+                    scope,
+                    kind,
+                ));
+            }
+            return;
         }
-        return;
+        _ => {}
     }
 
     let child_scope = if matches!(node.kind(), "do_block" | "stab_clause")
@@ -921,16 +908,6 @@ fn is_lexical_keyword_pair(node: Node<'_>, contents: &str) -> bool {
                     "do" | "else" | "rescue" | "catch" | "after"
                 )
             })
-}
-
-fn directive_kind(target: &str) -> Option<DirectiveKind> {
-    match target {
-        "alias" => Some(DirectiveKind::Alias),
-        "import" => Some(DirectiveKind::Import),
-        "require" => Some(DirectiveKind::Require),
-        "use" => Some(DirectiveKind::Use),
-        _ => None,
-    }
 }
 
 fn parse_directive(
@@ -1055,7 +1032,9 @@ fn collect_attribute(node: Node<'_>, contents: &str, module_name: &str, body: &m
     let Some(call) = descendant_call(node) else {
         return;
     };
-    let Some(target) = declaration_target(call, contents) else {
+    let Some(attribute) =
+        declaration_target(call, contents).and_then(|target| target.parse::<Attribute>().ok())
+    else {
         return;
     };
     let Some(arguments) = direct_child_kind(call, "arguments") else {
@@ -1067,8 +1046,8 @@ fn collect_attribute(node: Node<'_>, contents: &str, module_name: &str, body: &m
     let Some(text) = node_text(value, contents) else {
         return;
     };
-    match target.as_str() {
-        "spec" => {
+    match attribute {
+        Attribute::Spec => {
             if let Some((name, arity, _params, output)) = signature_parts(&text) {
                 body.specifications.push(Specification {
                     name,
@@ -1078,10 +1057,10 @@ fn collect_attribute(node: Node<'_>, contents: &str, module_name: &str, body: &m
                 });
             }
         }
-        "callback" | "macrocallback" => {
+        Attribute::Callback | Attribute::MacroCallback => {
             if let Some((name, arity, params, output)) = signature_parts(&text) {
                 body.callbacks.push(Callback {
-                    kind: if target == "callback" {
+                    kind: if attribute == Attribute::Callback {
                         SymbolKind::Callback
                     } else {
                         SymbolKind::MacroCallback
@@ -1095,10 +1074,10 @@ fn collect_attribute(node: Node<'_>, contents: &str, module_name: &str, body: &m
                 });
             }
         }
-        "optional_callbacks" => {
+        Attribute::OptionalCallbacks => {
             body.optional_callbacks.extend(optional_callbacks(&text));
         }
-        "behaviour" => {
+        Attribute::Behaviour => {
             if let Some(module) = static_relationship_module(&text, module_name) {
                 body.relationships.push(Relationship {
                     kind: RelationshipKind::BehaviourImplementation,
@@ -1111,7 +1090,6 @@ fn collect_attribute(node: Node<'_>, contents: &str, module_name: &str, body: &m
                 });
             }
         }
-        _ => {}
     }
 }
 
@@ -1120,7 +1098,7 @@ fn callable_clause(
     contents: &str,
     path: &str,
     module_name: &str,
-    declaration: &str,
+    declaration: CallableDeclaration,
 ) -> Option<CallableClause> {
     let arguments = direct_child_kind(node, "arguments")?;
     let mut head = first_named_child(arguments)?;
@@ -1158,14 +1136,9 @@ fn callable_clause(
         .into_iter()
         .filter_map(|parameter| node_text(parameter, contents))
         .collect::<Vec<_>>();
-    let kind = match declaration {
-        "def" | "defp" | "defdelegate" => SymbolKind::Function,
-        "defmacro" | "defmacrop" => SymbolKind::Macro,
-        "defguard" | "defguardp" => SymbolKind::Guard,
-        _ => return None,
-    };
-    let exported = !matches!(declaration, "defp" | "defmacrop" | "defguardp");
-    if declaration == "defdelegate" {
+    let kind = declaration.symbol_kind();
+    let exported = declaration.exported();
+    if declaration == CallableDeclaration::Defdelegate {
         relationships.push(delegate_relationship(
             node,
             contents,
@@ -1200,7 +1173,7 @@ fn callable_clause(
         range: node_range(node),
         has_body: direct_child_kind(node, "do_block").is_some()
             || keyword_value(arguments, contents, "do:").is_some()
-            || declaration == "defdelegate",
+            || declaration == CallableDeclaration::Defdelegate,
         relationships,
         default_relationships,
     })
@@ -1998,8 +1971,101 @@ fn declaration_target(node: Node<'_>, contents: &str) -> Option<String> {
         .and_then(|target| node_text(target, contents))
 }
 
-fn is_module_declaration(target: &str) -> bool {
-    matches!(target, "defmodule" | "defprotocol" | "defimpl")
+fn declaration(node: Node<'_>, contents: &str) -> Option<Declaration> {
+    declaration_target(node, contents)?.parse().ok()
+}
+
+/// A call that declares or directs something in an Elixir module body.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Declaration {
+    Module(ModuleDeclaration),
+    Callable(CallableDeclaration),
+    Struct,
+    Exception,
+    Directive(DirectiveKind),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModuleDeclaration {
+    Module,
+    Protocol,
+    Implementation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CallableDeclaration {
+    Def,
+    Defp,
+    Defmacro,
+    Defmacrop,
+    Defguard,
+    Defguardp,
+    Defdelegate,
+}
+
+impl CallableDeclaration {
+    const fn symbol_kind(self) -> SymbolKind {
+        match self {
+            Self::Def | Self::Defp | Self::Defdelegate => SymbolKind::Function,
+            Self::Defmacro | Self::Defmacrop => SymbolKind::Macro,
+            Self::Defguard | Self::Defguardp => SymbolKind::Guard,
+        }
+    }
+
+    const fn exported(self) -> bool {
+        !matches!(self, Self::Defp | Self::Defmacrop | Self::Defguardp)
+    }
+}
+
+impl std::str::FromStr for Declaration {
+    type Err = ();
+
+    fn from_str(target: &str) -> Result<Self, Self::Err> {
+        Ok(match target {
+            "defmodule" => Self::Module(ModuleDeclaration::Module),
+            "defprotocol" => Self::Module(ModuleDeclaration::Protocol),
+            "defimpl" => Self::Module(ModuleDeclaration::Implementation),
+            "def" => Self::Callable(CallableDeclaration::Def),
+            "defp" => Self::Callable(CallableDeclaration::Defp),
+            "defmacro" => Self::Callable(CallableDeclaration::Defmacro),
+            "defmacrop" => Self::Callable(CallableDeclaration::Defmacrop),
+            "defguard" => Self::Callable(CallableDeclaration::Defguard),
+            "defguardp" => Self::Callable(CallableDeclaration::Defguardp),
+            "defdelegate" => Self::Callable(CallableDeclaration::Defdelegate),
+            "defstruct" => Self::Struct,
+            "defexception" => Self::Exception,
+            "alias" => Self::Directive(DirectiveKind::Alias),
+            "import" => Self::Directive(DirectiveKind::Import),
+            "require" => Self::Directive(DirectiveKind::Require),
+            "use" => Self::Directive(DirectiveKind::Use),
+            _ => return Err(()),
+        })
+    }
+}
+
+/// A module attribute that criv reads, as in `@spec`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Attribute {
+    Spec,
+    Callback,
+    MacroCallback,
+    OptionalCallbacks,
+    Behaviour,
+}
+
+impl std::str::FromStr for Attribute {
+    type Err = ();
+
+    fn from_str(target: &str) -> Result<Self, Self::Err> {
+        Ok(match target {
+            "spec" => Self::Spec,
+            "callback" => Self::Callback,
+            "macrocallback" => Self::MacroCallback,
+            "optional_callbacks" => Self::OptionalCallbacks,
+            "behaviour" => Self::Behaviour,
+            _ => return Err(()),
+        })
+    }
 }
 
 fn unsafe_subtree(node: Node<'_>) -> bool {
