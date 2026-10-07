@@ -9,11 +9,6 @@ use serde::{Deserialize, Serialize};
 /// Schema identity for the current published State document.
 pub const STATE_SCHEMA: &str = "criv.state.v1";
 
-/// Return true when a schema identity is the current State schema.
-pub fn is_supported_schema(schema: &str) -> bool {
-    schema == STATE_SCHEMA
-}
-
 /// The complete serialized State document shared by native and Wasm code.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StateDocument {
@@ -33,6 +28,7 @@ pub struct StateDocument {
 }
 
 impl StateDocument {
+    #[must_use]
     pub fn new(
         graph: Graph,
         registered_patterns: Vec<String>,
@@ -174,7 +170,7 @@ mod tests {
         assert_eq!(value["asset-index"][0]["path"], "docs/diagram.png");
 
         let decoded: StateDocument = serde_json::from_value(value).unwrap();
-        assert!(is_supported_schema(&decoded.schema));
+        assert_eq!(decoded.schema, STATE_SCHEMA);
         assert_eq!(decoded.graph.nodes[0].hash, "node-hash");
         assert_eq!(decoded.graph.edges[0].hash, "edge-hash");
         assert_eq!(decoded.asset_index[0].hash, "asset-hash");

@@ -7,7 +7,7 @@ local cargo_fmt = (Builtins.cargo_fmt) {
 
 local cargo_clippy = new Step {
   glob = List("**/*.rs", "Cargo.toml", "Cargo.lock")
-  check = "cargo clippy --locked --workspace --all-targets -- -D warnings"
+  check = "cargo clippy --locked --workspace --all-targets -- -D warnings && cargo clippy --locked --package criv-wasm --target wasm32-unknown-unknown --lib -- -D warnings"
 }
 
 local staged_docs = new Step {
@@ -68,8 +68,8 @@ local enforce_ci = new Step {
   check = "cargo run --locked --quiet -- enforce --stage ci"
 }
 
-local cargo_audit = new Step {
-  check = "cargo audit --no-fetch || { criv_audit_exit=$?; echo \"cargo audit is monitor-only (exit $criv_audit_exit)\"; true; }"
+local cargo_deny = new Step {
+  check = "cargo deny --locked check"
 }
 
 local actionlint = new Step {
@@ -147,7 +147,7 @@ hooks {
       ["zizmor"] = zizmor
       ["cargo-test"] = cargo_test
       ["hawk"] = hawk
-      ["cargo-audit"] = cargo_audit
+      ["cargo-deny"] = cargo_deny
       ["criv-check"] = ci_full_docs
       ["criv-enforce-ci"] = ci_enforce
     }

@@ -1,4 +1,4 @@
-//! LikeC4 contract validation and editor projection.
+//! `LikeC4` contract validation and editor projection.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -16,7 +16,7 @@ struct LikeC4Contract {
     likec4_version: String,
 }
 
-pub(super) fn prepare_architecture(
+pub fn prepare_architecture(
     architecture: Option<LikeC4ArchitectureState>,
 ) -> Result<Option<EditorLikeC4Model>, String> {
     let Some(architecture) = architecture else {
@@ -25,7 +25,7 @@ pub(super) fn prepare_architecture(
     let contract = serde_json::from_str::<LikeC4Contract>(include_str!(
         "../../../assets/likec4-contract.json"
     ))
-    .expect("the embedded LikeC4 contract must be valid JSON");
+    .map_err(|error| format!("criv-likec4-contract-invalid: embedded LikeC4 contract: {error}"))?;
     if architecture.protocol_version != contract.protocol_version {
         return Err(format!(
             "criv-likec4-protocol-unsupported: expected protocol {}; got {}",
@@ -124,7 +124,7 @@ fn validate_raw_likec4_model(raw: &serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn prepare_c4_artifacts(
+pub fn prepare_c4_artifacts(
     sources: &[EditorSourceEntry],
     nodes: &[EditorGraphNode],
 ) -> Vec<EditorC4Artifact> {
@@ -165,6 +165,10 @@ pub(super) fn prepare_c4_artifacts(
     artifacts.into_values().collect()
 }
 
+#[expect(
+    clippy::case_sensitive_file_extension_comparisons,
+    reason = "native discovery publishes LikeC4 sources only with the exact .c4 extension"
+)]
 fn is_c4_path(path: &str) -> bool {
     path.split_once('#')
         .map_or(path, |value| value.0)

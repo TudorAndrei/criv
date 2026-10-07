@@ -29,6 +29,7 @@ impl SourceIdentity {
     /// Parse published Source identity text.
     ///
     /// Unknown and malformed selector forms remain exact opaque text.
+    #[must_use]
     pub fn parse(text: &str) -> Self {
         match text.split_once('#') {
             Some((path, selector)) => Self::symbol(path, SourceSelector::parse(selector)),
@@ -43,7 +44,8 @@ impl SourceIdentity {
     }
 
     /// Return the optional symbol selector.
-    pub fn selector(&self) -> Option<&SourceSelector> {
+    #[must_use]
+    pub const fn selector(&self) -> Option<&SourceSelector> {
         self.selector.as_ref()
     }
 }
@@ -74,19 +76,19 @@ impl SourceSelector {
     }
 
     /// Create a structured Elixir selector.
-    pub fn elixir(selector: ElixirSelector) -> Self {
+    #[must_use]
+    pub const fn elixir(selector: ElixirSelector) -> Self {
         Self::Elixir(selector)
     }
 
     /// Parse one selector, falling back to exact opaque text.
     fn parse(text: &str) -> Self {
-        parse_elixir_selector(text)
-            .map(Self::Elixir)
-            .unwrap_or_else(|| Self::Opaque(text.to_string()))
+        parse_elixir_selector(text).map_or_else(|| Self::Opaque(text.to_string()), Self::Elixir)
     }
 
     /// Return the structured Elixir selector, when this is one.
-    pub fn as_elixir(&self) -> Option<&ElixirSelector> {
+    #[must_use]
+    pub const fn as_elixir(&self) -> Option<&ElixirSelector> {
         match self {
             Self::Elixir(selector) => Some(selector),
             Self::Opaque(_) => None,
@@ -119,7 +121,8 @@ pub enum ElixirSelector {
 
 impl ElixirSelector {
     /// Create an owner-only selector.
-    pub fn owner(owner: ElixirOwner) -> Self {
+    #[must_use]
+    pub const fn owner(owner: ElixirOwner) -> Self {
         Self::Owner(owner)
     }
 
@@ -139,14 +142,16 @@ impl ElixirSelector {
     }
 
     /// Return the owner for this selector.
-    pub fn owner_identity(&self) -> &ElixirOwner {
+    #[must_use]
+    pub const fn owner_identity(&self) -> &ElixirOwner {
         match self {
             Self::Owner(owner) | Self::Callable { owner, .. } => owner,
         }
     }
 
     /// Return the callable kind when this selector names a callable.
-    pub fn callable_kind(&self) -> Option<ElixirCallableKind> {
+    #[must_use]
+    pub const fn callable_kind(&self) -> Option<ElixirCallableKind> {
         match self {
             Self::Owner(_) => None,
             Self::Callable { kind, .. } => Some(*kind),
@@ -164,7 +169,7 @@ impl ElixirSelector {
 
     /// Return the source arity when this selector names a callable.
     #[cfg(test)]
-    fn callable_arity(&self) -> Option<usize> {
+    const fn callable_arity(&self) -> Option<usize> {
         match self {
             Self::Owner(_) => None,
             Self::Callable { arity, .. } => Some(*arity),
@@ -185,7 +190,7 @@ impl fmt::Display for ElixirSelector {
                 formatter,
                 "{owner}/{}:{}/{arity}",
                 kind.prefix(),
-                encode_value(name)
+                Encoded(name)
             ),
         }
     }
@@ -215,6 +220,7 @@ impl ElixirOwner {
     }
 
     /// Return the module name for a module owner.
+    #[must_use]
     pub fn module_name(&self) -> Option<&str> {
         match self {
             Self::Module { name } => Some(name),
@@ -235,12 +241,12 @@ impl ElixirOwner {
 impl fmt::Display for ElixirOwner {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Module { name } => write!(formatter, "module:{}", encode_value(name)),
+            Self::Module { name } => write!(formatter, "module:{}", Encoded(name)),
             Self::Implementation { protocol, for_type } => write!(
                 formatter,
                 "impl:{}/for:{}",
-                encode_value(protocol),
-                encode_value(for_type)
+                Encoded(protocol),
+                Encoded(for_type)
             ),
         }
     }
@@ -257,7 +263,7 @@ pub enum ElixirCallableKind {
 }
 
 impl ElixirCallableKind {
-    fn prefix(self) -> &'static str {
+    const fn prefix(self) -> &'static str {
         match self {
             Self::Function => "fn",
             Self::Macro => "macro",
@@ -319,51 +325,48 @@ fn parse_callable(owner: ElixirOwner, callable: Option<&str>) -> Option<ElixirSe
     ))
 }
 
-fn encode_value(value: &str) -> String {
-    let mut encoded = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-            encoded.push(char::from(byte));
-        } else {
-            use fmt::Write as _;
-            write!(&mut encoded, "%{byte:02X}").expect("writing to String cannot fail");
+/// Percent-encoded selector value text.
+struct Encoded<'a>(&'a str);
+
+impl fmt::Display for Encoded<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use fmt::Write as _;
+        for byte in self.0.bytes() {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+                formatter.write_char(char::from(byte))?;
+            } else {
+                write!(formatter, "%{byte:02X}")?;
+            }
         }
+        Ok(())
     }
-    encoded
 }
 
 fn decode_value(value: &str) -> Option<String> {
     if value.is_empty() {
         return None;
     }
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        let byte = bytes[index];
+    let mut bytes = value.bytes();
+    let mut decoded = Vec::with_capacity(value.len());
+    while let Some(byte) = bytes.next() {
         if byte == b'%' {
-            let high = hex_value(*bytes.get(index + 1)?)?;
-            let low = hex_value(*bytes.get(index + 2)?)?;
-            decoded.push((high << 4) | low);
-            index += 3;
+            let high = hex_value(bytes.next()?)?;
+            let low = hex_value(bytes.next()?)?;
+            decoded.push(high.checked_mul(16)?.checked_add(low)?);
             continue;
         }
         if !byte.is_ascii_alphanumeric() && !matches!(byte, b'-' | b'.' | b'_' | b'~') {
             return None;
         }
         decoded.push(byte);
-        index += 1;
     }
     String::from_utf8(decoded).ok()
 }
 
 fn hex_value(value: u8) -> Option<u8> {
-    match value {
-        b'0'..=b'9' => Some(value - b'0'),
-        b'a'..=b'f' => Some(value - b'a' + 10),
-        b'A'..=b'F' => Some(value - b'A' + 10),
-        _ => None,
-    }
+    char::from(value)
+        .to_digit(16)
+        .and_then(|digit| u8::try_from(digit).ok())
 }
 
 #[cfg(test)]
@@ -480,6 +483,46 @@ mod tests {
             Some(SourceSelector::Opaque(value)) if value == "type:A/member:render"
         ));
         assert_eq!(symbol.to_string(), "src/views.ts#type:A/member:render");
+    }
+
+    fn elixir_owner() -> impl proptest::strategy::Strategy<Value = ElixirOwner> {
+        use proptest::prelude::*;
+        prop_oneof![
+            ".+".prop_map(ElixirOwner::module),
+            (".+", ".+")
+                .prop_map(|(protocol, for_type)| ElixirOwner::implementation(protocol, for_type)),
+        ]
+    }
+
+    fn elixir_selector() -> impl proptest::strategy::Strategy<Value = ElixirSelector> {
+        use proptest::prelude::*;
+        let kind = prop_oneof![
+            Just(ElixirCallableKind::Function),
+            Just(ElixirCallableKind::Macro),
+            Just(ElixirCallableKind::Guard),
+            Just(ElixirCallableKind::Callback),
+            Just(ElixirCallableKind::MacroCallback),
+        ];
+        prop_oneof![
+            elixir_owner().prop_map(ElixirSelector::owner),
+            (elixir_owner(), kind, ".+", any::<usize>()).prop_map(|(owner, kind, name, arity)| {
+                ElixirSelector::callable(owner, kind, name, arity)
+            }),
+        ]
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn structured_elixir_selectors_round_trip(selector in elixir_selector()) {
+            let identity = SourceIdentity::symbol("lib/a.ex", SourceSelector::elixir(selector));
+            proptest::prop_assert_eq!(SourceIdentity::parse(&identity.to_string()), identity);
+        }
+
+        #[test]
+        fn parsed_identity_text_round_trips(text in r"(?s)(.|#|/|%|:|module:|impl:|/for:|fn:){0,60}") {
+            let identity = SourceIdentity::parse(&text);
+            proptest::prop_assert_eq!(SourceIdentity::parse(&identity.to_string()), identity);
+        }
     }
 
     #[test]

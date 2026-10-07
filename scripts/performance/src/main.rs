@@ -1,3 +1,8 @@
+#![expect(
+    unsafe_code,
+    reason = "process resource accounting calls wait4 and GetProcessMemoryInfo"
+)]
+
 mod generate;
 mod manifest;
 
@@ -583,7 +588,10 @@ fn prepare_sample(
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one sample records every run identity field beside its result"
+)]
 fn measure_sample(
     result_dir: &Path,
     run: &RunIdentity,

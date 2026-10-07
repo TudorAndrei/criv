@@ -7,7 +7,6 @@ license = "MIT"
 description = "Local docs-to-code knowledge graph validator and query tool"
 repository = "https://github.com/TudorAndrei/criv"
 homepage = "https://github.com/TudorAndrei/criv"
-documentation = "https://docs.rs/criv"
 
 [workspace]
 members = ["crates/criv-state-wire", "crates/criv-wasm", "scripts/performance"]
@@ -20,7 +19,13 @@ lto = true
 codegen-units = 1
 panic = "abort"
 
-[lints.clippy]
+[lints]
+workspace = true
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
 pedantic = { level = "deny", priority = -1 }
 nursery = { level = "deny", priority = -1 }
 unwrap_used = "deny"
@@ -83,5 +88,6 @@ junction = "2"
 [dev-dependencies]
 assert_cmd = "2"
 predicates = "3"
+proptest = "1.11.0"
 tempfile = "3"
 usage-parser = { package = "usage-lib", version = "6" }

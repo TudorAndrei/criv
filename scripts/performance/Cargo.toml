@@ -5,6 +5,13 @@ edition = "2024"
 rust-version = "1.97.1"
 publish = false
 
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+allow_attributes = "deny"
+
 [dependencies]
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }

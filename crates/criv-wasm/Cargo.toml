@@ -8,6 +8,9 @@ description = "WASM helpers for the criv Obsidian plugin"
 repository = "https://github.com/TudorAndrei/criv"
 publish = false
 
+[lints]
+workspace = true
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 

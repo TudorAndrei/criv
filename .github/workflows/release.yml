@@ -247,6 +247,14 @@ jobs:
           restore-keys: |
             release-build-${{ matrix.target }}-
 
+      - name: Install cargo-auditable
+        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+        with:
+          install: true
+          install_args: github:rust-secure-code/cargo-auditable
+          add_shims_to_path: false
+          cache: true
+
       - name: Build exact release binary
         env:
           EXECUTABLE_SUFFIX: ${{ matrix.executable_suffix }}
@@ -254,7 +262,7 @@ jobs:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         shell: bash
         run: |
-          cargo build --locked --release --target "$RELEASE_TARGET" --package criv --bin criv
+          cargo +1.97.1 auditable build --locked --release --target "$RELEASE_TARGET" --package criv --bin criv
           mkdir -p target/release-build
           cp "target/$RELEASE_TARGET/release/criv$EXECUTABLE_SUFFIX" \
             "target/release-build/criv$EXECUTABLE_SUFFIX"

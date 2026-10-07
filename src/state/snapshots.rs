@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(test)]
 use std::path::PathBuf;
 
-use criv_state_wire::is_supported_schema;
+use criv_state_wire::STATE_SCHEMA;
 use serde::{Deserialize, Serialize};
 
 use crate::repository::RepositoryFiles;
@@ -415,14 +415,9 @@ fn validate_snapshot(hash: &str, contents: &str) -> Result<()> {
     }
     let value = serde_json::from_str::<serde_json::Value>(contents)
         .map_err(|err| CrivError::new(format!("snapshot `{hash}` is corrupt: {err}")))?;
-    if !value
-        .get("schema")
-        .and_then(serde_json::Value::as_str)
-        .is_some_and(is_supported_schema)
-    {
+    if value.get("schema").and_then(serde_json::Value::as_str) != Some(STATE_SCHEMA) {
         return Err(CrivError::new(format!(
-            "snapshot `{hash}` is corrupt: expected schema {}",
-            criv_state_wire::STATE_SCHEMA
+            "snapshot `{hash}` is corrupt: expected schema {STATE_SCHEMA}"
         )));
     }
     let published = contents.strip_suffix('\n').unwrap_or(contents);

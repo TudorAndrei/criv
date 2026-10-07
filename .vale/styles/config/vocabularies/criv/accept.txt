@@ -55,6 +55,7 @@ Git
 (?i)globset
 (?i)godog
 Graphviz
+Grype
 H?EEx
 (?i)hardcode[sd]?
 (?i)hk
@@ -136,6 +137,7 @@ Structurizr
 (?i)symlinks?
 Taplo
 Testcontainers
+Trivy
 (?i)toolchains?
 (?i)typespecs?
 (?i)undecoded

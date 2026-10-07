@@ -28,6 +28,7 @@ roots = [
   "hk.pkl",
   "hawk.toml",
   "cog.toml",
+  "deny.toml",
   ".taplo.toml",
   ".rumdl.toml",
   ".vale.ini",

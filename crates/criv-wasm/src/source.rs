@@ -5,10 +5,17 @@ use std::hash::{Hash, Hasher};
 
 use criv_state_wire::{Node, SourceIndexEntry, source_identity::SourceIdentity};
 
-use super::*;
+#[cfg(test)]
+use super::StateDocument;
+use super::{
+    BTreeMap, EditorC4Artifact, EditorGraphNode, EditorInventory, EditorLikeC4Model,
+    EditorSourceEntry, MAX_AMBIGUOUS_SOURCE_CANDIDATES, PatternMatch, PreparedSelector,
+    PreparedState, SelectorEntry, SourceSelectorSuggestion, SourceTargetCandidate,
+    SourceTargetLookupResult, StateSummary,
+};
 
 #[cfg(test)]
-pub(super) fn unique_source_paths(source_index: &[SourceIndexEntry]) -> Vec<String> {
+pub fn unique_source_paths(source_index: &[SourceIndexEntry]) -> Vec<String> {
     unique_source_entries(source_index)
         .into_iter()
         .map(|entry| entry.path)
@@ -16,7 +23,7 @@ pub(super) fn unique_source_paths(source_index: &[SourceIndexEntry]) -> Vec<Stri
 }
 
 #[cfg(test)]
-pub(super) fn unique_source_entries(source_index: &[SourceIndexEntry]) -> Vec<EditorSourceEntry> {
+pub fn unique_source_entries(source_index: &[SourceIndexEntry]) -> Vec<EditorSourceEntry> {
     let mut seen = BTreeSet::new();
     source_index
         .iter()
@@ -30,9 +37,7 @@ pub(super) fn unique_source_entries(source_index: &[SourceIndexEntry]) -> Vec<Ed
         .collect()
 }
 
-pub(super) fn take_unique_source_entries(
-    source_index: Vec<SourceIndexEntry>,
-) -> Vec<EditorSourceEntry> {
+pub fn take_unique_source_entries(source_index: Vec<SourceIndexEntry>) -> Vec<EditorSourceEntry> {
     let mut seen = BTreeSet::new();
     source_index
         .into_iter()
@@ -46,7 +51,7 @@ pub(super) fn take_unique_source_entries(
         .collect()
 }
 
-pub(super) fn safe_source_path(path: &str) -> Option<String> {
+pub fn safe_source_path(path: &str) -> Option<String> {
     let path = path.trim().replace('\\', "/");
     if path.is_empty()
         || path.starts_with('/')
@@ -68,7 +73,7 @@ pub(super) fn safe_source_path(path: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-pub(super) fn editor_graph_nodes(state: &StateDocument) -> Vec<EditorGraphNode> {
+pub fn editor_graph_nodes(state: &StateDocument) -> Vec<EditorGraphNode> {
     state
         .graph
         .nodes
@@ -96,7 +101,7 @@ pub(super) fn editor_graph_nodes(state: &StateDocument) -> Vec<EditorGraphNode> 
         .collect()
 }
 
-pub(super) fn take_editor_graph_nodes(nodes: Vec<Node>) -> Vec<EditorGraphNode> {
+pub fn take_editor_graph_nodes(nodes: Vec<Node>) -> Vec<EditorGraphNode> {
     nodes
         .into_iter()
         .map(|node| {
@@ -125,7 +130,7 @@ pub(super) fn take_editor_graph_nodes(nodes: Vec<Node>) -> Vec<EditorGraphNode> 
 }
 
 #[cfg(test)]
-pub(super) fn source_selector_suggestions(
+pub fn source_selector_suggestions(
     state: &StateDocument,
     query: &str,
     limit: usize,
@@ -134,10 +139,7 @@ pub(super) fn source_selector_suggestions(
 }
 
 #[cfg(test)]
-pub(super) fn find_editor_graph_node(
-    state: &StateDocument,
-    target: &str,
-) -> Option<EditorGraphNode> {
+pub fn find_editor_graph_node(state: &StateDocument, target: &str) -> Option<EditorGraphNode> {
     match PreparedState::from_borrowed(state).lookup_source_target(target) {
         SourceTargetLookupResult::Resolved { node, .. } => Some(node),
         SourceTargetLookupResult::Unresolved | SourceTargetLookupResult::Ambiguous { .. } => None,
@@ -156,6 +158,7 @@ fn line_range(path: &str) -> Option<String> {
 }
 
 fn source_match_score_prepared(lower_path: &str, basename: &str, query: &str) -> Option<i64> {
+    let path_length = score_length(lower_path.len());
     if lower_path == query {
         return Some(100_000);
     }
@@ -163,15 +166,24 @@ fn source_match_score_prepared(lower_path: &str, basename: &str, query: &str) ->
         return Some(90_000);
     }
     if lower_path.ends_with(query) {
-        return Some(80_000 - lower_path.len() as i64);
+        return Some(80_000_i64.saturating_sub(path_length));
     }
     if basename.starts_with(query) {
-        return Some(70_000 - basename.len() as i64);
+        return Some(70_000_i64.saturating_sub(score_length(basename.len())));
     }
     if let Some(index) = lower_path.find(query) {
-        return Some(60_000 - index as i64 - lower_path.len() as i64);
+        return Some(
+            60_000_i64
+                .saturating_sub(score_length(index))
+                .saturating_sub(path_length),
+        );
     }
-    fuzzy_subsequence_score(lower_path, query).map(|score| 40_000 + score - lower_path.len() as i64)
+    fuzzy_subsequence_score(lower_path, query)
+        .map(|score| 40_000_i64.saturating_add(score).saturating_sub(path_length))
+}
+
+fn score_length(length: usize) -> i64 {
+    i64::try_from(length).unwrap_or(i64::MAX)
 }
 
 impl PreparedState {
@@ -230,9 +242,12 @@ impl PreparedState {
         drop(seen);
         let mut empty_selector_order = (0..selectors.len()).collect::<Vec<_>>();
         empty_selector_order.sort_by(|left, right| {
-            selectors[*left]
-                .target(&sources, &nodes)
-                .cmp(selectors[*right].target(&sources, &nodes))
+            let target = |index: &usize| {
+                selectors
+                    .get(*index)
+                    .map(|selector| selector.target(&sources, &nodes))
+            };
+            target(left).cmp(&target(right))
         });
 
         Self {
@@ -277,35 +292,36 @@ impl PreparedState {
     fn lookup_result(
         &self,
         indexes: &[usize],
-        matches: impl Fn(&EditorGraphNode) -> bool,
+        is_match: impl Fn(&EditorGraphNode) -> bool,
     ) -> SourceTargetLookupResult {
         let mut matched = indexes
             .iter()
             .filter_map(|index| self.nodes.get(*index))
-            .filter(|node| matches(node))
+            .filter(|node| is_match(node))
             .filter_map(|node| Some((SourceTargetCandidate::from_node(node)?, node.clone())))
             .collect::<Vec<_>>();
         matched.sort();
         matched.dedup_by(|left, right| left.0 == right.0);
 
-        match matched.len() {
-            0 => SourceTargetLookupResult::Unresolved,
-            1 => {
-                let (candidate, node) = matched.pop().expect("one lookup candidate");
-                SourceTargetLookupResult::Resolved {
-                    canonical_target: candidate.canonical_target,
-                    node,
-                }
-            }
-            total_candidate_count => SourceTargetLookupResult::Ambiguous {
+        let total_candidate_count = matched.len();
+        if total_candidate_count > 1 {
+            return SourceTargetLookupResult::Ambiguous {
                 candidates: matched
                     .into_iter()
                     .take(MAX_AMBIGUOUS_SOURCE_CANDIDATES)
                     .map(|(candidate, _)| candidate)
                     .collect(),
                 total_candidate_count,
-            },
+            };
         }
+        matched
+            .pop()
+            .map_or(SourceTargetLookupResult::Unresolved, |(candidate, node)| {
+                SourceTargetLookupResult::Resolved {
+                    canonical_target: candidate.canonical_target,
+                    node,
+                }
+            })
     }
 
     pub(super) fn suggest_selectors(
@@ -318,8 +334,9 @@ impl PreparedState {
             return self
                 .empty_selector_order
                 .iter()
+                .filter_map(|index| self.selectors.get(*index))
+                .filter_map(|selector| selector.suggestion(&self.sources, &self.nodes))
                 .take(limit)
-                .map(|index| self.selectors[*index].suggestion(&self.sources, &self.nodes))
                 .collect();
         }
 
@@ -328,13 +345,9 @@ impl PreparedState {
             .iter()
             .filter_map(|selector| {
                 let lower_target = selector.target(&self.sources, &self.nodes).to_lowercase();
-                let basename_start = lower_target.rfind('/').map_or(0, |index| index + 1);
-                source_match_score_prepared(
-                    &lower_target,
-                    &lower_target[basename_start..],
-                    &clean_query,
-                )
-                .map(|score| (selector, score))
+                let basename = lower_target.rsplit('/').next().unwrap_or(&lower_target);
+                source_match_score_prepared(&lower_target, basename, &clean_query)
+                    .map(|score| (selector, score))
             })
             .collect::<Vec<_>>();
         scored.sort_by(|(left, left_score), (right, right_score)| {
@@ -345,14 +358,14 @@ impl PreparedState {
         });
         scored
             .into_iter()
+            .filter_map(|(selector, _)| selector.suggestion(&self.sources, &self.nodes))
             .take(limit)
-            .map(|(selector, _)| selector.suggestion(&self.sources, &self.nodes))
             .collect()
     }
 }
 
 impl PreparedSelector {
-    fn new(entry: SelectorEntry) -> Self {
+    const fn new(entry: SelectorEntry) -> Self {
         Self { entry }
     }
 
@@ -362,8 +375,13 @@ impl PreparedSelector {
         nodes: &'a [EditorGraphNode],
     ) -> &'a str {
         match self.entry {
-            SelectorEntry::Source(index) => &sources[index].path,
-            SelectorEntry::Node(index) => nodes[index].source_target.as_deref().unwrap_or_default(),
+            SelectorEntry::Source(index) => sources
+                .get(index)
+                .map_or_else(Default::default, |source| source.path.as_str()),
+            SelectorEntry::Node(index) => nodes
+                .get(index)
+                .and_then(|node| node.source_target.as_deref())
+                .unwrap_or_default(),
         }
     }
 
@@ -371,27 +389,27 @@ impl PreparedSelector {
         &self,
         sources: &[EditorSourceEntry],
         nodes: &[EditorGraphNode],
-    ) -> SourceSelectorSuggestion {
+    ) -> Option<SourceSelectorSuggestion> {
         match self.entry {
             SelectorEntry::Source(index) => {
-                let source = &sources[index];
-                SourceSelectorSuggestion {
+                let source = sources.get(index)?;
+                Some(SourceSelectorSuggestion {
                     target: source.path.clone(),
                     label: source.path.clone(),
                     kind: "file".into(),
                     path: source.path.clone(),
                     detail: "file".into(),
-                }
+                })
             }
             SelectorEntry::Node(index) => {
-                let node = &nodes[index];
-                SourceSelectorSuggestion {
+                let node = nodes.get(index)?;
+                Some(SourceSelectorSuggestion {
                     target: node.source_target.clone().unwrap_or_default(),
                     label: node.label.clone(),
                     kind: node.kind.clone(),
                     path: node.path.clone().unwrap_or_default(),
                     detail: node.id.clone(),
-                }
+                })
             }
         }
     }
@@ -468,8 +486,8 @@ fn callable_label_parts(label: &str) -> Option<(&str, usize)> {
 fn fuzzy_subsequence_score(value: &str, query: &str) -> Option<i64> {
     let mut query_chars = query.chars();
     let mut current_query = query_chars.next();
-    let mut score = 0;
-    let mut run = 0;
+    let mut score = 0_i64;
+    let mut run = 0_i64;
     let mut previous = None;
 
     for character in value.chars() {
@@ -481,13 +499,13 @@ fn fuzzy_subsequence_score(value: &str, query: &str) -> Option<i64> {
             previous = Some(character);
             continue;
         }
-        run += 1;
+        run = run.saturating_add(1);
         let boundary_bonus = if previous.is_none() || previous == Some('/') {
             8
         } else {
             0
         };
-        score += run * 3 + boundary_bonus;
+        score = score.saturating_add(run.saturating_mul(3).saturating_add(boundary_bonus));
         current_query = query_chars.next();
         previous = Some(character);
     }

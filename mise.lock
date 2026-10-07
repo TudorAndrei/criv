@@ -46,6 +46,45 @@ url = "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_
 url_api = "https://api.github.com/repos/rhysd/actionlint/releases/assets/384924919"
 provenance = "github-attestations"
 
+[[tools."aqua:EmbarkStudios/cargo-deny"]]
+version = "0.20.2"
+backend = "aqua:EmbarkStudios/cargo-deny"
+
+[tools."aqua:EmbarkStudios/cargo-deny"."platforms.linux-arm64"]
+checksum = "sha256:995c82be0defc7a025cae49a2aa2644ce8245c9a3318fc4103907c6a285e8c7d"
+url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471598345"
+
+[tools."aqua:EmbarkStudios/cargo-deny"."platforms.linux-arm64-musl"]
+checksum = "sha256:995c82be0defc7a025cae49a2aa2644ce8245c9a3318fc4103907c6a285e8c7d"
+url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471598345"
+
+[tools."aqua:EmbarkStudios/cargo-deny"."platforms.linux-x64"]
+checksum = "sha256:9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f"
+url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471598214"
+
+[tools."aqua:EmbarkStudios/cargo-deny"."platforms.linux-x64-musl"]
+checksum = "sha256:9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f"
+url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471598214"
+
+[tools."aqua:EmbarkStudios/cargo-deny"."platforms.macos-arm64"]
+checksum = "sha256:fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3"
+url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471597689"
+
+[tools."aqua:EmbarkStudios/cargo-deny"."platforms.macos-x64"]
+checksum = "sha256:248da7f581724e470071990c088ffc55c811981715f4cbdb258621fb79f8b7a6"
+url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471598357"
+
+[tools."aqua:EmbarkStudios/cargo-deny"."platforms.windows-x64"]
+checksum = "sha256:975a22143262fd27476d19ee00c7af67978426e40e1dee94eed6bbade1cf87dc"
+url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-pc-windows-msvc.tar.gz"
+url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471599057"
+
 [[tools."aqua:zizmorcore/zizmor"]]
 version = "1.24.1"
 backend = "aqua:zizmorcore/zizmor"
@@ -85,10 +124,6 @@ checksum = "sha256:b777ec2cb1098139ba74b32e30d11ed149c69ab692d23788c466d4a31704b
 url = "https://github.com/zizmorcore/zizmor/releases/download/v1.24.1/zizmor-x86_64-pc-windows-msvc.zip"
 url_api = "https://api.github.com/repos/zizmorcore/zizmor/releases/assets/395578624"
 provenance = "github-attestations"
-
-[[tools."cargo:cargo-audit"]]
-version = "0.22.2"
-backend = "cargo:cargo-audit"
 
 [[tools."cargo:cargo-release"]]
 version = "1.1.2"
@@ -224,6 +259,45 @@ url = "https://github.com/jdx/mr-boxington/releases/download/v1.9.0/mbx-x86_64-p
 url_api = "https://api.github.com/repos/jdx/mr-boxington/releases/assets/547392640"
 provenance = "github-attestations"
 
+[[tools."github:rust-secure-code/cargo-auditable"]]
+version = "0.7.7"
+backend = "github:rust-secure-code/cargo-auditable"
+
+[tools."github:rust-secure-code/cargo-auditable"."platforms.linux-arm64"]
+checksum = "sha256:bcb2d46002a8dd8e94d0d669cb39d38c9651db2ae5d1f3f1f1bab516ee1e212c"
+url = "https://github.com/rust-secure-code/cargo-auditable/releases/download/v0.7.7/cargo-auditable-aarch64-unknown-linux-gnu.tar.xz"
+url_api = "https://api.github.com/repos/rust-secure-code/cargo-auditable/releases/assets/605646405"
+
+[tools."github:rust-secure-code/cargo-auditable"."platforms.linux-arm64-musl"]
+checksum = "sha256:c324af56990601354bbf40080f582ba46f8ec8b807a1388e25bb7e429d285c18"
+url = "https://github.com/rust-secure-code/cargo-auditable/releases/download/v0.7.7/cargo-auditable-aarch64-unknown-linux-musl.tar.xz"
+url_api = "https://api.github.com/repos/rust-secure-code/cargo-auditable/releases/assets/605646416"
+
+[tools."github:rust-secure-code/cargo-auditable"."platforms.linux-x64"]
+checksum = "sha256:4c8d3b08c3c34e9f2333367224dbbfb4aab68067698b43de59fe19aded3416dd"
+url = "https://github.com/rust-secure-code/cargo-auditable/releases/download/v0.7.7/cargo-auditable-x86_64-unknown-linux-gnu.tar.xz"
+url_api = "https://api.github.com/repos/rust-secure-code/cargo-auditable/releases/assets/605646432"
+
+[tools."github:rust-secure-code/cargo-auditable"."platforms.linux-x64-musl"]
+checksum = "sha256:7676443367c5e33d9fb22acef63cccb5e9202de12dae1b0579995eb3e2bc7a18"
+url = "https://github.com/rust-secure-code/cargo-auditable/releases/download/v0.7.7/cargo-auditable-x86_64-unknown-linux-musl.tar.xz"
+url_api = "https://api.github.com/repos/rust-secure-code/cargo-auditable/releases/assets/605646444"
+
+[tools."github:rust-secure-code/cargo-auditable"."platforms.macos-arm64"]
+checksum = "sha256:a66ad6392861ca1abfe0b02b522622d91edf63e5d7b60f4d3088b5c23d240c72"
+url = "https://github.com/rust-secure-code/cargo-auditable/releases/download/v0.7.7/cargo-auditable-aarch64-apple-darwin.tar.xz"
+url_api = "https://api.github.com/repos/rust-secure-code/cargo-auditable/releases/assets/605646408"
+
+[tools."github:rust-secure-code/cargo-auditable"."platforms.macos-x64"]
+checksum = "sha256:4b87f06ea13d32466bbc68b1f5715ac11753a052d9935245380bddce8a3f0e50"
+url = "https://github.com/rust-secure-code/cargo-auditable/releases/download/v0.7.7/cargo-auditable-x86_64-apple-darwin.tar.xz"
+url_api = "https://api.github.com/repos/rust-secure-code/cargo-auditable/releases/assets/605646424"
+
+[tools."github:rust-secure-code/cargo-auditable"."platforms.windows-x64"]
+checksum = "sha256:717ba2d3ed7997c501e9987ee7c94bebf9d7219b18b185a03009420ec7029c7d"
+url = "https://github.com/rust-secure-code/cargo-auditable/releases/download/v0.7.7/cargo-auditable-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/rust-secure-code/cargo-auditable/releases/assets/605646426"
+
 [[tools.hk]]
 version = "1.45.0"
 backend = "aqua:jdx/hk"
@@ -297,6 +371,10 @@ backend = "npm:npm"
 [[tools.rust]]
 version = "1.97.1"
 backend = "core:rust"
+
+[tools.rust.options]
+components = "clippy,rustfmt"
+targets = "wasm32-unknown-unknown"
 
 [[tools.shellcheck]]
 version = "0.11.0"

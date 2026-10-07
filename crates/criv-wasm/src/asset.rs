@@ -9,7 +9,7 @@ use super::{EditorAssetEntry, source::safe_source_path};
 const MAX_ASSET_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_ASSET_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 
-pub(super) fn take_assets(entries: Vec<AssetIndexEntry>) -> Vec<EditorAssetEntry> {
+pub fn take_assets(entries: Vec<AssetIndexEntry>) -> Vec<EditorAssetEntry> {
     let mut candidates = entries
         .into_iter()
         .filter_map(|entry| {

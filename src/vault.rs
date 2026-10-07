@@ -1241,6 +1241,31 @@ mod tests {
         }
     }
 
+    proptest::proptest! {
+        #[test]
+        fn frontmatter_split_is_lossless(
+            contents in r"(?s)(---|-|\r|\n|[a-z: ]|é){0,120}"
+        ) {
+            let (frontmatter, body, lines, start, next) = split_frontmatter(&contents);
+            if next == 0 {
+                proptest::prop_assert_eq!(body.as_str(), contents.as_str());
+                proptest::prop_assert_eq!((frontmatter, lines, start), ("", 0, 0));
+            } else {
+                let frontmatter_end = start.checked_add(frontmatter.len());
+                proptest::prop_assert_eq!(
+                    frontmatter_end.and_then(|end| contents.get(start..end)),
+                    Some(frontmatter)
+                );
+                proptest::prop_assert_eq!(contents.get(next..), Some(body.as_str()));
+                proptest::prop_assert_eq!(
+                    contents.get(..next).map(|prefix| prefix.matches('\n').count()),
+                    Some(lines)
+                );
+                proptest::prop_assert!(contents.starts_with("---\n") || contents.starts_with("---\r\n"));
+            }
+        }
+    }
+
     #[test]
     fn supports_empty_frontmatter() {
         assert_eq!(
