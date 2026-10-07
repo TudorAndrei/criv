@@ -756,8 +756,8 @@ fn validate_decision_note(
     adr_prefix: &str,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let id = note.id.as_deref().unwrap_or("");
-    if !is_adr_id(id) {
+    let adr_id = note.id.as_deref().filter(|id| is_adr_id(id));
+    if adr_id.is_none() {
         diagnostics.push(error(
             DiagnosticCode::InvalidAdrId,
             &note.rel_path,
@@ -779,7 +779,7 @@ fn validate_decision_note(
     }
 
     if let Some(filename) = note.path.file_name().map(|value| value.to_string_lossy())
-        && is_adr_id(id)
+        && let Some(id) = adr_id
     {
         let Some(suffix) = id.get(4..) else {
             return;
