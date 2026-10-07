@@ -1,11 +1,11 @@
 use super::{
-    Arc, BTreeMap, BTreeSet, Graph, PartitionDependencies, PartitionKey, PartitionKind,
-    PartitionMeta, PatternMatch, PendingPolicyScan, PolicyPartition, PolicyScanPlan, Result,
-    SourceIndexEntry, SourceIndexPartition, State, StatePartitions, Vault, add_node,
-    append_graph_rows, c4_artifact_input_fingerprint, changed_paths_in_scopes, graph_root,
-    note_catalog_fingerprint, note_input_fingerprint, observe_partition_meta, partition_meta,
-    pattern_match_from_structural, record_partition_rebuilt, reusable_matches,
-    sort_and_dedup_pattern_matches, source_index_input_fingerprint, source_mime, structural,
+    Arc, BTreeMap, BTreeSet, Graph, GraphBuilder, PartitionDependencies, PartitionKey,
+    PartitionKind, PartitionMeta, PatternMatch, PendingPolicyScan, PolicyPartition, PolicyScanPlan,
+    Result, SourceIndexEntry, SourceIndexPartition, State, StatePartitions, Vault,
+    c4_artifact_input_fingerprint, changed_paths_in_scopes, graph_root, note_catalog_fingerprint,
+    note_input_fingerprint, observe_partition_meta, partition_meta, pattern_match_from_structural,
+    record_partition_rebuilt, reusable_matches, sort_and_dedup_pattern_matches,
+    source_index_input_fingerprint, source_mime, structural,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -264,41 +264,25 @@ pub(super) fn flatten(
     BTreeMap<String, Vec<PatternMatch>>,
     Vec<SourceIndexEntry>,
 ) {
-    let mut graph = Graph::default();
-    let mut seen_nodes = BTreeSet::new();
-    let mut seen_edges = BTreeSet::new();
+    let mut builder = GraphBuilder::default();
 
     // Keep the public v0 ordering: every code file node precedes source details.
     for (path, partition) in &partitions.sources {
         observe_partition_meta(&partition.meta, &PartitionKey::Source(path.clone()));
-        add_node(&mut graph, &mut seen_nodes, partition.code_node.clone());
+        builder.push_node(partition.code_node.clone());
     }
     for partition in partitions.sources.values() {
-        append_graph_rows(
-            &mut graph,
-            &mut seen_nodes,
-            &mut seen_edges,
-            &partition.rows,
-        );
+        builder.append_rows(&partition.rows);
     }
     for (path, partition) in &partitions.notes {
         observe_partition_meta(&partition.meta, &PartitionKey::Note(path.clone()));
-        append_graph_rows(
-            &mut graph,
-            &mut seen_nodes,
-            &mut seen_edges,
-            &partition.rows,
-        );
+        builder.append_rows(&partition.rows);
     }
     for (path, partition) in &partitions.c4_artifacts {
         observe_partition_meta(&partition.meta, &PartitionKey::C4Artifact(path.clone()));
-        append_graph_rows(
-            &mut graph,
-            &mut seen_nodes,
-            &mut seen_edges,
-            &partition.rows,
-        );
+        builder.append_rows(&partition.rows);
     }
+    let mut graph = builder.finish();
     graph.root = graph_root(&graph);
 
     let patterns = partitions

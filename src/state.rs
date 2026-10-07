@@ -232,7 +232,8 @@ impl State {
             })
             .collect();
         state.wire.architecture = vault.likec4_workspace.model.clone().map(|model| {
-            projection::add_likec4_model_to_graph(&mut state.wire.graph, vault, &model);
+            state.wire.graph =
+                projection::with_likec4_model(std::mem::take(&mut state.wire.graph), vault, &model);
             LikeC4ArchitectureState {
                 protocol_version: 1,
                 likec4_version: vault
@@ -477,20 +478,6 @@ fn observe_partition_meta(meta: &PartitionMeta, expected_key: &PartitionKey) {
     );
 }
 
-fn append_graph_rows(
-    graph: &mut Graph,
-    seen_nodes: &mut BTreeSet<String>,
-    seen_edges: &mut BTreeSet<String>,
-    rows: &GraphRows,
-) {
-    for node in &rows.nodes {
-        add_node(graph, seen_nodes, node.clone());
-    }
-    for edge in &rows.edges {
-        add_edge(graph, seen_edges, &edge.from, &edge.to, edge.kind);
-    }
-}
-
 fn graph_rows(graph: Graph) -> GraphRows {
     GraphRows {
         nodes: graph.nodes,
@@ -684,40 +671,86 @@ fn interface_anchor_hash(vault: &Vault, source: &str, path: &str) -> Option<(Str
     Some((target, hash))
 }
 
-fn add_node(graph: &mut Graph, seen: &mut BTreeSet<String>, node: Node) {
-    let mut node = node;
-    node.hash = node_hash(&node);
-    if seen.insert(node.id.clone()) {
-        graph.nodes.push(node);
+/// A graph whose node ids and edges are unique, in first-insertion order.
+#[derive(Default)]
+struct GraphBuilder {
+    graph: Graph,
+    seen_nodes: BTreeSet<String>,
+    seen_edges: BTreeSet<(String, String, EdgeKind)>,
+}
+
+impl GraphBuilder {
+    fn extending(graph: Graph) -> Self {
+        let seen_nodes = graph.nodes.iter().map(|node| node.id.clone()).collect();
+        let seen_edges = graph
+            .edges
+            .iter()
+            .map(|edge| (edge.from.clone(), edge.to.clone(), edge.kind))
+            .collect();
+        Self {
+            graph,
+            seen_nodes,
+            seen_edges,
+        }
+    }
+
+    fn node(&mut self, id: String, kind: NodeKind, label: String, path: Option<String>) {
+        if !self.seen_nodes.contains(&id) {
+            self.push_node(hashed_node(id, kind, label, path));
+        }
+    }
+
+    fn push_node(&mut self, node: Node) {
+        if self.seen_nodes.insert(node.id.clone()) {
+            self.graph.nodes.push(node);
+        }
+    }
+
+    fn edge(&mut self, from: &str, to: &str, kind: EdgeKind) {
+        if self
+            .seen_edges
+            .insert((from.to_owned(), to.to_owned(), kind))
+        {
+            let hash = stable_hash(&format!("edge\0{from}\0{kind}\0{to}"));
+            self.graph.edges.push(Edge {
+                from: from.into(),
+                to: to.into(),
+                kind,
+                hash,
+            });
+        }
+    }
+
+    fn append_rows(&mut self, rows: &GraphRows) {
+        for node in &rows.nodes {
+            self.push_node(node.clone());
+        }
+        for edge in &rows.edges {
+            self.edge(&edge.from, &edge.to, edge.kind);
+        }
+    }
+
+    const fn graph(&self) -> &Graph {
+        &self.graph
+    }
+
+    fn finish(self) -> Graph {
+        self.graph
     }
 }
 
-fn add_edge(graph: &mut Graph, seen: &mut BTreeSet<String>, from: &str, to: &str, kind: EdgeKind) {
-    let key = format!("{from}\0{to}\0{kind}");
-    if seen.insert(key) {
-        let mut edge = Edge {
-            from: from.into(),
-            to: to.into(),
-            kind,
-            hash: String::new(),
-        };
-        edge.hash = edge_hash(&edge);
-        graph.edges.push(edge);
+fn hashed_node(id: String, kind: NodeKind, label: String, path: Option<String>) -> Node {
+    let hash = stable_hash(&format!(
+        "node\0{id}\0{kind}\0{label}\0{}",
+        path.as_deref().unwrap_or("")
+    ));
+    Node {
+        id,
+        hash,
+        kind,
+        label,
+        path,
     }
-}
-
-fn node_hash(node: &Node) -> String {
-    stable_hash(&format!(
-        "node\0{}\0{}\0{}\0{}",
-        node.id,
-        node.kind,
-        node.label,
-        node.path.as_deref().unwrap_or("")
-    ))
-}
-
-fn edge_hash(edge: &Edge) -> String {
-    stable_hash(&format!("edge\0{}\0{}\0{}", edge.from, edge.kind, edge.to))
 }
 
 fn graph_root(graph: &Graph) -> String {
