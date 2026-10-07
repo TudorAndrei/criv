@@ -27,7 +27,7 @@ const SUMMARY_SCHEMA: &str = "criv.performance-summary.v2";
 
 /// Generate isolated criv workloads and preserve repeatable performance evidence
 #[derive(Debug, Cli)]
-#[usage(bin = "criv-perf", unknown_flags = "error")]
+#[usage(bin = "criv-perf", unknown_flags = "error", args_override_self = false)]
 struct Args {
     /// Explicit criv executable to measure.
     #[usage(long)]
