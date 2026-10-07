@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
 
-use clap::{Parser, ValueEnum};
 use criv_state_wire::STATE_SCHEMA;
 use serde::{Deserialize, Serialize};
+use usage::{Cli, ValueEnum};
 
 #[path = "generated/state_store_generated.rs"]
 #[allow(clippy::derivable_impls, clippy::extra_unused_lifetimes)]
@@ -15,31 +15,29 @@ use state_store_generated::criv::bench as fb;
 
 const REPORT_SCHEMA: &str = "criv.state-store-candidate.v1";
 
-#[derive(Debug, Parser)]
-#[command(
-    name = "criv-state-store-bench",
-    about = "PROTOTYPE: compare machine State store candidates"
-)]
+/// PROTOTYPE: compare machine State store candidates
+#[derive(Debug, Cli)]
+#[usage(bin = "criv-state-store-bench", unknown_flags = "error")]
 struct Args {
-    #[arg(long, value_enum)]
+    #[usage(long, value_enum)]
     candidate: Candidate,
-    #[arg(long)]
+    #[usage(long)]
     state: Option<PathBuf>,
-    #[arg(long)]
+    #[usage(long)]
     changed_state: Option<PathBuf>,
-    #[arg(long = "snapshot", num_args = 1..)]
+    #[usage(long = "snapshot", num_args = 1..)]
     snapshots: Vec<PathBuf>,
-    #[arg(long)]
+    #[usage(long)]
     wasm_package: Option<PathBuf>,
-    #[arg(long)]
+    #[usage(long)]
     output: Option<PathBuf>,
-    #[arg(long, default_value_t = 5)]
+    #[usage(long, default = "5")]
     samples: usize,
-    #[arg(long)]
+    #[usage(long)]
     allow_low_samples: bool,
-    #[arg(long, hide = true)]
+    #[usage(long, hide = true)]
     worker_operation: Option<String>,
-    #[arg(long, hide = true)]
+    #[usage(long, hide = true)]
     store: Option<PathBuf>,
 }
 
