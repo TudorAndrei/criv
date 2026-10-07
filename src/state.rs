@@ -28,6 +28,7 @@ mod publication;
 mod snapshots;
 
 pub use publication::load_snapshot;
+pub use snapshots::SnapshotId;
 
 #[derive(Debug, Clone)]
 pub struct State {

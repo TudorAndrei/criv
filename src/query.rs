@@ -7,6 +7,7 @@ use usage::{Args as UsageArgs, Subcommands, ValueEnum};
 use crate::diagnostic::DiagnosticCode;
 use crate::repository::RepositoryFiles;
 use crate::source::SymbolKind;
+use crate::state::SnapshotId;
 use crate::vault::{
     NoteKind, ResolvedLink, SourceTargetResolution, Vault, source_fragment_name,
     source_fragment_path,
@@ -745,10 +746,9 @@ impl SnapshotGraph {
 }
 
 fn load_snapshot(root: &Path, id: &str) -> Result<SnapshotDocument> {
-    let local = if id == "latest" || is_snapshot_hash(id) {
-        crate::state::load_snapshot(root, id)?
-    } else {
-        None
+    let local = match id.parse::<SnapshotId>() {
+        Ok(snapshot) => crate::state::load_snapshot(root, &snapshot)?,
+        Err(()) => None,
     };
     let contents = if let Some(contents) = local {
         contents
@@ -757,10 +757,6 @@ fn load_snapshot(root: &Path, id: &str) -> Result<SnapshotDocument> {
     };
     serde_json::from_str(&contents)
         .map_err(|err| CrivError::new(format!("failed to parse snapshot `{id}`: {err}")))
-}
-
-fn is_snapshot_hash(value: &str) -> bool {
-    !value.is_empty() && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
 fn load_git_state(root: &Path, id: &str) -> Result<String> {
@@ -1045,11 +1041,12 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_hash_shape() {
-        assert!(is_snapshot_hash("abc123"));
-        assert!(!is_snapshot_hash("../../etc/passwd"));
-        assert!(!is_snapshot_hash("HEAD~1"));
-        assert!(!is_snapshot_hash(""));
+    fn snapshot_id_shape() {
+        assert_eq!("latest".parse(), Ok(SnapshotId::Latest));
+        assert_eq!("abc123".parse(), Ok(SnapshotId::Hash("abc123".into())));
+        assert!("../../etc/passwd".parse::<SnapshotId>().is_err());
+        assert!("HEAD~1".parse::<SnapshotId>().is_err());
+        assert!("".parse::<SnapshotId>().is_err());
     }
 
     fn query_output_options() -> OutputOptions {
