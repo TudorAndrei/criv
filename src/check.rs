@@ -12,7 +12,7 @@ use rumdl_lib::rules::{all_rules, filter_rules};
 use serde::Serialize;
 use usage::{Args as UsageArgs, ValueEnum};
 
-use crate::diagnostic::{LspRange, SourceLocation, fix_for};
+use crate::diagnostic::{DiagnosticCode, LspRange, SourceLocation};
 use crate::discovery::{
     MarkdownPolicy, discover_markdown, read_selected_text_from, select_markdown,
 };
@@ -59,7 +59,7 @@ pub enum Severity {
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct Diagnostic {
     severity: Severity,
-    code: &'static str,
+    code: DiagnosticCode,
     path: String,
     line: Option<usize>,
     message: String,
@@ -69,7 +69,7 @@ pub struct Diagnostic {
 #[derive(Serialize)]
 struct JsonDiagnostic<'a> {
     severity: Severity,
-    code: &'static str,
+    code: DiagnosticCode,
     path: &'a str,
     line: Option<usize>,
     message: &'a str,
@@ -109,7 +109,7 @@ impl Diagnostic {
             line: self.line,
             message: &self.message,
             range: self.location.as_ref().and_then(SourceLocation::lsp_range),
-            fix: fix_for(self.code),
+            fix: self.code.fix(),
         }
     }
 }
@@ -126,7 +126,7 @@ pub fn run(root: &Path, options: &CheckOptions) -> Result<()> {
         diagnostics.retain(|diag| {
             diag.path.contains(filter)
                 || diag.message.contains(filter)
-                || diag.code.contains(filter)
+                || diag.code.as_str().contains(filter)
         });
     }
 
@@ -158,10 +158,9 @@ pub fn run(root: &Path, options: &CheckOptions) -> Result<()> {
         if options.format == Format::Text {
             println!("next: {}", next_command(&diagnostics));
         }
-        return Err(CrivError::coded_fix(
-            "check-failed",
+        return Err(CrivError::coded(
+            DiagnosticCode::CheckFailed,
             "check failed",
-            fix_for("check-failed").unwrap_or("Run `criv check` and repair the reported issue."),
         ));
     }
 
@@ -188,7 +187,7 @@ fn validate_all_with_fix(files: &RepositoryFiles, fix: bool) -> Result<Vec<Diagn
             .into_iter()
             .map(|violation| {
                 error_with_location(
-                    "policy-violation",
+                    DiagnosticCode::PolicyViolation,
                     &violation.path,
                     Some(violation.line),
                     violation.location,
@@ -235,7 +234,7 @@ fn validate_changed(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
             .into_iter()
             .map(|violation| {
                 error_with_location(
-                    "policy-violation",
+                    DiagnosticCode::PolicyViolation,
                     &violation.path,
                     Some(violation.line),
                     violation.location,
@@ -353,7 +352,7 @@ fn validate_markdown_format(
                 );
             }
             Err(err) => diagnostics.push(error(
-                "markdown-format",
+                DiagnosticCode::MarkdownFormat,
                 &rel_path,
                 None,
                 format!("rumdl failed: {err}"),
@@ -440,7 +439,12 @@ fn apply_markdown_fixes(
                 result.conflicting_rules.join(", ")
             )
         };
-        diagnostics.push(error("markdown-format", rel_path, None, detail));
+        diagnostics.push(error(
+            DiagnosticCode::MarkdownFormat,
+            rel_path,
+            None,
+            detail,
+        ));
     }
 
     Ok(())
@@ -470,7 +474,7 @@ fn markdown_diagnostic(path: &str, source: Arc<str>, warning: &LintWarning) -> D
         warning.end_column,
     );
     error_with_location(
-        "markdown-format",
+        DiagnosticCode::MarkdownFormat,
         path,
         Some(warning.line),
         location,
@@ -546,7 +550,7 @@ fn validate_likec4_workspace(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
             SourceTargetResolution::Resolved { .. }
         ) {
             diagnostics.push(error(
-                "invalid-likec4-source",
+                DiagnosticCode::InvalidLikeC4Source,
                 &vault.likec4_workspace.path,
                 None,
                 format!("LikeC4 source link does not resolve: `{target}`"),
@@ -609,39 +613,39 @@ fn validate_changed_vault(
 fn policy_diagnostic(diagnostic: &PolicyDiagnostic) -> Diagnostic {
     let (code, message) = match &diagnostic.kind {
         PolicyDiagnosticKind::MissingId => (
-            "missing-policy-pattern-id",
+            DiagnosticCode::MissingPolicyPatternId,
             "policy pattern must declare an id".to_string(),
         ),
         PolicyDiagnosticKind::EmptyId => (
-            "empty-policy-pattern",
+            DiagnosticCode::EmptyPolicyPattern,
             "policy pattern id may not be empty".to_string(),
         ),
         PolicyDiagnosticKind::DuplicateId { id } => (
-            "duplicate-policy-pattern",
+            DiagnosticCode::DuplicatePolicyPattern,
             format!("policy pattern id `{id}` is declared more than once"),
         ),
         PolicyDiagnosticKind::MissingDefinition { id } => (
-            "missing-policy-pattern-definition",
+            DiagnosticCode::MissingPolicyPatternDefinition,
             format!("policy pattern `{id}` must declare language and pattern or rule"),
         ),
         PolicyDiagnosticKind::MissingLanguage { id } => (
-            "missing-policy-pattern-language",
+            DiagnosticCode::MissingPolicyPatternLanguage,
             format!("inline policy pattern `{id}` must declare a language"),
         ),
         PolicyDiagnosticKind::AmbiguousBody { id } => (
-            "ambiguous-policy-pattern-body",
+            DiagnosticCode::AmbiguousPolicyPatternBody,
             format!("inline policy pattern `{id}` must declare either pattern or rule, not both"),
         ),
         PolicyDiagnosticKind::MissingBody { id } => (
-            "missing-policy-pattern-body",
+            DiagnosticCode::MissingPolicyPatternBody,
             format!("inline policy pattern `{id}` must declare pattern or rule"),
         ),
         PolicyDiagnosticKind::InvalidPattern { id, error } => (
-            "invalid-policy-pattern",
+            DiagnosticCode::InvalidPolicyPattern,
             format!("inline policy pattern `{id}` does not compile: {error}"),
         ),
         PolicyDiagnosticKind::InvalidRule { id, error } => (
-            "invalid-policy-pattern",
+            DiagnosticCode::InvalidPolicyPattern,
             format!("inline policy rule `{id}` does not compile: {error}"),
         ),
     };
@@ -693,7 +697,7 @@ fn validate_notes(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
         if notes.len() > 1 {
             for note in notes {
                 diagnostics.push(error(
-                    "duplicate-id",
+                    DiagnosticCode::DuplicateId,
                     &note.rel_path,
                     None,
                     format!("duplicate note id `{id}`"),
@@ -712,7 +716,7 @@ fn validate_note_local(
 ) {
     if let Some(err) = &note.frontmatter_error {
         diagnostics.push(error_with_location(
-            "invalid-frontmatter",
+            DiagnosticCode::InvalidFrontmatter,
             &note.rel_path,
             None,
             note.frontmatter_error_location.clone(),
@@ -722,7 +726,7 @@ fn validate_note_local(
 
     if note.id.is_none() {
         diagnostics.push(error(
-            "missing-id",
+            DiagnosticCode::MissingId,
             &note.rel_path,
             None,
             "note is missing required frontmatter `id`",
@@ -732,7 +736,7 @@ fn validate_note_local(
     match note.kind {
         NoteKind::Doc | NoteKind::Decision => {}
         NoteKind::Unknown => diagnostics.push(error(
-            "invalid-kind",
+            DiagnosticCode::InvalidKind,
             &note.rel_path,
             None,
             "note frontmatter `kind` must be `doc` or `decision`",
@@ -743,7 +747,7 @@ fn validate_note_local(
         validate_decision_note(vault, note, adr_prefix, diagnostics);
     } else if note.rel_path.starts_with(adr_prefix) && note.rel_path != adr_readme {
         diagnostics.push(error(
-            "adr-dir-non-decision",
+            DiagnosticCode::AdrDirNonDecision,
             &note.rel_path,
             None,
             "ADR directory may contain only `kind: decision` notes plus README.md",
@@ -762,7 +766,7 @@ fn validate_decision_note(
     let id = note.id.as_deref().unwrap_or("");
     if !is_adr_id(id) {
         diagnostics.push(error(
-            "invalid-adr-id",
+            DiagnosticCode::InvalidAdrId,
             &note.rel_path,
             None,
             "decision id must match ADR-NNNN",
@@ -771,7 +775,7 @@ fn validate_decision_note(
 
     if !note.rel_path.starts_with(adr_prefix) {
         diagnostics.push(error(
-            "decision-location",
+            DiagnosticCode::DecisionLocation,
             &note.rel_path,
             None,
             format!(
@@ -795,7 +799,7 @@ fn validate_decision_note(
 
         if !title_matches {
             diagnostics.push(error(
-                "adr-filename",
+                DiagnosticCode::AdrFilename,
                 &note.rel_path,
                 None,
                 format!(
@@ -822,7 +826,7 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
                 }
                 SourceTargetResolution::MissingFile => {
                     diagnostics.push(error(
-                        "unresolved-target",
+                        DiagnosticCode::UnresolvedTarget,
                         &note.rel_path,
                         None,
                         format!("target symbol `{target}` does not resolve to a source file"),
@@ -830,7 +834,7 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
                 }
                 SourceTargetResolution::MissingFragment { path } => {
                     diagnostics.push(error(
-                        "unresolved-target",
+                        DiagnosticCode::UnresolvedTarget,
                         &note.rel_path,
                         None,
                         format!(
@@ -845,7 +849,7 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
     for pattern in &note.target_pattern_refs {
         if vault.resolve_policy_pattern(&pattern.id).is_none() {
             diagnostics.push(error(
-                "unresolved-pattern",
+                DiagnosticCode::UnresolvedPattern,
                 &note.rel_path,
                 Some(pattern.line),
                 format!("pattern reference `{}` does not resolve", pattern.id),
@@ -857,7 +861,7 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
     for pattern in &note.target_pattern_ids {
         if !doc_local_patterns.insert(pattern) {
             diagnostics.push(error(
-                "duplicate-doc-pattern",
+                DiagnosticCode::DuplicateDocPattern,
                 &note.rel_path,
                 None,
                 format!("doc-local pattern id `{pattern}` is declared more than once"),
@@ -873,7 +877,7 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
         {
             if !has_match {
                 diagnostics.push(warning(
-                    "empty-target-scope",
+                    DiagnosticCode::EmptyTargetScope,
                     &note.rel_path,
                     None,
                     format!("target scope `{scope}` matches no source files"),
@@ -883,7 +887,7 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
 
         for governs in unresolved_governs(vault, note) {
             diagnostics.push(error(
-                "unresolved-governs",
+                DiagnosticCode::UnresolvedGoverns,
                 &note.rel_path,
                 None,
                 format!("governs glob `{governs}` matches no source files"),
@@ -910,7 +914,7 @@ pub fn publication_blocking_diagnostics(vault: &Vault) -> Vec<Diagnostic> {
         .flat_map(|note| {
             unresolved_governs(vault, note).into_iter().map(|governs| {
                 error(
-                    "unresolved-governs",
+                    DiagnosticCode::UnresolvedGoverns,
                     &note.rel_path,
                     None,
                     format!("governs glob `{governs}` matches no source files"),
@@ -976,7 +980,7 @@ fn validate_architecture_interface_drift_for_paths(
         };
         if previous_hash != &record.hash {
             diagnostics.push(warning(
-                "architecture-interface-drift",
+                DiagnosticCode::ArchitectureInterfaceDrift,
                 &record.path,
                 Some(record.line),
                 format!(
@@ -1015,7 +1019,7 @@ fn validate_pattern_collisions(vault: &Vault, diagnostics: &mut Vec<Diagnostic>)
         }
         for location in &locations {
             diagnostics.push(error(
-                "duplicate-pattern-id",
+                DiagnosticCode::DuplicatePatternId,
                 location,
                 None,
                 format!(
@@ -1037,7 +1041,7 @@ fn validate_note_links(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnos
     for link in &note.wiki_links {
         match vault.resolve_link(&link.target) {
             ResolvedLink::Broken => diagnostics.push(error_with_location(
-                "broken-link",
+                DiagnosticCode::BrokenLink,
                 &note.rel_path,
                 Some(link.line),
                 link.location.clone(),
@@ -1051,7 +1055,7 @@ fn validate_note_links(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnos
                     })
                     .unwrap_or_default();
                 diagnostics.push(warning_with_location(
-                        "source-wikilink",
+                        DiagnosticCode::SourceWikilink,
                         &note.rel_path,
                         Some(link.line),
                         link.location.clone(),
@@ -1062,7 +1066,7 @@ fn validate_note_links(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnos
                     ));
                 if ambiguous {
                     diagnostics.push(warning_with_location(
-                        "ambiguous-source-link",
+                        DiagnosticCode::AmbiguousSourceLink,
                         &note.rel_path,
                         Some(link.line),
                         link.location.clone(),
@@ -1081,7 +1085,7 @@ fn validate_note_links(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnos
                         .map(|target| format!("; use `[[{target}]]` instead"))
                         .unwrap_or_default();
                     diagnostics.push(error_with_location(
-                            "non-portable-note-link",
+                            DiagnosticCode::NonPortableNoteLink,
                             &note.rel_path,
                             Some(link.line),
                             link.location.clone(),
@@ -1110,7 +1114,7 @@ fn warn_legacy_source_target(
     let normalized = source_target_body(target);
     if is_typed_source_target(target) || normalized != canonical {
         diagnostics.push(warning(
-            "legacy-source-target",
+            DiagnosticCode::LegacySourceTarget,
             path,
             line,
             format!(
@@ -1132,7 +1136,7 @@ fn validate_supersession(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
         for old_id in &note.supersedes {
             if !decisions.contains_key(old_id.as_str()) {
                 diagnostics.push(error(
-                    "unknown-supersedes",
+                    DiagnosticCode::UnknownSupersedes,
                     &note.rel_path,
                     None,
                     format!("supersedes references unknown decision `{old_id}`"),
@@ -1143,7 +1147,7 @@ fn validate_supersession(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
         for new_id in &note.superseded_by {
             match decisions.get(new_id.as_str()) {
                 None => diagnostics.push(error(
-                    "unknown-superseded-by",
+                    DiagnosticCode::UnknownSupersededBy,
                     &note.rel_path,
                     None,
                     format!("superseded_by references unknown decision `{new_id}`"),
@@ -1151,7 +1155,7 @@ fn validate_supersession(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
                 Some(new_note) => {
                     if !new_note.supersedes.iter().any(|value| value == id) {
                         diagnostics.push(error(
-                            "inconsistent-supersession",
+                            DiagnosticCode::InconsistentSupersession,
                             &note.rel_path,
                             None,
                             format!("`{new_id}` must list `{id}` in supersedes"),
@@ -1164,7 +1168,7 @@ fn validate_supersession(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
 
     for cycle in supersession_cycles(&decisions) {
         diagnostics.push(error(
-            "supersession-cycle",
+            DiagnosticCode::SupersessionCycle,
             decisions
                 .get(cycle.first().map_or("", String::as_str))
                 .map_or("docs", |note| note.rel_path.as_str()),
@@ -1215,13 +1219,13 @@ fn visit_supersession(
 fn next_command(diagnostics: &[Diagnostic]) -> &'static str {
     if diagnostics
         .iter()
-        .any(|diag| diag.is_error() && diag.code == "markdown-format")
+        .any(|diag| diag.is_error() && diag.code == DiagnosticCode::MarkdownFormat)
     {
         return "criv check --fix";
     }
     if diagnostics
         .iter()
-        .any(|diag| diag.is_error() && diag.code == "unresolved-target")
+        .any(|diag| diag.is_error() && diag.code == DiagnosticCode::UnresolvedTarget)
     {
         return "criv watch --once";
     }
@@ -1247,7 +1251,7 @@ fn print_text(diagnostics: &[Diagnostic]) {
         } else {
             println!("{severity}[{}] {}: {}", diag.code, diag.path, diag.message);
         }
-        if let Some(fix) = fix_for(diag.code) {
+        if let Some(fix) = diag.code.fix() {
             println!("  fix: {fix}");
         }
     }
@@ -1313,7 +1317,7 @@ fn escape_github_property(value: &str) -> String {
 }
 
 fn error(
-    code: &'static str,
+    code: DiagnosticCode,
     path: &str,
     line: Option<usize>,
     message: impl Into<String>,
@@ -1322,7 +1326,7 @@ fn error(
 }
 
 fn error_with_location(
-    code: &'static str,
+    code: DiagnosticCode,
     path: &str,
     line: Option<usize>,
     location: Option<SourceLocation>,
@@ -1340,7 +1344,7 @@ fn error_with_location(
 }
 
 fn warning(
-    code: &'static str,
+    code: DiagnosticCode,
     path: &str,
     line: Option<usize>,
     message: impl Into<String>,
@@ -1349,7 +1353,7 @@ fn warning(
 }
 
 fn warning_with_location(
-    code: &'static str,
+    code: DiagnosticCode,
     path: &str,
     line: Option<usize>,
     location: Option<SourceLocation>,
@@ -1371,83 +1375,87 @@ mod tests {
     use super::*;
     use crate::vault::WikiLink;
 
-    const EMITTED_CODES: [&str; 35] = [
-        "adr-dir-non-decision",
-        "adr-filename",
-        "ambiguous-policy-pattern-body",
-        "ambiguous-source-link",
-        "architecture-interface-drift",
-        "broken-link",
-        "decision-location",
-        "duplicate-doc-pattern",
-        "duplicate-id",
-        "duplicate-pattern-id",
-        "duplicate-policy-pattern",
-        "empty-policy-pattern",
-        "empty-target-scope",
-        "inconsistent-supersession",
-        "invalid-adr-id",
-        "invalid-frontmatter",
-        "invalid-kind",
-        "invalid-likec4-source",
-        "invalid-policy-pattern",
-        "legacy-source-target",
-        "markdown-format",
-        "missing-id",
-        "missing-policy-pattern-body",
-        "missing-policy-pattern-definition",
-        "missing-policy-pattern-id",
-        "missing-policy-pattern-language",
-        "non-portable-note-link",
-        "policy-violation",
-        "source-wikilink",
-        "supersession-cycle",
-        "unknown-superseded-by",
-        "unknown-supersedes",
-        "unresolved-governs",
-        "unresolved-pattern",
-        "unresolved-target",
+    const EMITTED_CODES: [DiagnosticCode; 35] = [
+        DiagnosticCode::AdrDirNonDecision,
+        DiagnosticCode::AdrFilename,
+        DiagnosticCode::AmbiguousPolicyPatternBody,
+        DiagnosticCode::AmbiguousSourceLink,
+        DiagnosticCode::ArchitectureInterfaceDrift,
+        DiagnosticCode::BrokenLink,
+        DiagnosticCode::DecisionLocation,
+        DiagnosticCode::DuplicateDocPattern,
+        DiagnosticCode::DuplicateId,
+        DiagnosticCode::DuplicatePatternId,
+        DiagnosticCode::DuplicatePolicyPattern,
+        DiagnosticCode::EmptyPolicyPattern,
+        DiagnosticCode::EmptyTargetScope,
+        DiagnosticCode::InconsistentSupersession,
+        DiagnosticCode::InvalidAdrId,
+        DiagnosticCode::InvalidFrontmatter,
+        DiagnosticCode::InvalidKind,
+        DiagnosticCode::InvalidLikeC4Source,
+        DiagnosticCode::InvalidPolicyPattern,
+        DiagnosticCode::LegacySourceTarget,
+        DiagnosticCode::MarkdownFormat,
+        DiagnosticCode::MissingId,
+        DiagnosticCode::MissingPolicyPatternBody,
+        DiagnosticCode::MissingPolicyPatternDefinition,
+        DiagnosticCode::MissingPolicyPatternId,
+        DiagnosticCode::MissingPolicyPatternLanguage,
+        DiagnosticCode::NonPortableNoteLink,
+        DiagnosticCode::PolicyViolation,
+        DiagnosticCode::SourceWikilink,
+        DiagnosticCode::SupersessionCycle,
+        DiagnosticCode::UnknownSupersededBy,
+        DiagnosticCode::UnknownSupersedes,
+        DiagnosticCode::UnresolvedGoverns,
+        DiagnosticCode::UnresolvedPattern,
+        DiagnosticCode::UnresolvedTarget,
     ];
 
     #[test]
     fn every_emitted_code_carries_a_repair() {
         for code in EMITTED_CODES {
             assert!(
-                fix_for(code).is_some(),
+                code.fix().is_some(),
                 "diagnostic code `{code}` reaches a caller with no repair"
             );
         }
         for code in [
-            "not-a-vault",
-            "check-failed",
-            "policy-violation",
-            "import-policy-violation",
-            "adr-immutability-violation",
-            "enforcement-failed",
+            DiagnosticCode::NotAVault,
+            DiagnosticCode::CheckFailed,
+            DiagnosticCode::PolicyViolation,
+            DiagnosticCode::ImportPolicyViolation,
+            DiagnosticCode::AdrImmutabilityViolation,
+            DiagnosticCode::EnforcementFailed,
         ] {
             assert!(
-                fix_for(code).is_some(),
+                code.fix().is_some(),
                 "failure code `{code}` reaches a caller with no repair"
             );
         }
     }
 
     #[test]
-    fn every_emitted_code_is_reachable_from_the_source() {
-        let source = include_str!("check.rs");
-        for code in EMITTED_CODES {
-            assert!(
-                source.contains(&format!("\"{code}\"")),
-                "`{code}` is listed as emitted but appears nowhere in this module"
-            );
-        }
-    }
-
-    #[test]
     fn next_command_names_the_repair_criv_can_run() {
-        let markdown = vec![error("markdown-format", "docs/a.md", None, "bad")];
-        let stale = vec![error("unresolved-target", "docs/a.md", None, "stale")];
-        let other = vec![error("broken-link", "docs/a.md", None, "missing")];
+        let markdown = vec![error(
+            DiagnosticCode::MarkdownFormat,
+            "docs/a.md",
+            None,
+            "bad",
+        )];
+        let stale = vec![error(
+            DiagnosticCode::UnresolvedTarget,
+            "docs/a.md",
+            None,
+            "stale",
+        )];
+        let other = vec![error(
+            DiagnosticCode::BrokenLink,
+            "docs/a.md",
+            None,
+            "missing",
+        )];
 
         assert_eq!(next_command(&markdown), "criv check --fix");
         assert_eq!(next_command(&stale), "criv watch --once");
@@ -1456,7 +1464,7 @@ mod tests {
 
     #[test]
     fn json_diagnostics_carry_the_repair() {
-        let diagnostic = error("markdown-format", "docs/a.md", None, "bad");
+        let diagnostic = error(DiagnosticCode::MarkdownFormat, "docs/a.md", None, "bad");
         let json = serde_json::to_value(diagnostic.json()).expect("serialize");
 
         assert_eq!(json["code"], "markdown-format");
@@ -1531,7 +1539,7 @@ mod tests {
     fn github_annotation_escapes_workflow_command_data() {
         let diag = Diagnostic {
             severity: Severity::Error,
-            code: "broken-link",
+            code: DiagnosticCode::BrokenLink,
             path: "docs/a,b:guide.md".into(),
             line: Some(7),
             message: "bad % link\r\ntry again".into(),
@@ -1548,7 +1556,7 @@ mod tests {
     fn github_annotation_omits_missing_line() {
         let diag = Diagnostic {
             severity: Severity::Warning,
-            code: "missing-id",
+            code: DiagnosticCode::MissingId,
             path: "docs/note.md".into(),
             line: None,
             message: "missing id".into(),
@@ -1625,7 +1633,7 @@ mod tests {
         let source: Arc<str> = Arc::from("first\nsecond\n");
         let location = SourceLocation::new(source, 2..9).unwrap();
         let diagnostic = error_with_location(
-            "multi-line",
+            DiagnosticCode::BrokenLink,
             "docs/multi.md",
             None,
             Some(location),
@@ -1634,7 +1642,7 @@ mod tests {
 
         assert_eq!(
             github_annotation(&diagnostic),
-            "::error file=docs/multi.md,line=1,endLine=2,title=criv multi-line::crosses lines"
+            "::error file=docs/multi.md,line=1,endLine=2,title=criv broken-link::crosses lines"
         );
     }
 
@@ -1660,14 +1668,14 @@ mod tests {
         assert!(
             diagnostics
                 .iter()
-                .all(|diag| diag.code != "inconsistent-supersession")
+                .all(|diag| diag.code != DiagnosticCode::InconsistentSupersession)
         );
         old.superseded_by.push("ADR-0003".into());
         let vault = test_vault(vec![old]);
         assert!(
             validate(&vault)
                 .iter()
-                .any(|diag| diag.code == "unknown-superseded-by")
+                .any(|diag| diag.code == DiagnosticCode::UnknownSupersededBy)
         );
     }
 
@@ -1683,7 +1691,7 @@ mod tests {
         assert!(
             diagnostics
                 .iter()
-                .any(|diag| diag.code == "non-portable-note-link")
+                .any(|diag| diag.code == DiagnosticCode::NonPortableNoteLink)
         );
     }
 
@@ -1701,7 +1709,7 @@ mod tests {
         assert!(
             diagnostics
                 .iter()
-                .all(|diag| diag.code != "non-portable-note-link")
+                .all(|diag| diag.code != DiagnosticCode::NonPortableNoteLink)
         );
     }
 
@@ -1712,12 +1720,16 @@ mod tests {
         let diagnostics = validate(&vault);
 
         assert!(diagnostics.iter().any(|diag| {
-            diag.code == "source-wikilink"
+            diag.code == DiagnosticCode::SourceWikilink
                 && diag
                     .message
                     .contains("AST-aware source selector `src/main.rs#fn:run`")
         }));
-        assert!(diagnostics.iter().all(|diag| diag.code != "broken-link"));
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diag| diag.code != DiagnosticCode::BrokenLink)
+        );
     }
 
     #[test]
@@ -1727,12 +1739,16 @@ mod tests {
         let diagnostics = validate(&vault);
 
         assert!(diagnostics.iter().any(|diag| {
-            diag.code == "source-wikilink"
+            diag.code == DiagnosticCode::SourceWikilink
                 && diag
                     .message
                     .contains("AST-aware source selector `src/main.rs#fn:run`")
         }));
-        assert!(diagnostics.iter().all(|diag| diag.code != "broken-link"));
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diag| diag.code != DiagnosticCode::BrokenLink)
+        );
     }
 
     #[test]
@@ -1741,11 +1757,15 @@ mod tests {
 
         let diagnostics = validate(&vault);
 
-        assert!(diagnostics.iter().any(|diag| diag.code == "broken-link"));
         assert!(
             diagnostics
                 .iter()
-                .all(|diag| diag.code != "source-wikilink")
+                .any(|diag| diag.code == DiagnosticCode::BrokenLink)
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diag| diag.code != DiagnosticCode::SourceWikilink)
         );
     }
 
@@ -1758,17 +1778,21 @@ mod tests {
         assert!(
             diagnostics
                 .iter()
-                .any(|diag| diag.code == "source-wikilink"),
+                .any(|diag| diag.code == DiagnosticCode::SourceWikilink),
             "{diagnostics:#?}"
         );
         assert!(
             diagnostics
                 .iter()
-                .any(|diag| diag.code == "ambiguous-source-link"
+                .any(|diag| diag.code == DiagnosticCode::AmbiguousSourceLink
                     && diag.message.contains("first match is `")),
             "{diagnostics:#?}"
         );
-        assert!(diagnostics.iter().all(|diag| diag.code != "broken-link"));
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diag| diag.code != DiagnosticCode::BrokenLink)
+        );
     }
 
     #[test]
@@ -1778,7 +1802,7 @@ mod tests {
         let diagnostics = validate(&vault);
 
         assert!(diagnostics.iter().any(|diag| {
-            diag.code == "legacy-source-target"
+            diag.code == DiagnosticCode::LegacySourceTarget
                 && diag
                     .message
                     .contains("AST-aware source selector `src/main.rs#fn:run`")
@@ -1794,7 +1818,7 @@ mod tests {
         assert!(
             diagnostics
                 .iter()
-                .all(|diag| diag.code != "legacy-source-target")
+                .all(|diag| diag.code != DiagnosticCode::LegacySourceTarget)
         );
     }
 
@@ -1834,7 +1858,7 @@ governs:
         assert!(
             diagnostics
                 .iter()
-                .all(|diag| diag.code != "unresolved-governs")
+                .all(|diag| diag.code != DiagnosticCode::UnresolvedGoverns)
         );
     }
 
@@ -1893,9 +1917,9 @@ governs:
         let diagnostics = validate(&vault);
 
         assert!(diagnostics.iter().all(|diagnostic| {
-            diagnostic.code != "unresolved-governs"
-                && diagnostic.code != "unresolved-target"
-                && diagnostic.code != "empty-target-scope"
+            diagnostic.code != DiagnosticCode::UnresolvedGoverns
+                && diagnostic.code != DiagnosticCode::UnresolvedTarget
+                && diagnostic.code != DiagnosticCode::EmptyTargetScope
         }));
         assert!(publication_blocking_diagnostics(&vault).is_empty());
     }
@@ -1950,7 +1974,7 @@ governs:
         let blockers = publication_blocking_diagnostics(&vault);
 
         assert_eq!(blockers.len(), 1);
-        assert_eq!(blockers[0].code, "unresolved-governs");
+        assert_eq!(blockers[0].code, DiagnosticCode::UnresolvedGoverns);
         assert_eq!(blockers[0].path, "docs/adr/0001-old.md");
     }
 
@@ -1981,7 +2005,7 @@ See [[does-not-exist]].
             + 1;
         let broken = diagnostics
             .iter()
-            .find(|diag| diag.code == "broken-link")
+            .find(|diag| diag.code == DiagnosticCode::BrokenLink)
             .expect("the dangling wiki link must be reported");
         assert_eq!(
             broken.line,
@@ -2021,7 +2045,7 @@ pub fn run(input: String) -> usize {
         assert!(
             diagnostics
                 .iter()
-                .all(|diag| diag.code != "architecture-interface-drift")
+                .all(|diag| diag.code != DiagnosticCode::ArchitectureInterfaceDrift)
         );
         let _ = fs::remove_dir_all(root);
     }
@@ -2052,7 +2076,7 @@ pub fn run(input: String, fallback: usize) -> usize {
             validate_vault(&vault, Some(&previous_state), &PolicyScanPlan::new(&vault));
 
         assert!(diagnostics.iter().any(|diag| {
-            diag.code == "architecture-interface-drift"
+            diag.code == DiagnosticCode::ArchitectureInterfaceDrift
                 && diag.path == "docs/architecture"
                 && diag.is_warning()
         }));

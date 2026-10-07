@@ -7,7 +7,7 @@ use serde::Serialize;
 use usage::{Args as UsageArgs, ValueEnum};
 
 use crate::check;
-use crate::diagnostic;
+use crate::diagnostic::DiagnosticCode;
 use crate::git::{ChangedSet, ChangedSetComparison, GitRepository};
 use crate::policy_scan::PolicyScanPlan;
 use crate::vault::Vault;
@@ -129,18 +129,14 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
                 .as_ref()
                 .map_or(&[][..], |failure| &failure.violations),
             code: failure.as_ref().map(|failure| failure.code),
-            fix: failure.as_ref().map(|failure| failure.fix),
+            fix: failure.as_ref().and_then(|failure| failure.code.fix()),
         };
         let json = serde_json::to_string_pretty(&report).map_err(|err| {
             CrivError::new(format!("failed to serialize enforcement report: {err}"))
         })?;
         println!("{json}");
         return match failure {
-            Some(failure) => Err(CrivError::coded_fix(
-                failure.code,
-                failure.message,
-                failure.fix,
-            )),
+            Some(failure) => Err(CrivError::coded(failure.code, failure.message)),
             None => Ok(()),
         };
     }
@@ -165,11 +161,7 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
         for violation in &failure.violations {
             println!("{violation}");
         }
-        return Err(CrivError::coded_fix(
-            failure.code,
-            failure.message,
-            failure.fix,
-        ));
+        return Err(CrivError::coded(failure.code, failure.message));
     }
 
     println!("enforcement passed");
@@ -177,9 +169,8 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
 }
 
 struct EnforceFailure {
-    code: &'static str,
+    code: DiagnosticCode,
     message: String,
-    fix: &'static str,
     violations: Vec<String>,
 }
 
@@ -193,7 +184,7 @@ struct EnforceReport<'a> {
     basis: &'a str,
     violations: &'a [String],
     #[serde(skip_serializing_if = "Option::is_none")]
-    code: Option<&'static str>,
+    code: Option<DiagnosticCode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     fix: Option<&'static str>,
 }
@@ -206,13 +197,13 @@ fn enforce_failure(
 ) -> Option<EnforceFailure> {
     let (code, message, violations) = if !violations.is_empty() {
         (
-            "policy-violation",
+            DiagnosticCode::PolicyViolation,
             format!("{} policy violation(s) found", violations.len()),
             violations,
         )
     } else if !import_violations.is_empty() {
         (
-            "import-policy-violation",
+            DiagnosticCode::ImportPolicyViolation,
             format!(
                 "{} import policy violation(s) found",
                 import_violations.len()
@@ -221,7 +212,7 @@ fn enforce_failure(
         )
     } else if !adr_violations.is_empty() {
         (
-            "adr-immutability-violation",
+            DiagnosticCode::AdrImmutabilityViolation,
             format!(
                 "{} ADR immutability violation(s) found",
                 adr_violations.len()
@@ -230,7 +221,7 @@ fn enforce_failure(
         )
     } else if errors > 0 {
         (
-            "enforcement-failed",
+            DiagnosticCode::EnforcementFailed,
             "enforcement failed".into(),
             Vec::new(),
         )
@@ -240,7 +231,6 @@ fn enforce_failure(
     Some(EnforceFailure {
         code,
         message,
-        fix: diagnostic::fix_for(code).unwrap_or("Run `criv check` and repair the reported issue."),
         violations,
     })
 }

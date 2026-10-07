@@ -3,6 +3,7 @@ use std::path::Path;
 
 use usage::{Args as UsageArgs, Subcommands, ValueEnum};
 
+use crate::diagnostic::DiagnosticCode;
 use crate::repository::RepositoryFiles;
 use crate::source::SymbolKind;
 use crate::vault::{
@@ -441,10 +442,9 @@ fn next_adr_id(vault: &Vault) -> Result<String> {
         .filter(|next| *next <= MAX_ADR_NUMBER);
     next.map_or_else(
         || {
-            Err(CrivError::coded_fix(
-                "adr-id-exhausted",
+            Err(CrivError::coded(
+                DiagnosticCode::AdrIdExhausted,
                 format!("no free ADR id after ADR-{highest:04}; ids are four digits"),
-                "Retire or renumber the highest ADR ids, or widen the id format in a new ADR.",
             ))
         },
         |next| Ok(format!("ADR-{next:04}")),

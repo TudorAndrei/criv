@@ -69,11 +69,10 @@ pub type Result<T> = std::result::Result<T, CrivError>;
 pub enum CrivError {
     #[error("{0}")]
     Message(String),
-    #[error("[{code}] {message}{}", fix_suffix(.fix.as_deref()))]
+    #[error("[{code}] {message}{}", fix_suffix(code.fix()))]
     Coded {
-        code: &'static str,
+        code: diagnostic::DiagnosticCode,
         message: String,
-        fix: Option<String>,
     },
     #[error("{0}")]
     Usage(String),
@@ -92,11 +91,10 @@ impl CrivError {
         Self::Message(message.into())
     }
 
-    fn coded_fix(code: &'static str, message: impl Into<String>, fix: impl Into<String>) -> Self {
+    fn coded(code: diagnostic::DiagnosticCode, message: impl Into<String>) -> Self {
         Self::Coded {
             code,
             message: message.into(),
-            fix: Some(fix.into()),
         }
     }
 

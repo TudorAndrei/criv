@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 use std::path::Path;
 
+use crate::diagnostic::DiagnosticCode;
 use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
@@ -131,14 +132,13 @@ impl GitRepository {
                     return Ok(None);
                 };
                 if !same_directory(&workdir, root) {
-                    return Err(CrivError::coded_fix(
-                        "vault-outside-git-root",
+                    return Err(CrivError::coded(
+                        DiagnosticCode::VaultOutsideGitRoot,
                         format!(
                             "the vault at `{}` is not the root of the Git worktree at `{}`; every path basis would shift",
                             root.display(),
                             workdir.display()
                         ),
-                        "Run criv from the worktree root, or make the vault its own repository.",
                     ));
                 }
                 Ok(Some(Self { repository }))
