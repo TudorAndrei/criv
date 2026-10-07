@@ -17,6 +17,25 @@ use crate::source::read_source_to_string_from;
 use crate::vault::{PolicyPattern, Vault};
 use crate::{CrivError, Result};
 
+/// The `language` of a policy pattern, parsed when the ADR is read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PolicyLanguage {
+    Supported(SupportLang),
+    Unsupported { name: String, error: String },
+}
+
+impl From<&str> for PolicyLanguage {
+    fn from(name: &str) -> Self {
+        name.parse().map_or_else(
+            |error: <SupportLang as std::str::FromStr>::Err| Self::Unsupported {
+                name: name.to_string(),
+                error: error.to_string(),
+            },
+            Self::Supported,
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum PatternSource<'a> {
     Pattern(&'a str),
@@ -134,10 +153,16 @@ pub fn compile_policy(
     policy: &PolicyPattern,
 ) -> std::result::Result<CompiledPolicy, PolicyCompileError> {
     let (source, language) = policy_source(policy)?;
-    let language = parse_language(language).map_err(|error| match source {
-        PatternSource::Pattern(_) => PolicyCompileError::InvalidPattern(error.to_string()),
-        PatternSource::Rule(_) => PolicyCompileError::InvalidRule(error.to_string()),
-    })?;
+    let language = match language {
+        PolicyLanguage::Supported(language) => *language,
+        PolicyLanguage::Unsupported { name, error } => {
+            let message = format!("unsupported ast-grep language `{name}`: {error}");
+            return Err(match source {
+                PatternSource::Pattern(_) => PolicyCompileError::InvalidPattern(message),
+                PatternSource::Rule(_) => PolicyCompileError::InvalidRule(message),
+            });
+        }
+    };
     #[cfg(test)]
     record_work(|counts| {
         counts.policy_compilations = counts.policy_compilations.saturating_add(1);
@@ -221,16 +246,11 @@ fn sort_matches(rows: &mut Vec<StructuralMatch>) {
 
 fn policy_source(
     policy: &PolicyPattern,
-) -> std::result::Result<(PatternSource<'_>, &str), PolicyCompileError> {
+) -> std::result::Result<(PatternSource<'_>, &PolicyLanguage), PolicyCompileError> {
     if !policy.has_inline_definition() {
         return Err(PolicyCompileError::MissingDefinition);
     }
-    let Some(language) = policy
-        .language
-        .as_deref()
-        .map(str::trim)
-        .filter(|language| !language.is_empty())
-    else {
+    let Some(language) = &policy.language else {
         return Err(PolicyCompileError::MissingLanguage);
     };
 
@@ -348,12 +368,6 @@ fn indent_yaml(value: &str) -> String {
         .map(|line| format!("  {line}"))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn parse_language(language: &str) -> Result<SupportLang> {
-    language
-        .parse()
-        .map_err(|err| CrivError::new(format!("unsupported ast-grep language `{language}`: {err}")))
 }
 
 #[cfg(test)]
@@ -530,8 +544,14 @@ all:
 
     #[test]
     fn elixir_language_names_extensions_patterns_and_rules_have_parity() {
-        assert_eq!(parse_language("elixir").unwrap(), SupportLang::Elixir);
-        assert_eq!(parse_language("ex").unwrap(), SupportLang::Elixir);
+        assert_eq!(
+            PolicyLanguage::from("elixir"),
+            PolicyLanguage::Supported(SupportLang::Elixir)
+        );
+        assert_eq!(
+            PolicyLanguage::from("ex"),
+            PolicyLanguage::Supported(SupportLang::Elixir)
+        );
         assert_eq!(
             SupportLang::from_path("lib/sample.ex"),
             Some(SupportLang::Elixir)
@@ -645,7 +665,7 @@ end
         PolicyPattern {
             id: Some("test".to_string()),
             line: 1,
-            language: Some(language.to_string()),
+            language: Some(PolicyLanguage::from(language)),
             pattern: Some(pattern.to_string()),
             rule: None,
             message: None,
