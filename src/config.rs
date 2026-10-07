@@ -67,6 +67,12 @@ impl Config {
     pub(crate) fn docs_path(&self, root: &Path) -> PathBuf {
         root.join(&self.docs_dir)
     }
+
+    /// The repository-relative ADR directory with a trailing `/`, as Git and
+    /// vault paths spell it.
+    pub(crate) fn adr_prefix(&self) -> String {
+        format!("{}/{}/", self.docs_dir, self.adr_dir)
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]

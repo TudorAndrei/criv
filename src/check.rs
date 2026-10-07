@@ -211,7 +211,7 @@ fn validate_changed(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
     }
 
     let config = crate::config::Config::load_from(files)?;
-    if changed_scope_requires_full_check(&changes, &config.docs_dir, &config.adr_dir) {
+    if changed_scope_requires_full_check(&changes, &config.adr_prefix()) {
         return validate_all_with_fix(files, false);
     }
 
@@ -262,12 +262,7 @@ const SCOPE_INVALIDATING_CONFIG_FILES: [&str; 7] = [
     ".markdownlint.yaml",
 ];
 
-fn changed_scope_requires_full_check(changes: &ChangedSet, docs_dir: &str, adr_dir: &str) -> bool {
-    let adr_prefix = format!(
-        "{}/{}/",
-        docs_dir.trim_end_matches('/'),
-        adr_dir.trim_matches('/')
-    );
+fn changed_scope_requires_full_check(changes: &ChangedSet, adr_prefix: &str) -> bool {
     changes.entries.iter().any(|entry| {
         matches!(
             entry.status,
@@ -278,8 +273,7 @@ fn changed_scope_requires_full_check(changes: &ChangedSet, docs_dir: &str, adr_d
         ]
         .into_iter()
         .any(|path| {
-            SCOPE_INVALIDATING_CONFIG_FILES.contains(&path.as_str())
-                || path.starts_with(&adr_prefix)
+            SCOPE_INVALIDATING_CONFIG_FILES.contains(&path.as_str()) || path.starts_with(adr_prefix)
         })
     })
 }
@@ -567,7 +561,7 @@ fn validate_changed_vault(
     changed_paths: &BTreeSet<String>,
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
-    let adr_prefix = format!("{}/{}/", vault.config.docs_dir, vault.config.adr_dir);
+    let adr_prefix = vault.config.adr_prefix();
     let adr_readme = format!("{adr_prefix}README.md");
 
     for note in vault
@@ -676,7 +670,7 @@ fn previous_architecture_interface_hashes(
 
 fn validate_notes(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
     let mut ids: BTreeMap<&str, Vec<&Note>> = BTreeMap::new();
-    let adr_prefix = format!("{}/{}/", vault.config.docs_dir, vault.config.adr_dir);
+    let adr_prefix = vault.config.adr_prefix();
     let adr_readme = format!("{adr_prefix}README.md");
 
     for note in &vault.notes {
@@ -1494,7 +1488,7 @@ mod tests {
             changed_entry(ChangeStatus::Modified, "src/lib.rs", None),
         ]);
 
-        assert!(!changed_scope_requires_full_check(&changes, "docs", "adr"));
+        assert!(!changed_scope_requires_full_check(&changes, "docs/adr/"));
     }
 
     #[test]
@@ -1508,8 +1502,7 @@ mod tests {
         ] {
             assert!(changed_scope_requires_full_check(
                 &changed_set_fixture(vec![entry]),
-                "docs",
-                "adr"
+                "docs/adr/"
             ));
         }
     }
