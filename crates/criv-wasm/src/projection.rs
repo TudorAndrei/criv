@@ -17,7 +17,7 @@ use super::{
 };
 
 #[cfg(target_arch = "wasm32")]
-pub(super) fn initial_projections_from_js(prepared: &PreparedState) -> Result<JsValue, JsValue> {
+pub fn initial_projections_from_js(prepared: &PreparedState) -> Result<JsValue, JsValue> {
     let projections = js_sys::Object::new();
     set_js_field(
         &projections,
@@ -75,7 +75,7 @@ fn set_js_field(object: &js_sys::Object, name: &str, value: &JsValue) -> Result<
 }
 
 #[cfg(target_arch = "wasm32")]
-fn js_encode_error(error: serde_wasm_bindgen::Error) -> JsValue {
+fn js_encode_error(error: &serde_wasm_bindgen::Error) -> JsValue {
     JsValue::from_str(&format!(
         "failed to encode criv initial projections: {error}"
     ))
@@ -85,12 +85,12 @@ fn js_encode_error(error: serde_wasm_bindgen::Error) -> JsValue {
 fn js_projection_value(value: &impl Serialize) -> Result<JsValue, JsValue> {
     value
         .serialize(&serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true))
-        .map_err(js_encode_error)
+        .map_err(|error| js_encode_error(&error))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Serialize)]
-pub(super) struct InitialProjections<'a> {
+pub struct InitialProjections<'a> {
     summary: &'a StateSummary,
     sources: &'a [EditorSourceEntry],
     assets: &'a [EditorAssetEntry],

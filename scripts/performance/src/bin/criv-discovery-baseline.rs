@@ -1,3 +1,8 @@
+#![expect(
+    unsafe_code,
+    reason = "process resource accounting calls wait4 and GetProcessMemoryInfo"
+)]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
@@ -564,7 +569,10 @@ fn build_probe(repository_root: &Path) -> Result<PathBuf, String> {
     executable.ok_or_else(|| "cargo did not report the criv library-test executable".into())
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one attempt records every run identity field beside its result"
+)]
 fn run_attempt(
     executable: &Path,
     workload_root: &Path,

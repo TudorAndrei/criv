@@ -1,3 +1,15 @@
+#![cfg_attr(
+    test,
+    allow(
+        clippy::pedantic,
+        clippy::nursery,
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::indexing_slicing
+    )
+)]
+
 use std::collections::{BTreeMap, HashMap};
 
 #[cfg(target_arch = "wasm32")]
@@ -26,11 +38,17 @@ pub struct LoadedState {
 
 #[wasm_bindgen]
 impl LoadedState {
+    /// Load and prepare one published State document.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when the text is not valid State JSON, names an
+    /// unsupported schema, or cannot be prepared.
     #[wasm_bindgen(constructor)]
-    pub fn new(raw: &str) -> Result<LoadedState, JsValue> {
+    pub fn new(raw: &str) -> Result<Self, JsValue> {
         #[cfg(target_arch = "wasm32")]
         {
-            return Self::load_wasm(raw);
+            Self::load_wasm(raw)
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -40,6 +58,11 @@ impl LoadedState {
         }
     }
 
+    /// Take the projections prepared during load.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when the projections were already taken.
     #[wasm_bindgen(js_name = initialProjections)]
     pub fn initial_projections(&mut self) -> Result<JsValue, JsValue> {
         self.initial_projections
@@ -47,6 +70,11 @@ impl LoadedState {
             .ok_or_else(|| JsValue::from_str(INITIAL_PROJECTIONS_TAKEN))
     }
 
+    /// Resolve one Source target against the loaded State.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when the result cannot be encoded for JavaScript.
     #[wasm_bindgen(js_name = lookupSourceTarget)]
     pub fn lookup_source_target(&self, target: &str) -> Result<JsValue, JsValue> {
         serde_wasm_bindgen::to_value(&self.prepared.lookup_source_target(target)).map_err(|error| {
@@ -56,6 +84,11 @@ impl LoadedState {
         })
     }
 
+    /// Suggest at most `limit` symbol selectors that match `query`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when the result cannot be encoded for JavaScript.
     #[wasm_bindgen(js_name = suggestSelectors)]
     pub fn suggest_selectors(&self, query: &str, limit: usize) -> Result<JsValue, JsValue> {
         serde_wasm_bindgen::to_value(&self.prepared.suggest_selectors(query, limit)).map_err(

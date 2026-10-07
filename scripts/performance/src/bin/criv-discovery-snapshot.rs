@@ -1,3 +1,11 @@
+#![cfg_attr(
+    unix,
+    expect(
+        unsafe_code,
+        reason = "snapshot cloning and free-space checks call clonefile and statvfs"
+    )
+)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

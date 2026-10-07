@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 pub const STATE_SCHEMA: &str = "criv.state.v1";
 
 /// Return true when a schema identity is the current State schema.
+#[must_use]
 pub fn is_supported_schema(schema: &str) -> bool {
     schema == STATE_SCHEMA
 }
@@ -33,6 +34,7 @@ pub struct StateDocument {
 }
 
 impl StateDocument {
+    #[must_use]
     pub fn new(
         graph: Graph,
         registered_patterns: Vec<String>,

@@ -20,7 +20,13 @@ lto = true
 codegen-units = 1
 panic = "abort"
 
-[lints.clippy]
+[lints]
+workspace = true
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
 pedantic = { level = "deny", priority = -1 }
 nursery = { level = "deny", priority = -1 }
 unwrap_used = "deny"

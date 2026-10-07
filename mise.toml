@@ -1,7 +1,12 @@
 min_version = "2026.8.16"
 
 [tools]
-rust = "1.97.1"
+rust = { version = "1.97.1", components = [
+  "clippy",
+  "rustfmt",
+], targets = [
+  "wasm32-unknown-unknown",
+] }
 node = "26.5.1"
 hk = "1.45.0"
 actionlint = "1.7.12"

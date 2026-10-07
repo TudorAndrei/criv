@@ -1,8 +1,17 @@
 #[path = "../generate.rs"]
-#[allow(dead_code)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "this binary shares the fixture generator but not every workload"
+    )
+)]
 mod generate;
 #[path = "../manifest.rs"]
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "this binary shares the manifest model but not every field reader"
+)]
 mod manifest;
 
 use std::fs;

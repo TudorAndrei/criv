@@ -1,3 +1,11 @@
+#![cfg_attr(
+    unix,
+    expect(
+        unsafe_code,
+        reason = "process accounting and interruption call wait4, kill, and proc_pid_rusage"
+    )
+)]
+
 use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
@@ -595,7 +603,10 @@ fn run_warmup(args: &Args, binary: &Path, snapshot_root: &Path, case: Case) -> R
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one attempt records every run identity field beside its result"
+)]
 fn run_attempt(
     args: &Args,
     binary: &Path,
@@ -1009,7 +1020,10 @@ fn run_live(args: &Args, binary: &Path, root: &Path) -> Result<CaseOutcome, Stri
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a failed live outcome records the same fields as a completed one"
+)]
 fn failed_live_outcome(
     error: String,
     stopped: ProcessOutput,

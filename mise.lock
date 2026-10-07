@@ -298,6 +298,10 @@ backend = "npm:npm"
 version = "1.97.1"
 backend = "core:rust"
 
+[tools.rust.options]
+components = "clippy,rustfmt"
+targets = "wasm32-unknown-unknown"
+
 [[tools.shellcheck]]
 version = "0.11.0"
 backend = "aqua:koalaman/shellcheck"

@@ -7,7 +7,7 @@ local cargo_fmt = (Builtins.cargo_fmt) {
 
 local cargo_clippy = new Step {
   glob = List("**/*.rs", "Cargo.toml", "Cargo.lock")
-  check = "cargo clippy --locked --workspace --all-targets -- -D warnings"
+  check = "cargo clippy --locked --workspace --all-targets -- -D warnings && cargo clippy --locked --package criv-wasm --target wasm32-unknown-unknown --lib -- -D warnings"
 }
 
 local staged_docs = new Step {

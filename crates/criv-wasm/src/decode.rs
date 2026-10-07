@@ -7,7 +7,7 @@ use criv_state_wire::is_supported_schema;
 use wasm_bindgen::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
-pub(super) fn validate_architecture_wrapper_wasm(envelope: &JsValue) -> Result<(), JsValue> {
+pub fn validate_architecture_wrapper_wasm(envelope: &JsValue) -> Result<(), JsValue> {
     let architecture = js_sys::Reflect::get(envelope, &JsValue::from_str("architecture"))
         .unwrap_or(JsValue::UNDEFINED);
     if architecture.is_undefined() || architecture.is_null() {
@@ -19,7 +19,7 @@ pub(super) fn validate_architecture_wrapper_wasm(envelope: &JsValue) -> Result<(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) fn validate_architecture_wrapper(envelope: &serde_json::Value) -> Result<(), String> {
+pub fn validate_architecture_wrapper(envelope: &serde_json::Value) -> Result<(), String> {
     let Some(architecture) = envelope
         .get("architecture")
         .filter(|value| !value.is_null())
@@ -32,7 +32,7 @@ pub(super) fn validate_architecture_wrapper(envelope: &serde_json::Value) -> Res
 }
 
 #[cfg(target_arch = "wasm32")]
-pub(super) fn js_error_message(error: &JsValue) -> String {
+pub fn js_error_message(error: &JsValue) -> String {
     js_sys::Reflect::get(error, &JsValue::from_str("message"))
         .ok()
         .and_then(|value| value.as_string())
@@ -41,7 +41,7 @@ pub(super) fn js_error_message(error: &JsValue) -> String {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) fn decode_state_value(raw: &str) -> Result<serde_json::Value, String> {
+pub fn decode_state_value(raw: &str) -> Result<serde_json::Value, String> {
     let state = serde_json::from_str::<serde_json::Value>(raw)
         .map_err(|err| format!("criv-state-json-invalid: {err}"))?;
     let schema = state
