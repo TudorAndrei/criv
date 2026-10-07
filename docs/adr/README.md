@@ -156,3 +156,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0143-lint-docs-prose-with-vale|ADR-0143]] - Lint docs prose with Vale
 - [[0144-apply-strict-lints-across-the-workspace|ADR-0144]] - Apply strict lints across the workspace
 - [[0145-gate-rust-dependencies-with-cargo-deny|ADR-0145]] - Gate Rust dependencies with cargo-deny
+- [[0146-type-diagnostic-codes-graph-kinds-and-hash-inputs|ADR-0146]] - Type diagnostic codes, graph kinds, and hash inputs
