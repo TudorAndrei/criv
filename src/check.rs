@@ -5,6 +5,7 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::fs;
 
+use criv_state_wire::{NodeKind, StateDocument};
 use rumdl_lib::config::Config as RumdlConfig;
 use rumdl_lib::fix_coordinator::FixCoordinator;
 use rumdl_lib::rule::{LintWarning, Rule};
@@ -658,25 +659,17 @@ fn previous_architecture_interface_hashes(
     let Some(contents) = files.read_optional_string(Path::new(".criv/state.json"))? else {
         return Ok(None);
     };
-    let value: serde_json::Value = serde_json::from_str(&contents)
-        .map_err(|err| CrivError::new(format!("failed to parse .criv/state.json: {err}")))?;
-    let hashes = value
-        .pointer("/graph/nodes")
-        .and_then(serde_json::Value::as_array)
+    let document: StateDocument = serde_json::from_str(&contents).map_err(|err| {
+        CrivError::new(format!(
+            "failed to parse .criv/state.json: {err}; run `criv watch --once` to rebuild it"
+        ))
+    })?;
+    let hashes = document
+        .graph
+        .nodes
         .into_iter()
-        .flatten()
-        .filter(|node| {
-            matches!(
-                node.get("kind").and_then(serde_json::Value::as_str),
-                Some("architecture-interface" | "c4-interface")
-            )
-        })
-        .filter_map(|node| {
-            Some((
-                node.get("id")?.as_str()?.to_string(),
-                node.get("label")?.as_str()?.to_string(),
-            ))
-        })
+        .filter(|node| node.kind == NodeKind::ArchitectureInterface)
+        .map(|node| (node.id, node.label))
         .collect::<BTreeMap<_, _>>();
     Ok(Some(hashes))
 }
