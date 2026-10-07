@@ -12,6 +12,7 @@ use criv_state_wire::source_identity::{SourceIdentity, SourceSelector};
 
 use super::paths::read_source_bytes;
 use crate::repository::RepositoryFiles;
+use crate::stable_hash::StableHasher;
 use crate::{CrivError, Result};
 
 mod elixir;
@@ -566,60 +567,34 @@ fn graph_cache_path(root: &Path) -> std::path::PathBuf {
 
 impl InterfaceSignature {
     fn hash(&self) -> String {
-        blake3::hash(self.stable_text().as_bytes())
-            .to_hex()
-            .to_string()
-    }
-
-    fn stable_text(&self) -> String {
-        let mut fields = self.fields.clone();
+        let mut hasher = StableHasher::new("interface");
+        hasher
+            .str(self.language.as_str())
+            .str(self.symbol_kind.as_str())
+            .str(&self.qualified_name)
+            .option_str(self.visibility.as_deref())
+            .option_usize(self.arity)
+            .strs(&self.inputs)
+            .option_str(self.output.as_deref())
+            .strs(&self.guards)
+            .strs(&self.defaults)
+            .strs(&self.specifications);
+        let mut fields = self.fields.iter().collect::<Vec<_>>();
         fields.sort();
-        let mut variants = self.variants.clone();
-        variants.sort();
-        let field_text = fields
-            .iter()
-            .map(|field| format!("{}:{}", field.name, field.ty.as_deref().unwrap_or("")))
-            .collect::<Vec<_>>()
-            .join(",");
-        let variant_text = variants
-            .iter()
-            .map(|variant| {
-                let fields = variant
-                    .fields
-                    .iter()
-                    .map(|field| format!("{}:{}", field.name, field.ty.as_deref().unwrap_or("")))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                format!("{}({fields})", variant.name)
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        if self.language == Language::Elixir {
-            format!(
-                "language={}\nkind={}\nname={}\nvisibility={}\narity={}\ninputs={}\noutput={}\nguards={}\ndefaults={}\nspecifications={}\nfields={field_text}\nvariants={variant_text}\n",
-                self.language.as_str(),
-                self.symbol_kind.as_str(),
-                self.qualified_name,
-                self.visibility.as_deref().unwrap_or(""),
-                self.arity
-                    .map_or_else(String::new, |arity| arity.to_string()),
-                self.inputs.join(","),
-                self.output.as_deref().unwrap_or(""),
-                self.guards.join(","),
-                self.defaults.join(","),
-                self.specifications.join("\n"),
-            )
-        } else {
-            format!(
-                "language={}\nkind={}\nname={}\nvisibility={}\ninputs={}\noutput={}\nfields={field_text}\nvariants={variant_text}\n",
-                self.language.as_str(),
-                self.symbol_kind.as_str(),
-                self.qualified_name,
-                self.visibility.as_deref().unwrap_or(""),
-                self.inputs.join(","),
-                self.output.as_deref().unwrap_or(""),
-            )
+        hasher.usize(fields.len());
+        for field in fields {
+            hasher.str(&field.name).option_str(field.ty.as_deref());
         }
+        let mut variants = self.variants.iter().collect::<Vec<_>>();
+        variants.sort();
+        hasher.usize(variants.len());
+        for variant in variants {
+            hasher.str(&variant.name).usize(variant.fields.len());
+            for field in &variant.fields {
+                hasher.str(&field.name).option_str(field.ty.as_deref());
+            }
+        }
+        hasher.finish()
     }
 }
 

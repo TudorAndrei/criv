@@ -28,6 +28,7 @@ mod query;
 mod refresh;
 mod repository;
 mod source;
+mod stable_hash;
 mod state;
 mod structural;
 mod vault;

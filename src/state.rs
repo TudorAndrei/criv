@@ -18,6 +18,7 @@ use crate::source::{
     DirectiveKind, Import, Language, ModuleRelationshipRole, Relationship, RelationshipKind,
     RelationshipTarget, SourceFile, Symbol,
 };
+use crate::stable_hash::StableHasher;
 use crate::structural;
 use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
@@ -282,7 +283,7 @@ impl State {
         let json = serde_json::to_string_pretty(&self.wire)
             .map_err(|err| CrivError::new(format!("failed to serialize state: {err}")))?;
         Ok(SerializedState {
-            hash: stable_hash(&json),
+            hash: blake3::hash(json.as_bytes()).to_hex().to_string(),
             published: format!("{json}\n"),
         })
     }
@@ -336,134 +337,103 @@ const fn partition_meta(
 }
 
 fn source_input_fingerprint(file: &SourceFile) -> String {
-    let mut hasher = blake3::Hasher::new();
-    fingerprint_str(&mut hasher, &file.path);
-    fingerprint_str(&mut hasher, file.language.as_str());
+    let mut hasher = StableHasher::new("source-partition");
+    hasher
+        .str(&file.path)
+        .str(file.language.as_str())
+        .usize(file.imports.len());
     for import in &file.imports {
-        fingerprint_str(&mut hasher, &import.module);
-        fingerprint_usize(&mut hasher, import.line);
-        fingerprint_usize(&mut hasher, import.site);
-        fingerprint_str(&mut hasher, import.kind.as_str());
-        fingerprint_str(&mut hasher, &format!("{:?}", import.owner));
-        fingerprint_str(&mut hasher, &format!("{:?}", import.scope));
-        fingerprint_option_str(&mut hasher, import.alias.as_deref());
-        fingerprint_str(&mut hasher, &format!("{:?}", import.only));
-        fingerprint_str(&mut hasher, &format!("{:?}", import.except));
-        fingerprint_bool(&mut hasher, import.absolute);
+        hasher
+            .str(&import.module)
+            .usize(import.line)
+            .usize(import.site)
+            .str(import.kind.as_str())
+            .str(&format!("{:?}", import.owner))
+            .str(&format!("{:?}", import.scope))
+            .option_str(import.alias.as_deref())
+            .str(&format!("{:?}", import.only))
+            .str(&format!("{:?}", import.except))
+            .bool(import.absolute);
     }
+    hasher.usize(file.symbols.len());
     for symbol in &file.symbols {
-        fingerprint_str(&mut hasher, &symbol.id.display());
-        fingerprint_str(&mut hasher, &symbol.name);
-        fingerprint_str(&mut hasher, symbol.kind.as_str());
-        fingerprint_option_str(&mut hasher, symbol.parent.as_deref());
-        fingerprint_str(&mut hasher, &format!("{:?}", symbol.owner));
-        fingerprint_option_usize(&mut hasher, symbol.arity);
-        fingerprint_usize(&mut hasher, symbol.range.start_line);
-        fingerprint_usize(&mut hasher, symbol.range.end_line);
+        hasher
+            .str(&symbol.id.display())
+            .str(&symbol.name)
+            .str(symbol.kind.as_str())
+            .option_str(symbol.parent.as_deref())
+            .str(&format!("{:?}", symbol.owner))
+            .option_usize(symbol.arity)
+            .usize(symbol.range.start_line)
+            .usize(symbol.range.end_line)
+            .usize(symbol.calls.len());
         for call in &symbol.calls {
-            fingerprint_str(&mut hasher, &call.target);
-            fingerprint_usize(&mut hasher, call.line);
+            hasher.str(&call.target).usize(call.line);
         }
+        hasher.usize(symbol.relationships.len());
         for relationship in &symbol.relationships {
-            fingerprint_str(&mut hasher, relationship.kind.as_str());
-            fingerprint_str(&mut hasher, &format!("{:?}", relationship.target));
-            fingerprint_usize(&mut hasher, relationship.line);
-            fingerprint_usize(&mut hasher, relationship.site);
+            hasher
+                .str(relationship.kind.as_str())
+                .str(&format!("{:?}", relationship.target))
+                .usize(relationship.line)
+                .usize(relationship.site);
         }
     }
-    hasher.finalize().to_hex().to_string()
+    hasher.finish()
 }
 
 fn note_input_fingerprint(note: &Note) -> String {
-    let mut hasher = blake3::Hasher::new();
-    fingerprint_str(&mut hasher, &note.rel_path);
-    fingerprint_option_str(&mut hasher, note.id.as_deref());
-    fingerprint_str(
-        &mut hasher,
-        match note.kind {
+    StableHasher::new("note-partition")
+        .str(&note.rel_path)
+        .option_str(note.id.as_deref())
+        .str(match note.kind {
             NoteKind::Decision => "decision",
             NoteKind::Doc => "doc",
             NoteKind::Unknown => "unknown",
-        },
-    );
-    fingerprint_option_str(&mut hasher, note.title.as_deref());
-    fingerprint_option_str(&mut hasher, note.status.as_deref());
-    fingerprint_str(&mut hasher, &note.body);
-    fingerprint_str(&mut hasher, &format!("{:?}", note.targets_symbols));
-    fingerprint_str(&mut hasher, &format!("{:?}", note.targets_scope));
-    fingerprint_str(&mut hasher, &format!("{:?}", note.target_pattern_refs));
-    fingerprint_str(&mut hasher, &format!("{:?}", note.target_pattern_ids));
-    fingerprint_str(&mut hasher, &format!("{:?}", note.policy_patterns));
-    fingerprint_str(&mut hasher, &format!("{:?}", note.governs));
-    fingerprint_str(&mut hasher, &format!("{:?}", note.supersedes));
-    fingerprint_str(&mut hasher, &format!("{:?}", note.superseded_by));
-    fingerprint_str(&mut hasher, &format!("{:?}", note.frontmatter_error));
-    fingerprint_str(
-        &mut hasher,
-        &format!("{:?}", Vault::effective_governs(note)),
-    );
-    hasher.finalize().to_hex().to_string()
+        })
+        .option_str(note.title.as_deref())
+        .option_str(note.status.as_deref())
+        .str(&note.body)
+        .str(&format!("{:?}", note.targets_symbols))
+        .str(&format!("{:?}", note.targets_scope))
+        .str(&format!("{:?}", note.target_pattern_refs))
+        .str(&format!("{:?}", note.target_pattern_ids))
+        .str(&format!("{:?}", note.policy_patterns))
+        .str(&format!("{:?}", note.governs))
+        .str(&format!("{:?}", note.supersedes))
+        .str(&format!("{:?}", note.superseded_by))
+        .str(&format!("{:?}", note.frontmatter_error))
+        .str(&format!("{:?}", Vault::effective_governs(note)))
+        .finish()
 }
 
 fn note_catalog_fingerprint(vault: &Vault) -> String {
-    let mut hasher = blake3::Hasher::new();
+    let mut hasher = StableHasher::new("note-catalog");
+    hasher.usize(vault.notes.len());
     for note in &vault.notes {
-        fingerprint_str(&mut hasher, &note.rel_path);
-        fingerprint_option_str(&mut hasher, note.id.as_deref());
-        fingerprint_option_str(&mut hasher, note.title.as_deref());
+        hasher
+            .str(&note.rel_path)
+            .option_str(note.id.as_deref())
+            .option_str(note.title.as_deref())
+            .usize(note.headings.len());
         for heading in &note.headings {
-            fingerprint_str(&mut hasher, &heading.text);
-            fingerprint_usize(&mut hasher, heading.level);
+            hasher.str(&heading.text).usize(heading.level);
         }
     }
-    hasher.finalize().to_hex().to_string()
+    hasher.finish()
 }
 
 fn c4_artifact_input_fingerprint(artifact: &C4Artifact) -> String {
-    stable_hash(&format!("{artifact:#?}"))
+    StableHasher::new("c4-artifact-partition")
+        .str(&format!("{artifact:#?}"))
+        .finish()
 }
 
 fn source_index_input_fingerprint(entry: &SourceIndexEntry) -> String {
-    stable_hash(&format!("{}\0{:?}", entry.path, entry.mime))
-}
-
-fn fingerprint_str(hasher: &mut blake3::Hasher, value: &str) {
-    let length = u64::try_from(value.len()).unwrap_or(u64::MAX);
-    hasher.update(&length.to_le_bytes());
-    hasher.update(value.as_bytes());
-}
-
-fn fingerprint_option_str(hasher: &mut blake3::Hasher, value: Option<&str>) {
-    match value {
-        Some(value) => {
-            hasher.update(&[1]);
-            fingerprint_str(hasher, value);
-        }
-        None => {
-            hasher.update(&[0]);
-        }
-    }
-}
-
-fn fingerprint_usize(hasher: &mut blake3::Hasher, value: usize) {
-    let value = u64::try_from(value).unwrap_or(u64::MAX);
-    hasher.update(&value.to_le_bytes());
-}
-
-fn fingerprint_option_usize(hasher: &mut blake3::Hasher, value: Option<usize>) {
-    match value {
-        Some(value) => {
-            hasher.update(&[1]);
-            fingerprint_usize(hasher, value);
-        }
-        None => {
-            hasher.update(&[0]);
-        }
-    }
-}
-
-fn fingerprint_bool(hasher: &mut blake3::Hasher, value: bool) {
-    hasher.update(&[u8::from(value)]);
+    StableHasher::new("source-index-partition")
+        .str(&entry.path)
+        .option_str(entry.mime.as_deref())
+        .finish()
 }
 
 fn observe_partition_meta(meta: &PartitionMeta, expected_key: &PartitionKey) {
@@ -712,7 +682,11 @@ impl GraphBuilder {
             .seen_edges
             .insert((from.to_owned(), to.to_owned(), kind))
         {
-            let hash = stable_hash(&format!("edge\0{from}\0{kind}\0{to}"));
+            let hash = StableHasher::new("edge")
+                .str(from)
+                .str(kind.as_str())
+                .str(to)
+                .finish();
             self.graph.edges.push(Edge {
                 from: from.into(),
                 to: to.into(),
@@ -741,10 +715,12 @@ impl GraphBuilder {
 }
 
 fn hashed_node(id: String, kind: NodeKind, label: String, path: Option<String>) -> Node {
-    let hash = stable_hash(&format!(
-        "node\0{id}\0{kind}\0{label}\0{}",
-        path.as_deref().unwrap_or("")
-    ));
+    let hash = StableHasher::new("node")
+        .str(&id)
+        .str(kind.as_str())
+        .str(&label)
+        .option_str(path.as_deref())
+        .finish();
     Node {
         id,
         hash,
@@ -762,11 +738,7 @@ fn graph_root(graph: &Graph) -> String {
         .chain(graph.edges.iter().map(|edge| edge.hash.as_str()))
         .collect::<Vec<_>>();
     hashes.sort_unstable();
-    stable_hash(&hashes.join("\n"))
-}
-
-fn stable_hash(value: &str) -> String {
-    blake3::hash(value.as_bytes()).to_hex().to_string()
+    StableHasher::new("graph").strs(&hashes).finish()
 }
 
 fn note_node_id(id: &str) -> String {
@@ -1303,7 +1275,7 @@ policy:
         );
         assert_eq!(
             State::build(&vault).unwrap().hash().unwrap(),
-            "e726e1970e996838a7c68bf68cee6dc2bdd98ad6657e196f2bf44640dcb040c1"
+            "5daebfeb1e0852bba748b8e225dab7469e53f98d3103e242ba0c3bffbbbb199a"
         );
 
         let _ = std::fs::remove_dir_all(root);
