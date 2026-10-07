@@ -51,6 +51,7 @@ Excalidraw
 (?i)frecency
 (?i)frontmatter
 Git
+(?i)gitleaks
 (?i)glibc
 (?i)globset
 (?i)godog

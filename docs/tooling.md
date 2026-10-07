@@ -31,8 +31,15 @@ checks workflow, composite action, and Dependabot definitions for risky CI/CD
 patterns. Hawk uses the same Rust toolchain to check whether public Rust APIs
 are required by the shipped `criv` binary. Release tooling is also pinned here:
 Cocogitto calculates the next SemVer version from conventional commits, and
-cargo-release updates Cargo workspace versions. `HK_PKL_BACKEND=pklr` keeps hk
-self-contained by avoiding a separate `pkl` CLI requirement.
+cargo-release updates Cargo workspace versions. hk 2 evaluates `hk.pkl` with its
+bundled Pkl evaluator, so no separate `pkl` CLI is needed.
+
+The top-level `steps` block in `hk.pkl` runs in the `check`, `fix`, and
+`pre-commit` hooks. It holds the gatekeepers (merge-conflict markers, files
+over 500 KB outside `brag-output/`, and private keys), the formatters, and the
+workflow and shell linters. `pre-commit` adds gitleaks on the staged changes,
+and `check` adds gitleaks on the Git history. `hk fix` does not stage its
+changes; pass `--stage` to stage them.
 
 Workflow YAML under `.github/workflows/` is checked with actionlint in
 `pre-commit` and the full `check` hook. zizmor runs in offline mode in the same

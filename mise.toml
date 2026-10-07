@@ -8,7 +8,7 @@ rust = { version = "1.97.1", components = [
   "wasm32-unknown-unknown",
 ] }
 node = "26.5.1"
-hk = "1.45.0"
+hk = "2.5.0"
 actionlint = "1.7.12"
 shellcheck = "0.11.0"
 "aqua:zizmorcore/zizmor" = "1.24.1"
@@ -17,6 +17,7 @@ shellcheck = "0.11.0"
 cocogitto = "7.0.0"
 "cargo:cargo-release" = "1.1.2"
 "aqua:EmbarkStudios/cargo-deny" = "0.20.2"
+"aqua:gitleaks/gitleaks" = "8.30.1"
 "github:rust-secure-code/cargo-auditable" = "0.7.7"
 "cargo:mdbook" = "0.5.4"
 taplo = "0.10.0"
@@ -26,7 +27,6 @@ vale = "3.22.0"
 
 [env]
 HK_MISE = "1"
-HK_PKL_BACKEND = "pklr"
 # Hosted builds keep their existing compiler cache. Preserve local bypasses,
 # including Hawk's step environment, when mise dispatches Cargo again.
 MBX_DISABLE = "{% if env.CI | default(value='') != '' or env.GITHUB_ACTIONS | default(value='') != '' %}1{% else %}{{ env.MBX_DISABLE | default(value='0') }}{% endif %}"
