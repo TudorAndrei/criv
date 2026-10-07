@@ -104,35 +104,35 @@ pub struct Node {
 #[serde(rename_all = "kebab-case")]
 #[strum(serialize_all = "kebab-case")]
 pub enum NodeKind {
-    Code,
-    Doc,
-    Decision,
-    DocHeading,
-    Pattern,
-    ExternalCall,
-    ExternalModule,
-    DynamicCall,
-    ArchitectureSource,
-    ArchitectureWorkspace,
+    Alias,
     ArchitectureElement,
     ArchitectureInterface,
-    Alias,
-    Import,
-    Require,
-    Use,
-    Function,
-    Method,
-    Class,
-    Module,
-    Protocol,
-    Implementation,
-    Struct,
-    Exception,
+    ArchitectureSource,
+    ArchitectureWorkspace,
     Behaviour,
-    Macro,
-    Guard,
     Callback,
+    Class,
+    Code,
+    Decision,
+    Doc,
+    DocHeading,
+    DynamicCall,
+    Exception,
+    ExternalCall,
+    ExternalModule,
+    Function,
+    Guard,
+    Implementation,
+    Import,
+    Macro,
     MacroCallback,
+    Method,
+    Module,
+    Pattern,
+    Protocol,
+    Require,
+    Struct,
+    Use,
 }
 
 impl NodeKind {
@@ -288,6 +288,22 @@ mod tests {
         }
         for kind in EdgeKind::iter() {
             assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
+        }
+    }
+
+    #[test]
+    fn kinds_sort_like_their_wire_names() {
+        use strum::IntoEnumIterator;
+
+        for left in NodeKind::iter() {
+            for right in NodeKind::iter() {
+                assert_eq!(left.cmp(&right), left.as_str().cmp(right.as_str()));
+            }
+        }
+        for left in EdgeKind::iter() {
+            for right in EdgeKind::iter() {
+                assert_eq!(left.cmp(&right), left.as_str().cmp(right.as_str()));
+            }
         }
     }
 
