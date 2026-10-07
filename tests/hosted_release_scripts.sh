@@ -31,7 +31,7 @@ grep -F 'name: release-vsix-${{ needs.prepare.outputs.commit }}' "$quality_job" 
 build_job="$test_root/build-job.yml"
 sed -n '/  build:/,/  package:/p' "$workflow" >"$build_job"
 grep -F 'name: Build ${{ matrix.name }}' "$build_job" >/dev/null
-grep -F 'cargo build --locked --release --target "$RELEASE_TARGET" --package criv --bin criv' \
+grep -F 'cargo +1.97.1 auditable build --locked --release --target "$RELEASE_TARGET" --package criv --bin criv' \
   "$build_job" >/dev/null
 grep -F 'name: release-binary-${{ matrix.target }}-${{ needs.prepare.outputs.commit }}' \
   "$build_job" >/dev/null
