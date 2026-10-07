@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
+use usage::{Cli, ValueEnum};
 
 const RUN_SCHEMA: &str = "criv.discovery-run.v1";
 const SAMPLE_SCHEMA: &str = "criv.discovery-sample.v1";
@@ -20,50 +20,48 @@ const PROBE_SCHEMA: &str = "criv.discovery-probe.v1";
 const PROBE_PREFIX: &str = "criv-discovery-probe-v1 ";
 const ROOT_ENV: &str = "CRIV_DISCOVERY_PROBE_ROOT";
 
-#[derive(Debug, Parser)]
-#[command(
-    name = "criv-discovery-baseline",
-    about = "Measure criv discovery profiles through the test-only selector probe"
-)]
+/// Measure criv discovery profiles through the test-only selector probe
+#[derive(Debug, Cli)]
+#[usage(bin = "criv-discovery-baseline", unknown_flags = "error")]
 struct Args {
     /// Repository that contains the criv source and probe hook.
-    #[arg(long, default_value = ".")]
+    #[usage(long, default = ".")]
     repository_root: PathBuf,
     /// Repository tree whose file discovery is measured.
-    #[arg(long)]
+    #[usage(long)]
     workload_root: PathBuf,
     /// Full local workload inventory. Required for evidence runs.
-    #[arg(long)]
+    #[usage(long)]
     workload_inventory: Option<PathBuf>,
     /// Stable workload name for a smoke run without an inventory.
-    #[arg(long)]
+    #[usage(long)]
     workload_id: Option<String>,
     /// BLAKE3 workload identity for a smoke run without an inventory.
-    #[arg(long)]
+    #[usage(long)]
     workload_digest: Option<String>,
     /// Compiled criv library-test executable. Build it automatically when omitted.
-    #[arg(long)]
+    #[usage(long)]
     probe_executable: Option<PathBuf>,
     /// Receipt for a test-only adapter applied to an immutable production revision.
-    #[arg(long)]
+    #[usage(long)]
     adapter_receipt: Option<PathBuf>,
     /// Human-readable identity for the probe source and adapter.
-    #[arg(long, default_value = "current-main-control")]
+    #[usage(long, default = "current-main-control")]
     probe_label: String,
     /// Discovery profile to measure. Repeat to select more than one.
-    #[arg(long = "profile", value_enum)]
+    #[usage(long = "profile", value_enum)]
     profiles: Vec<Profile>,
     /// Number of recorded samples per profile and attempt.
-    #[arg(long, default_value_t = 5)]
+    #[usage(long, default = "5")]
     samples: usize,
     /// Permit fewer than five samples for harness smoke tests only.
-    #[arg(long)]
+    #[usage(long)]
     allow_low_samples: bool,
     /// Include full selected path lists for a one-sample correctness run.
-    #[arg(long)]
+    #[usage(long)]
     dump_paths: bool,
     /// Parent directory for a new unique result directory.
-    #[arg(long, default_value = "target/discovery-results")]
+    #[usage(long, default = "target/discovery-results")]
     results_root: PathBuf,
 }
 

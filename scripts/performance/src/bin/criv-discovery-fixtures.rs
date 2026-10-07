@@ -3,23 +3,21 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use clap::Parser;
 use serde::{Deserialize, Serialize};
+use usage::Cli;
 
 const MANIFEST_SCHEMA: &str = "criv.discovery-workload.v1";
 const FIXTURE_COMMIT_DATE: &str = "2000-01-01T00:00:00Z";
 
-#[derive(Debug, Parser)]
-#[command(
-    name = "criv-discovery-fixtures",
-    about = "Generate one deterministic file-discovery scaling workload"
-)]
+/// Generate one deterministic file-discovery scaling workload
+#[derive(Debug, Cli)]
+#[usage(bin = "criv-discovery-fixtures", unknown_flags = "error")]
 struct Args {
     /// Discovery workload manifest.
-    #[arg(long)]
+    #[usage(long)]
     manifest: PathBuf,
     /// New generated repository directory. It must not exist.
-    #[arg(long)]
+    #[usage(long)]
     output: PathBuf,
 }
 

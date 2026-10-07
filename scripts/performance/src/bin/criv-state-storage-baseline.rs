@@ -4,26 +4,24 @@ use std::hint::black_box;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use clap::Parser;
 use criv_state_wire::STATE_SCHEMA;
 use serde::Serialize;
+use usage::Cli;
 
 const OUTPUT_SCHEMA: &str = "criv.state-storage-baseline.v1";
 
-#[derive(Debug, Parser)]
-#[command(
-    name = "criv-state-storage-baseline",
-    about = "Measure the current JSON State shape and native load cost"
-)]
+/// Measure the current JSON State shape and native load cost
+#[derive(Debug, Cli)]
+#[usage(bin = "criv-state-storage-baseline", unknown_flags = "error")]
 struct Args {
     /// Generated .criv/state.json file to measure.
-    #[arg(long, required = true)]
+    #[usage(long)]
     state: PathBuf,
     /// Number of recorded native load samples.
-    #[arg(long, default_value_t = 5)]
+    #[usage(long, default = "5")]
     samples: usize,
     /// Permit fewer than three samples for smoke tests only.
-    #[arg(long)]
+    #[usage(long)]
     allow_low_samples: bool,
 }
 

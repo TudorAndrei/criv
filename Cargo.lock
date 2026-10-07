@@ -421,13 +421,13 @@ name = "criv-perf-harness"
 version = "0.12.2"
 dependencies = [
  "blake3",
- "clap",
  "criv-state-wire",
  "libc",
  "serde",
  "serde_json",
  "tempfile",
  "toml",
+ "usage-rs",
  "windows-sys 0.61.2",
 ]
 

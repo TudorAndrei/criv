@@ -9,28 +9,26 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use clap::Parser;
 use serde::Serialize;
+use usage::Cli;
 
 const GIB: u64 = 1024 * 1024 * 1024;
 
-#[derive(Debug, Parser)]
-#[command(
-    name = "criv-discovery-snapshot",
-    about = "Create one strict copy-on-write workload snapshot on APFS"
-)]
+/// Create one strict copy-on-write workload snapshot on APFS
+#[derive(Debug, Cli)]
+#[usage(bin = "criv-discovery-snapshot", unknown_flags = "error")]
 struct Args {
     /// Existing workload directory to clone.
-    #[arg(long)]
+    #[usage(long)]
     source: PathBuf,
     /// New disposable directory. It must not exist.
-    #[arg(long)]
+    #[usage(long)]
     destination: PathBuf,
     /// Required physical free space before cloning.
-    #[arg(long, default_value_t = 30)]
+    #[usage(long, default = "30")]
     minimum_free_gib: u64,
     /// Maximum physical allocation that directory metadata may consume.
-    #[arg(long, default_value_t = 1)]
+    #[usage(long, default = "1")]
     maximum_allocation_gib: u64,
 }
 

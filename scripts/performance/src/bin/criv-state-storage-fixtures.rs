@@ -18,26 +18,24 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use clap::Parser;
 use generate::{append_source_revision, generate};
 use manifest::LoadedManifest;
 use serde::Serialize;
+use usage::Cli;
 
 const OUTPUT_SCHEMA: &str = "criv.state-storage-fixtures.v1";
 
-#[derive(Debug, Parser)]
-#[command(
-    name = "criv-state-storage-fixtures",
-    about = "Generate observed-shape State revisions for store candidate measurements"
-)]
+/// Generate observed-shape State revisions for store candidate measurements
+#[derive(Debug, Cli)]
+#[usage(bin = "criv-state-storage-fixtures", unknown_flags = "error")]
 struct Args {
-    #[arg(long, required = true)]
+    #[usage(long)]
     binary: PathBuf,
-    #[arg(long, required = true)]
+    #[usage(long)]
     manifest: PathBuf,
-    #[arg(long, required = true)]
+    #[usage(long)]
     output: PathBuf,
-    #[arg(long, default_value_t = 20)]
+    #[usage(long, default = "20")]
     snapshots: usize,
 }
 

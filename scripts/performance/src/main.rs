@@ -15,48 +15,46 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use clap::{Parser, ValueEnum};
 use generate::{GeneratedWorkload, append_source_revision, generate, mutate_sources};
 use manifest::LoadedManifest;
 use serde::Serialize;
 use tempfile::TempDir;
+use usage::{Cli, ValueEnum};
 
 const RUN_SCHEMA: &str = "criv.performance-run.v2";
 const SAMPLE_SCHEMA: &str = "criv.performance-sample.v2";
 const SUMMARY_SCHEMA: &str = "criv.performance-summary.v2";
 
-#[derive(Debug, Parser)]
-#[command(
-    name = "criv-perf",
-    about = "Generate isolated criv workloads and preserve repeatable performance evidence"
-)]
+/// Generate isolated criv workloads and preserve repeatable performance evidence
+#[derive(Debug, Cli)]
+#[usage(bin = "criv-perf", unknown_flags = "error")]
 struct Args {
     /// Explicit criv executable to measure.
-    #[arg(long, required = true)]
+    #[usage(long)]
     binary: PathBuf,
     /// Cargo profile identity for the supplied binary.
-    #[arg(long, required = true)]
+    #[usage(long)]
     profile: String,
     /// Workload manifest; repeat to measure more than one.
-    #[arg(long)]
+    #[usage(long)]
     manifest: Vec<PathBuf>,
     /// Number of recorded samples per workload and case.
-    #[arg(long, default_value_t = 5)]
+    #[usage(long, default = "5")]
     samples: usize,
     /// Permit fewer than three samples for harness smoke tests only.
-    #[arg(long)]
+    #[usage(long)]
     allow_low_samples: bool,
     /// Permit an explicit profile other than release for harness smoke tests only.
-    #[arg(long)]
+    #[usage(long)]
     allow_non_release: bool,
     /// Restrict the run to selected command cases; repeat as needed.
-    #[arg(long = "case", value_enum)]
+    #[usage(long = "case", value_enum)]
     cases: Vec<Case>,
     /// Parent directory in which a new unique result directory is created.
-    #[arg(long, default_value = "target/performance-results")]
+    #[usage(long, default = "target/performance-results")]
     results_root: PathBuf,
     /// Repository whose revision, manifests, and Rust metadata identify the run.
-    #[arg(long, default_value = ".")]
+    #[usage(long, default = ".")]
     repository_root: PathBuf,
 }
 

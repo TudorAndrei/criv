@@ -2,32 +2,30 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use clap::Parser;
 use serde::Serialize;
+use usage::Cli;
 
-#[derive(Debug, Parser)]
-#[command(
-    name = "criv-discovery-adapter",
-    about = "Prepare an immutable criv tag with its test-only discovery probe adapter"
-)]
+/// Prepare an immutable criv tag with its test-only discovery probe adapter
+#[derive(Debug, Cli)]
+#[usage(bin = "criv-discovery-adapter", unknown_flags = "error")]
 struct Args {
     /// Source criv repository.
-    #[arg(long, default_value = ".")]
+    #[usage(long, default = ".")]
     repository_root: PathBuf,
     /// Immutable tag or commit to export.
-    #[arg(long, default_value = "v0.9.0")]
+    #[usage(long, default = "v0.9.0")]
     revision: String,
     /// New output directory. It must not exist.
-    #[arg(long)]
+    #[usage(long)]
     output: PathBuf,
     /// Adapter patch relative to repository-root.
-    #[arg(
+    #[usage(
         long,
-        default_value = "scripts/performance/adapters/v0.9.0-discovery-probe.patch"
+        default = "scripts/performance/adapters/v0.9.0-discovery-probe.patch"
     )]
     patch: PathBuf,
     /// Shared probe source relative to repository-root.
-    #[arg(long, default_value = "scripts/performance/discovery_probe.rs")]
+    #[usage(long, default = "scripts/performance/discovery_probe.rs")]
     probe_source: PathBuf,
 }
 

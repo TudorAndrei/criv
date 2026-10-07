@@ -15,67 +15,65 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use clap::{Parser, ValueEnum};
 use serde::{Deserialize, Serialize};
+use usage::{Cli, ValueEnum};
 
 const RUN_SCHEMA: &str = "criv.discovery-command-run.v1";
 const SAMPLE_SCHEMA: &str = "criv.discovery-command-sample.v1";
 const SUMMARY_SCHEMA: &str = "criv.discovery-command-summary.v1";
 const INVENTORY_SCHEMA: &str = "criv.discovery-inventory.v1";
 
-#[derive(Debug, Parser)]
-#[command(
-    name = "criv-discovery-commands",
-    about = "Measure official criv commands on isolated observed-workload snapshots"
-)]
+/// Measure official criv commands on isolated observed-workload snapshots
+#[derive(Debug, Cli)]
+#[usage(bin = "criv-discovery-commands", unknown_flags = "error")]
 struct Args {
     /// Official criv executable to measure.
-    #[arg(long)]
+    #[usage(long)]
     binary: PathBuf,
     /// Human-readable release artifact identity.
-    #[arg(long, default_value = "official-criv-0.9.0-artifact")]
+    #[usage(long, default = "official-criv-0.9.0-artifact")]
     binary_label: String,
     /// Strict snapshot helper executable.
-    #[arg(long)]
+    #[usage(long)]
     snapshot_executable: PathBuf,
     /// Read-only golden observed workload.
-    #[arg(long)]
+    #[usage(long)]
     workload_root: PathBuf,
     /// Full local workload inventory.
-    #[arg(long)]
+    #[usage(long)]
     workload_inventory: PathBuf,
     /// Parent for one disposable snapshot at a time.
-    #[arg(long)]
+    #[usage(long)]
     sample_root: PathBuf,
     /// Parent for preserved result directories.
-    #[arg(long, default_value = "target/discovery-command-results")]
+    #[usage(long, default = "target/discovery-command-results")]
     results_root: PathBuf,
     /// Existing source file to modify for the changed-source case.
-    #[arg(long)]
+    #[usage(long)]
     source_mutation_path: Option<PathBuf>,
     /// Existing non-ADR Markdown file to modify for the changed-Markdown case.
-    #[arg(long)]
+    #[usage(long)]
     markdown_mutation_path: Option<PathBuf>,
     /// Configured Source directory used for live create, rename, and delete.
-    #[arg(long)]
+    #[usage(long)]
     live_mutation_directory: Option<PathBuf>,
     /// Command case to measure. Repeat to select more than one.
-    #[arg(long = "case", value_enum)]
+    #[usage(long = "case", value_enum)]
     cases: Vec<Case>,
     /// Number of recorded samples per case and attempt.
-    #[arg(long, default_value_t = 5)]
+    #[usage(long, default = "5")]
     samples: usize,
     /// Permit fewer than five samples for smoke tests only.
-    #[arg(long)]
+    #[usage(long)]
     allow_low_samples: bool,
     /// Startup and convergence timeout in seconds.
-    #[arg(long, default_value_t = 120)]
+    #[usage(long, default = "120")]
     timeout_seconds: u64,
     /// Required free space before each snapshot.
-    #[arg(long, default_value_t = 30)]
+    #[usage(long, default = "30")]
     minimum_free_gib: u64,
     /// Maximum volume allocation observed while the strict snapshot is made.
-    #[arg(long, default_value_t = 20)]
+    #[usage(long, default = "20")]
     maximum_snapshot_allocation_gib: u64,
 }
 

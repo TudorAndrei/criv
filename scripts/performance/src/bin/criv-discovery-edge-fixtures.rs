@@ -3,22 +3,20 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use clap::{Parser, ValueEnum};
 use serde::Serialize;
+use usage::{Cli, ValueEnum};
 
 const FIXTURE_COMMIT_DATE: &str = "2000-01-01T00:00:00Z";
 
-#[derive(Debug, Parser)]
-#[command(
-    name = "criv-discovery-edge-fixtures",
-    about = "Generate one deterministic file-discovery edge-case repository"
-)]
+/// Generate one deterministic file-discovery edge-case repository
+#[derive(Debug, Cli)]
+#[usage(bin = "criv-discovery-edge-fixtures", unknown_flags = "error")]
 struct Args {
     /// Edge case to generate.
-    #[arg(long, value_enum)]
+    #[usage(long, value_enum)]
     case: EdgeCase,
     /// New generated repository directory. It must not exist.
-    #[arg(long)]
+    #[usage(long)]
     output: PathBuf,
 }
 

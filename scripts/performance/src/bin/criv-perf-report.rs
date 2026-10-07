@@ -3,31 +3,29 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use clap::Parser;
 use serde::Deserialize;
+use usage::Cli;
 
 const RUN_SCHEMA: &str = "criv.performance-run.v2";
 const SUMMARY_SCHEMA: &str = "criv.performance-summary.v2";
 const SAMPLE_SCHEMA: &str = "criv.performance-sample.v2";
 const NOTE_SCHEMA: &str = "criv.performance-git-note.v2";
 
-#[derive(Debug, Parser)]
-#[command(
-    name = "criv-perf-report",
-    about = "Render validated criv performance evidence as self-contained HTML"
-)]
+/// Render validated criv performance evidence as self-contained HTML
+#[derive(Debug, Cli)]
+#[usage(bin = "criv-perf-report", unknown_flags = "error")]
 struct Args {
     /// Completed performance result directory containing run.json and summary.json.
-    #[arg(long)]
+    #[usage(long)]
     result_dir: PathBuf,
     /// Published-note candidate containing workflow and artifact identity.
-    #[arg(long)]
+    #[usage(long)]
     note: PathBuf,
     /// Self-contained HTML report destination.
-    #[arg(long)]
+    #[usage(long)]
     output: PathBuf,
     /// Optional Markdown summary suitable for GITHUB_STEP_SUMMARY.
-    #[arg(long)]
+    #[usage(long)]
     github_summary: Option<PathBuf>,
 }
 

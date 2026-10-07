@@ -5,28 +5,26 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use clap::Parser;
 use serde::Serialize;
+use usage::Cli;
 
 const INVENTORY_SCHEMA: &str = "criv.discovery-inventory.v1";
 
-#[derive(Debug, Parser)]
-#[command(
-    name = "criv-discovery-inventory",
-    about = "Create a content-addressed identity for an observed discovery workload"
-)]
+/// Create a content-addressed identity for an observed discovery workload
+#[derive(Debug, Cli)]
+#[usage(bin = "criv-discovery-inventory", unknown_flags = "error")]
 struct Args {
     /// Git worktree to inventory.
-    #[arg(long)]
+    #[usage(long)]
     root: PathBuf,
     /// Stable workload name.
-    #[arg(long)]
+    #[usage(long)]
     workload_id: String,
     /// Local full inventory output. It must not exist.
-    #[arg(long)]
+    #[usage(long)]
     output: PathBuf,
     /// Sanitized summary output. It must not exist.
-    #[arg(long)]
+    #[usage(long)]
     summary_output: PathBuf,
 }
 
