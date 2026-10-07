@@ -7,7 +7,6 @@ license = "MIT"
 description = "Local docs-to-code knowledge graph validator and query tool"
 repository = "https://github.com/TudorAndrei/criv"
 homepage = "https://github.com/TudorAndrei/criv"
-documentation = "https://docs.rs/criv"
 
 [workspace]
 members = ["crates/criv-state-wire", "crates/criv-wasm", "scripts/performance"]
