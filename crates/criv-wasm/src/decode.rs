@@ -2,7 +2,7 @@
 
 use criv_state_wire::LikeC4ArchitectureState;
 #[cfg(not(target_arch = "wasm32"))]
-use criv_state_wire::is_supported_schema;
+use criv_state_wire::STATE_SCHEMA;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
@@ -48,7 +48,7 @@ pub fn decode_state_value(raw: &str) -> Result<serde_json::Value, String> {
         .get("schema")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("<missing>");
-    if !is_supported_schema(schema) {
+    if schema != STATE_SCHEMA {
         return Err(format!(
             "criv-state-schema-unsupported: unsupported criv state schema: {schema}"
         ));

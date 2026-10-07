@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 #[cfg(target_arch = "wasm32")]
-use criv_state_wire::is_supported_schema;
+use criv_state_wire::STATE_SCHEMA;
 #[cfg(test)]
 use criv_state_wire::{Node, SourceIndexEntry};
 use criv_state_wire::{PatternMatch, StateDocument};
@@ -114,7 +114,7 @@ impl LoadedState {
             .ok()
             .and_then(|value| value.as_string())
             .unwrap_or_else(|| "<missing>".into());
-        if !is_supported_schema(&schema) {
+        if schema != STATE_SCHEMA {
             return Err(JsValue::from_str(&format!(
                 "criv-state-schema-unsupported: unsupported criv state schema: {schema}"
             )));
