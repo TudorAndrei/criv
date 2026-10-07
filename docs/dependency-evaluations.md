@@ -163,3 +163,21 @@ The dated audit and build measurements above remain historical evidence. Their
 instruction to keep `fff-search` was superseded only after the separate file-
 discovery contract, implementation decision, compatibility corpus, and release
 gates were accepted.
+
+## Blocking Rust dependency gate, 2026-10-07
+
+[[0145-gate-rust-dependencies-with-cargo-deny|ADR-0145]] replaces the
+monitor-only `cargo audit` step with a blocking `cargo deny` step. On
+2026-10-07, `cargo deny --locked check` loaded 1,294 advisories and reported
+`advisories ok, bans ok, licenses ok, sources ok`.
+
+Release binaries are built with `cargo auditable`. A local release build had
+158 dependencies embedded, and `cargo audit bin` read them.
+
+Evidence commands:
+
+```sh
+cargo deny --locked check
+cargo auditable build --locked --release --package criv --bin criv
+cargo audit bin target/release/criv
+```

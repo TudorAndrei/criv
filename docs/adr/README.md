@@ -155,3 +155,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0142-use-mbx-for-local-cargo-caching|ADR-0142]] - Use mbx for local Cargo caching
 - [[0143-lint-docs-prose-with-vale|ADR-0143]] - Lint docs prose with Vale
 - [[0144-apply-strict-lints-across-the-workspace|ADR-0144]] - Apply strict lints across the workspace
+- [[0145-gate-rust-dependencies-with-cargo-deny|ADR-0145]] - Gate Rust dependencies with cargo-deny

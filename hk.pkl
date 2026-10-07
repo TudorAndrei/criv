@@ -68,8 +68,8 @@ local enforce_ci = new Step {
   check = "cargo run --locked --quiet -- enforce --stage ci"
 }
 
-local cargo_audit = new Step {
-  check = "cargo audit --no-fetch || { criv_audit_exit=$?; echo \"cargo audit is monitor-only (exit $criv_audit_exit)\"; true; }"
+local cargo_deny = new Step {
+  check = "cargo deny --locked check"
 }
 
 local actionlint = new Step {
@@ -147,7 +147,7 @@ hooks {
       ["zizmor"] = zizmor
       ["cargo-test"] = cargo_test
       ["hawk"] = hawk
-      ["cargo-audit"] = cargo_audit
+      ["cargo-deny"] = cargo_deny
       ["criv-check"] = ci_full_docs
       ["criv-enforce-ci"] = ci_enforce
     }
