@@ -247,6 +247,9 @@ jobs:
           restore-keys: |
             release-build-${{ matrix.target }}-
 
+      - name: Install cargo-auditable
+        run: cargo +1.97.1 install cargo-auditable --locked --version 0.7.7
+
       - name: Build exact release binary
         env:
           EXECUTABLE_SUFFIX: ${{ matrix.executable_suffix }}
@@ -254,7 +257,7 @@ jobs:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         shell: bash
         run: |
-          cargo build --locked --release --target "$RELEASE_TARGET" --package criv --bin criv
+          cargo +1.97.1 auditable build --locked --release --target "$RELEASE_TARGET" --package criv --bin criv
           mkdir -p target/release-build
           cp "target/$RELEASE_TARGET/release/criv$EXECUTABLE_SUFFIX" \
             "target/release-build/criv$EXECUTABLE_SUFFIX"
