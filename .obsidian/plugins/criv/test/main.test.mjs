@@ -26,8 +26,8 @@ const { default: CrivPlugin, CrivC4View } = await import(pathToFileURL(outFile).
 const validState = {
   schema: "criv.state.v1",
   graph: {
-    nodes: [{ id: "note:README.md", kind: "note", label: "README", path: "README.md" }],
-    edges: [{ from: "note:README.md", kind: "mentions", to: "source:src/lib.rs" }],
+    nodes: [{ id: "note:README.md", kind: "doc", label: "README", path: "README.md" }],
+    edges: [{ from: "note:README.md", kind: "references", to: "code:src/lib.rs" }],
   },
   patterns: {},
   "registered-patterns": ["ADR-0001/no-block-on"],
@@ -138,7 +138,7 @@ class FakeRevision {
     asset_count: 0,
     pattern_count: 1,
     first_node_id: "note:README.md",
-    first_edge: "note:README.md:mentions:source:src/lib.rs",
+    first_edge: "note:README.md:references:code:src/lib.rs",
     first_source_path: "src/lib.rs",
     first_asset_path: undefined,
   });
