@@ -7,8 +7,8 @@ use std::{cell::Cell, thread_local};
 #[cfg(test)]
 use criv_state_wire::STATE_SCHEMA;
 use criv_state_wire::{
-    AssetIndexEntry, Edge, Graph, LikeC4ArchitectureState, Node, PatternMatch, SourceIndexEntry,
-    StateDocument, source_identity::SourceIdentity,
+    AssetIndexEntry, Edge, EdgeKind, Graph, LikeC4ArchitectureState, Node, NodeKind, PatternMatch,
+    SourceIndexEntry, StateDocument, source_identity::SourceIdentity,
 };
 use serde::{Serialize, Serializer};
 
@@ -18,6 +18,7 @@ use crate::source::{
     DirectiveKind, Import, Language, ModuleRelationshipRole, Relationship, RelationshipKind,
     RelationshipTarget, SourceFile, Symbol,
 };
+use crate::stable_hash::StableHasher;
 use crate::structural;
 use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
@@ -28,6 +29,7 @@ mod publication;
 mod snapshots;
 
 pub use publication::load_snapshot;
+pub use snapshots::SnapshotId;
 
 #[derive(Debug, Clone)]
 pub struct State {
@@ -232,7 +234,8 @@ impl State {
             })
             .collect();
         state.wire.architecture = vault.likec4_workspace.model.clone().map(|model| {
-            projection::add_likec4_model_to_graph(&mut state.wire.graph, vault, &model);
+            state.wire.graph =
+                projection::with_likec4_model(std::mem::take(&mut state.wire.graph), vault, &model);
             LikeC4ArchitectureState {
                 protocol_version: 1,
                 likec4_version: vault
@@ -280,7 +283,7 @@ impl State {
         let json = serde_json::to_string_pretty(&self.wire)
             .map_err(|err| CrivError::new(format!("failed to serialize state: {err}")))?;
         Ok(SerializedState {
-            hash: stable_hash(&json),
+            hash: blake3::hash(json.as_bytes()).to_hex().to_string(),
             published: format!("{json}\n"),
         })
     }
@@ -334,134 +337,103 @@ const fn partition_meta(
 }
 
 fn source_input_fingerprint(file: &SourceFile) -> String {
-    let mut hasher = blake3::Hasher::new();
-    fingerprint_str(&mut hasher, &file.path);
-    fingerprint_str(&mut hasher, file.language.as_str());
+    let mut hasher = StableHasher::new("source-partition");
+    hasher
+        .str(&file.path)
+        .str(file.language.as_str())
+        .usize(file.imports.len());
     for import in &file.imports {
-        fingerprint_str(&mut hasher, &import.module);
-        fingerprint_usize(&mut hasher, import.line);
-        fingerprint_usize(&mut hasher, import.site);
-        fingerprint_str(&mut hasher, import.kind.as_str());
-        fingerprint_str(&mut hasher, &format!("{:?}", import.owner));
-        fingerprint_str(&mut hasher, &format!("{:?}", import.scope));
-        fingerprint_option_str(&mut hasher, import.alias.as_deref());
-        fingerprint_str(&mut hasher, &format!("{:?}", import.only));
-        fingerprint_str(&mut hasher, &format!("{:?}", import.except));
-        fingerprint_bool(&mut hasher, import.absolute);
+        hasher
+            .str(&import.module)
+            .usize(import.line)
+            .usize(import.site)
+            .str(import.kind.as_str())
+            .str(&format!("{:?}", import.owner))
+            .str(&format!("{:?}", import.scope))
+            .option_str(import.alias.as_deref())
+            .str(&format!("{:?}", import.only))
+            .str(&format!("{:?}", import.except))
+            .bool(import.absolute);
     }
+    hasher.usize(file.symbols.len());
     for symbol in &file.symbols {
-        fingerprint_str(&mut hasher, &symbol.id.display());
-        fingerprint_str(&mut hasher, &symbol.name);
-        fingerprint_str(&mut hasher, symbol.kind.as_str());
-        fingerprint_option_str(&mut hasher, symbol.parent.as_deref());
-        fingerprint_str(&mut hasher, &format!("{:?}", symbol.owner));
-        fingerprint_option_usize(&mut hasher, symbol.arity);
-        fingerprint_usize(&mut hasher, symbol.range.start_line);
-        fingerprint_usize(&mut hasher, symbol.range.end_line);
+        hasher
+            .str(&symbol.id.display())
+            .str(&symbol.name)
+            .str(symbol.kind.as_str())
+            .option_str(symbol.parent.as_deref())
+            .str(&format!("{:?}", symbol.owner))
+            .option_usize(symbol.arity)
+            .usize(symbol.range.start_line)
+            .usize(symbol.range.end_line)
+            .usize(symbol.calls.len());
         for call in &symbol.calls {
-            fingerprint_str(&mut hasher, &call.target);
-            fingerprint_usize(&mut hasher, call.line);
+            hasher.str(&call.target).usize(call.line);
         }
+        hasher.usize(symbol.relationships.len());
         for relationship in &symbol.relationships {
-            fingerprint_str(&mut hasher, relationship.kind.as_str());
-            fingerprint_str(&mut hasher, &format!("{:?}", relationship.target));
-            fingerprint_usize(&mut hasher, relationship.line);
-            fingerprint_usize(&mut hasher, relationship.site);
+            hasher
+                .str(relationship.kind.as_str())
+                .str(&format!("{:?}", relationship.target))
+                .usize(relationship.line)
+                .usize(relationship.site);
         }
     }
-    hasher.finalize().to_hex().to_string()
+    hasher.finish()
 }
 
 fn note_input_fingerprint(note: &Note) -> String {
-    let mut hasher = blake3::Hasher::new();
-    fingerprint_str(&mut hasher, &note.rel_path);
-    fingerprint_option_str(&mut hasher, note.id.as_deref());
-    fingerprint_str(
-        &mut hasher,
-        match note.kind {
+    StableHasher::new("note-partition")
+        .str(&note.rel_path)
+        .option_str(note.id.as_deref())
+        .str(match note.kind {
             NoteKind::Decision => "decision",
             NoteKind::Doc => "doc",
             NoteKind::Unknown => "unknown",
-        },
-    );
-    fingerprint_option_str(&mut hasher, note.title.as_deref());
-    fingerprint_option_str(&mut hasher, note.status.as_deref());
-    fingerprint_str(&mut hasher, &note.body);
-    fingerprint_str(&mut hasher, &format!("{:?}", note.targets_symbols));
-    fingerprint_str(&mut hasher, &format!("{:?}", note.targets_scope));
-    fingerprint_str(&mut hasher, &format!("{:?}", note.target_pattern_refs));
-    fingerprint_str(&mut hasher, &format!("{:?}", note.target_pattern_ids));
-    fingerprint_str(&mut hasher, &format!("{:?}", note.policy_patterns));
-    fingerprint_str(&mut hasher, &format!("{:?}", note.governs));
-    fingerprint_str(&mut hasher, &format!("{:?}", note.supersedes));
-    fingerprint_str(&mut hasher, &format!("{:?}", note.superseded_by));
-    fingerprint_str(&mut hasher, &format!("{:?}", note.frontmatter_error));
-    fingerprint_str(
-        &mut hasher,
-        &format!("{:?}", Vault::effective_governs(note)),
-    );
-    hasher.finalize().to_hex().to_string()
+        })
+        .option_str(note.title.as_deref())
+        .option_str(note.status.as_deref())
+        .str(&note.body)
+        .str(&format!("{:?}", note.targets_symbols))
+        .str(&format!("{:?}", note.targets_scope))
+        .str(&format!("{:?}", note.target_pattern_refs))
+        .str(&format!("{:?}", note.target_pattern_ids))
+        .str(&format!("{:?}", note.policy_patterns))
+        .str(&format!("{:?}", note.governs))
+        .str(&format!("{:?}", note.supersedes))
+        .str(&format!("{:?}", note.superseded_by))
+        .str(&format!("{:?}", note.frontmatter_error))
+        .str(&format!("{:?}", Vault::effective_governs(note)))
+        .finish()
 }
 
 fn note_catalog_fingerprint(vault: &Vault) -> String {
-    let mut hasher = blake3::Hasher::new();
+    let mut hasher = StableHasher::new("note-catalog");
+    hasher.usize(vault.notes.len());
     for note in &vault.notes {
-        fingerprint_str(&mut hasher, &note.rel_path);
-        fingerprint_option_str(&mut hasher, note.id.as_deref());
-        fingerprint_option_str(&mut hasher, note.title.as_deref());
+        hasher
+            .str(&note.rel_path)
+            .option_str(note.id.as_deref())
+            .option_str(note.title.as_deref())
+            .usize(note.headings.len());
         for heading in &note.headings {
-            fingerprint_str(&mut hasher, &heading.text);
-            fingerprint_usize(&mut hasher, heading.level);
+            hasher.str(&heading.text).usize(heading.level);
         }
     }
-    hasher.finalize().to_hex().to_string()
+    hasher.finish()
 }
 
 fn c4_artifact_input_fingerprint(artifact: &C4Artifact) -> String {
-    stable_hash(&format!("{artifact:#?}"))
+    StableHasher::new("c4-artifact-partition")
+        .str(&format!("{artifact:#?}"))
+        .finish()
 }
 
 fn source_index_input_fingerprint(entry: &SourceIndexEntry) -> String {
-    stable_hash(&format!("{}\0{:?}", entry.path, entry.mime))
-}
-
-fn fingerprint_str(hasher: &mut blake3::Hasher, value: &str) {
-    let length = u64::try_from(value.len()).unwrap_or(u64::MAX);
-    hasher.update(&length.to_le_bytes());
-    hasher.update(value.as_bytes());
-}
-
-fn fingerprint_option_str(hasher: &mut blake3::Hasher, value: Option<&str>) {
-    match value {
-        Some(value) => {
-            hasher.update(&[1]);
-            fingerprint_str(hasher, value);
-        }
-        None => {
-            hasher.update(&[0]);
-        }
-    }
-}
-
-fn fingerprint_usize(hasher: &mut blake3::Hasher, value: usize) {
-    let value = u64::try_from(value).unwrap_or(u64::MAX);
-    hasher.update(&value.to_le_bytes());
-}
-
-fn fingerprint_option_usize(hasher: &mut blake3::Hasher, value: Option<usize>) {
-    match value {
-        Some(value) => {
-            hasher.update(&[1]);
-            fingerprint_usize(hasher, value);
-        }
-        None => {
-            hasher.update(&[0]);
-        }
-    }
-}
-
-fn fingerprint_bool(hasher: &mut blake3::Hasher, value: bool) {
-    hasher.update(&[u8::from(value)]);
+    StableHasher::new("source-index-partition")
+        .str(&entry.path)
+        .option_str(entry.mime.as_deref())
+        .finish()
 }
 
 fn observe_partition_meta(meta: &PartitionMeta, expected_key: &PartitionKey) {
@@ -475,20 +447,6 @@ fn observe_partition_meta(meta: &PartitionMeta, expected_key: &PartitionKey) {
         meta.dependencies.note_catalog_sensitive,
         meta.dependencies.policy_sensitive,
     );
-}
-
-fn append_graph_rows(
-    graph: &mut Graph,
-    seen_nodes: &mut BTreeSet<String>,
-    seen_edges: &mut BTreeSet<String>,
-    rows: &GraphRows,
-) {
-    for node in &rows.nodes {
-        add_node(graph, seen_nodes, node.clone());
-    }
-    for edge in &rows.edges {
-        add_edge(graph, seen_edges, &edge.from, &edge.to, &edge.kind);
-    }
 }
 
 fn graph_rows(graph: Graph) -> GraphRows {
@@ -619,7 +577,7 @@ impl State {
             .graph
             .nodes
             .iter()
-            .filter(|node| node.kind == "architecture-interface")
+            .filter(|node| node.kind == NodeKind::ArchitectureInterface)
             .map(|node| (node.id.clone(), node.label.clone()))
             .collect()
     }
@@ -684,40 +642,92 @@ fn interface_anchor_hash(vault: &Vault, source: &str, path: &str) -> Option<(Str
     Some((target, hash))
 }
 
-fn add_node(graph: &mut Graph, seen: &mut BTreeSet<String>, node: Node) {
-    let mut node = node;
-    node.hash = node_hash(&node);
-    if seen.insert(node.id.clone()) {
-        graph.nodes.push(node);
+/// A graph whose node ids and edges are unique, in first-insertion order.
+#[derive(Default)]
+struct GraphBuilder {
+    graph: Graph,
+    seen_nodes: BTreeSet<String>,
+    seen_edges: BTreeSet<(String, String, EdgeKind)>,
+}
+
+impl GraphBuilder {
+    fn extending(graph: Graph) -> Self {
+        let seen_nodes = graph.nodes.iter().map(|node| node.id.clone()).collect();
+        let seen_edges = graph
+            .edges
+            .iter()
+            .map(|edge| (edge.from.clone(), edge.to.clone(), edge.kind))
+            .collect();
+        Self {
+            graph,
+            seen_nodes,
+            seen_edges,
+        }
+    }
+
+    fn node(&mut self, id: String, kind: NodeKind, label: String, path: Option<String>) {
+        if !self.seen_nodes.contains(&id) {
+            self.push_node(hashed_node(id, kind, label, path));
+        }
+    }
+
+    fn push_node(&mut self, node: Node) {
+        if self.seen_nodes.insert(node.id.clone()) {
+            self.graph.nodes.push(node);
+        }
+    }
+
+    fn edge(&mut self, from: &str, to: &str, kind: EdgeKind) {
+        if self
+            .seen_edges
+            .insert((from.to_owned(), to.to_owned(), kind))
+        {
+            let hash = StableHasher::new("edge")
+                .str(from)
+                .str(kind.as_str())
+                .str(to)
+                .finish();
+            self.graph.edges.push(Edge {
+                from: from.into(),
+                to: to.into(),
+                kind,
+                hash,
+            });
+        }
+    }
+
+    fn append_rows(&mut self, rows: &GraphRows) {
+        for node in &rows.nodes {
+            self.push_node(node.clone());
+        }
+        for edge in &rows.edges {
+            self.edge(&edge.from, &edge.to, edge.kind);
+        }
+    }
+
+    const fn graph(&self) -> &Graph {
+        &self.graph
+    }
+
+    fn finish(self) -> Graph {
+        self.graph
     }
 }
 
-fn add_edge(graph: &mut Graph, seen: &mut BTreeSet<String>, from: &str, to: &str, kind: &str) {
-    let key = format!("{from}\0{to}\0{kind}");
-    if seen.insert(key) {
-        let mut edge = Edge {
-            from: from.into(),
-            to: to.into(),
-            kind: kind.into(),
-            hash: String::new(),
-        };
-        edge.hash = edge_hash(&edge);
-        graph.edges.push(edge);
+fn hashed_node(id: String, kind: NodeKind, label: String, path: Option<String>) -> Node {
+    let hash = StableHasher::new("node")
+        .str(&id)
+        .str(kind.as_str())
+        .str(&label)
+        .option_str(path.as_deref())
+        .finish();
+    Node {
+        id,
+        hash,
+        kind,
+        label,
+        path,
     }
-}
-
-fn node_hash(node: &Node) -> String {
-    stable_hash(&format!(
-        "node\0{}\0{}\0{}\0{}",
-        node.id,
-        node.kind,
-        node.label,
-        node.path.as_deref().unwrap_or("")
-    ))
-}
-
-fn edge_hash(edge: &Edge) -> String {
-    stable_hash(&format!("edge\0{}\0{}\0{}", edge.from, edge.kind, edge.to))
 }
 
 fn graph_root(graph: &Graph) -> String {
@@ -728,11 +738,7 @@ fn graph_root(graph: &Graph) -> String {
         .chain(graph.edges.iter().map(|edge| edge.hash.as_str()))
         .collect::<Vec<_>>();
     hashes.sort_unstable();
-    stable_hash(&hashes.join("\n"))
-}
-
-fn stable_hash(value: &str) -> String {
-    blake3::hash(value.as_bytes()).to_hex().to_string()
+    StableHasher::new("graph").strs(&hashes).finish()
 }
 
 fn note_node_id(id: &str) -> String {
@@ -936,7 +942,12 @@ end
             "external-module",
         ] {
             assert!(
-                first.wire.graph.nodes.iter().any(|node| node.kind == kind),
+                first
+                    .wire
+                    .graph
+                    .nodes
+                    .iter()
+                    .any(|node| node.kind.as_str() == kind),
                 "missing State node kind {kind}"
             );
         }
@@ -968,19 +979,21 @@ end
             "implements-behaviour",
         ] {
             assert!(
-                first.wire.graph.edges.iter().any(|edge| edge.kind == kind),
+                first
+                    .wire
+                    .graph
+                    .edges
+                    .iter()
+                    .any(|edge| edge.kind.as_str() == kind),
                 "missing State edge kind {kind}"
             );
         }
         let app = "symbol:lib/sample.ex#module:Demo.App";
         let run = "symbol:lib/sample.ex#module:Demo.App/fn:run/1";
         assert!(
-            first
-                .wire
-                .graph
-                .edges
-                .iter()
-                .any(|edge| { edge.from == app && edge.to == run && edge.kind == "contains" })
+            first.wire.graph.edges.iter().any(|edge| {
+                edge.from == app && edge.to == run && edge.kind == EdgeKind::Contains
+            })
         );
         assert!(
             first
@@ -1031,7 +1044,7 @@ end
         assert!(changed.wire.graph.edges.iter().any(|edge| {
             edge.from == run
                 && edge.to == "symbol:lib/sample.ex#module:Demo.Target/fn:other/1"
-                && edge.kind == "calls"
+                && edge.kind == EdgeKind::Calls
         }));
 
         let _ = std::fs::remove_dir_all(root);
@@ -1262,7 +1275,7 @@ policy:
         );
         assert_eq!(
             State::build(&vault).unwrap().hash().unwrap(),
-            "e726e1970e996838a7c68bf68cee6dc2bdd98ad6657e196f2bf44640dcb040c1"
+            "5daebfeb1e0852bba748b8e225dab7469e53f98d3103e242ba0c3bffbbbb199a"
         );
 
         let _ = std::fs::remove_dir_all(root);

@@ -1,46 +1,46 @@
 {
   "schema": "criv.state.v1",
   "graph": {
-    "root": "3388c6958cd047d1191c9a8a07d46847e60fbc9dd1362dbb193922a4c56ae02f",
+    "root": "64cf604239faa8ff555cf63d0e2167e39375a34d31995fc2f9f6ce8aa4a511b9",
     "nodes": [
       {
         "id": "code:src/lib.rs",
-        "hash": "b8d8a28f8ad24895bf455f9fbb24d1a40ea2c94cbc7a0ac0d853344c86492483",
+        "hash": "e0a4f849c5f2f92b2074d103e9aeae9069f3a06cb0e4cb96ebc423900203705c",
         "kind": "code",
         "label": "src/lib.rs (rust)",
         "path": "src/lib.rs"
       },
       {
         "id": "symbol:src/lib.rs#fn:run",
-        "hash": "69ab2410ac5921ba170347d0d1d63773b959c8c989eef24ea25cc378aa25666b",
+        "hash": "c64e0e6694e91aa027cb9e331a89518ba02928402e97491e0fd20a6190d1dc7b",
         "kind": "function",
         "label": "run",
         "path": "src/lib.rs#L1-L1"
       },
       {
         "id": "note:ADR-0001",
-        "hash": "53055971aada5bc58e9e4ddd9cff09d093ab12a7a9a0288257e9331dcb4e77cf",
+        "hash": "abb8443562006d699f6d73f6262e74f2ea57a8cfb4d4934fa7616268ebc7013b",
         "kind": "decision",
         "label": "Entrypoint",
         "path": "docs/adr/0001-entrypoint.md"
       },
       {
         "id": "note:ADR-0001#entrypoint",
-        "hash": "587434e159011ee2a085f5fce6e765870b195b7247966a6775b84153f0131668",
+        "hash": "341961183cee8bf334a9fca497599c301168eb0d376a6f15a2ffa3458c097934",
         "kind": "doc-heading",
         "label": "Entrypoint",
         "path": "docs/adr/0001-entrypoint.md#L15:H1"
       },
       {
         "id": "note:ADR-0002",
-        "hash": "f931ad4ee10e1a6fc54e53c4fb7ea0de8e1f73b1fd75548930dbc53e3f96da7d",
+        "hash": "afe7b0f0c67ee2b573221efdfa9ab7af4fd8363f4a1c158b3d584726372787ce",
         "kind": "decision",
         "label": "Draft Entrypoint",
         "path": "docs/adr/0002-draft-entrypoint.md"
       },
       {
         "id": "note:ADR-0002#draft-entrypoint",
-        "hash": "9cafac6179f32402bb096fcd1b858875f8f2473d4df0fb4b1af42fe88504ba78",
+        "hash": "d56e509cce76a0ffa9a8b3d081c9b0dbe653b1e6de188375c6f2469988a61ed2",
         "kind": "doc-heading",
         "label": "Draft Entrypoint",
         "path": "docs/adr/0002-draft-entrypoint.md#L15:H1"
@@ -51,31 +51,31 @@
         "from": "code:src/lib.rs",
         "to": "symbol:src/lib.rs#fn:run",
         "kind": "contains",
-        "hash": "113fbed7438b74327e2c72284d65d5cc30d7365fde741c138810be001344c43d"
+        "hash": "e10ad90ef6f0a858b9d6ee13847041bc7c1875792d607432e14a56f79081fb2a"
       },
       {
         "from": "note:ADR-0001",
         "to": "note:ADR-0001#entrypoint",
         "kind": "contains",
-        "hash": "c0b57e0655aec5764894349e766ef37221f085cdd080460373b825983ca3455b"
+        "hash": "b64672162880f39ebee43b5efdd19748eb0c53c66070194dc958e4a364e59212"
       },
       {
         "from": "note:ADR-0001",
         "to": "code:src/lib.rs",
         "kind": "governs",
-        "hash": "6c1587c6d44c802b93d9f7224c5ebf9dc42e010556a18c04340525565fb9ae98"
+        "hash": "09691ad7fb54ea426bb0a4aaf18a57a9a3f531f2c024436d074aee47b38f9246"
       },
       {
         "from": "note:ADR-0002",
         "to": "note:ADR-0002#draft-entrypoint",
         "kind": "contains",
-        "hash": "21fe1e781737cebcd5cb73871170fb33f1e5fbd3a1c19cfa135f14f1b8dbd158"
+        "hash": "9239a4a9fb429fe85d5aa4c1963be4eb51ce767d798419754bc4ab322c083e01"
       },
       {
         "from": "note:ADR-0002",
         "to": "code:src/lib.rs",
         "kind": "governs",
-        "hash": "d663db82dd6945c981d7a8e6792d2c70b802c90ccc708b2ca89a35779eade57d"
+        "hash": "cdc4f7d409fac18858a680fc8fbec9a26c2171a52448ee51eaf62b9b3bca3d92"
       }
     ]
   },

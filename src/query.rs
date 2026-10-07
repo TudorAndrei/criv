@@ -1,10 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use serde::Deserialize;
 use usage::{Args as UsageArgs, Subcommands, ValueEnum};
 
+use crate::diagnostic::DiagnosticCode;
 use crate::repository::RepositoryFiles;
 use crate::source::SymbolKind;
+use crate::state::SnapshotId;
 use crate::vault::{
     NoteKind, ResolvedLink, SourceTargetResolution, Vault, source_fragment_name,
     source_fragment_path,
@@ -441,10 +444,9 @@ fn next_adr_id(vault: &Vault) -> Result<String> {
         .filter(|next| *next <= MAX_ADR_NUMBER);
     next.map_or_else(
         || {
-            Err(CrivError::coded_fix(
-                "adr-id-exhausted",
+            Err(CrivError::coded(
+                DiagnosticCode::AdrIdExhausted,
                 format!("no free ADR id after ADR-{highest:04}; ids are four digits"),
-                "Retire or renumber the highest ADR ids, or widen the id format in a new ADR.",
             ))
         },
         |next| Ok(format!("ADR-{next:04}")),
@@ -672,12 +674,12 @@ fn nodes(
 }
 
 fn diff(root: &Path, left: &str, right: &str) -> Result<Vec<String>> {
-    let left = load_snapshot(root, left)?;
-    let right = load_snapshot(root, right)?;
-    let left_nodes = json_string_set(&left, "/graph/nodes", "id");
-    let right_nodes = json_string_set(&right, "/graph/nodes", "id");
-    let left_edges = json_edge_set(&left);
-    let right_edges = json_edge_set(&right);
+    let left = load_snapshot(root, left)?.graph;
+    let right = load_snapshot(root, right)?.graph;
+    let left_nodes = left.node_ids();
+    let right_nodes = right.node_ids();
+    let left_edges = left.edge_rows();
+    let right_edges = right.edge_rows();
 
     let mut rows = Vec::new();
     rows.extend(
@@ -704,11 +706,49 @@ fn diff(root: &Path, left: &str, right: &str) -> Result<Vec<String>> {
     Ok(rows)
 }
 
-fn load_snapshot(root: &Path, id: &str) -> Result<serde_json::Value> {
-    let local = if id == "latest" || is_snapshot_hash(id) {
-        crate::state::load_snapshot(root, id)?
-    } else {
-        None
+#[derive(Deserialize)]
+struct SnapshotDocument {
+    #[serde(default)]
+    graph: SnapshotGraph,
+}
+
+#[derive(Default, Deserialize)]
+struct SnapshotGraph {
+    #[serde(default)]
+    nodes: Vec<SnapshotNode>,
+    #[serde(default)]
+    edges: Vec<SnapshotEdge>,
+}
+
+#[derive(Deserialize)]
+struct SnapshotNode {
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct SnapshotEdge {
+    from: String,
+    kind: String,
+    to: String,
+}
+
+impl SnapshotGraph {
+    fn node_ids(&self) -> BTreeSet<&str> {
+        self.nodes.iter().map(|node| node.id.as_str()).collect()
+    }
+
+    fn edge_rows(&self) -> BTreeSet<String> {
+        self.edges
+            .iter()
+            .map(|edge| format!("{}:{}:{}", edge.from, edge.kind, edge.to))
+            .collect()
+    }
+}
+
+fn load_snapshot(root: &Path, id: &str) -> Result<SnapshotDocument> {
+    let local = match id.parse::<SnapshotId>() {
+        Ok(snapshot) => crate::state::load_snapshot(root, &snapshot)?,
+        Err(()) => None,
     };
     let contents = if let Some(contents) = local {
         contents
@@ -717,10 +757,6 @@ fn load_snapshot(root: &Path, id: &str) -> Result<serde_json::Value> {
     };
     serde_json::from_str(&contents)
         .map_err(|err| CrivError::new(format!("failed to parse snapshot `{id}`: {err}")))
-}
-
-fn is_snapshot_hash(value: &str) -> bool {
-    !value.is_empty() && value.chars().all(|ch| ch.is_ascii_hexdigit())
 }
 
 fn load_git_state(root: &Path, id: &str) -> Result<String> {
@@ -735,34 +771,6 @@ fn load_git_state(root: &Path, id: &str) -> Result<String> {
             "git ref `{id}` produced non-UTF-8 .criv/state.json: {err}"
         ))
     })
-}
-
-fn json_string_set(value: &serde_json::Value, pointer: &str, field: &str) -> BTreeSet<String> {
-    value
-        .pointer(pointer)
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|item| item.get(field).and_then(serde_json::Value::as_str))
-        .map(str::to_string)
-        .collect()
-}
-
-fn json_edge_set(value: &serde_json::Value) -> BTreeSet<String> {
-    value
-        .pointer("/graph/edges")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|item| {
-            Some(format!(
-                "{}:{}:{}",
-                item.get("from")?.as_str()?,
-                item.get("kind")?.as_str()?,
-                item.get("to")?.as_str()?
-            ))
-        })
-        .collect()
 }
 
 fn print_rows(rows: &[String], output: OutputOptions) -> Result<()> {
@@ -1033,11 +1041,12 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_hash_shape() {
-        assert!(is_snapshot_hash("abc123"));
-        assert!(!is_snapshot_hash("../../etc/passwd"));
-        assert!(!is_snapshot_hash("HEAD~1"));
-        assert!(!is_snapshot_hash(""));
+    fn snapshot_id_shape() {
+        assert_eq!("latest".parse(), Ok(SnapshotId::Latest));
+        assert_eq!("abc123".parse(), Ok(SnapshotId::Hash("abc123".into())));
+        assert!("../../etc/passwd".parse::<SnapshotId>().is_err());
+        assert!("HEAD~1".parse::<SnapshotId>().is_err());
+        assert!("".parse::<SnapshotId>().is_err());
     }
 
     fn query_output_options() -> OutputOptions {

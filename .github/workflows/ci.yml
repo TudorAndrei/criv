@@ -397,6 +397,27 @@ jobs:
           filter_mode: nofilter
           fail_on_error: true
 
+  commits:
+    name: Conventional commits
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install mise tools
+        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+        with:
+          install: true
+          install_args: cocogitto
+          cache: true
+
+      - name: Check commit messages since the latest tag
+        run: cog check --from-latest-tag
+
   performance-smoke:
     name: Performance tooling smoke tests
     needs: changes
@@ -455,6 +476,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs:
       - changes
+      - commits
       - core
       - discovery-contracts
       - editor-contracts
@@ -472,6 +494,7 @@ jobs:
       - name: Require all lanes
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
+          COMMITS_RESULT: ${{ needs.commits.result }}
           CORE_RESULT: ${{ needs.core.result }}
           DISCOVERY_CONTRACTS_RESULT: ${{ needs.discovery-contracts.result }}
           EDITOR_CONTRACTS_RESULT: ${{ needs.editor-contracts.result }}
@@ -485,6 +508,7 @@ jobs:
           MACOS_WATCH_LOCK_RESULT: ${{ needs.macos-watch-lock.result }}
         run: |
           test "$CHANGES_RESULT" = success
+          test "$COMMITS_RESULT" = success
           test "$CORE_RESULT" = success
           test "$DISCOVERY_CONTRACTS_RESULT" = success
           test "$EDITOR_CONTRACTS_RESULT" = success

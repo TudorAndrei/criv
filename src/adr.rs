@@ -45,8 +45,7 @@ pub fn change_violations(
     let source_receipt_allows_transaction = mode == ChangeMode::Commit
         && changes.is_some_and(|changes| source_receipt_allows_transaction(root, &changes.entries));
     let mut adr_violations = adr_immutability_violations(
-        &config.docs_dir,
-        &config.adr_dir,
+        &config.adr_prefix(),
         changes.map(|changes| changes.entries.as_slice()),
         |entry| {
             (receipt_allows_transaction
@@ -71,8 +70,7 @@ pub fn change_violations(
 
 /// Report protected ADR edits in Git entry order, after testing allowed exceptions.
 fn adr_immutability_violations(
-    docs_dir: &str,
-    adr_dir: &str,
+    adr_prefix: &str,
     changed_entries: Option<&[ChangedEntry]>,
     mut is_allowed_change: impl FnMut(&ChangedEntry) -> bool,
 ) -> Vec<String> {
@@ -87,7 +85,7 @@ fn adr_immutability_violations(
         }
 
         let path = entry.previous_path.as_deref().unwrap_or(&entry.path);
-        if !is_adr_file(docs_dir, adr_dir, path) {
+        if !is_adr_file(adr_prefix, path) {
             continue;
         }
         if is_allowed_change(entry) {
@@ -296,9 +294,8 @@ fn looks_like_decision(path: &str) -> bool {
 }
 
 /// Match Markdown decisions under the configured scope, excluding its index.
-fn is_adr_file(docs_dir: &str, adr_dir: &str, path: &str) -> bool {
-    let adr_prefix = format!("{docs_dir}/{adr_dir}/");
-    path.starts_with(&adr_prefix)
+fn is_adr_file(adr_prefix: &str, path: &str) -> bool {
+    path.starts_with(adr_prefix)
         && path != format!("{adr_prefix}README.md")
         && Path::new(path)
             .extension()
@@ -716,7 +713,7 @@ fn build_plan_from(
             "refusing ADR reconciliation because vault.docs or vault.adr differs from the target; cannot prove ADR ownership",
         ));
     }
-    let adr_prefix = format!("{}/{}/", vault.config.docs_dir, vault.config.adr_dir);
+    let adr_prefix = vault.config.adr_prefix();
     let merge_base = git::merge_base(root, target_sha, "HEAD")?;
     let target_paths = git::tree_paths(root, target_sha, &adr_prefix)?;
     let merge_paths = git::tree_paths(root, &merge_base, &adr_prefix)?

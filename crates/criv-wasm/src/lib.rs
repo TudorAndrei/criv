@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, HashMap};
 use criv_state_wire::STATE_SCHEMA;
 #[cfg(test)]
 use criv_state_wire::{Node, SourceIndexEntry};
-use criv_state_wire::{PatternMatch, StateDocument};
+use criv_state_wire::{NodeKind, PatternMatch, StateDocument};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -276,7 +276,7 @@ struct EditorAssetEntry {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 struct EditorGraphNode {
     id: String,
-    kind: String,
+    kind: NodeKind,
     label: String,
     path: Option<String>,
     source_target: Option<String>,
@@ -346,7 +346,7 @@ enum SourceTargetLookupResult {
 struct SourceTargetCandidate {
     canonical_target: String,
     node_id: String,
-    kind: String,
+    kind: NodeKind,
     label: String,
 }
 
@@ -354,9 +354,30 @@ struct SourceTargetCandidate {
 struct SourceSelectorSuggestion {
     target: String,
     label: String,
-    kind: String,
+    kind: SuggestionKind,
     path: String,
     detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SuggestionKind {
+    File,
+    Node(NodeKind),
+}
+
+impl SuggestionKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Node(kind) => kind.as_str(),
+        }
+    }
+}
+
+impl Serialize for SuggestionKind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
 }
 
 struct PreparedSelector {
@@ -449,7 +470,7 @@ mod tests {
         else {
             panic!("expected an exact source target to resolve");
         };
-        assert_eq!(node.kind, "function");
+        assert_eq!(node.kind, NodeKind::Function);
         assert_eq!(
             loaded.prepared.suggest_selectors("run", 10)[0].target,
             "src/lib.rs#fn:run"
@@ -581,7 +602,7 @@ mod tests {
             .find(|node| node.id == "symbol:src/lib.rs#fn:run")
             .unwrap();
 
-        assert_eq!(symbol.kind, "function");
+        assert_eq!(symbol.kind, NodeKind::Function);
         assert_eq!(symbol.label, "run");
         assert_eq!(symbol.source_target.as_deref(), Some("src/lib.rs#fn:run"));
         assert_eq!(symbol.line_range.as_deref(), Some("L10-L20"));
@@ -595,9 +616,12 @@ mod tests {
 
         assert_eq!(suggestions.len(), 2);
         assert_eq!(suggestions[0].target, "src/lib.rs#fn:run");
-        assert_eq!(suggestions[0].kind, "function");
+        assert_eq!(
+            suggestions[0].kind,
+            SuggestionKind::Node(NodeKind::Function)
+        );
         assert_eq!(suggestions[1].target, "src/run.rs");
-        assert_eq!(suggestions[1].kind, "file");
+        assert_eq!(suggestions[1].kind, SuggestionKind::File);
     }
 
     #[test]
@@ -688,7 +712,7 @@ mod tests {
         state.graph.nodes.push(Node {
             id: "symbol:src/lib.rs#method:run".into(),
             hash: String::new(),
-            kind: "method".into(),
+            kind: NodeKind::Method,
             label: "run".into(),
             path: Some("src/lib.rs#L30-L40".into()),
         });
@@ -710,21 +734,21 @@ mod tests {
             Node {
                 id: "symbol:lib/unicode.ex#module:My.%CE%94/fn:%2B/2".into(),
                 hash: String::new(),
-                kind: "function".into(),
+                kind: NodeKind::Function,
                 label: "+/2".into(),
                 path: Some("lib/unicode.ex#L1-L1".into()),
             },
             Node {
                 id: "symbol:lib/impl.ex#impl:Enumerable/for:My.App/fn:reduce/3".into(),
                 hash: String::new(),
-                kind: "function".into(),
+                kind: NodeKind::Function,
                 label: "reduce/3".into(),
                 path: Some("lib/impl.ex#L1-L1".into()),
             },
             Node {
                 id: "symbol:lib/bad.ex#module:Bad%2/fn:run/1".into(),
                 hash: String::new(),
-                kind: "function".into(),
+                kind: NodeKind::Function,
                 label: "run/1".into(),
                 path: Some("lib/bad.ex#L1-L1".into()),
             },

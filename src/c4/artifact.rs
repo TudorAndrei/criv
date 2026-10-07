@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::Result;
-use crate::diagnostic::SourceLocation;
+use crate::diagnostic::{DiagnosticCode, SourceLocation};
 use crate::discovery::read_selected_text_from;
 use crate::identity::strip_prefix;
 use crate::repository::RepositoryFiles;
@@ -23,7 +23,7 @@ pub struct C4Artifact {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct C4ArtifactDiagnostic {
-    pub(crate) code: &'static str,
+    pub(crate) code: DiagnosticCode,
     pub(crate) line: Option<usize>,
     pub(crate) message: String,
     pub(crate) location: Option<SourceLocation>,
@@ -47,7 +47,7 @@ fn parse_contents(root: &Path, docs_path: &Path, path: &Path, contents: &str) ->
     if format.is_none() {
         let line = first_non_empty_line(contents);
         diagnostics.push(C4ArtifactDiagnostic {
-            code: "unknown-c4-format",
+            code: DiagnosticCode::UnknownC4Format,
             line,
             message: ".c4 content must use LikeC4 DSL".into(),
             location: line.and_then(|line| line_location(&source, line)),
@@ -59,7 +59,7 @@ fn parse_contents(root: &Path, docs_path: &Path, path: &Path, contents: &str) ->
             .is_some_and(|value| !matches!(value, "true" | "false"))
         {
             diagnostics.push(C4ArtifactDiagnostic {
-                code: "invalid-c4-generated",
+                code: DiagnosticCode::InvalidC4Generated,
                 line: Some(*line),
                 message: "criv:generated must be true or false".into(),
                 location: line_location(&source, *line),
@@ -158,7 +158,10 @@ mod tests {
         for legacy in ["C4Context\n", "digraph architecture { a -> b }\n"] {
             let artifact = parse_contents(root, &docs, &path, legacy);
             assert_eq!(artifact.format, None);
-            assert_eq!(artifact.diagnostics[0].code, "unknown-c4-format");
+            assert_eq!(
+                artifact.diagnostics[0].code,
+                DiagnosticCode::UnknownC4Format
+            );
             let exact = artifact.diagnostics[0]
                 .location
                 .as_ref()

@@ -39,6 +39,27 @@ struct PruneReport {
     retained: usize,
 }
 
+/// A snapshot in the local store: the `latest` pointer or a content hash.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum SnapshotId {
+    Latest,
+    Hash(String),
+}
+
+impl std::str::FromStr for SnapshotId {
+    type Err = ();
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        if value == "latest" {
+            Ok(Self::Latest)
+        } else if is_hash_reference(value) {
+            Ok(Self::Hash(value.to_string()))
+        } else {
+            Err(())
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct SnapshotIndex {
     schema: String,
@@ -143,24 +164,21 @@ fn publish_preflighted(
     Ok(())
 }
 
-pub fn load_unlocked(files: &RepositoryFiles, id: &str) -> Result<Option<String>> {
-    let hash = if id == "latest" {
-        read_latest(files)?
-            .ok_or_else(|| CrivError::new("local snapshot `latest` does not resolve"))?
-    } else if is_hash_reference(id) {
-        id.to_string()
-    } else {
-        return Ok(None);
+pub fn load_unlocked(files: &RepositoryFiles, id: &SnapshotId) -> Result<Option<String>> {
+    let hash = match id {
+        SnapshotId::Latest => read_latest(files)?
+            .ok_or_else(|| CrivError::new("local snapshot `latest` does not resolve"))?,
+        SnapshotId::Hash(hash) => hash.clone(),
     };
     let Some(()) = existing_store_dir(files)? else {
-        if id == "latest" {
+        if *id == SnapshotId::Latest {
             return Err(CrivError::new("local snapshot `latest` does not resolve"));
         }
         return Ok(None);
     };
     let path = format!(".criv/snapshots/{hash}.json");
     let Some(contents) = files.read_optional_string(Path::new(&path))? else {
-        if id == "latest" {
+        if *id == SnapshotId::Latest {
             return Err(CrivError::new(format!(
                 "local latest snapshot `{hash}` does not resolve"
             )));
@@ -636,14 +654,15 @@ mod tests {
     #[test]
     fn local_lookup_does_not_claim_git_refs() {
         let root = tempfile::TempDir::new().unwrap();
+        assert!("HEAD".parse::<SnapshotId>().is_err());
         assert_eq!(
-            crate::state::load_snapshot(root.path(), "HEAD").unwrap(),
+            crate::state::load_snapshot(root.path(), &SnapshotId::Hash("abc123".into())).unwrap(),
             None
         );
         let item = state("one");
         publish(root.path(), &item.0, &item.1, 1).unwrap();
         assert_eq!(
-            crate::state::load_snapshot(root.path(), "latest").unwrap(),
+            crate::state::load_snapshot(root.path(), &SnapshotId::Latest).unwrap(),
             Some(item.1)
         );
     }

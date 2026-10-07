@@ -207,7 +207,7 @@ fn set_phase(
     write_record(files, record)
 }
 
-pub fn load_snapshot(root: &Path, id: &str) -> Result<Option<String>> {
+pub fn load_snapshot(root: &Path, id: &snapshots::SnapshotId) -> Result<Option<String>> {
     let files = RepositoryFiles::open(root)?;
     let _lock = PublicationLock::acquire(&files)?;
     recover_locked(&files)?;
@@ -563,7 +563,9 @@ mod tests {
         .unwrap();
         assert!(root.path().join(TRANSACTION_PATH).exists());
 
-        let loaded = load_snapshot(root.path(), "latest").unwrap().unwrap();
+        let loaded = load_snapshot(root.path(), &snapshots::SnapshotId::Latest)
+            .unwrap()
+            .unwrap();
         assert_eq!(loaded, candidate.1);
         assert_eq!(
             fs::read_to_string(root.path().join(".criv/state.json")).unwrap(),
@@ -650,7 +652,9 @@ mod tests {
         }
 
         let state = fs::read_to_string(root.join(".criv/state.json")).unwrap();
-        let latest = load_snapshot(&root, "latest").unwrap().unwrap();
+        let latest = load_snapshot(&root, &snapshots::SnapshotId::Latest)
+            .unwrap()
+            .unwrap();
         assert_eq!(state, latest);
         assert!(!root.join(TRANSACTION_PATH).exists());
     }
@@ -690,7 +694,7 @@ mod tests {
         assert!(root.path().join(TRANSACTION_PATH).exists());
 
         assert_eq!(
-            load_snapshot(root.path(), "latest").unwrap(),
+            load_snapshot(root.path(), &snapshots::SnapshotId::Latest).unwrap(),
             Some(candidate.1)
         );
         assert!(!root.path().join(TRANSACTION_PATH).exists());

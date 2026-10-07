@@ -8,6 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::diagnostic::DiagnosticCode;
 use crate::{CrivError, Result};
 
 #[derive(Clone)]
@@ -41,15 +42,12 @@ impl RepositoryFiles {
         if self.read_optional_string(Path::new("criv.toml"))?.is_some() {
             return Ok(());
         }
-        let fix = crate::diagnostic::fix_for("not-a-vault")
-            .ok_or_else(|| CrivError::new("missing repair for not-a-vault"))?;
-        Err(CrivError::coded_fix(
-            "not-a-vault",
+        Err(CrivError::coded(
+            DiagnosticCode::NotAVault,
             format!(
                 "not a criv vault: no criv.toml in {}",
                 self.root().display()
             ),
-            fix,
         ))
     }
 

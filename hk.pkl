@@ -1,5 +1,14 @@
-amends "package://github.com/jdx/hk/releases/download/v1.45.0/hk@1.45.0#/Config.pkl"
-import "package://github.com/jdx/hk/releases/download/v1.45.0/hk@1.45.0#/Builtins.pkl"
+amends "package://github.com/jdx/hk/releases/download/v2.5.0/hk@2.5.0#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v2.5.0/hk@2.5.0#/Builtins.pkl"
+
+local large_files = (Builtins.check_added_large_files) {
+  // The launch video and its soundtrack are committed on purpose.
+  exclude = List("brag-output/**")
+}
+
+local gitleaks_history = new Step {
+  check = "gitleaks git --redact --no-banner"
+}
 
 local cargo_fmt = (Builtins.cargo_fmt) {
   workspace_indicator = "Cargo.toml"
@@ -106,6 +115,18 @@ local ci_enforce = (enforce_ci) {
   depends = List("criv-check")
 }
 
+// Shared by the check, fix, and pre-commit hooks.
+steps {
+  ["check-merge-conflict"] = Builtins.check_merge_conflict
+  ["check-added-large-files"] = large_files
+  ["detect-private-key"] = Builtins.detect_private_key
+  ["cargo-fmt"] = cargo_fmt
+  ["toml-fmt"] = toml_fmt
+  ["actionlint"] = actionlint
+  ["shellcheck"] = shellcheck
+  ["zizmor"] = zizmor
+}
+
 hooks {
   ["commit-msg"] {
     steps {
@@ -114,14 +135,8 @@ hooks {
   }
 
   ["pre-commit"] {
-    fix = true
-    stash = "git"
     steps {
-      ["cargo-fmt"] = cargo_fmt
-      ["toml-fmt"] = toml_fmt
-      ["actionlint"] = actionlint
-      ["shellcheck"] = shellcheck
-      ["zizmor"] = zizmor
+      ["gitleaks"] = (Builtins.gitleaks) { scan = "staged" }
       ["criv-check"] = staged_docs
       ["vale"] = vale
       ["criv-enforce"] = enforce_commit
@@ -139,12 +154,8 @@ hooks {
 
   ["check"] {
     steps {
-      ["cargo-fmt"] = cargo_fmt
-      ["toml-fmt"] = toml_fmt
+      ["gitleaks"] = gitleaks_history
       ["cargo-clippy"] = ci_cargo_clippy
-      ["actionlint"] = actionlint
-      ["shellcheck"] = shellcheck
-      ["zizmor"] = zizmor
       ["cargo-test"] = cargo_test
       ["hawk"] = hawk
       ["cargo-deny"] = cargo_deny
@@ -154,10 +165,7 @@ hooks {
   }
 
   ["fix"] {
-    fix = true
     steps {
-      ["cargo-fmt"] = cargo_fmt
-      ["toml-fmt"] = toml_fmt
       ["criv-check"] = full_docs
     }
   }

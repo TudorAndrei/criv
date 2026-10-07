@@ -6,70 +6,218 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-pub fn fix_for(code: &str) -> Option<&'static str> {
-    let fix = match code {
-        "adr-dir-non-decision" => {
-            "Set `kind: decision` in the frontmatter, or move the file out of the ADR directory."
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub enum DiagnosticCode {
+    AdrDirNonDecision,
+    AdrFilename,
+    AdrIdExhausted,
+    AdrImmutabilityViolation,
+    AmbiguousPolicyPatternBody,
+    AmbiguousSourceLink,
+    ArchitectureInterfaceDrift,
+    BrokenLink,
+    CheckFailed,
+    DecisionLocation,
+    DuplicateDocPattern,
+    DuplicateId,
+    DuplicatePatternId,
+    DuplicatePolicyPattern,
+    EmptyPolicyPattern,
+    EmptyTargetScope,
+    EnforcementFailed,
+    ImportPolicyViolation,
+    InconsistentSupersession,
+    InvalidAdrId,
+    InvalidC4Generated,
+    InvalidFrontmatter,
+    InvalidKind,
+    InvalidLikeC4,
+    InvalidLikeC4Protocol,
+    InvalidLikeC4Source,
+    InvalidPolicyPattern,
+    LegacySourceTarget,
+    MarkdownFormat,
+    MissingId,
+    MissingLikeC4Runtime,
+    MissingPolicyPatternBody,
+    MissingPolicyPatternDefinition,
+    MissingPolicyPatternId,
+    MissingPolicyPatternLanguage,
+    NonPortableNoteLink,
+    NotAVault,
+    PolicyViolation,
+    SourceWikilink,
+    SupersessionCycle,
+    UnknownC4Format,
+    UnknownSupersededBy,
+    UnknownSupersedes,
+    UnresolvedGoverns,
+    UnresolvedPattern,
+    UnresolvedTarget,
+    VaultOutsideGitRoot,
+}
+
+impl DiagnosticCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AdrDirNonDecision => "adr-dir-non-decision",
+            Self::AdrFilename => "adr-filename",
+            Self::AdrIdExhausted => "adr-id-exhausted",
+            Self::AdrImmutabilityViolation => "adr-immutability-violation",
+            Self::AmbiguousPolicyPatternBody => "ambiguous-policy-pattern-body",
+            Self::AmbiguousSourceLink => "ambiguous-source-link",
+            Self::ArchitectureInterfaceDrift => "architecture-interface-drift",
+            Self::BrokenLink => "broken-link",
+            Self::CheckFailed => "check-failed",
+            Self::DecisionLocation => "decision-location",
+            Self::DuplicateDocPattern => "duplicate-doc-pattern",
+            Self::DuplicateId => "duplicate-id",
+            Self::DuplicatePatternId => "duplicate-pattern-id",
+            Self::DuplicatePolicyPattern => "duplicate-policy-pattern",
+            Self::EmptyPolicyPattern => "empty-policy-pattern",
+            Self::EmptyTargetScope => "empty-target-scope",
+            Self::EnforcementFailed => "enforcement-failed",
+            Self::ImportPolicyViolation => "import-policy-violation",
+            Self::InconsistentSupersession => "inconsistent-supersession",
+            Self::InvalidAdrId => "invalid-adr-id",
+            Self::InvalidC4Generated => "invalid-c4-generated",
+            Self::InvalidFrontmatter => "invalid-frontmatter",
+            Self::InvalidKind => "invalid-kind",
+            Self::InvalidLikeC4 => "invalid-likec4",
+            Self::InvalidLikeC4Protocol => "invalid-likec4-protocol",
+            Self::InvalidLikeC4Source => "invalid-likec4-source",
+            Self::InvalidPolicyPattern => "invalid-policy-pattern",
+            Self::LegacySourceTarget => "legacy-source-target",
+            Self::MarkdownFormat => "markdown-format",
+            Self::MissingId => "missing-id",
+            Self::MissingLikeC4Runtime => "missing-likec4-runtime",
+            Self::MissingPolicyPatternBody => "missing-policy-pattern-body",
+            Self::MissingPolicyPatternDefinition => "missing-policy-pattern-definition",
+            Self::MissingPolicyPatternId => "missing-policy-pattern-id",
+            Self::MissingPolicyPatternLanguage => "missing-policy-pattern-language",
+            Self::NonPortableNoteLink => "non-portable-note-link",
+            Self::NotAVault => "not-a-vault",
+            Self::PolicyViolation => "policy-violation",
+            Self::SourceWikilink => "source-wikilink",
+            Self::SupersessionCycle => "supersession-cycle",
+            Self::UnknownC4Format => "unknown-c4-format",
+            Self::UnknownSupersededBy => "unknown-superseded-by",
+            Self::UnknownSupersedes => "unknown-supersedes",
+            Self::UnresolvedGoverns => "unresolved-governs",
+            Self::UnresolvedPattern => "unresolved-pattern",
+            Self::UnresolvedTarget => "unresolved-target",
+            Self::VaultOutsideGitRoot => "vault-outside-git-root",
         }
-        "adr-filename" => "Rename the file to `NNNN-kebab-title.md`.",
-        "adr-immutability-violation" => {
-            "Restore the accepted ADR, and record the change in a new ADR with `supersedes:`."
-        }
-        "ambiguous-policy-pattern-body" => {
-            "Give the pattern either `pattern` or `rule`, and not both."
-        }
-        "ambiguous-source-link" => {
-            "Name the file in the link, as in `[[src/lib.rs#fn:run]]`, so one source resolves."
-        }
-        "architecture-interface-drift" => {
-            "Run `criv watch --once`, then correct the C4 element so it matches the source."
-        }
-        "broken-link" => "Correct the link target, or add the note it names.",
-        "check-failed" => "Repair the diagnostics above, then run `criv check`.",
-        "decision-location" => "Move the decision into the ADR directory.",
-        "duplicate-doc-pattern" | "duplicate-pattern-id" => "Give each pattern a unique `id`.",
-        "duplicate-id" => "Give the note an `id` no other note uses.",
-        "duplicate-policy-pattern" => "Give each policy pattern in the ADR a unique `id`.",
-        "empty-policy-pattern" => "Give the policy pattern a body, or remove it.",
-        "empty-target-scope" => "Name at least one path or symbol under `targets`.",
-        "enforcement-failed" => "Run `criv check` for the diagnostics, then repair them.",
-        "import-policy-violation" => "Remove the import, or widen the import policy in criv.toml.",
-        "inconsistent-supersession" => {
-            "Make `supersedes` and `superseded_by` agree in both decisions."
-        }
-        "invalid-adr-id" => "Take a free id from `criv query next-adr-id`.",
-        "invalid-frontmatter" => "Correct the YAML frontmatter block.",
-        "invalid-kind" => "Set `kind` to `doc` or to `decision`.",
-        "invalid-likec4-source" => "Correct the LikeC4 source, then run `criv watch --once`.",
-        "invalid-policy-pattern" => "Correct the ast-grep pattern or rule syntax.",
-        "legacy-source-target" | "source-wikilink" => {
-            "Rewrite the target as an AST-aware selector, as in `src/main.rs#fn:run`."
-        }
-        "markdown-format" => "Run `criv check --fix`.",
-        "missing-id" => "Add an `id` to the note frontmatter.",
-        "missing-policy-pattern-body" => "Give the pattern a `pattern` or a `rule`.",
-        "missing-policy-pattern-definition" => {
-            "Declare the pattern in an ADR `policy.patterns` entry."
-        }
-        "missing-policy-pattern-id" => "Give the policy pattern an `id`.",
-        "missing-policy-pattern-language" => "Set `language` on the policy pattern.",
-        "non-portable-note-link" => "Use the portable link form `[[note-id|Text]]`.",
-        "not-a-vault" => "criv init",
-        "policy-violation" => "Change the code, or write a successor ADR that retires the policy.",
-        "supersession-cycle" => "Break the cycle: a decision cannot supersede its own ancestor.",
-        "unknown-superseded-by" | "unknown-supersedes" => {
-            "Name a decision that exists, or add the missing ADR."
-        }
-        "unresolved-governs" => {
-            "Run `criv adr reconcile-sources --base <ref>` for a rename, or add a successor ADR for a deletion."
-        }
-        "unresolved-pattern" => "Correct the pattern reference, or declare the pattern.",
-        "unresolved-target" => {
-            "Correct the target, or run `criv watch --once` to refresh the state."
-        }
-        _ => return None,
-    };
-    Some(fix)
+    }
+
+    pub const fn fix(self) -> Option<&'static str> {
+        let fix = match self {
+            Self::AdrDirNonDecision => {
+                "Set `kind: decision` in the frontmatter, or move the file out of the ADR directory."
+            }
+            Self::AdrFilename => "Rename the file to `NNNN-kebab-title.md`.",
+            Self::AdrImmutabilityViolation => {
+                "Restore the accepted ADR, and record the change in a new ADR with `supersedes:`."
+            }
+            Self::AmbiguousPolicyPatternBody => {
+                "Give the pattern either `pattern` or `rule`, and not both."
+            }
+            Self::AmbiguousSourceLink => {
+                "Name the file in the link, as in `[[src/lib.rs#fn:run]]`, so one source resolves."
+            }
+            Self::ArchitectureInterfaceDrift => {
+                "Run `criv watch --once`, then correct the C4 element so it matches the source."
+            }
+            Self::BrokenLink => "Correct the link target, or add the note it names.",
+            Self::CheckFailed => "Repair the diagnostics above, then run `criv check`.",
+            Self::DecisionLocation => "Move the decision into the ADR directory.",
+            Self::DuplicateDocPattern | Self::DuplicatePatternId => {
+                "Give each pattern a unique `id`."
+            }
+            Self::DuplicateId => "Give the note an `id` no other note uses.",
+            Self::DuplicatePolicyPattern => "Give each policy pattern in the ADR a unique `id`.",
+            Self::EmptyPolicyPattern => "Give the policy pattern a body, or remove it.",
+            Self::EmptyTargetScope => "Name at least one path or symbol under `targets`.",
+            Self::EnforcementFailed => "Run `criv check` for the diagnostics, then repair them.",
+            Self::ImportPolicyViolation => {
+                "Remove the import, or widen the import policy in criv.toml."
+            }
+            Self::InconsistentSupersession => {
+                "Make `supersedes` and `superseded_by` agree in both decisions."
+            }
+            Self::InvalidAdrId => "Take a free id from `criv query next-adr-id`.",
+            Self::InvalidFrontmatter => "Correct the YAML frontmatter block.",
+            Self::InvalidKind => "Set `kind` to `doc` or to `decision`.",
+            Self::InvalidLikeC4Source => "Correct the LikeC4 source, then run `criv watch --once`.",
+            Self::InvalidPolicyPattern => "Correct the ast-grep pattern or rule syntax.",
+            Self::LegacySourceTarget | Self::SourceWikilink => {
+                "Rewrite the target as an AST-aware selector, as in `src/main.rs#fn:run`."
+            }
+            Self::MarkdownFormat => "Run `criv check --fix`.",
+            Self::MissingId => "Add an `id` to the note frontmatter.",
+            Self::MissingPolicyPatternBody => "Give the pattern a `pattern` or a `rule`.",
+            Self::MissingPolicyPatternDefinition => {
+                "Declare the pattern in an ADR `policy.patterns` entry."
+            }
+            Self::MissingPolicyPatternId => "Give the policy pattern an `id`.",
+            Self::MissingPolicyPatternLanguage => "Set `language` on the policy pattern.",
+            Self::NonPortableNoteLink => "Use the portable link form `[[note-id|Text]]`.",
+            Self::NotAVault => "criv init",
+            Self::PolicyViolation => {
+                "Change the code, or write a successor ADR that retires the policy."
+            }
+            Self::SupersessionCycle => {
+                "Break the cycle: a decision cannot supersede its own ancestor."
+            }
+            Self::UnknownSupersededBy | Self::UnknownSupersedes => {
+                "Name a decision that exists, or add the missing ADR."
+            }
+            Self::UnresolvedGoverns => {
+                "Run `criv adr reconcile-sources --base <ref>` for a rename, or add a successor ADR for a deletion."
+            }
+            Self::UnresolvedPattern => "Correct the pattern reference, or declare the pattern.",
+            Self::UnresolvedTarget => {
+                "Correct the target, or run `criv watch --once` to refresh the state."
+            }
+            Self::AdrIdExhausted => {
+                "Retire or renumber the highest ADR ids, or widen the id format in a new ADR."
+            }
+            Self::VaultOutsideGitRoot => {
+                "Run criv from the worktree root, or make the vault its own repository."
+            }
+            Self::InvalidC4Generated
+            | Self::InvalidLikeC4
+            | Self::InvalidLikeC4Protocol
+            | Self::MissingLikeC4Runtime
+            | Self::UnknownC4Format => return None,
+        };
+        Some(fix)
+    }
+}
+
+impl std::fmt::Display for DiagnosticCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl Serialize for DiagnosticCode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+// Output sorts diagnostics by the code text, not by declaration order.
+impl Ord for DiagnosticCode {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.as_str().cmp(other.as_str())
+    }
+}
+
+impl PartialOrd for DiagnosticCode {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]

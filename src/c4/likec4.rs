@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde::Deserialize;
 use wait_timeout::ChildExt;
 
-use crate::diagnostic::{LspRange, SourceLocation};
+use crate::diagnostic::{DiagnosticCode, LspRange, SourceLocation};
 
 const BRIDGE_SOURCE_TEMPLATE: &str = include_str!("../../assets/likec4-bridge.mjs");
 const BRIDGE_TIMEOUT: Duration = Duration::from_mins(1);
@@ -36,11 +36,11 @@ pub enum LikeC4DiagnosticKind {
 }
 
 impl LikeC4DiagnosticKind {
-    pub(crate) const fn code(self) -> &'static str {
+    pub(crate) const fn code(self) -> DiagnosticCode {
         match self {
-            Self::Model => "invalid-likec4",
-            Self::Runtime => "missing-likec4-runtime",
-            Self::Protocol => "invalid-likec4-protocol",
+            Self::Model => DiagnosticCode::InvalidLikeC4,
+            Self::Runtime => DiagnosticCode::MissingLikeC4Runtime,
+            Self::Protocol => DiagnosticCode::InvalidLikeC4Protocol,
         }
     }
 }

@@ -78,21 +78,120 @@ pub struct Node {
     pub id: String,
     #[serde(default)]
     pub hash: String,
-    #[serde(default)]
-    pub kind: String,
+    pub kind: NodeKind,
     #[serde(default)]
     pub label: String,
     #[serde(default)]
     pub path: Option<String>,
 }
 
+/// Kind of a graph node. Serde and `as_str` share one kebab-case spelling.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Deserialize,
+    Serialize,
+    strum::Display,
+    strum::IntoStaticStr,
+)]
+#[cfg_attr(test, derive(strum::EnumIter))]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
+pub enum NodeKind {
+    Alias,
+    ArchitectureElement,
+    ArchitectureInterface,
+    ArchitectureSource,
+    ArchitectureWorkspace,
+    Behaviour,
+    Callback,
+    Class,
+    Code,
+    Decision,
+    Doc,
+    DocHeading,
+    DynamicCall,
+    Exception,
+    ExternalCall,
+    ExternalModule,
+    Function,
+    Guard,
+    Implementation,
+    Import,
+    Macro,
+    MacroCallback,
+    Method,
+    Module,
+    Pattern,
+    Protocol,
+    Require,
+    Struct,
+    Use,
+}
+
+impl NodeKind {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Edge {
     pub from: String,
     pub to: String,
-    pub kind: String,
+    pub kind: EdgeKind,
     #[serde(default)]
     pub hash: String,
+}
+
+/// Kind of a graph edge. Serde and `as_str` share one kebab-case spelling.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Deserialize,
+    Serialize,
+    strum::Display,
+    strum::IntoStaticStr,
+)]
+#[cfg_attr(test, derive(strum::EnumIter))]
+#[serde(rename_all = "kebab-case")]
+#[strum(serialize_all = "kebab-case")]
+pub enum EdgeKind {
+    Calls,
+    Captures,
+    Cites,
+    Contains,
+    Delegates,
+    Governs,
+    ImplementsBehaviour,
+    ImplementsFor,
+    ImplementsProtocol,
+    Imports,
+    ProtocolImplementation,
+    References,
+    Relates,
+    Supersedes,
+    TracksInterface,
+}
+
+impl EdgeKind {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
@@ -131,14 +230,14 @@ mod tests {
                 nodes: vec![Node {
                     id: "code:src/lib.rs".into(),
                     hash: "node-hash".into(),
-                    kind: "code".into(),
+                    kind: NodeKind::Code,
                     label: "src/lib.rs (rust)".into(),
                     path: Some("src/lib.rs".into()),
                 }],
                 edges: vec![Edge {
                     from: "code:src/lib.rs".into(),
                     to: "symbol:src/lib.rs#fn:run".into(),
-                    kind: "contains".into(),
+                    kind: EdgeKind::Contains,
                     hash: "edge-hash".into(),
                 }],
             },
@@ -178,6 +277,34 @@ mod tests {
             decoded.patterns["ADR-0001/entrypoint"][0].file,
             "src/lib.rs"
         );
+    }
+
+    #[test]
+    fn kind_hash_names_match_wire_names() {
+        use strum::IntoEnumIterator;
+
+        for kind in NodeKind::iter() {
+            assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
+        }
+        for kind in EdgeKind::iter() {
+            assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
+        }
+    }
+
+    #[test]
+    fn kinds_sort_like_their_wire_names() {
+        use strum::IntoEnumIterator;
+
+        for left in NodeKind::iter() {
+            for right in NodeKind::iter() {
+                assert_eq!(left.cmp(&right), left.as_str().cmp(right.as_str()));
+            }
+        }
+        for left in EdgeKind::iter() {
+            for right in EdgeKind::iter() {
+                assert_eq!(left.cmp(&right), left.as_str().cmp(right.as_str()));
+            }
+        }
     }
 
     #[test]

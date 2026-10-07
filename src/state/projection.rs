@@ -1,76 +1,84 @@
 use super::{
-    BTreeSet, C4Artifact, Graph, ModuleRelationshipRole, Node, Note, NoteKind,
-    PartitionDependencies, PartitionKey, Relationship, RelationshipKind, RelationshipTarget,
-    ResolvedLink, RowPartition, SourceFile, SourcePartition, SourceTargetResolution, Symbol, Vault,
-    add_edge, add_node, c4_artifact_input_fingerprint, c4_artifact_node_id, code_node_id,
-    directive_node_id, external_call_node_id, external_module_node_id, graph_root, graph_rows,
-    interface_anchor_hash, likec4_element_node_id, likec4_interface_node_id, model_array,
-    note_input_fingerprint, note_node_id, partition_meta, pattern_node_id, relationship_endpoint,
-    source_input_fingerprint, symbol_label, symbol_node_id,
+    C4Artifact, DirectiveKind, EdgeKind, Graph, GraphBuilder, ModuleRelationshipRole, NodeKind,
+    Note, NoteKind, PartitionDependencies, PartitionKey, Relationship, RelationshipKind,
+    RelationshipTarget, ResolvedLink, RowPartition, SourceFile, SourcePartition,
+    SourceTargetResolution, Symbol, Vault, c4_artifact_input_fingerprint, c4_artifact_node_id,
+    code_node_id, directive_node_id, external_call_node_id, external_module_node_id, graph_root,
+    graph_rows, hashed_node, interface_anchor_hash, likec4_element_node_id,
+    likec4_interface_node_id, model_array, note_input_fingerprint, note_node_id, partition_meta,
+    pattern_node_id, relationship_endpoint, source_input_fingerprint, symbol_label, symbol_node_id,
 };
+use crate::source::SymbolKind;
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "source partition building preserves graph insertion order and dependencies together"
-)]
+impl From<DirectiveKind> for NodeKind {
+    fn from(kind: DirectiveKind) -> Self {
+        match kind {
+            DirectiveKind::Alias => Self::Alias,
+            DirectiveKind::Import | DirectiveKind::Legacy => Self::Import,
+            DirectiveKind::Require => Self::Require,
+            DirectiveKind::Use => Self::Use,
+        }
+    }
+}
+
+impl From<SymbolKind> for NodeKind {
+    fn from(kind: SymbolKind) -> Self {
+        match kind {
+            SymbolKind::Function => Self::Function,
+            SymbolKind::Method => Self::Method,
+            SymbolKind::Class => Self::Class,
+            SymbolKind::Module => Self::Module,
+            SymbolKind::Protocol => Self::Protocol,
+            SymbolKind::Implementation => Self::Implementation,
+            SymbolKind::Struct => Self::Struct,
+            SymbolKind::Exception => Self::Exception,
+            SymbolKind::Behaviour => Self::Behaviour,
+            SymbolKind::Macro => Self::Macro,
+            SymbolKind::Guard => Self::Guard,
+            SymbolKind::Callback => Self::Callback,
+            SymbolKind::MacroCallback => Self::MacroCallback,
+        }
+    }
+}
+
 pub(super) fn build_source_partition(vault: &Vault, file: &SourceFile) -> SourcePartition {
-    let mut graph = Graph::default();
-    let mut seen_nodes = BTreeSet::new();
-    let mut seen_edges = BTreeSet::new();
+    let mut graph = GraphBuilder::default();
     let mut dependencies = PartitionDependencies::default();
     let file_id = code_node_id(&file.path);
 
     for import in &file.imports {
         let import_id = directive_node_id(file, import);
-        add_node(
-            &mut graph,
-            &mut seen_nodes,
-            Node {
-                id: import_id.clone(),
-                hash: String::new(),
-                kind: import.kind.as_str().into(),
-                label: import.module.clone(),
-                path: Some(format!("{}#L{}", file.path, import.line)),
-            },
+        graph.node(
+            import_id.clone(),
+            import.kind.into(),
+            import.module.clone(),
+            Some(format!("{}#L{}", file.path, import.line)),
         );
-        add_edge(&mut graph, &mut seen_edges, &file_id, &import_id, "imports");
+        graph.edge(&file_id, &import_id, EdgeKind::Imports);
     }
 
     for symbol in &file.symbols {
         dependencies.defined_symbols.insert(symbol.name.clone());
         let symbol_id = symbol_node_id(&symbol.id.display());
-        add_node(
-            &mut graph,
-            &mut seen_nodes,
-            Node {
-                id: symbol_id.clone(),
-                hash: String::new(),
-                kind: symbol.kind.as_str().into(),
-                label: symbol_label(symbol),
-                path: Some(format!(
-                    "{}#L{}-L{}",
-                    symbol.id.path, symbol.range.start_line, symbol.range.end_line
-                )),
-            },
+        graph.node(
+            symbol_id.clone(),
+            symbol.kind.into(),
+            symbol_label(symbol),
+            Some(format!(
+                "{}#L{}-L{}",
+                symbol.id.path, symbol.range.start_line, symbol.range.end_line
+            )),
         );
-        add_edge(
-            &mut graph,
-            &mut seen_edges,
-            &file_id,
-            &symbol_id,
-            "contains",
-        );
+        graph.edge(&file_id, &symbol_id, EdgeKind::Contains);
         if let Some(parent) = &symbol.parent
             && let Some(parent_id) = vault
                 .source_graph()
                 .resolve_symbol(&format!("{}#{}", symbol.id.path, parent))
         {
-            add_edge(
-                &mut graph,
-                &mut seen_edges,
+            graph.edge(
                 &symbol_node_id(&parent_id.display()),
                 &symbol_id,
-                "contains",
+                EdgeKind::Contains,
             );
         }
         if let Some(owner) = &symbol.owner
@@ -80,12 +88,10 @@ pub(super) fn build_source_partition(vault: &Vault, file: &SourceFile) -> Source
                     && candidate.owner.as_ref() == Some(owner)
             })
         {
-            add_edge(
-                &mut graph,
-                &mut seen_edges,
+            graph.edge(
                 &symbol_node_id(&parent.id.display()),
                 &symbol_id,
-                "contains",
+                EdgeKind::Contains,
             );
         }
         for call in &symbol.calls {
@@ -99,30 +105,17 @@ pub(super) fn build_source_partition(vault: &Vault, file: &SourceFile) -> Source
                 |target| symbol_node_id(&target.display()),
             );
             if target.starts_with("external-call:") {
-                add_node(
-                    &mut graph,
-                    &mut seen_nodes,
-                    Node {
-                        id: target.clone(),
-                        hash: String::new(),
-                        kind: "external-call".into(),
-                        label: call.target.clone(),
-                        path: Some(format!("{}#L{}", symbol.id.path, call.line)),
-                    },
+                graph.node(
+                    target.clone(),
+                    NodeKind::ExternalCall,
+                    call.target.clone(),
+                    Some(format!("{}#L{}", symbol.id.path, call.line)),
                 );
             }
-            add_edge(&mut graph, &mut seen_edges, &symbol_id, &target, "calls");
+            graph.edge(&symbol_id, &target, EdgeKind::Calls);
         }
         for relationship in &symbol.relationships {
-            project_relationship(
-                vault,
-                &mut graph,
-                &mut seen_nodes,
-                &mut seen_edges,
-                &mut dependencies,
-                symbol,
-                relationship,
-            );
+            project_relationship(vault, &mut graph, &mut dependencies, symbol, relationship);
         }
     }
 
@@ -132,22 +125,19 @@ pub(super) fn build_source_partition(vault: &Vault, file: &SourceFile) -> Source
             source_input_fingerprint(file),
             dependencies,
         ),
-        code_node: Node {
-            id: file_id,
-            hash: String::new(),
-            kind: "code".into(),
-            label: format!("{} ({})", file.path, file.language.as_str()),
-            path: Some(file.path.clone()),
-        },
-        rows: graph_rows(graph),
+        code_node: hashed_node(
+            file_id,
+            NodeKind::Code,
+            format!("{} ({})", file.path, file.language.as_str()),
+            Some(file.path.clone()),
+        ),
+        rows: graph_rows(graph.finish()),
     }
 }
 
 fn project_relationship(
     vault: &Vault,
-    graph: &mut Graph,
-    seen_nodes: &mut BTreeSet<String>,
-    seen_edges: &mut BTreeSet<String>,
+    graph: &mut GraphBuilder,
     dependencies: &mut PartitionDependencies,
     symbol: &Symbol,
     relationship: &Relationship,
@@ -176,21 +166,14 @@ fn project_relationship(
         |target| symbol_node_id(&target.display()),
     );
     if resolved.is_none() {
-        add_node(
-            graph,
-            seen_nodes,
-            Node {
-                id: target.clone(),
-                hash: String::new(),
-                kind: relationship_target_node_kind(relationship).into(),
-                label,
-                path: Some(format!("{}#L{}", symbol.id.path, relationship.line)),
-            },
+        graph.node(
+            target.clone(),
+            relationship_target_node_kind(relationship),
+            label,
+            Some(format!("{}#L{}", symbol.id.path, relationship.line)),
         );
     }
-    add_edge(
-        graph,
-        seen_edges,
+    graph.edge(
         &symbol_node_id(&symbol.id.display()),
         &target,
         relationship_edge_kind(relationship),
@@ -205,69 +188,57 @@ fn relationship_target_node_id(relationship: &Relationship, label: &str) -> Stri
     }
 }
 
-const fn relationship_target_node_kind(relationship: &Relationship) -> &'static str {
+const fn relationship_target_node_kind(relationship: &Relationship) -> NodeKind {
     match &relationship.target {
-        RelationshipTarget::Dynamic { .. } => "dynamic-call",
-        RelationshipTarget::Callable { .. } => "external-call",
-        RelationshipTarget::Module { .. } => "external-module",
+        RelationshipTarget::Dynamic { .. } => NodeKind::DynamicCall,
+        RelationshipTarget::Callable { .. } => NodeKind::ExternalCall,
+        RelationshipTarget::Module { .. } => NodeKind::ExternalModule,
     }
 }
 
-const fn relationship_edge_kind(relationship: &Relationship) -> &'static str {
+const fn relationship_edge_kind(relationship: &Relationship) -> EdgeKind {
     match (&relationship.kind, &relationship.target) {
-        (RelationshipKind::Call, _) => "calls",
-        (RelationshipKind::Capture, _) => "captures",
-        (RelationshipKind::Delegate, _) => "delegates",
+        (RelationshipKind::Call, _) => EdgeKind::Calls,
+        (RelationshipKind::Capture, _) => EdgeKind::Captures,
+        (RelationshipKind::Delegate, _) => EdgeKind::Delegates,
         (
             RelationshipKind::ProtocolImplementation,
             RelationshipTarget::Module {
                 role: ModuleRelationshipRole::Protocol,
                 ..
             },
-        ) => "implements-protocol",
+        ) => EdgeKind::ImplementsProtocol,
         (
             RelationshipKind::ProtocolImplementation,
             RelationshipTarget::Module {
                 role: ModuleRelationshipRole::ForType,
                 ..
             },
-        ) => "implements-for",
-        (RelationshipKind::BehaviourImplementation, _) => "implements-behaviour",
-        _ => relationship.kind.as_str(),
+        ) => EdgeKind::ImplementsFor,
+        (RelationshipKind::BehaviourImplementation, _) => EdgeKind::ImplementsBehaviour,
+        (RelationshipKind::ProtocolImplementation, _) => EdgeKind::ProtocolImplementation,
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "note partition building keeps graph and dependency construction synchronized"
-)]
 pub(super) fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
-    let mut graph = Graph::default();
-    let mut seen_nodes = BTreeSet::new();
-    let mut seen_edges = BTreeSet::new();
+    let mut graph = GraphBuilder::default();
     let mut dependencies = PartitionDependencies {
         note_catalog_sensitive: !note.wiki_links.is_empty(),
         policy_sensitive: note.kind == NoteKind::Decision,
         ..PartitionDependencies::default()
     };
     let kind = match note.kind {
-        NoteKind::Decision => "decision",
-        NoteKind::Doc | NoteKind::Unknown => "doc",
+        NoteKind::Decision => NodeKind::Decision,
+        NoteKind::Doc | NoteKind::Unknown => NodeKind::Doc,
     };
     let note_id = note_node_id(note.display_id());
-    add_node(
-        &mut graph,
-        &mut seen_nodes,
-        Node {
-            id: note_id.clone(),
-            hash: String::new(),
-            kind: kind.into(),
-            label: note
-                .title
-                .clone()
-                .unwrap_or_else(|| note.display_id().to_string()),
-            path: Some(note.rel_path.clone()),
-        },
+    graph.node(
+        note_id.clone(),
+        kind,
+        note.title
+            .clone()
+            .unwrap_or_else(|| note.display_id().to_string()),
+        Some(note.rel_path.clone()),
     );
 
     for target in &note.targets_symbols {
@@ -275,13 +246,7 @@ pub(super) fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
         match vault.resolve_source_target(target) {
             SourceTargetResolution::Resolved { path, .. } => {
                 dependencies.source_content_paths.insert(path.clone());
-                add_edge(
-                    &mut graph,
-                    &mut seen_edges,
-                    &note_id,
-                    &code_node_id(&path),
-                    "references",
-                );
+                graph.edge(&note_id, &code_node_id(&path), EdgeKind::References);
             }
             SourceTargetResolution::MissingFragment { path } => {
                 dependencies.source_content_paths.insert(path);
@@ -292,27 +257,16 @@ pub(super) fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
 
     for heading in &note.headings {
         let heading_id = format!("{note_id}#{}", crate::identity::kebab(&heading.text));
-        add_node(
-            &mut graph,
-            &mut seen_nodes,
-            Node {
-                id: heading_id.clone(),
-                hash: String::new(),
-                kind: "doc-heading".into(),
-                label: heading.text.clone(),
-                path: Some(format!(
-                    "{}#L{}:H{}",
-                    note.rel_path, heading.line, heading.level
-                )),
-            },
+        graph.node(
+            heading_id.clone(),
+            NodeKind::DocHeading,
+            heading.text.clone(),
+            Some(format!(
+                "{}#L{}:H{}",
+                note.rel_path, heading.line, heading.level
+            )),
         );
-        add_edge(
-            &mut graph,
-            &mut seen_edges,
-            &note_id,
-            &heading_id,
-            "contains",
-        );
+        graph.edge(&note_id, &heading_id, EdgeKind::Contains);
     }
 
     let governs = Vault::effective_governs(note);
@@ -320,70 +274,30 @@ pub(super) fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
         dependencies.catalog_sensitive = true;
     }
     for source_file in vault.source_files_matching_globs(&governs) {
-        add_edge(
-            &mut graph,
-            &mut seen_edges,
-            &note_id,
-            &code_node_id(&source_file),
-            "governs",
-        );
+        graph.edge(&note_id, &code_node_id(&source_file), EdgeKind::Governs);
     }
 
     for superseded in &note.supersedes {
-        add_edge(
-            &mut graph,
-            &mut seen_edges,
-            &note_id,
-            &note_node_id(superseded),
-            "supersedes",
-        );
+        graph.edge(&note_id, &note_node_id(superseded), EdgeKind::Supersedes);
     }
 
     for link in &note.wiki_links {
         match vault.resolve_link(&link.target) {
             ResolvedLink::Note { id } => {
-                add_edge(
-                    &mut graph,
-                    &mut seen_edges,
-                    &note_id,
-                    &note_node_id(&id),
-                    "cites",
-                );
+                graph.edge(&note_id, &note_node_id(&id), EdgeKind::Cites);
             }
             ResolvedLink::Source { path, .. } => {
                 dependencies.catalog_sensitive = true;
                 if crate::vault::source_fragment_name(&link.target).is_some() {
                     dependencies.source_content_paths.insert(path.clone());
                 }
-                add_edge(
-                    &mut graph,
-                    &mut seen_edges,
-                    &note_id,
-                    &code_node_id(&path),
-                    "references",
-                );
+                graph.edge(&note_id, &code_node_id(&path), EdgeKind::References);
             }
             ResolvedLink::Pattern { id } => {
                 dependencies.policy_sensitive = true;
                 let pattern_id = pattern_node_id(&id);
-                add_node(
-                    &mut graph,
-                    &mut seen_nodes,
-                    Node {
-                        id: pattern_id.clone(),
-                        hash: String::new(),
-                        kind: "pattern".into(),
-                        label: id,
-                        path: None,
-                    },
-                );
-                add_edge(
-                    &mut graph,
-                    &mut seen_edges,
-                    &note_id,
-                    &pattern_id,
-                    "references",
-                );
+                graph.node(pattern_id.clone(), NodeKind::Pattern, id, None);
+                graph.edge(&note_id, &pattern_id, EdgeKind::References);
             }
             ResolvedLink::Broken => {
                 dependencies.catalog_sensitive = true;
@@ -396,7 +310,7 @@ pub(super) fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
         }
     }
 
-    collect_graph_source_dependencies(&graph, &mut dependencies);
+    collect_graph_source_dependencies(graph.graph(), &mut dependencies);
 
     RowPartition {
         meta: partition_meta(
@@ -404,24 +318,17 @@ pub(super) fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
             note_input_fingerprint(note),
             dependencies,
         ),
-        rows: graph_rows(graph),
+        rows: graph_rows(graph.finish()),
     }
 }
 
 pub(super) fn build_c4_artifact_partition(artifact: &C4Artifact) -> RowPartition {
-    let mut graph = Graph::default();
-    let mut seen_nodes = BTreeSet::new();
-    let artifact_id = c4_artifact_node_id(&artifact.rel_path);
-    add_node(
-        &mut graph,
-        &mut seen_nodes,
-        Node {
-            id: artifact_id,
-            hash: String::new(),
-            kind: "architecture-source".into(),
-            label: artifact.rel_path.clone(),
-            path: Some(artifact.rel_path.clone()),
-        },
+    let mut graph = GraphBuilder::default();
+    graph.node(
+        c4_artifact_node_id(&artifact.rel_path),
+        NodeKind::ArchitectureSource,
+        artifact.rel_path.clone(),
+        Some(artifact.rel_path.clone()),
     );
     RowPartition {
         meta: partition_meta(
@@ -429,13 +336,13 @@ pub(super) fn build_c4_artifact_partition(artifact: &C4Artifact) -> RowPartition
             c4_artifact_input_fingerprint(artifact),
             PartitionDependencies::default(),
         ),
-        rows: graph_rows(graph),
+        rows: graph_rows(graph.finish()),
     }
 }
 
 fn collect_graph_source_dependencies(graph: &Graph, dependencies: &mut PartitionDependencies) {
     for node in &graph.nodes {
-        if node.kind == "architecture-interface"
+        if node.kind == NodeKind::ArchitectureInterface
             && let Some(path) = node
                 .path
                 .as_deref()
@@ -446,36 +353,14 @@ fn collect_graph_source_dependencies(graph: &Graph, dependencies: &mut Partition
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "LikeC4 model projection maintains its recursive graph conversion in one place"
-)]
-pub(super) fn add_likec4_model_to_graph(
-    graph: &mut Graph,
-    vault: &Vault,
-    model: &serde_json::Value,
-) {
-    let mut seen_nodes = graph
-        .nodes
-        .iter()
-        .map(|node| node.id.clone())
-        .collect::<BTreeSet<_>>();
-    let mut seen_edges = graph
-        .edges
-        .iter()
-        .map(|edge| format!("{}\0{}\0{}", edge.from, edge.to, edge.kind))
-        .collect::<BTreeSet<_>>();
+pub(super) fn with_likec4_model(graph: Graph, vault: &Vault, model: &serde_json::Value) -> Graph {
+    let mut graph = GraphBuilder::extending(graph);
     let workspace_id = "architecture:likec4";
-    add_node(
-        graph,
-        &mut seen_nodes,
-        Node {
-            id: workspace_id.into(),
-            hash: String::new(),
-            kind: "architecture-workspace".into(),
-            label: "LikeC4 architecture".into(),
-            path: Some(vault.likec4_workspace.path.clone()),
-        },
+    graph.node(
+        workspace_id.into(),
+        NodeKind::ArchitectureWorkspace,
+        "LikeC4 architecture".into(),
+        Some(vault.likec4_workspace.path.clone()),
     );
 
     for element in model_array(model, "elements") {
@@ -483,28 +368,17 @@ pub(super) fn add_likec4_model_to_graph(
             continue;
         };
         let element_id = likec4_element_node_id(id);
-        add_node(
-            graph,
-            &mut seen_nodes,
-            Node {
-                id: element_id.clone(),
-                hash: String::new(),
-                kind: "architecture-element".into(),
-                label: element
-                    .get("title")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or(id)
-                    .to_string(),
-                path: Some(vault.likec4_workspace.path.clone()),
-            },
+        graph.node(
+            element_id.clone(),
+            NodeKind::ArchitectureElement,
+            element
+                .get("title")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(id)
+                .to_string(),
+            Some(vault.likec4_workspace.path.clone()),
         );
-        add_edge(
-            graph,
-            &mut seen_edges,
-            workspace_id,
-            &element_id,
-            "contains",
-        );
+        graph.edge(workspace_id, &element_id, EdgeKind::Contains);
     }
 
     for relationship in model_array(model, "relationships") {
@@ -514,12 +388,10 @@ pub(super) fn add_likec4_model_to_graph(
         let Some(target) = relationship_endpoint(relationship, "target") else {
             continue;
         };
-        add_edge(
-            graph,
-            &mut seen_edges,
+        graph.edge(
             &likec4_element_node_id(source),
             &likec4_element_node_id(target),
-            "relates",
+            EdgeKind::Relates,
         );
     }
 
@@ -535,39 +407,24 @@ pub(super) fn add_likec4_model_to_graph(
             continue;
         };
         let element_id = likec4_element_node_id(element);
-        add_edge(
-            graph,
-            &mut seen_edges,
-            &element_id,
-            &code_node_id(&path),
-            "references",
-        );
+        graph.edge(&element_id, &code_node_id(&path), EdgeKind::References);
         if let Some((target, interface_hash)) = interface_anchor_hash(vault, target, &path) {
             let interface_id = likec4_interface_node_id(element);
-            add_node(
-                graph,
-                &mut seen_nodes,
-                Node {
-                    id: interface_id.clone(),
-                    hash: String::new(),
-                    kind: "architecture-interface".into(),
-                    label: interface_hash,
-                    path: Some(target),
-                },
+            graph.node(
+                interface_id.clone(),
+                NodeKind::ArchitectureInterface,
+                interface_hash,
+                Some(target),
             );
-            add_edge(
-                graph,
-                &mut seen_edges,
-                &element_id,
-                &interface_id,
-                "tracks-interface",
-            );
+            graph.edge(&element_id, &interface_id, EdgeKind::TracksInterface);
         }
     }
 
+    let mut graph = graph.finish();
     graph.nodes.sort_by(|left, right| left.id.cmp(&right.id));
     graph.edges.sort_by(|left, right| {
         (&left.from, &left.to, &left.kind).cmp(&(&right.from, &right.to, &right.kind))
     });
-    graph.root = graph_root(graph);
+    graph.root = graph_root(&graph);
+    graph
 }
