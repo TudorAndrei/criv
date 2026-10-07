@@ -485,6 +485,46 @@ mod tests {
         assert_eq!(symbol.to_string(), "src/views.ts#type:A/member:render");
     }
 
+    fn elixir_owner() -> impl proptest::strategy::Strategy<Value = ElixirOwner> {
+        use proptest::prelude::*;
+        prop_oneof![
+            ".+".prop_map(ElixirOwner::module),
+            (".+", ".+")
+                .prop_map(|(protocol, for_type)| ElixirOwner::implementation(protocol, for_type)),
+        ]
+    }
+
+    fn elixir_selector() -> impl proptest::strategy::Strategy<Value = ElixirSelector> {
+        use proptest::prelude::*;
+        let kind = prop_oneof![
+            Just(ElixirCallableKind::Function),
+            Just(ElixirCallableKind::Macro),
+            Just(ElixirCallableKind::Guard),
+            Just(ElixirCallableKind::Callback),
+            Just(ElixirCallableKind::MacroCallback),
+        ];
+        prop_oneof![
+            elixir_owner().prop_map(ElixirSelector::owner),
+            (elixir_owner(), kind, ".+", any::<usize>()).prop_map(|(owner, kind, name, arity)| {
+                ElixirSelector::callable(owner, kind, name, arity)
+            }),
+        ]
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn structured_elixir_selectors_round_trip(selector in elixir_selector()) {
+            let identity = SourceIdentity::symbol("lib/a.ex", SourceSelector::elixir(selector));
+            proptest::prop_assert_eq!(SourceIdentity::parse(&identity.to_string()), identity);
+        }
+
+        #[test]
+        fn parsed_identity_text_round_trips(text in r"(?s)(.|#|/|%|:|module:|impl:|/for:|fn:){0,60}") {
+            let identity = SourceIdentity::parse(&text);
+            proptest::prop_assert_eq!(SourceIdentity::parse(&identity.to_string()), identity);
+        }
+    }
+
     #[test]
     fn exposes_structured_elixir_parts() {
         let identity =

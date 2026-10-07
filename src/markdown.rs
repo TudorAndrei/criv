@@ -136,4 +136,18 @@ mod tests {
         let links = find_wiki_links_with_lines("`[[example]]`\n[[real]]\n```\n[[fenced]]\n```");
         assert_eq!(links, vec![(2, "real".into(), 14..22)]);
     }
+
+    proptest::proptest! {
+        #[test]
+        fn wiki_link_ranges_slice_back_to_their_links(
+            markdown in r"(?s)([a-z\[\]`|#\n\r ]|é|中|\u{1F600}){0,200}"
+        ) {
+            for (line, link, range) in find_wiki_links_with_lines(&markdown) {
+                let expected = format!("[[{link}]]");
+                proptest::prop_assert_eq!(markdown.get(range.clone()), Some(expected.as_str()));
+                let newlines_before = markdown.get(..range.start).map(|prefix| prefix.matches('\n').count());
+                proptest::prop_assert_eq!(Some(line), newlines_before.and_then(|count| count.checked_add(1)));
+            }
+        }
+    }
 }
