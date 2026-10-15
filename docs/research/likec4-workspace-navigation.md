@@ -23,7 +23,7 @@ Criv must also connect LikeC4's `onNavigateTo` event to its selected view. The
 current criv renderer does not do this. Moving files will make each opened file
 more useful, but moving files alone will not enable diagram navigation.
 
-This research applies to LikeC4 1.59.2, which criv pins. The reviewed official
+This research was conducted against LikeC4 1.59.2. The reviewed official
 source is commit
 [`67b696e77ef8f97f43e435819a019ff8cc637cec`](https://github.com/likec4/likec4/tree/67b696e77ef8f97f43e435819a019ff8cc637cec).
 

@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use usage::Cli;
+use usage_rs::Cli;
 
 const RUN_SCHEMA: &str = "criv.performance-run.v2";
 const SUMMARY_SCHEMA: &str = "criv.performance-summary.v2";

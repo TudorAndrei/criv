@@ -21,7 +21,7 @@ use std::process::Command;
 use generate::{append_source_revision, generate};
 use manifest::LoadedManifest;
 use serde::Serialize;
-use usage::Cli;
+use usage_rs::Cli;
 
 const OUTPUT_SCHEMA: &str = "criv.state-storage-fixtures.v1";
 

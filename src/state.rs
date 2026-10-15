@@ -242,7 +242,7 @@ impl State {
                     .likec4_workspace
                     .version
                     .clone()
-                    .unwrap_or_else(|| "1.59.2".into()),
+                    .unwrap_or_else(|| "1.60.0".into()),
                 revision: 0,
                 workspace: vault.likec4_workspace.path.clone(),
                 model,

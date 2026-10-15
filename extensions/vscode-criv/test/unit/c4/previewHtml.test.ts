@@ -13,7 +13,7 @@ test("builds a local LikeC4 webview with a strict default CSP", () => {
       viewId: "index",
       model: {
         protocolVersion: 1,
-        likec4Version: "1.59.2",
+        likec4Version: "1.60.0",
         workspace: "docs/architecture",
         model: {},
         views: [],

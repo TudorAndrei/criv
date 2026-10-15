@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use serde::Deserialize;
-use usage::{Args as UsageArgs, Subcommands, ValueEnum};
+use usage_rs::{Args as UsageArgs, Subcommands, ValueEnum};
 
 use crate::diagnostic::DiagnosticCode;
 use crate::repository::RepositoryFiles;

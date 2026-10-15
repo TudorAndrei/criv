@@ -10,7 +10,7 @@ use notify_debouncer_mini::{
     notify::{RecommendedWatcher, RecursiveMode},
 };
 use serde::Serialize;
-use usage::{Args as UsageArgs, ValueEnum};
+use usage_rs::{Args as UsageArgs, ValueEnum};
 
 use crate::config::Config;
 use crate::discovery::SourceEventFilter;

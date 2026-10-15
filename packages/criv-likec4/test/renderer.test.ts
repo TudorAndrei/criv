@@ -12,7 +12,7 @@ import {
 
 const model: CrivLikeC4Model = {
   protocolVersion: 1,
-  likec4Version: "1.59.2",
+  likec4Version: "1.60.0",
   workspace: "docs/architecture",
   model: {
     _stage: "layouted",

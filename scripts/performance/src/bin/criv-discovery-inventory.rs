@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::Serialize;
-use usage::Cli;
+use usage_rs::Cli;
 
 const INVENTORY_SCHEMA: &str = "criv.discovery-inventory.v1";
 

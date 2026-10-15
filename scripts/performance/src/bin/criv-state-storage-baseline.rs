@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use criv_state_wire::STATE_SCHEMA;
 use serde::Serialize;
-use usage::Cli;
+use usage_rs::Cli;
 
 const OUTPUT_SCHEMA: &str = "criv.state-storage-baseline.v1";
 

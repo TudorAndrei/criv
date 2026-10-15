@@ -433,7 +433,7 @@ mod tests {
         assert!(source.contains(&format!("protocolVersion: {}", contract.protocol)));
         assert!(!source.contains("__CRIV_LIKEC4_PROTOCOL_VERSION__"));
         assert_eq!(contract.node, "26.5.1");
-        assert_eq!(contract.likec4, "1.59.2");
+        assert_eq!(contract.likec4, "1.60.0");
     }
 
     #[test]

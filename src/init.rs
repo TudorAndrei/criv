@@ -5,7 +5,7 @@ mod tests;
 
 use std::path::Path;
 
-use usage::Args as UsageArgs;
+use usage_rs::Args as UsageArgs;
 
 use crate::Result;
 use crate::install::{self, InstallMode, SkillPublication};

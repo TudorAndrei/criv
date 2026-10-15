@@ -62,7 +62,7 @@ fn discovery_probe_vault_files(root: &std::path::Path) -> Result<(Vec<String>, V
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
 
-use usage::{Cli, Error, Subcommands, help};
+use usage_rs::{Cli, Error, Subcommands, help};
 
 pub type Result<T> = std::result::Result<T, CrivError>;
 
@@ -166,11 +166,14 @@ fn run_command(args: &[String], cwd: &std::path::Path) -> Result<()> {
             return Ok(());
         }
         Err(err @ (Error::MissingSubcommand | Error::MissingArgsHelp { .. })) => {
-            eprint!("{}", usage::render_failure(CrivCli::spec(), &os_args, &err));
+            eprint!(
+                "{}",
+                usage_rs::render_failure(CrivCli::spec(), &os_args, &err)
+            );
             return Err(CrivError::UsageReported);
         }
         Err(err) => {
-            return Err(CrivError::usage(usage::render_failure(
+            return Err(CrivError::usage(usage_rs::render_failure(
                 CrivCli::spec(),
                 &os_args,
                 &err,
@@ -201,7 +204,7 @@ fn run_command(args: &[String], cwd: &std::path::Path) -> Result<()> {
     }
 }
 
-fn render_help(command: &usage::Command<'_>, long: bool) -> Result<String> {
+fn render_help(command: &usage_rs::Command<'_>, long: bool) -> Result<String> {
     help::render(CrivCli::spec(), command, long)
         .ok_or_else(|| CrivError::new("failed to render help"))
 }
@@ -255,47 +258,47 @@ struct JsonArg<'a> {
     default: &'a [&'a str],
 }
 
-fn json_command<'a>(meta: &'a usage::spec::CommandMeta<'a>, parent: &str) -> JsonCommand<'a> {
+fn json_command<'a>(meta: &'a usage_rs::spec::CommandMeta<'a>, parent: &str) -> JsonCommand<'a> {
     let path = if parent.is_empty() {
-        meta.cmd.name.to_string()
+        meta.cmd().name.to_string()
     } else {
-        format!("{parent} {}", meta.cmd.name)
+        format!("{parent} {}", meta.cmd().name)
     };
     JsonCommand {
-        name: meta.cmd.name,
-        about: meta.about,
+        name: meta.cmd().name,
+        about: meta.about(),
         args: meta
-            .args
+            .args()
             .iter()
-            .filter(|arg| !arg.hide)
+            .filter(|arg| !arg.hide())
             .map(|arg| JsonArg {
-                name: arg.arg.name,
-                required: arg.required,
-                help: arg.help,
-                choices: arg.choices,
-                default: arg.default,
+                name: arg.arg().name,
+                required: arg.required(),
+                help: arg.help(),
+                choices: arg.choices(),
+                default: arg.default(),
             })
             .collect(),
         flags: meta
-            .flags
+            .flags()
             .iter()
-            .filter(|flag| !flag.hide)
+            .filter(|flag| !flag.hide())
             .map(|flag| JsonFlag {
-                name: flag.flag.name,
-                long: flag.flag.longs,
-                required: flag.required,
-                takes_value: flag.flag.takes_value,
-                help: flag.help,
-                choices: flag.choices,
-                default: flag.default,
-                conflicts: flag.conflicts,
-                requires: flag.requires,
+                name: flag.flag().name,
+                long: flag.flag().longs,
+                required: flag.required(),
+                takes_value: flag.flag().takes_value,
+                help: flag.help(),
+                choices: flag.choices(),
+                default: flag.default(),
+                conflicts: flag.conflicts(),
+                requires: flag.requires(),
             })
             .collect(),
         subcommands: meta
-            .subcommands
+            .subcommands()
             .iter()
-            .filter(|child| !child.hide)
+            .filter(|child| !child.hide())
             .map(|child| json_command(child, &path))
             .collect(),
         path,
@@ -376,7 +379,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(names, QUERY_SUBCOMMANDS);
         assert!(query.args.is_empty());
-        assert!(query.flags.is_empty());
+        assert!(query.flags.iter().all(|flag| flag.builtin));
     }
 
     #[test]
@@ -439,8 +442,13 @@ mod tests {
         assert!(!root.contains("--usage"));
         assert!(query.contains("Usage: criv query"));
         assert!(query.contains("<SUBCOMMAND>"));
+        let (_, commands) = query.split_once("Commands:").expect("query lists commands");
         for name in QUERY_SUBCOMMANDS {
-            assert!(query.contains(&format!("query {name}")));
+            assert!(
+                commands
+                    .lines()
+                    .any(|line| line.split_whitespace().next() == Some(name))
+            );
         }
         assert!(coverage.contains("--by <BY>"));
         assert!(!coverage.contains("--kind"));

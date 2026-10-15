@@ -3,7 +3,7 @@
     "schema": "criv.state.v1",
     "architecture": {
       "protocolVersion": 1,
-      "likec4Version": "1.59.2",
+      "likec4Version": "1.60.0",
       "revision": 7,
       "workspace": "docs/architecture",
       "model": {
@@ -91,7 +91,7 @@
     ],
     "architecture": {
       "protocolVersion": 1,
-      "likec4Version": "1.59.2",
+      "likec4Version": "1.60.0",
       "workspace": "docs/architecture",
       "model": {
         "_stage": "layouted",

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::Serialize;
-use usage::Cli;
+use usage_rs::Cli;
 
 /// Prepare an immutable criv tag with its test-only discovery probe adapter
 #[derive(Debug, Cli)]

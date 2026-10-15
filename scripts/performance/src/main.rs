@@ -19,7 +19,7 @@ use generate::{GeneratedWorkload, append_source_revision, generate, mutate_sourc
 use manifest::LoadedManifest;
 use serde::Serialize;
 use tempfile::TempDir;
-use usage::{Cli, ValueEnum};
+use usage_rs::{Cli, ValueEnum};
 
 const RUN_SCHEMA: &str = "criv.performance-run.v2";
 const SAMPLE_SCHEMA: &str = "criv.performance-sample.v2";

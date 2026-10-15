@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use usage::Cli;
+use usage_rs::Cli;
 
 const GIB: u64 = 1024 * 1024 * 1024;
 

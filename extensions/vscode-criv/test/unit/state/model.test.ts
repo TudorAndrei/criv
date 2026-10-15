@@ -35,7 +35,7 @@ test("publishes the canonical Wasm projection without host State parsing", () =>
     patternMatches: {},
     architecture: {
       protocolVersion: 1,
-      likec4Version: "1.59.2",
+      likec4Version: "1.60.0",
       workspace: "docs/architecture",
       model: { elements: {}, relations: {}, views: {} },
       views: [{ id: "index", title: "System context", sourcePath: "systems.c4" }],

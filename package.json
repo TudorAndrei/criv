@@ -16,21 +16,21 @@
     "build:site": "node scripts/prepare-docs-site.mjs && likec4 build --output site/architecture --base /criv/architecture/ --use-hash-history docs/architecture && mdbook build .site-build/docs-book"
   },
   "devDependencies": {
-    "@types/react": "19.2.18",
-    "@types/react-dom": "19.2.4",
-    "likec4": "1.59.2",
-    "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "likec4": "1.60.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
   },
   "allowScripts": {
-    "esbuild@0.28.1": true,
+    "esbuild@0.28.2": true,
     "fsevents@2.3.3": true
   },
   "optionalDependencies": {
-    "@oxfmt/binding-linux-arm64-gnu": "0.72.0",
-    "@oxfmt/binding-linux-x64-gnu": "0.72.0",
-    "@oxlint/binding-linux-arm64-gnu": "1.71.0",
-    "@oxlint/binding-linux-x64-gnu": "1.71.0"
+    "@oxfmt/binding-linux-arm64-gnu": "0.73.0",
+    "@oxfmt/binding-linux-x64-gnu": "0.73.0",
+    "@oxlint/binding-linux-arm64-gnu": "1.88.0",
+    "@oxlint/binding-linux-x64-gnu": "1.88.0"
   },
   "overrides": {
     "vite-plugin-singlefile": {

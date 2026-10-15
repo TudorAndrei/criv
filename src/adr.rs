@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use usage::{Args as UsageArgs, Subcommands};
+use usage_rs::{Args as UsageArgs, Subcommands};
 
 use crate::config::Config;
 use crate::git::{self, ChangeStatus, ChangedEntry, ChangedSet};

@@ -16,7 +16,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use usage::{Cli, ValueEnum};
+use usage_rs::{Cli, ValueEnum};
 
 const RUN_SCHEMA: &str = "criv.discovery-command-run.v1";
 const SAMPLE_SCHEMA: &str = "criv.discovery-command-sample.v1";

@@ -6,7 +6,7 @@ use std::path::Path;
 use std::fs;
 
 use serde::{Deserialize, Serialize};
-use usage::Args as UsageArgs;
+use usage_rs::Args as UsageArgs;
 
 use super::reconcile_transaction::Snapshot;
 use crate::git::{self, ChangeStatus, ChangedEntry, ChangedSet};

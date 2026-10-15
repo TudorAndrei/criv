@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::Serialize;
-use usage::{Cli, ValueEnum};
+use usage_rs::{Cli, ValueEnum};
 
 const FIXTURE_COMMIT_DATE: &str = "2000-01-01T00:00:00Z";
 

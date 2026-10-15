@@ -4,7 +4,7 @@ use std::io::Read;
 use std::path::Path;
 
 use serde::Serialize;
-use usage::{Args as UsageArgs, ValueEnum};
+use usage_rs::{Args as UsageArgs, ValueEnum};
 
 use crate::check;
 use crate::diagnostic::DiagnosticCode;

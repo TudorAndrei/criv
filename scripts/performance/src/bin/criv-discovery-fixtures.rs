@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde::{Deserialize, Serialize};
-use usage::Cli;
+use usage_rs::Cli;
 
 const MANIFEST_SCHEMA: &str = "criv.discovery-workload.v1";
 const FIXTURE_COMMIT_DATE: &str = "2000-01-01T00:00:00Z";

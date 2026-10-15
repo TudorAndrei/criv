@@ -11,7 +11,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
-use usage::{Cli, ValueEnum};
+use usage_rs::{Cli, ValueEnum};
 
 const RUN_SCHEMA: &str = "criv.discovery-run.v1";
 const SAMPLE_SCHEMA: &str = "criv.discovery-sample.v1";

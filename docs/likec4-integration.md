@@ -97,9 +97,9 @@ The exact runtime contract is:
 | Item | Required value |
 | --- | --- |
 | Node.js | 26.5.1 |
-| LikeC4 | 1.59.2 |
-| React | 19.2.8 |
-| React DOM | 19.2.8 |
+| LikeC4 | 1.60.0 |
+| React | 19.3.1 |
+| React DOM | 19.3.1 |
 | Bridge protocol | 1 |
 | State schema | `criv.state.v1` |
 | Process limit | 60 seconds |

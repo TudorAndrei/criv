@@ -6,7 +6,7 @@ use std::process::{Command, Output};
 #[cfg(windows)]
 use std::ffi::OsStr;
 
-use usage::{Args as UsageArgs, ValueEnum};
+use usage_rs::{Args as UsageArgs, ValueEnum};
 
 use crate::{CrivError, Result};
 

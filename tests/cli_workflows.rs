@@ -74,7 +74,7 @@ fn write_fake_node(root: &Path, output: &str) -> TempDir {
     fs::create_dir_all(root.join("node_modules/likec4")).unwrap();
     fs::write(
         root.join("node_modules/likec4/package.json"),
-        "{\"name\":\"likec4\",\"version\":\"1.59.2\"}\n",
+        "{\"name\":\"likec4\",\"version\":\"1.60.0\"}\n",
     )
     .unwrap();
     bin
@@ -112,7 +112,7 @@ fn check_reports_normalized_likec4_diagnostics() {
     let bridge_output = serde_json::json!({
         "protocolVersion": 1,
         "nodeVersion": "26.5.1",
-        "likec4Version": "1.59.2",
+        "likec4Version": "1.60.0",
         "revision": 0,
         "valid": false,
         "diagnostics": [{
@@ -155,7 +155,7 @@ fn check_json_and_github_preserve_exact_likec4_ranges() {
     let bridge_output = serde_json::json!({
         "protocolVersion": 1,
         "nodeVersion": "26.5.1",
-        "likec4Version": "1.59.2",
+        "likec4Version": "1.60.0",
         "revision": 0,
         "valid": false,
         "diagnostics": [{
@@ -221,7 +221,7 @@ fn check_rejects_a_likec4_bridge_with_the_wrong_node_version() {
     let bridge_output = serde_json::json!({
         "protocolVersion": 1,
         "nodeVersion": "24.0.0",
-        "likec4Version": "1.59.2",
+        "likec4Version": "1.60.0",
         "revision": 0,
         "valid": true,
         "diagnostics": [],
@@ -254,7 +254,7 @@ fn check_rejects_an_unresolved_likec4_source_link() {
     let bridge_output = serde_json::json!({
         "protocolVersion": 1,
         "nodeVersion": "26.5.1",
-        "likec4Version": "1.59.2",
+        "likec4Version": "1.60.0",
         "revision": 0,
         "valid": true,
         "diagnostics": [],

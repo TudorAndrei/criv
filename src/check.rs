@@ -11,7 +11,7 @@ use rumdl_lib::fix_coordinator::FixCoordinator;
 use rumdl_lib::rule::{LintWarning, Rule};
 use rumdl_lib::rules::{all_rules, filter_rules};
 use serde::Serialize;
-use usage::{Args as UsageArgs, ValueEnum};
+use usage_rs::{Args as UsageArgs, ValueEnum};
 
 use crate::diagnostic::{DiagnosticCode, LspRange, SourceLocation};
 use crate::discovery::{
