@@ -326,7 +326,7 @@ dependencies = [
 
 [[package]]
 name = "criv"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "assert_cmd",
  "ast-grep-config",
@@ -368,7 +368,7 @@ dependencies = [
 
 [[package]]
 name = "criv-perf-harness"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "blake3",
  "criv-state-wire",
@@ -383,7 +383,7 @@ dependencies = [
 
 [[package]]
 name = "criv-state-wire"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "proptest",
  "serde",
@@ -393,7 +393,7 @@ dependencies = [
 
 [[package]]
 name = "criv-wasm"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "criv-state-wire",
  "js-sys",
