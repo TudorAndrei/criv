@@ -426,11 +426,15 @@ backend = "core:rust"
 
 [tools.rust.options]
 components = "clippy,rustfmt"
+profile = "minimal"
 targets = "wasm32-unknown-unknown"
 
 [[tools.rust]]
 version = "1.99.0"
 backend = "core:rust"
+
+[tools.rust.options]
+profile = "minimal"
 
 [[tools.shellcheck]]
 version = "0.11.0"

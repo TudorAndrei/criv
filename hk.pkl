@@ -55,6 +55,8 @@ local cargo_test = new Step {
   check = "cargo test --locked --workspace"
 }
 
+local hawk_command = "mise exec rust@1.99.0 -- cargo hawk check --manifest-path Cargo.toml --target-dir target/hawk --exclude-crate criv_wasm -D warnings"
+
 local hawk = new Step {
   glob = List(
     "Cargo.toml",
@@ -65,7 +67,10 @@ local hawk = new Step {
     "crates/**/*.rs",
     "hk.pkl",
   )
-  check = "mise exec rust@1.99.0 -- cargo hawk check --manifest-path Cargo.toml --target-dir target/hawk --exclude-crate criv_wasm -D warnings"
+  check = new Script {
+    linux = hawk_command
+    macos = hawk_command
+  }
   env {
     ["MBX_DISABLE"] = "1"
     ["RUSTC_WRAPPER"] = ""
