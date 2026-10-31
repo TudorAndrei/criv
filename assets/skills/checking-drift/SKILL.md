@@ -17,8 +17,8 @@ check` is the whole verdict: the vault is **green** when the command prints
    and the run ends with one `next:` command. Use `criv check --filter <text>`
    to narrow the output while investigating one failure, and `criv check
    --format json` when an agent or a script consumes the diagnostics.
-3. Run the command the `next:` line names. It is `criv check --fix` when criv
-   can repair the vault itself.
+3. Apply the diagnostic repairs, then run the command the `next:` line names.
+   Checks are read-only. Use the repository's separate formatter for style.
 4. Run `criv enforce --stage ci` when the change touches ADR-governed source.
 
 Repeat until a run that included your change comes back green.
@@ -59,16 +59,16 @@ fix: criv init
 
 Key recovery on the code when there is one. These are the coded failures:
 
-| Code | Meaning |
-| --- | --- |
-| `not-a-vault` | The working directory holds no `criv.toml`. Check the directory before running `criv init`. |
-| `check-failed` | `criv check` found errors. The diagnostics above it say which. |
-| `policy-violation` | An ADR policy pattern matched. Change the code, or supersede the ADR. |
-| `import-policy-violation` | An import broke a rule in `criv.toml`. |
-| `adr-immutability-violation` | An accepted ADR changed. Restore it and write a successor. |
-| `enforcement-failed` | Validation errors blocked the stage. Run `criv check`. |
-| `vault-outside-git-root` | The vault is not the root of the Git worktree. Run criv from the worktree root. |
-| `adr-id-exhausted` | No free four-digit ADR id remains. |
+| Code                         | Meaning                                                                                     |
+| ---------------------------- | ------------------------------------------------------------------------------------------- |
+| `not-a-vault`                | The working directory holds no `criv.toml`. Check the directory before running `criv init`. |
+| `check-failed`               | `criv check` found errors. The diagnostics above it say which.                              |
+| `policy-violation`           | An ADR policy pattern matched. Change the code, or supersede the ADR.                       |
+| `import-policy-violation`    | An import broke a rule in `criv.toml`.                                                      |
+| `adr-immutability-violation` | An accepted ADR changed. Restore it and write a successor.                                  |
+| `enforcement-failed`         | Validation errors blocked the stage. Run `criv check`.                                      |
+| `vault-outside-git-root`     | The vault is not the root of the Git worktree. Run criv from the worktree root.             |
+| `adr-id-exhausted`           | No free four-digit ADR id remains.                                                          |
 
 Exit codes are the fast signal: `0` succeeded, `1` the command failed, `2` the
 command line was wrong.

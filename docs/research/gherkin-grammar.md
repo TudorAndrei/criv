@@ -4,7 +4,7 @@ kind: doc
 title: Gherkin grammar and ast-grep contract
 ---
 
-# Gherkin Grammar and ast-grep Language Contract
+# Gherkin Grammar and ast-grep Contract
 
 Date: 2026-09-13
 
@@ -123,15 +123,15 @@ by the Berp tool. Generating a Rust target is new work, not a dependency.
 [`gherkin` 0.16.0](https://crates.io/crates/gherkin/0.16.0), repository
 [`cucumber-rs/gherkin`](https://github.com/cucumber-rs/gherkin).
 
-| Fact | Value |
-| --- | --- |
-| Licence | `MIT OR Apache-2.0` |
-| Latest release | 0.16.0, 2026-04-23 |
-| Previous releases | 0.15.0 (2025-12-12), 0.14.0 (2023-07-14) |
-| Downloads | 16,932,413 |
-| MSRV | 1.88 |
-| Runtime dependencies | `peg 0.6.3`, `textwrap 0.16`, `thiserror 2.0`, `typed-builder 0.23` |
-| Transitive normal crates | 53 |
+| Fact                     | Value                                                               |
+| ------------------------ | ------------------------------------------------------------------- |
+| Licence                  | `MIT OR Apache-2.0`                                                 |
+| Latest release           | 0.16.0, 2026-04-23                                                  |
+| Previous releases        | 0.15.0 (2025-12-12), 0.14.0 (2023-07-14)                            |
+| Downloads                | 16,932,413                                                          |
+| MSRV                     | 1.88                                                                |
+| Runtime dependencies     | `peg 0.6.3`, `textwrap 0.16`, `thiserror 2.0`, `typed-builder 0.23` |
+| Transitive normal crates | 53                                                                  |
 
 Facts from `https://crates.io/api/v1/crates/gherkin`,
 `https://crates.io/api/v1/crates/gherkin/0.16.0/dependencies`, and the
@@ -158,11 +158,11 @@ the release profile from
 (`strip = true`, `opt-level = "z"`, `lto = true`, `codegen-units = 1`,
 `panic = "abort"`) on `aarch64-apple-darwin`, Rust edition 2024:
 
-| Binary | Bytes |
-| --- | --- |
-| Baseline: read a file, print its length | 286,128 |
-| Same, plus `gherkin::Feature::parse` and a full AST walk | 385,696 |
-| **Delta** | **99,568** |
+| Binary                                                   | Bytes      |
+| -------------------------------------------------------- | ---------- |
+| Baseline: read a file, print its length                  | 286,128    |
+| Same, plus `gherkin::Feature::parse` and a full AST walk | 385,696    |
+| **Delta**                                                | **99,568** |
 
 99,568 bytes is 1.01% of the 9,815,840-byte `criv` binary that ADR-0015
 records. This is small, and ADR-0015 asks that future size work "start with
@@ -318,13 +318,13 @@ There is none. `Feature::parse` returns
 `Result<Feature, ParseFileError>`. A failure gives no partial `Feature`, so
 criv would get zero symbols from the file. Measured cases:
 
-| Input | Result |
-| --- | --- |
-| Truncated last step (`When I`) | Parses. The partial step becomes `value="I"`. |
-| Scenario with no name (`Scenario:`) | Parses. `name=""`. |
-| One typed keyword (`Scenaro:`) | `Error at 8:20: {"unknown keyword"}`. No symbols. |
-| No `Feature:` header | `Error at 1:14: {"unknown keyword"}`. No symbols. |
-| Empty file | `Error at 2:1: {...}`. No symbols. |
+| Input                               | Result                                            |
+| ----------------------------------- | ------------------------------------------------- |
+| Truncated last step (`When I`)      | Parses. The partial step becomes `value="I"`.     |
+| Scenario with no name (`Scenario:`) | Parses. `name=""`.                                |
+| One typed keyword (`Scenaro:`)      | `Error at 8:20: {"unknown keyword"}`. No symbols. |
+| No `Feature:` header                | `Error at 1:14: {"unknown keyword"}`. No symbols. |
+| Empty file                          | `Error at 2:1: {...}`. No symbols.                |
 
 `ParseError` exposes only a `Display` impl,
 `"Error at {line}:{col}: {expected:?}"`. Its `position` and `expected`

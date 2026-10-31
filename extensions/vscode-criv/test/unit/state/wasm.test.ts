@@ -8,7 +8,6 @@ import {
   CRIV_LIKEC4_ARCHITECTURE_INVALID,
   CRIV_LIKEC4_MODEL_INVALID,
   CRIV_LIKEC4_PROTOCOL_UNSUPPORTED,
-  CRIV_LIKEC4_VERSION_UNSUPPORTED,
   CRIV_STATE_JSON_INVALID,
   CRIV_STATE_SCHEMA_UNSUPPORTED,
   CRIV_WASM_LOAD_ERROR,
@@ -109,7 +108,6 @@ test("reports every generated Wasm State failure with a stable code", async () =
     [CRIV_STATE_SCHEMA_UNSUPPORTED, { ...valid, schema: "criv.state.v2" }],
     [CRIV_LIKEC4_ARCHITECTURE_INVALID, { ...valid, architecture: true }],
     [CRIV_LIKEC4_PROTOCOL_UNSUPPORTED, withArchitecture(valid, { protocolVersion: 2 })],
-    [CRIV_LIKEC4_VERSION_UNSUPPORTED, withArchitecture(valid, { likec4Version: "2.0.0" })],
     [
       CRIV_LIKEC4_MODEL_INVALID,
       withArchitecture(valid, { model: { raw: true, views: [], sourceLinks: [] } }),

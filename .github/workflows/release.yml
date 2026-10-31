@@ -27,7 +27,7 @@ permissions:
 env:
   CARGO_INCREMENTAL: "0"
   CARGO_TERM_COLOR: always
-  RUSTUP_TOOLCHAIN: 1.97.1
+  RUSTUP_TOOLCHAIN: 1.99.1
 
 jobs:
   prepare:
@@ -158,8 +158,8 @@ jobs:
 
       - name: Install Rust components
         run: |
-          rustup toolchain install 1.97.1 --profile minimal --no-self-update
-          rustup component add clippy rustfmt --toolchain 1.97.1
+          rustup toolchain install 1.99.1 --profile minimal --no-self-update
+          rustup component add clippy rustfmt --toolchain 1.99.1
 
       - name: Install JavaScript dependencies
         run: npm ci
@@ -234,7 +234,7 @@ jobs:
           persist-credentials: false
 
       - name: Install Rust
-        run: rustup toolchain install 1.97.1 --profile minimal --no-self-update
+        run: rustup toolchain install 1.99.1 --profile minimal --no-self-update
 
       - name: Cache Cargo registry inputs
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -262,7 +262,7 @@ jobs:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         shell: bash
         run: |
-          cargo +1.97.1 auditable build --locked --release --target "$RELEASE_TARGET" --package criv --bin criv
+          cargo +1.99.1 auditable build --locked --release --target "$RELEASE_TARGET" --package criv --bin criv
           mkdir -p target/release-build
           cp "target/$RELEASE_TARGET/release/criv$EXECUTABLE_SUFFIX" \
             "target/release-build/criv$EXECUTABLE_SUFFIX"

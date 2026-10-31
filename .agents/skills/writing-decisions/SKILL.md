@@ -2,13 +2,16 @@
 name: writing-decisions
 description: Use when creating or superseding a criv ADR under docs/adr, setting its governs scopes, or adding an inline policy pattern.
 metadata:
-  criv-template: blake3:6e8c9bc91bcf932f
+  criv-template: blake3:51424b92bc10efd3
 ---
 
 # Writing decisions
 
 A decision note lives under `docs/adr/` as `NNNN-kebab-title.md` and carries
-`id`, `kind: decision`, `title`, `status`, and `date`. Take the ID from `criv
+`id`, `kind: decision`, `title`, `status`, and `date`. Use one H1 matching
+`title`, then H2 `Context`, `Decision`, and `Consequences` sections, once each
+and in that order. Active ADRs and drafts must meet this format; accepted
+historical records keep their original bytes when superseded. Take the ID from `criv
 query next-adr-id`, which reads the state and returns the next free number.
 
 ## Governed scope

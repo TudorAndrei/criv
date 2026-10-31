@@ -762,7 +762,7 @@ fn prepare_case(args: &Args, binary: &Path, root: &Path, case: Case) -> Result<(
         Case::CheckChangedMarkdown => stage_mutation(
             root,
             args.markdown_mutation_path.as_ref().unwrap(),
-            "\n#bad\n",
+            "\n#bad\n\n# Invalid second title\n",
         )?,
         _ => {}
     }
@@ -1322,10 +1322,15 @@ fn full_check_completed(exit_status: Option<i32>, stdout: &[u8], stderr: &[u8]) 
             diagnostics
                 .iter()
                 .any(|diagnostic| diagnostic["severity"] == "error")
-                && String::from_utf8_lossy(stderr).contains("criv: check failed")
+                && check_failure_reported(stderr)
         }
         _ => false,
     }
+}
+
+fn check_failure_reported(stderr: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(stderr);
+    text.contains("criv: check failed") || text.contains("criv: [check-failed] check failed")
 }
 
 fn expected_markdown_diagnostic(
@@ -1334,7 +1339,7 @@ fn expected_markdown_diagnostic(
     stderr: &[u8],
     expected_path: &Path,
 ) -> bool {
-    if exit_status != Some(1) || !String::from_utf8_lossy(stderr).contains("criv: check failed") {
+    if exit_status != Some(1) || !check_failure_reported(stderr) {
         return false;
     }
     serde_json::from_slice::<Vec<serde_json::Value>>(stdout)
@@ -1343,7 +1348,10 @@ fn expected_markdown_diagnostic(
             let expected = path_text(expected_path);
             diagnostics.iter().any(|diagnostic| {
                 diagnostic["severity"] == "error"
-                    && diagnostic["code"] == "markdown-format"
+                    && matches!(
+                        diagnostic["code"].as_str(),
+                        Some("markdown-format" | "document-format")
+                    )
                     && diagnostic["path"] == expected
             })
         })
@@ -1964,19 +1972,25 @@ mod tests {
 
     #[test]
     fn expected_markdown_diagnostic_requires_the_mutated_file() {
-        let stdout = br#"[{"severity":"error","code":"markdown-format","path":"content/file.md"}]"#;
-        assert!(expected_markdown_diagnostic(
-            Some(1),
-            stdout,
-            b"criv: check failed\n",
-            Path::new("content/file.md")
-        ));
-        assert!(!expected_markdown_diagnostic(
-            Some(1),
-            stdout,
-            b"criv: check failed\n",
-            Path::new("content/other.md")
-        ));
+        for (code, stderr) in [
+            ("markdown-format", "criv: check failed\n"),
+            ("document-format", "criv: [check-failed] check failed\n"),
+        ] {
+            let stdout =
+                format!(r#"[{{"severity":"error","code":"{code}","path":"content/file.md"}}]"#);
+            assert!(expected_markdown_diagnostic(
+                Some(1),
+                stdout.as_bytes(),
+                stderr.as_bytes(),
+                Path::new("content/file.md")
+            ));
+            assert!(!expected_markdown_diagnostic(
+                Some(1),
+                stdout.as_bytes(),
+                stderr.as_bytes(),
+                Path::new("content/other.md")
+            ));
+        }
     }
 
     #[test]

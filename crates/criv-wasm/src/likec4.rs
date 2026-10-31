@@ -13,7 +13,6 @@ use super::{
 #[serde(rename_all = "camelCase")]
 struct LikeC4Contract {
     protocol_version: u32,
-    likec4_version: String,
 }
 
 pub fn prepare_architecture(
@@ -30,12 +29,6 @@ pub fn prepare_architecture(
         return Err(format!(
             "criv-likec4-protocol-unsupported: expected protocol {}; got {}",
             contract.protocol_version, architecture.protocol_version
-        ));
-    }
-    if architecture.likec4_version != contract.likec4_version {
-        return Err(format!(
-            "criv-likec4-version-unsupported: expected LikeC4 {}; got {}",
-            contract.likec4_version, architecture.likec4_version
         ));
     }
     let workspace = super::source::safe_source_path(&architecture.workspace).ok_or_else(|| {
@@ -71,7 +64,7 @@ pub fn prepare_architecture(
     }
     Ok(Some(EditorLikeC4Model {
         protocol_version: contract.protocol_version,
-        likec4_version: contract.likec4_version,
+        likec4_version: architecture.likec4_version,
         workspace,
         model: published.raw,
         views: published.views,

@@ -66,7 +66,6 @@ pub struct LikeC4Workspace {
 #[serde(rename_all = "camelCase")]
 struct BridgeResponse {
     protocol_version: u32,
-    node_version: String,
     likec4_version: String,
     revision: u64,
     valid: bool,
@@ -161,7 +160,7 @@ pub(super) fn load(root: &Path, docs_path: &Path, sources: &[LikeC4Source]) -> L
                 path: workspace,
                 line: None,
                 message: format!(
-                    "LikeC4 source requires Node.js {} and local likec4 {}: {error}",
+                    "LikeC4 source requires Node.js on PATH and a local likec4 package (development versions: Node.js {}, likec4 {}): {error}",
                     contract.node, contract.likec4
                 ),
                 location: None,
@@ -262,21 +261,14 @@ pub(super) fn load(root: &Path, docs_path: &Path, sources: &[LikeC4Source]) -> L
     };
 
     result.version = Some(response.likec4_version.clone());
-    if response.protocol_version != contract.protocol
-        || response.node_version != contract.node
-        || response.likec4_version != contract.likec4
-        || response.revision != 0
-    {
+    if response.protocol_version != contract.protocol || response.revision != 0 {
         result.diagnostics.push(LikeC4Diagnostic {
             kind: LikeC4DiagnosticKind::Protocol,
             path: workspace,
             line: None,
             message: format!(
-                "LikeC4 bridge version mismatch: expected protocol {}, Node.js {}, and LikeC4 {}; got protocol {}, Node.js {}, and LikeC4 {}",
-                contract.protocol,
-                contract.node,
-                contract.likec4,
-                response.protocol_version, response.node_version, response.likec4_version
+                "LikeC4 bridge protocol mismatch: expected protocol {} and revision 0; got protocol {} and revision {}",
+                contract.protocol, response.protocol_version, response.revision
             ),
             location: None,
         });
@@ -287,7 +279,10 @@ pub(super) fn load(root: &Path, docs_path: &Path, sources: &[LikeC4Source]) -> L
             kind: LikeC4DiagnosticKind::Runtime,
             path: workspace,
             line: None,
-            message: format!("LikeC4 bridge failed: {error}"),
+            message: format!(
+                "LikeC4 bridge failed: {error}; install a compatible local likec4 package (development versions: Node.js {}, likec4 {})",
+                contract.node, contract.likec4
+            ),
             location: None,
         });
         return result;
@@ -432,8 +427,6 @@ mod tests {
 
         assert!(source.contains(&format!("protocolVersion: {}", contract.protocol)));
         assert!(!source.contains("__CRIV_LIKEC4_PROTOCOL_VERSION__"));
-        assert_eq!(contract.node, "26.5.1");
-        assert_eq!(contract.likec4, "1.60.0");
     }
 
     #[test]

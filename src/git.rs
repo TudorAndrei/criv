@@ -271,10 +271,7 @@ impl GitRepository {
                 let reference = reference.map_err(|error| {
                     CrivError::new(format!("Git reference lookup failed: {error}"))
                 })?;
-                if reference
-                    .name()
-                    .ok()
-                    .is_some_and(|name| name.starts_with(&prefix))
+                if reference.name().is_ok_and(|name| name.starts_with(&prefix))
                     && let Some(target) = reference.target()
                 {
                     walk.hide(target).map_err(|error| {

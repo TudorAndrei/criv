@@ -92,19 +92,24 @@ When the vault has at least one `.c4` file, `src/c4/likec4.rs` starts the embedd
 resolves the local `likec4` package. It does not use a global LikeC4 command and
 does not download a package.
 
-The exact runtime contract is:
+[[0147-validate-likec4-capabilities-not-runtime-versions|ADR-0147]] separates
+reproducible development versions from runtime compatibility. Node.js and
+LikeC4 version strings are informational, not runtime gates. criv validates
+the bridge protocol and actual model instead.
 
-| Item | Required value |
-| --- | --- |
-| Node.js | 26.5.1 |
-| LikeC4 | 1.60.0 |
-| React | 19.3.1 |
-| React DOM | 19.3.1 |
-| Bridge protocol | 1 |
-| State schema | `criv.state.v1` |
-| Process limit | 60 seconds |
-| Standard output limit | 16 MiB |
-| Standard error limit | 16 MiB |
+The development versions and required protocol limits are:
+
+| Item                  | Required value  |
+| --------------------- | --------------- |
+| Node.js               | 26.13.0 LTS     |
+| LikeC4                | 1.60.0          |
+| React                 | 19.3.1          |
+| React DOM             | 19.3.1          |
+| Bridge protocol       | 1               |
+| State schema          | `criv.state.v1` |
+| Process limit         | 60 seconds      |
+| Standard output limit | 16 MiB          |
+| Standard error limit  | 16 MiB          |
 
 The bridge uses `LikeC4.fromWorkspace`, `getErrors`, and `layoutedModel`. It
 returns one JSON response with the exact runtime versions, revision, errors,
@@ -114,7 +119,9 @@ prevents a pipe deadlock when a large layout model fills an operating-system
 pipe.
 
 Rust rejects a timeout, too much output, invalid JSON, a protocol difference,
-or any runtime version difference. LikeC4 errors use repository paths and
+or an unexpected revision. Missing dependencies and actual bridge API errors
+also fail validation, with development versions suggested for recovery.
+Neither Rust nor the editor Wasm projection rejects a package version difference. LikeC4 errors use repository paths and
 one-based lines in criv output. A vault with no `.c4` file does not need Node.js
 or LikeC4.
 
@@ -173,8 +180,9 @@ disposes its React root.
 
 ## Installation and CI
 
-The root `package-lock.json` is the only npm lockfile. Use the pinned Node.js
-version and run `npm ci`. Normal validation can then run without network
+The root `package-lock.json` is the only npm lockfile. For development, use the
+mise-pinned Node.js version and run `npm ci`. Consuming vaults can use their
+own Node.js and local LikeC4 versions; criv does not enforce these pins. Normal validation can then run without network
 access. CI must run the Rust workspace tests, the two editor test suites,
 `criv check`, and `npm audit`.
 
@@ -182,17 +190,17 @@ The 2026-08-04 implementation measurements used Node.js 26.5.1 on an Apple
 arm64 development host and the repository model that existed during the test.
 Architecture changes can change its element, view, and source-link counts:
 
-| Measure | Result |
-| --- | ---: |
-| Node.js empty-process start | 0.02 s |
-| Full `criv check` with LikeC4 layout | 3.80 s |
-| Obsidian production JavaScript | 2,764,888 bytes |
-| VS Code extension JavaScript | 26,311 bytes |
-| VS Code LikeC4 webview JavaScript | 2,294,423 bytes |
-| Cold browser bundle transfer | 17.5 ms |
-| Cold state transfer | 2.9 ms |
-| Cold first LikeC4 view | 112.2 ms |
-| Test SVG export | 188,499 bytes |
+| Measure                              |          Result |
+| ------------------------------------ | --------------: |
+| Node.js empty-process start          |          0.02 s |
+| Full `criv check` with LikeC4 layout |          3.80 s |
+| Obsidian production JavaScript       | 2,764,888 bytes |
+| VS Code extension JavaScript         |    26,311 bytes |
+| VS Code LikeC4 webview JavaScript    | 2,294,423 bytes |
+| Cold browser bundle transfer         |         17.5 ms |
+| Cold state transfer                  |          2.9 ms |
+| Cold first LikeC4 view               |        112.2 ms |
+| Test SVG export                      |   188,499 bytes |
 
 The cold browser test used a local server and a new headless Chromium session.
 The first-view point was the first LikeC4 React Flow node in the renderer shadow

@@ -181,3 +181,16 @@ cargo deny --locked check
 cargo auditable build --locked --release --package criv --bin criv
 cargo audit bin target/release/criv
 ```
+
+## Markdown tooling resolution, 2026-10-30
+
+[[0148-separate-markdown-formatting-from-vault-validation|ADR-0148]] removes
+rumdl rather than accepting its unmaintained unsafe-libyaml dependency.
+Ast-grep 0.51.0 uses serde-saphyr instead of `serde_yaml`. The current dependency
+graph contains neither `serde_yaml` nor unsafe-libyaml, and `cargo deny --locked
+check` passes without an advisory exception. Its BSD-3-Clause allowance covers
+`encoding_rs` in the dependency graph for the replacement parser.
+
+Markdown formatting belongs to the separate `oxfmt` repository hook. The CLI
+keeps native document-schema validation and no longer owns a general Markdown
+formatting discovery profile.

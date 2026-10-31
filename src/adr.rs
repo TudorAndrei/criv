@@ -1621,7 +1621,7 @@ fn rewrite_owned_lines(
 }
 
 fn contains_reference(bytes: &[u8], mappings: &[Mapping]) -> bool {
-    std::str::from_utf8(bytes).ok().is_some_and(|text| {
+    std::str::from_utf8(bytes).is_ok_and(|text| {
         !reference_edits(text, mappings)
             .unwrap_or_default()
             .is_empty()

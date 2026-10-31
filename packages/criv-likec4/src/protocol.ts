@@ -5,7 +5,7 @@ export const CRIV_LIKEC4_VERSION = contract.likec4Version;
 
 export interface CrivLikeC4Model {
   protocolVersion: typeof CRIV_LIKEC4_PROTOCOL_VERSION;
-  likec4Version: typeof CRIV_LIKEC4_VERSION;
+  likec4Version: string;
   workspace: string;
   model: unknown;
   views: { id: string; title: string; sourcePath?: string }[];

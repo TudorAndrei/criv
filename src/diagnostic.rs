@@ -36,7 +36,7 @@ pub enum DiagnosticCode {
     InvalidLikeC4Source,
     InvalidPolicyPattern,
     LegacySourceTarget,
-    MarkdownFormat,
+    DocumentFormat,
     MissingId,
     MissingLikeC4Runtime,
     MissingPolicyPatternBody,
@@ -88,7 +88,7 @@ impl DiagnosticCode {
             Self::InvalidLikeC4Source => "invalid-likec4-source",
             Self::InvalidPolicyPattern => "invalid-policy-pattern",
             Self::LegacySourceTarget => "legacy-source-target",
-            Self::MarkdownFormat => "markdown-format",
+            Self::DocumentFormat => "document-format",
             Self::MissingId => "missing-id",
             Self::MissingLikeC4Runtime => "missing-likec4-runtime",
             Self::MissingPolicyPatternBody => "missing-policy-pattern-body",
@@ -153,7 +153,9 @@ impl DiagnosticCode {
             Self::LegacySourceTarget | Self::SourceWikilink => {
                 "Rewrite the target as an AST-aware selector, as in `src/main.rs#fn:run`."
             }
-            Self::MarkdownFormat => "Run `criv check --fix`.",
+            Self::DocumentFormat => {
+                "Use required frontmatter and one H1 matching title; active ADRs require Context, Decision, and Consequences H2 sections."
+            }
             Self::MissingId => "Add an `id` to the note frontmatter.",
             Self::MissingPolicyPatternBody => "Give the pattern a `pattern` or a `rule`.",
             Self::MissingPolicyPatternDefinition => {
@@ -280,18 +282,6 @@ impl SourceLocation {
         Self::new(source, start..end)
     }
 
-    pub(crate) fn from_one_based_character_range(
-        source: Arc<str>,
-        line: usize,
-        column: usize,
-        end_line: usize,
-        end_column: usize,
-    ) -> Option<Self> {
-        let start = one_based_character_position_to_byte(&source, line, column)?;
-        let end = one_based_character_position_to_byte(&source, end_line, end_column)?;
-        Self::new(source, start..end)
-    }
-
     pub(crate) fn line(&self) -> Option<usize> {
         self.lsp_range()?.start.line.checked_add(1)
     }
@@ -389,20 +379,6 @@ fn lsp_position_to_byte(source: &str, position: LspPosition) -> Option<usize> {
         }
     }
     (utf16 == position.character).then_some(line_end)
-}
-
-fn one_based_character_position_to_byte(source: &str, line: usize, column: usize) -> Option<usize> {
-    if line == 0 || column == 0 {
-        return None;
-    }
-    let (line_start, line_end) = line_bounds(source, line.checked_sub(1)?)?;
-    let line = source.get(line_start..line_end)?;
-    let character = column.checked_sub(1)?;
-    line.char_indices()
-        .map(|(offset, _)| offset)
-        .chain(std::iter::once(line.len()))
-        .nth(character)
-        .and_then(|offset| line_start.checked_add(offset))
 }
 
 fn line_bounds(source: &str, target_line: usize) -> Option<(usize, usize)> {
@@ -532,22 +508,6 @@ mod tests {
             )
             .is_none(),
             "a UTF-16 position inside a surrogate pair is invalid"
-        );
-
-        let character_range =
-            SourceLocation::from_one_based_character_range(source, 1, 2, 1, 4).unwrap();
-        assert_eq!(
-            character_range.lsp_range(),
-            Some(LspRange {
-                start: LspPosition {
-                    line: 0,
-                    character: 1,
-                },
-                end: LspPosition {
-                    line: 0,
-                    character: 4,
-                },
-            })
         );
     }
 }

@@ -208,7 +208,7 @@ fn check_json_and_github_preserve_exact_likec4_ranges() {
 
 #[cfg(unix)]
 #[test]
-fn check_rejects_a_likec4_bridge_with_the_wrong_node_version() {
+fn check_accepts_local_runtime_versions_but_rejects_invalid_bridge_responses() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     init(root);
@@ -218,25 +218,49 @@ fn check_rejects_a_likec4_bridge_with_the_wrong_node_version() {
         "specification { element system }\nmodel { system = system 'System' }\n",
     )
     .unwrap();
-    let bridge_output = serde_json::json!({
+    let response = serde_json::json!({
         "protocolVersion": 1,
-        "nodeVersion": "24.0.0",
-        "likec4Version": "1.60.0",
+        "nodeVersion": "26.12.1",
+        "likec4Version": "2.0.0",
         "revision": 0,
         "valid": true,
         "diagnostics": [],
         "model": null
-    })
-    .to_string();
-    let fake_bin = write_fake_node(root, &bridge_output);
-
-    criv(root)
-        .arg("check")
-        .env("PATH", fake_bin.path())
-        .assert()
-        .failure()
-        .stdout(predicate::str::contains("invalid-likec4-protocol"))
-        .stdout(predicate::str::contains("Node.js 26.5.1"));
+    });
+    for (field, value, expected_error) in [
+        ("nodeVersion", serde_json::json!("24.0.0"), None),
+        ("nodeVersion", serde_json::json!("26.12.1"), None),
+        (
+            "protocolVersion",
+            serde_json::json!(2),
+            Some("invalid-likec4-protocol"),
+        ),
+        (
+            "revision",
+            serde_json::json!(1),
+            Some("invalid-likec4-protocol"),
+        ),
+        (
+            "bridgeError",
+            serde_json::json!("LikeC4 API unavailable"),
+            Some("missing-likec4-runtime"),
+        ),
+    ] {
+        let mut output = response.clone();
+        output[field] = value;
+        let fake_bin = write_fake_node(root, &output.to_string());
+        let assertion = criv(root)
+            .arg("check")
+            .env("PATH", fake_bin.path())
+            .assert();
+        if let Some(code) = expected_error {
+            assertion.failure().stdout(predicate::str::contains(code));
+        } else {
+            assertion
+                .success()
+                .stdout(predicate::str::contains("criv check: ok"));
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -397,7 +421,7 @@ fn changed_check_does_not_walk_unselected_markdown_directories() {
     init_git_vault(root);
     fs::write(
         root.join("docs/guide.md"),
-        "---\nid: guide\nkind: doc\ntitle: Guide\n---\n\nClean.\n",
+        "---\nid: guide\nkind: doc\ntitle: Guide\n---\n\n# Guide\n\nClean.\n",
     )
     .unwrap();
     git(root, &["add", "docs/guide.md"]);
@@ -504,7 +528,7 @@ fn changed_check_is_read_only() {
         .assert()
         .failure()
         .code(2)
-        .stderr(predicate::str::contains("cannot be used with"));
+        .stderr(predicate::str::contains("--fix"));
 }
 
 #[test]
@@ -914,7 +938,7 @@ fn check_accepts_valid_crlf_frontmatter() {
     init(root);
     fs::write(
         root.join("docs/crlf.md"),
-        "---\r\nid: crlf\r\nkind: doc\r\ntitle: CRLF note\r\n---\r\n\r\n## CRLF note\r\n",
+        "---\r\nid: crlf\r\nkind: doc\r\ntitle: CRLF note\r\n---\r\n\r\n# CRLF note\r\n",
     )
     .unwrap();
 
@@ -1869,120 +1893,77 @@ Missing [[missing-target]]
 }
 
 #[test]
-fn check_fix_rewrites_fixable_markdown_in_the_docs_tree() {
+fn check_owns_document_structure_without_formatting_or_external_tools() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-
     init(root);
-    let messy = root.join("docs/messy.md");
-    fs::write(
-        &messy,
-        "---\nid: messy\nkind: doc\ntitle: Messy\n---\n\n## Messy\n\nTrailing spaces here.   \n\n\n\nToo many blank lines above.\n",
-    )
-    .unwrap();
-
-    criv(root).args(["check", "--fix"]).assert().success();
-
-    let fixed = fs::read_to_string(&messy).unwrap();
-    assert!(
-        !fixed.contains("here.   \n"),
-        "trailing whitespace should be fixed: {fixed:?}"
-    );
-    assert!(
-        !fixed.contains("\n\n\n"),
-        "consecutive blank lines should be collapsed: {fixed:?}"
-    );
+    let path = root.join("docs/guide.md");
+    fs::write(root.join(".rumdl.toml"), "invalid = [").unwrap();
+    fs::write(root.join(".oxfmtrc.json"), "invalid json").unwrap();
+    for (title, body, expected_error) in [
+        ("Guide", "# Guide\n\nTrailing spaces.   \n\n\nBody.\n", None),
+        ("Guide", "# guide!\n\n```md\n# Not a heading\n```\n", None),
+        ("指南", "# 指南\n", None),
+        ("指南", "# 手册\n", Some("must match frontmatter")),
+        ("Guide", "## Guide\n", Some("exactly one H1")),
+        ("Guide", "# Guide\n\n# Another\n", Some("exactly one H1")),
+        ("Guide", "# Wrong title\n", Some("must match frontmatter")),
+        ("", "# Guide\n", Some("non-empty frontmatter `title`")),
+    ] {
+        let contents = format!("---\nid: guide\nkind: doc\ntitle: '{title}'\n---\n\n{body}");
+        fs::write(&path, &contents).unwrap();
+        let assertion = criv(root).arg("check").env("PATH", "").assert();
+        if let Some(message) = expected_error {
+            assertion
+                .failure()
+                .stdout(predicate::str::contains("document-format"))
+                .stdout(predicate::str::contains(message));
+        } else {
+            assertion.success();
+        }
+        assert_eq!(fs::read_to_string(&path).unwrap(), contents);
+    }
 }
 
 #[test]
-fn check_fix_leaves_already_clean_markdown_untouched() {
+fn check_requires_adr_sections_until_an_accepted_successor_preserves_history() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-
     init(root);
-    let clean = root.join("docs/clean.md");
-    let contents = "---\nid: clean\nkind: doc\ntitle: Clean\n---\n\n## Clean\n\nBody text.\n";
-    fs::write(&clean, contents).unwrap();
-
-    criv(root).args(["check", "--fix"]).assert().success();
-
-    assert_eq!(
-        fs::read_to_string(&clean).unwrap(),
-        contents,
-        "a file with nothing to fix must not be rewritten"
-    );
-}
-
-#[test]
-fn check_fix_rewrites_markdown_outside_the_docs_tree() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-
-    init(root);
-    let readme = root.join("README.md");
-    fs::write(&readme, "# Root\n\nTrailing spaces here.   \n").unwrap();
-
-    criv(root).args(["check", "--fix"]).assert().success();
-
-    assert_eq!(
-        fs::read_to_string(&readme).unwrap(),
-        "# Root\n\nTrailing spaces here.\n",
-        "ADR-0044: --fix rewrites every Markdown file check lints inside the root"
-    );
-}
-
-#[test]
-fn check_fix_honors_the_rumdl_exclude_list() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-
-    init(root);
-    fs::write(
-        root.join(".rumdl.toml"),
-        "[global]\nexclude = [\"vendor/**\"]\n",
-    )
-    .unwrap();
-    fs::create_dir_all(root.join("vendor")).unwrap();
-    let vendored = root.join("vendor/upstream.md");
-    let contents = "# Upstream\n\nTrailing spaces here.   \n";
-    fs::write(&vendored, contents).unwrap();
-
-    criv(root).args(["check", "--fix"]).assert().success();
-
-    assert_eq!(
-        fs::read_to_string(&vendored).unwrap(),
-        contents,
-        "the rumdl exclude list is the scope control for --fix"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn check_fix_rejects_a_selected_link_outside_the_repository_root() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    let outside = TempDir::new().unwrap();
-
-    init(root);
-    let target = outside.path().join("secret.md");
-    let contents = "# Secret\n\nTrailing spaces here.   \n";
-    fs::write(&target, contents).unwrap();
-
-    std::os::unix::fs::symlink(&target, root.join("ESCAPE.md")).unwrap();
-
+    fs::create_dir_all(root.join("src")).unwrap();
+    fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
+    let old = root.join("docs/adr/0001-old.md");
+    let original = "---\nid: ADR-0001\nkind: decision\ntitle: Old\nstatus: accepted\n---\n\n# Old\n\nA historical decision.\n";
+    fs::write(&old, original).unwrap();
     criv(root)
-        .args(["check", "--fix"])
+        .arg("check")
         .assert()
         .failure()
-        .stderr(predicate::str::contains(
-            "refusing to discover file link `ESCAPE.md`",
-        ));
+        .stdout(predicate::str::contains("active ADR requires"));
 
-    assert_eq!(
-        fs::read_to_string(&target).unwrap(),
-        contents,
-        "no --fix write may reach a file outside the repository root"
-    );
+    let successor = root.join("docs/adr/0002-new.md");
+    let valid = "---\nid: ADR-0002\nkind: decision\ntitle: New\nstatus: accepted\nsupersedes: [ADR-0001]\n---\n\n# New\n\n## Context\n\nHistory.\n\n## Decision\n\nRetain the decision.\n\n## Consequences\n\nStandard structure.\n";
+    fs::write(&successor, valid).unwrap();
+    criv(root).arg("check").assert().success();
+    assert_eq!(fs::read_to_string(&old).unwrap(), original);
+
+    for invalid in [
+        valid.replace("## Context", "### Context"),
+        valid.replace("## Consequences", "## Decision"),
+        valid
+            .replace("## Context", "## Consequences")
+            .replace("Standard structure.", "## Context"),
+        valid.replace("status: accepted", "status: unknown"),
+        valid.replace("status: accepted", "status: draft"),
+        valid.replace("title: New", "title: ''"),
+    ] {
+        fs::write(&successor, invalid).unwrap();
+        criv(root)
+            .arg("check")
+            .assert()
+            .failure()
+            .stdout(predicate::str::contains("document-format"));
+    }
 }
 
 #[test]
@@ -2680,6 +2661,18 @@ policy:
 ---
 
 # Proposed inline policy
+
+## Context
+
+A draft policy.
+
+## Decision
+
+Consider the proposed rule.
+
+## Consequences
+
+It is not active yet.
 "#,
     )
     .unwrap();
@@ -2802,6 +2795,18 @@ policy:
 ---
 
 # Staged policy
+
+## Context
+
+Source changes need checking.
+
+## Decision
+
+Apply the inline policy.
+
+## Consequences
+
+Staged violations fail.
 "#,
     )
     .unwrap();
@@ -3524,7 +3529,7 @@ fn write_criv_config(root: &Path, roots: Vec<&str>, exclude: Vec<&str>, source_i
 
 fn source_governance_adr(governs: &str) -> String {
     format!(
-        "---\nid: ADR-0099\nkind: decision\ntitle: Source governance\nstatus: accepted\ndate: 2026-08-03\ngoverns:\n  - {governs}\n---\n\n## Source governance\n\nThe old path stays in prose: src/old.rs.\n"
+        "---\nid: ADR-0099\nkind: decision\ntitle: Source governance\nstatus: accepted\ndate: 2026-08-03\ngoverns:\n  - {governs}\n---\n\n# Source governance\n\n## Context\n\nThe old path stays in prose: src/old.rs.\n\n## Decision\n\nGovern the selected source path.\n\n## Consequences\n\nChanges require a decision.\n"
     )
 }
 
@@ -3805,7 +3810,7 @@ fn source_reconcile_history_proof_rejects_extra_adr_edits() {
         .success();
     let path = root.join("docs/adr/0099-source-governance.md");
     let contents = fs::read_to_string(&path).unwrap();
-    let modified = contents.replace("## Source governance", "## Changed governance");
+    let modified = contents.replace("# Source governance", "# Changed governance");
     fs::write(&path, &modified).unwrap();
     git(root, &["add", "docs/adr/0099-source-governance.md"]);
 
@@ -3869,7 +3874,7 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
     .unwrap();
     fs::write(
         root.join("docs/guide.md"),
-        "---\nid: guide\nkind: doc\ntitle: Guide\n---\n\n## Guide\n",
+        "---\nid: guide\nkind: doc\ntitle: Guide\n---\n\n# Guide\n",
     )
     .unwrap();
     fs::create_dir_all(root.join("src")).unwrap();
@@ -3891,7 +3896,7 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
     git(root, &["mv", "docs/guide.md", "docs/guide-topic.md"]);
     fs::write(
         root.join("docs/guide-topic.md"),
-        "---\nid: guide\nkind: doc\ntitle: Guide\n---\n\n## Guide\n\nSee [[0002-topic|ADR-0002]].\n",
+        "---\nid: guide\nkind: doc\ntitle: Guide\n---\n\n# Guide\n\nSee [[0002-topic|ADR-0002]].\n",
     )
     .unwrap();
     fs::write(root.join("src/no-reference.rs"), shared_boilerplate).unwrap();
@@ -4924,7 +4929,7 @@ fn git_test_helper_disables_commit_signing() {
 
 fn adr(id: &str, title: &str, slug: &str) -> String {
     format!(
-        "---\nid: ADR-{id}\nkind: decision\ntitle: {title}\nstatus: accepted\ndate: 2026-08-02\n---\n\n## {title}\n\n{slug}\n"
+        "---\nid: ADR-{id}\nkind: decision\ntitle: {title}\nstatus: accepted\ndate: 2026-08-02\n---\n\n# {title}\n\n## Context\n\nA decision is needed.\n\n## Decision\n\n{slug}\n\n## Consequences\n\nThe decision governs the vault.\n"
     )
 }
 

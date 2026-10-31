@@ -296,7 +296,10 @@ fn write_notes(
             ));
         }
         frontmatter.push_str("---\n\n");
-        let body = note_body(&format!("Decision {index:04}"), &links[index - 1]);
+        let body = format!(
+            "{}\n## Context\n\nA generated workload decision.\n\n## Decision\n\nUse the generated contract.\n\n## Consequences\n\nKeep performance inputs reproducible.\n",
+            note_body(&format!("Decision {index:04}"), &links[index - 1])
+        );
         fs::write(
             root.join("docs/adr")
                 .join(format!("{index:04}-decision-{index:04}.md")),

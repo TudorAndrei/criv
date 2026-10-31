@@ -25,7 +25,7 @@ mise install
 ```
 
 The mise postinstall hook runs `hk install --mise`, so Git hook execution goes
-through `mise x` and uses the pinned tool versions, including hk, Rust 1.97.1,
+through `mise x` and uses the pinned tool versions, including hk, Rust 1.99.1,
 and actionlint. GitHub Actions security analysis is pinned here too: zizmor
 checks workflow, composite action, and Dependabot definitions for risky CI/CD
 patterns. Hawk uses the same Rust toolchain to check whether public Rust APIs
@@ -135,10 +135,10 @@ repository already uses. Wire criv into your own runner instead.
 
 The commands are stable:
 
-| Stage | Commands |
-|-------|----------|
+| Stage  | Commands                                                                   |
+| ------ | -------------------------------------------------------------------------- |
 | commit | `criv watch --once`, `criv check --changed`, `criv enforce --stage commit` |
-| push | `criv enforce --stage push` |
+| push   | `criv enforce --stage push`                                                |
 
 `watch --once` refreshes `.criv/state.json` before the changed check. The
 changed check is a staged, read-only partial fast path; plain `criv check`
@@ -146,14 +146,20 @@ remains the full manual and hosted authority per
 [[0067-staged-changes-are-a-partial-check-scope|ADR-0067]]. Run commit commands
 in the listed order.
 
+Markdown presentation is a separate `oxfmt` hook. Use `npm run format:markdown`
+to format the repository or `npm run format:markdown:check` to check it.
+The formatter excludes accepted ADR paths and test fixtures; criv enforces
+frontmatter, titles, ADR sections, and heading links independently under
+[[0148-separate-markdown-formatting-from-vault-validation|ADR-0148]].
+Neither full nor staged criv validation requires a formatter, and `check --fix`
+is no longer a command option.
+
 With hk, as this repository does in `hk.pkl`:
 
 ```pkl
 local criv_check_changed = new Step {
   glob = List("**/*.md", "criv.toml")
-  check_first = true
   check = "criv check --changed"
-  fix = "criv check --fix"
 }
 
 local criv_enforce_commit = new Step {
@@ -285,7 +291,7 @@ npm --prefix .obsidian/plugins/criv run build
 
 The combined build preserves the release and manual entry point by running the
 Wasm build followed by the plugin build. The Wasm command invokes `wasm-pack`
-through `mise exec cargo:wasm-pack@0.15.0`, so the repository's pinned tools are
+through `mise exec cargo:wasm-pack@0.15.1`, so the repository's pinned tools are
 used rather than whichever Rust or `wasm-pack` appears first in the shell.
 It writes `criv_wasm.js`, `criv_wasm_bg.js`, and `criv_wasm_bg.wasm` under
 `.obsidian/plugins/criv/pkg/`. The plugin bundle keeps that runtime import

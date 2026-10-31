@@ -15,6 +15,16 @@ policy:
       message: Do not start operating-system commands from this fixture.
 ---
 
-## Elixir source contract
+# Elixir source contract
 
-The acceptance fixture uses first-class Elixir source identities.
+## Context
+
+The acceptance fixture exercises Elixir source indexing.
+
+## Decision
+
+Use first-class Elixir source identities and the inline policy above.
+
+## Consequences
+
+Operating-system commands fail the fixture's policy check.

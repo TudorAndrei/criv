@@ -140,28 +140,30 @@ Check the vault before committing documentation or code changes:
 ```sh
 criv check
 criv check --changed
-criv check --fix
 criv check --format json
 criv check --format github
 criv check --filter broken-link
 ```
 
-`--changed` checks the staged Git transaction. It lints changed Markdown,
+`--changed` checks the staged Git transaction. It checks document structure,
 validates local facts authored by changed vault files, and scopes policy scans
 to changed sources. Changes that can alter global identity or resolution—such
 as renames, deletions, ADR edits, or configuration edits—automatically run the
 full check. A passing changed check is a pre-commit fast-path result, not a
 full-vault validity claim; plain `criv check` remains the CI and manual
-authority. `--changed` is read-only and cannot be combined with `--fix`, per
-[ADR-0067](docs/adr/0067-staged-changes-are-a-partial-check-scope.md).
+authority. All checks are read-only. Formatting is separate repository tooling;
+`check --fix` has been removed, per
+[ADR-0148](docs/adr/0148-separate-markdown-formatting-from-vault-validation.md).
 
-`--fix` applies the Markdown formatting fixes rumdl can make automatically. It
-rewrites any Markdown file `criv check` lints, anywhere inside the repository
-root, so it is not limited to the vault docs directory. Which files are linted
-is controlled by the `include` and `exclude` lists in your rumdl configuration;
-excluding a directory there is how you keep `--fix` away from it. Writes are
-confined to the repository root and never follow symlinks, per
-[ADR-0044](docs/adr/0044-vault-write-confinement.md).
+criv requires non-empty frontmatter `id`, `kind`, and `title`, plus a supported
+ADR `status`. Notes require exactly one H1 matching their title, ignoring case
+and punctuation. Active ADRs require the H2 sections `Context`, `Decision`, and
+`Consequences`, once each and in order. Accepted historical records are left
+unchanged when an accepted successor takes over. Heading links remain checked.
+
+General Markdown style is not a criv concern. This repository uses oxfmt through
+its independent formatting hooks and `npm run format:markdown`. Consumer vaults
+can choose another formatter or none; criv never starts one.
 
 `--format` selects the diagnostic output. `text` is the default, `json` emits one
 object per diagnostic for editors and scripts, and `github` emits workflow
