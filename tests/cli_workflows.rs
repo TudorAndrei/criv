@@ -54,32 +54,6 @@ fn copy_fixture_tree(source: &Path, destination: &Path) {
     }
 }
 
-#[cfg(unix)]
-fn write_fake_node(root: &Path, output: &str) -> TempDir {
-    use std::os::unix::fs::PermissionsExt;
-
-    let bin = TempDir::new().unwrap();
-    let node = bin.path().join("node");
-    fs::write(
-        &node,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' '{}'\n",
-            output.replace('\'', "'\\''")
-        ),
-    )
-    .unwrap();
-    let mut permissions = fs::metadata(&node).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&node, permissions).unwrap();
-    fs::create_dir_all(root.join("node_modules/likec4")).unwrap();
-    fs::write(
-        root.join("node_modules/likec4/package.json"),
-        "{\"name\":\"likec4\",\"version\":\"1.60.0\"}\n",
-    )
-    .unwrap();
-    bin
-}
-
 fn init(root: &Path) {
     criv(root).args(["init", "--no-skills"]).assert().success();
 }
@@ -97,213 +71,48 @@ fn init_git_vault(root: &Path) {
     git(root, &["commit", "-m", "initial vault"]);
 }
 
-#[cfg(unix)]
-#[test]
-fn check_reports_normalized_likec4_diagnostics() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    init(root);
-    fs::create_dir_all(root.join("docs/architecture")).unwrap();
-    fs::write(
-        root.join("docs/architecture/model.c4"),
-        "specification { element system }\nmodel { broken = system }\n",
-    )
-    .unwrap();
-    let bridge_output = serde_json::json!({
-        "protocolVersion": 1,
-        "nodeVersion": "26.5.1",
-        "likec4Version": "1.60.0",
-        "revision": 0,
-        "valid": false,
-        "diagnostics": [{
-            "message": "Expected an element body",
-            "file": "/outside/docs/architecture/model.c4",
-            "line": 4,
-            "range": {
-                "start": { "line": 4, "character": 2 },
-                "end": { "line": 4, "character": 8 }
-            }
-        }],
-        "model": null
-    })
-    .to_string();
-    let fake_bin = write_fake_node(root, &bridge_output);
-
-    criv(root)
-        .arg("check")
-        .env("PATH", fake_bin.path())
-        .assert()
-        .failure()
-        .stdout(predicate::str::contains(
-            "docs/architecture/model.c4:5: Expected an element body",
-        ))
-        .stdout(predicate::str::contains("invalid-likec4"));
-}
-
-#[cfg(unix)]
-#[test]
-fn check_json_and_github_preserve_exact_likec4_ranges() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    init(root);
-    fs::create_dir_all(root.join("docs/architecture")).unwrap();
-    fs::write(
-        root.join("docs/architecture/model.c4"),
-        "specification { element system }\nmodel { broken = system }\n",
-    )
-    .unwrap();
-    let bridge_output = serde_json::json!({
-        "protocolVersion": 1,
-        "nodeVersion": "26.5.1",
-        "likec4Version": "1.60.0",
-        "revision": 0,
-        "valid": false,
-        "diagnostics": [{
-            "message": "Expected an element body",
-            "file": "/outside/docs/architecture/model.c4",
-            "line": 1,
-            "range": {
-                "start": { "line": 1, "character": 8 },
-                "end": { "line": 1, "character": 14 }
-            }
-        }],
-        "model": null
-    })
-    .to_string();
-    let fake_bin = write_fake_node(root, &bridge_output);
-
-    let json = criv(root)
-        .args(["check", "--format", "json", "--filter", "invalid-likec4"])
-        .env("PATH", fake_bin.path())
-        .assert()
-        .failure()
-        .get_output()
-        .stdout
-        .clone();
-    let diagnostics: Vec<serde_json::Value> = serde_json::from_slice(&json).unwrap();
-    assert_eq!(diagnostics.len(), 1);
-    assert_eq!(
-        diagnostics[0]["range"],
-        serde_json::json!({
-            "start": { "line": 1, "character": 8 },
-            "end": { "line": 1, "character": 14 }
-        })
-    );
-
-    criv(root)
-        .args([
-            "check",
-            "--format",
-            "github",
-            "--filter",
-            "invalid-likec4",
-        ])
-        .env("PATH", fake_bin.path())
-        .assert()
-        .failure()
-        .stdout(predicate::str::contains(
-            "file=docs/architecture/model.c4,line=2,col=9,endLine=2,endColumn=14,title=criv invalid-likec4",
-        ));
-}
-
-#[cfg(unix)]
-#[test]
-fn check_accepts_local_runtime_versions_but_rejects_invalid_bridge_responses() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    init(root);
-    fs::create_dir_all(root.join("docs/architecture")).unwrap();
-    fs::write(
-        root.join("docs/architecture/model.c4"),
-        "specification { element system }\nmodel { system = system 'System' }\n",
-    )
-    .unwrap();
-    let response = serde_json::json!({
-        "protocolVersion": 1,
-        "nodeVersion": "26.12.1",
-        "likec4Version": "2.0.0",
-        "revision": 0,
-        "valid": true,
-        "diagnostics": [],
-        "model": null
-    });
-    for (field, value, expected_error) in [
-        ("nodeVersion", serde_json::json!("24.0.0"), None),
-        ("nodeVersion", serde_json::json!("26.12.1"), None),
-        (
-            "protocolVersion",
-            serde_json::json!(2),
-            Some("invalid-likec4-protocol"),
-        ),
-        (
-            "revision",
-            serde_json::json!(1),
-            Some("invalid-likec4-protocol"),
-        ),
-        (
-            "bridgeError",
-            serde_json::json!("LikeC4 API unavailable"),
-            Some("missing-likec4-runtime"),
-        ),
-    ] {
-        let mut output = response.clone();
-        output[field] = value;
-        let fake_bin = write_fake_node(root, &output.to_string());
-        let assertion = criv(root)
-            .arg("check")
-            .env("PATH", fake_bin.path())
-            .assert();
-        if let Some(code) = expected_error {
-            assertion.failure().stdout(predicate::str::contains(code));
-        } else {
-            assertion
-                .success()
-                .stdout(predicate::str::contains("criv check: ok"));
-        }
-    }
-}
-
-#[cfg(unix)]
-#[test]
-fn check_rejects_an_unresolved_likec4_source_link() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    init(root);
-    fs::create_dir_all(root.join("docs/architecture")).unwrap();
-    fs::write(
-        root.join("docs/architecture/model.c4"),
-        "specification { element system }\nmodel { system = system 'System' }\n",
-    )
-    .unwrap();
-    let bridge_output = serde_json::json!({
-        "protocolVersion": 1,
-        "nodeVersion": "26.5.1",
-        "likec4Version": "1.60.0",
-        "revision": 0,
-        "valid": true,
-        "diagnostics": [],
-        "model": {
-            "raw": { "elements": {}, "relations": {}, "views": {} },
-            "elements": [],
-            "relationships": [],
-            "views": [],
-            "sourceLinks": [{ "element": "system", "target": "src/missing.rs" }]
-        }
-    })
-    .to_string();
-    let fake_bin = write_fake_node(root, &bridge_output);
-
-    criv(root)
-        .arg("check")
-        .env("PATH", fake_bin.path())
-        .assert()
-        .failure()
-        .stdout(predicate::str::contains("invalid-likec4-source"))
-        .stdout(predicate::str::contains("src/missing.rs"));
-}
-
 fn doc(id: &str, title: &str, body: &str) -> String {
     format!("---\nid: {id}\nkind: doc\ntitle: {title}\n---\n\n# {title}\n\n{body}\n")
+}
+
+#[test]
+fn vault_validation_and_publication_are_independent_of_architecture() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    let empty_path = TempDir::new().unwrap();
+    init(root);
+    fs::create_dir_all(root.join("docs/architecture")).unwrap();
+    fs::write(
+        root.join("docs/architecture/model.c4"),
+        "not a valid diagram\n",
+    )
+    .unwrap();
+    fs::create_dir_all(root.join(".criv")).unwrap();
+    fs::write(
+        root.join(".criv/state.json"),
+        "not a valid previous State\n",
+    )
+    .unwrap();
+
+    criv(root)
+        .arg("check")
+        .env("PATH", empty_path.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("criv check: ok"));
+    criv(root)
+        .args(["watch", "--once"])
+        .env("PATH", empty_path.path())
+        .assert()
+        .success();
+
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(root.join(".criv/state.json")).unwrap()).unwrap();
+    assert!(state.get("architecture").is_none());
+    assert_eq!(
+        fs::read_to_string(root.join("docs/architecture/model.c4")).unwrap(),
+        "not a valid diagram\n"
+    );
 }
 
 #[test]
@@ -2083,40 +1892,6 @@ Range [[src/lib.rs#L1-L1]]
         .args(["check", "--filter", "broken-link"])
         .assert()
         .success();
-}
-
-#[test]
-fn removed_c4_code_query_is_not_a_cli_command() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-
-    init(root);
-    fs::create_dir_all(root.join("src")).unwrap();
-    fs::create_dir_all(root.join("docs")).unwrap();
-    fs::write(root.join("src/lib.rs"), "mod helper;\nuse crate::helper;\n").unwrap();
-    fs::write(root.join("src/helper.rs"), "pub fn run() {}\n").unwrap();
-    write_criv_config(
-        root,
-        vec!["src"],
-        vec!["**/target/**", "**/node_modules/**"],
-        true,
-    );
-
-    criv(root)
-        .args(["query", "c4-code", "src/**"])
-        .assert()
-        .failure()
-        .code(2)
-        .stderr(predicate::str::contains(
-            "unrecognized subcommand 'c4-code'",
-        ));
-
-    criv(root)
-        .args(["query", "c4-elements", "c4"])
-        .assert()
-        .failure()
-        .code(2)
-        .stderr(predicate::str::contains("unrecognized subcommand"));
 }
 
 #[test]

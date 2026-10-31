@@ -11,6 +11,5 @@ minimum_file_bytes = 64
 [expected]
 source_files = 0
 vault_markdown_files = 0
-vault_c4_files = 0
 markdown_files = 900000
 errors = []

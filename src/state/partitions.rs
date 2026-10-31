@@ -2,8 +2,8 @@ use super::{
     Arc, BTreeMap, BTreeSet, Graph, GraphBuilder, PartitionDependencies, PartitionKey,
     PartitionKind, PartitionMeta, PatternMatch, PendingPolicyScan, PolicyPartition, PolicyScanPlan,
     Result, SourceIndexEntry, SourceIndexPartition, State, StatePartitions, Vault,
-    c4_artifact_input_fingerprint, changed_paths_in_scopes, graph_root, note_catalog_fingerprint,
-    note_input_fingerprint, observe_partition_meta, partition_meta, pattern_match_from_structural,
+    changed_paths_in_scopes, graph_root, note_catalog_fingerprint, note_input_fingerprint,
+    observe_partition_meta, partition_meta, pattern_match_from_structural,
     record_partition_rebuilt, reusable_matches, sort_and_dedup_pattern_matches,
     source_index_input_fingerprint, source_mime, structural,
 };
@@ -117,12 +117,6 @@ impl ReverseDependencies {
                 &partition.meta.dependencies,
             );
         }
-        for (path, partition) in &partitions.c4_artifacts {
-            index.insert(
-                PartitionKey::C4Artifact(path.clone()),
-                &partition.meta.dependencies,
-            );
-        }
         for (id, partition) in &partitions.policies {
             index.insert(
                 PartitionKey::Policy(id.clone()),
@@ -207,24 +201,6 @@ pub(super) fn build(
         partitions.notes.insert(note.rel_path.clone(), partition);
     }
 
-    for artifact in &vault.c4_artifacts {
-        let key = PartitionKey::C4Artifact(artifact.rel_path.clone());
-        let fingerprint = c4_artifact_input_fingerprint(artifact);
-        let partition = previous
-            .and_then(|previous| previous.c4_artifacts.get(&artifact.rel_path))
-            .filter(|partition| {
-                partition.meta.input_fingerprint == fingerprint && !invalidation.affects(&key)
-            })
-            .cloned()
-            .unwrap_or_else(|| {
-                record_partition_rebuilt(PartitionKind::C4Artifact);
-                Arc::new(super::projection::build_c4_artifact_partition(artifact))
-            });
-        partitions
-            .c4_artifacts
-            .insert(artifact.rel_path.clone(), partition);
-    }
-
     for entry in vault.source_entries() {
         let state_entry = SourceIndexEntry {
             mime: source_mime(&entry.path),
@@ -276,10 +252,6 @@ pub(super) fn flatten(
     }
     for (path, partition) in &partitions.notes {
         observe_partition_meta(&partition.meta, &PartitionKey::Note(path.clone()));
-        builder.append_rows(&partition.rows);
-    }
-    for (path, partition) in &partitions.c4_artifacts {
-        observe_partition_meta(&partition.meta, &PartitionKey::C4Artifact(path.clone()));
         builder.append_rows(&partition.rows);
     }
     let mut graph = builder.finish();

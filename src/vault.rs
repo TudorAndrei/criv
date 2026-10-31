@@ -8,7 +8,6 @@ use std::{cell::Cell, thread_local};
 use serde::Deserialize;
 
 use crate::Result;
-use crate::c4;
 use crate::config::Config;
 use crate::diagnostic::SourceLocation;
 use crate::discovery::{discover_vault, read_selected_text_from};
@@ -150,8 +149,6 @@ pub struct Vault {
     files: RepositoryFiles,
     pub(crate) config: Config,
     pub(crate) notes: Vec<Note>,
-    pub(crate) c4_artifacts: Vec<c4::C4Artifact>,
-    pub(crate) likec4_workspace: c4::LikeC4Workspace,
     assets: Vec<DocumentationAsset>,
     note_ids: BTreeMap<String, usize>,
     filenames: BTreeMap<String, usize>,
@@ -234,14 +231,7 @@ impl Vault {
             .map(|path| root.join(path))
             .map(|path| parse_note(files, &docs_path, &path))
             .collect::<Result<Vec<_>>>()?;
-        let c4_artifacts = discovered
-            .c4
-            .into_iter()
-            .map(|path| root.join(path))
-            .map(|path| c4::parse_file_from(files, &docs_path, &path))
-            .collect::<Result<Vec<_>>>()?;
         let assets = load_documentation_assets(files, discovered.assets)?;
-        let likec4_workspace = c4::load_workspace(root, &docs_path, &c4_artifacts);
 
         let mut note_ids = BTreeMap::new();
         let mut filenames = BTreeMap::new();
@@ -274,8 +264,6 @@ impl Vault {
             files: files.clone(),
             config,
             notes,
-            c4_artifacts,
-            likec4_workspace,
             assets,
             note_ids,
             filenames,
@@ -605,8 +593,6 @@ impl Vault {
             files,
             config: Config::default(),
             notes,
-            c4_artifacts: Vec::new(),
-            likec4_workspace: c4::LikeC4Workspace::default(),
             assets: Vec::new(),
             note_ids,
             filenames,
@@ -1598,11 +1584,8 @@ See [[lib.rs]], [[match:ADR-0001/no-block-on]], [[helper.rs#help]],
         let vault = Vault::load(&root).unwrap();
         assert_eq!(work_counts().link_source_resolutions, 2);
 
-        let _ = crate::check::validate_vault(
-            &vault,
-            None,
-            &crate::policy_scan::PolicyScanPlan::new(&vault),
-        );
+        let _ =
+            crate::check::validate_vault(&vault, &crate::policy_scan::PolicyScanPlan::new(&vault));
         let state = crate::state::State::build(&vault).unwrap();
         assert_eq!(work_counts().link_source_resolutions, 2);
         let state = serde_json::to_value(state).unwrap();

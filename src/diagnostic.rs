@@ -14,7 +14,6 @@ pub enum DiagnosticCode {
     AdrImmutabilityViolation,
     AmbiguousPolicyPatternBody,
     AmbiguousSourceLink,
-    ArchitectureInterfaceDrift,
     BrokenLink,
     CheckFailed,
     DecisionLocation,
@@ -28,17 +27,12 @@ pub enum DiagnosticCode {
     ImportPolicyViolation,
     InconsistentSupersession,
     InvalidAdrId,
-    InvalidC4Generated,
     InvalidFrontmatter,
     InvalidKind,
-    InvalidLikeC4,
-    InvalidLikeC4Protocol,
-    InvalidLikeC4Source,
     InvalidPolicyPattern,
     LegacySourceTarget,
     DocumentFormat,
     MissingId,
-    MissingLikeC4Runtime,
     MissingPolicyPatternBody,
     MissingPolicyPatternDefinition,
     MissingPolicyPatternId,
@@ -48,7 +42,6 @@ pub enum DiagnosticCode {
     PolicyViolation,
     SourceWikilink,
     SupersessionCycle,
-    UnknownC4Format,
     UnknownSupersededBy,
     UnknownSupersedes,
     UnresolvedGoverns,
@@ -66,7 +59,6 @@ impl DiagnosticCode {
             Self::AdrImmutabilityViolation => "adr-immutability-violation",
             Self::AmbiguousPolicyPatternBody => "ambiguous-policy-pattern-body",
             Self::AmbiguousSourceLink => "ambiguous-source-link",
-            Self::ArchitectureInterfaceDrift => "architecture-interface-drift",
             Self::BrokenLink => "broken-link",
             Self::CheckFailed => "check-failed",
             Self::DecisionLocation => "decision-location",
@@ -80,17 +72,12 @@ impl DiagnosticCode {
             Self::ImportPolicyViolation => "import-policy-violation",
             Self::InconsistentSupersession => "inconsistent-supersession",
             Self::InvalidAdrId => "invalid-adr-id",
-            Self::InvalidC4Generated => "invalid-c4-generated",
             Self::InvalidFrontmatter => "invalid-frontmatter",
             Self::InvalidKind => "invalid-kind",
-            Self::InvalidLikeC4 => "invalid-likec4",
-            Self::InvalidLikeC4Protocol => "invalid-likec4-protocol",
-            Self::InvalidLikeC4Source => "invalid-likec4-source",
             Self::InvalidPolicyPattern => "invalid-policy-pattern",
             Self::LegacySourceTarget => "legacy-source-target",
             Self::DocumentFormat => "document-format",
             Self::MissingId => "missing-id",
-            Self::MissingLikeC4Runtime => "missing-likec4-runtime",
             Self::MissingPolicyPatternBody => "missing-policy-pattern-body",
             Self::MissingPolicyPatternDefinition => "missing-policy-pattern-definition",
             Self::MissingPolicyPatternId => "missing-policy-pattern-id",
@@ -100,7 +87,6 @@ impl DiagnosticCode {
             Self::PolicyViolation => "policy-violation",
             Self::SourceWikilink => "source-wikilink",
             Self::SupersessionCycle => "supersession-cycle",
-            Self::UnknownC4Format => "unknown-c4-format",
             Self::UnknownSupersededBy => "unknown-superseded-by",
             Self::UnknownSupersedes => "unknown-supersedes",
             Self::UnresolvedGoverns => "unresolved-governs",
@@ -110,8 +96,8 @@ impl DiagnosticCode {
         }
     }
 
-    pub const fn fix(self) -> Option<&'static str> {
-        let fix = match self {
+    pub const fn fix(self) -> &'static str {
+        match self {
             Self::AdrDirNonDecision => {
                 "Set `kind: decision` in the frontmatter, or move the file out of the ADR directory."
             }
@@ -124,9 +110,6 @@ impl DiagnosticCode {
             }
             Self::AmbiguousSourceLink => {
                 "Name the file in the link, as in `[[src/lib.rs#fn:run]]`, so one source resolves."
-            }
-            Self::ArchitectureInterfaceDrift => {
-                "Run `criv watch --once`, then correct the C4 element so it matches the source."
             }
             Self::BrokenLink => "Correct the link target, or add the note it names.",
             Self::CheckFailed => "Repair the diagnostics above, then run `criv check`.",
@@ -148,7 +131,6 @@ impl DiagnosticCode {
             Self::InvalidAdrId => "Take a free id from `criv query next-adr-id`.",
             Self::InvalidFrontmatter => "Correct the YAML frontmatter block.",
             Self::InvalidKind => "Set `kind` to `doc` or to `decision`.",
-            Self::InvalidLikeC4Source => "Correct the LikeC4 source, then run `criv watch --once`.",
             Self::InvalidPolicyPattern => "Correct the ast-grep pattern or rule syntax.",
             Self::LegacySourceTarget | Self::SourceWikilink => {
                 "Rewrite the target as an AST-aware selector, as in `src/main.rs#fn:run`."
@@ -187,13 +169,7 @@ impl DiagnosticCode {
             Self::VaultOutsideGitRoot => {
                 "Run criv from the worktree root, or make the vault its own repository."
             }
-            Self::InvalidC4Generated
-            | Self::InvalidLikeC4
-            | Self::InvalidLikeC4Protocol
-            | Self::MissingLikeC4Runtime
-            | Self::UnknownC4Format => return None,
-        };
-        Some(fix)
+        }
     }
 }
 
@@ -271,15 +247,6 @@ impl SourceLocation {
     pub(crate) fn new(source: Arc<str>, range: Range<usize>) -> Option<Self> {
         let span = ByteSpan::new(&source, range)?;
         Some(Self { source, span })
-    }
-
-    pub(crate) fn from_lsp_range(source: Arc<str>, range: LspRange) -> Option<Self> {
-        if (range.end.line, range.end.character) < (range.start.line, range.start.character) {
-            return None;
-        }
-        let start = lsp_position_to_byte(&source, range.start)?;
-        let end = lsp_position_to_byte(&source, range.end)?;
-        Self::new(source, start..end)
     }
 
     pub(crate) fn line(&self) -> Option<usize> {
@@ -363,22 +330,6 @@ fn byte_to_character_position(source: &str, offset: usize) -> Option<LspPosition
         line,
         character: line_prefix.chars().count(),
     })
-}
-
-fn lsp_position_to_byte(source: &str, position: LspPosition) -> Option<usize> {
-    let (line_start, line_end) = line_bounds(source, position.line)?;
-    let line = source.get(line_start..line_end)?;
-    let mut utf16 = 0;
-    for (offset, character) in line.char_indices() {
-        if utf16 == position.character {
-            return line_start.checked_add(offset);
-        }
-        utf16 = utf16.checked_add(character.len_utf16())?;
-        if utf16 > position.character {
-            return None;
-        }
-    }
-    (utf16 == position.character).then_some(line_end)
 }
 
 fn line_bounds(source: &str, target_line: usize) -> Option<(usize, usize)> {
@@ -474,40 +425,6 @@ mod tests {
                 end_line: 2,
                 end_column: Some(1),
             })
-        );
-    }
-
-    #[test]
-    fn converts_and_rejects_external_coordinate_ranges() {
-        let source: Arc<str> = Arc::from("a😀b\r\nçd\n");
-        let lsp = LspRange {
-            start: LspPosition {
-                line: 0,
-                character: 1,
-            },
-            end: LspPosition {
-                line: 1,
-                character: 1,
-            },
-        };
-        let location = SourceLocation::from_lsp_range(source.clone(), lsp).unwrap();
-        assert_eq!(location.lsp_range(), Some(lsp));
-        assert!(
-            SourceLocation::from_lsp_range(
-                source.clone(),
-                LspRange {
-                    start: LspPosition {
-                        line: 0,
-                        character: 2,
-                    },
-                    end: LspPosition {
-                        line: 0,
-                        character: 3,
-                    },
-                },
-            )
-            .is_none(),
-            "a UTF-16 position inside a surrogate pair is invalid"
         );
     }
 }

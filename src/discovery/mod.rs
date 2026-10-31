@@ -18,7 +18,6 @@ const COLLECT_FLUSH_ENTRIES: usize = 1_024;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultPaths {
     pub(crate) markdown: Vec<String>,
-    pub(crate) c4: Vec<String>,
     pub(crate) assets: Vec<String>,
 }
 
@@ -26,7 +25,6 @@ pub struct VaultPaths {
 enum SelectionKind {
     Source,
     VaultMarkdown,
-    VaultC4,
     VaultAsset,
 }
 
@@ -191,14 +189,12 @@ pub fn discover_vault(root: &Path, docs_dir: &str) -> Result<VaultPaths> {
     if profile_prunes_path(profile.as_ref(), &docs_relative) {
         return Ok(VaultPaths {
             markdown: Vec::new(),
-            c4: Vec::new(),
             assets: Vec::new(),
         });
     }
     let Some(kind) = validate_root(root, &docs_relative)? else {
         return Ok(VaultPaths {
             markdown: Vec::new(),
-            c4: Vec::new(),
             assets: Vec::new(),
         });
     };
@@ -215,30 +211,21 @@ pub fn discover_vault(root: &Path, docs_dir: &str) -> Result<VaultPaths> {
         .threads(VAULT_WALK_THREADS);
     let selections = finish(walk(root, &mut builder, profile))?;
     let mut markdown = Vec::new();
-    let mut c4 = Vec::new();
     let mut assets = Vec::new();
     for selection in selections {
         match selection.kind {
             SelectionKind::VaultMarkdown => markdown.push(selection.path),
-            SelectionKind::VaultC4 => c4.push(selection.path),
             SelectionKind::VaultAsset => assets.push(selection.path),
             SelectionKind::Source => {}
         }
     }
-    Ok(VaultPaths {
-        markdown,
-        c4,
-        assets,
-    })
+    Ok(VaultPaths { markdown, assets })
 }
 
 fn vault_selection_kind(path: &Path) -> Option<SelectionKind> {
     let extension = path.extension()?.to_str()?;
     if extension == "md" {
         return Some(SelectionKind::VaultMarkdown);
-    }
-    if extension == "c4" {
-        return Some(SelectionKind::VaultC4);
     }
     matches!(extension, "png" | "jpg" | "jpeg" | "gif" | "webp" | "pdf")
         .then_some(SelectionKind::VaultAsset)
@@ -932,7 +919,6 @@ mod tests {
             discover_vault(root, "docs").unwrap(),
             VaultPaths {
                 markdown: vec!["docs/note.md".into()],
-                c4: vec!["docs/model.c4".into()],
                 assets: vec!["docs/report.pdf".into()],
             }
         );
@@ -950,7 +936,6 @@ mod tests {
             discover_vault(root, "docs").unwrap(),
             VaultPaths {
                 markdown: vec!["docs/.hidden.md".into()],
-                c4: vec![],
                 assets: vec![],
             }
         );
@@ -958,7 +943,6 @@ mod tests {
             discover_vault(root, "missing").unwrap(),
             VaultPaths {
                 markdown: vec![],
-                c4: vec![],
                 assets: vec![],
             }
         );
@@ -966,7 +950,6 @@ mod tests {
             discover_vault(root, "docs/target").unwrap(),
             VaultPaths {
                 markdown: vec![],
-                c4: vec![],
                 assets: vec![],
             }
         );
@@ -993,7 +976,6 @@ mod tests {
             discover_vault(root, "docs").unwrap(),
             VaultPaths {
                 markdown: vec![],
-                c4: vec![],
                 assets: vec![],
             }
         );

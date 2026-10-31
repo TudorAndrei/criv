@@ -91,7 +91,7 @@ criv check</code></pre>
       </p>
 
       <p>
-        <button type="button" id="architecture-open">View Architecture</button>
+        <a href="https://github.com/TudorAndrei/criv/tree/main/docs/architecture">Architecture source</a>
       </p>
 
       <h2>What criv checks</h2>
@@ -108,25 +108,5 @@ criv check</code></pre>
       </p>
     </main>
 
-    <dialog id="architecture-dialog" aria-labelledby="architecture-title">
-      <div class="architecture-dialog-header">
-        <h2 id="architecture-title">Architecture</h2>
-        <form method="dialog">
-          <button type="submit">Close</button>
-        </form>
-      </div>
-      <iframe
-        class="architecture-explorer"
-        src="/criv/architecture/"
-        title="criv architecture explorer"
-      ></iframe>
-    </dialog>
-
-    <script>
-      const architectureDialog = document.querySelector('#architecture-dialog');
-      document.querySelector('#architecture-open').addEventListener('click', () => {
-        architectureDialog.showModal();
-      });
-    </script>
   </body>
 </html>

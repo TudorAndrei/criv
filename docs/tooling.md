@@ -224,8 +224,9 @@ pre-push:
       run: criv enforce --stage push
 ```
 
-Keep `parallel: false` for the commit stage: `check` reads the state `watch`
-writes, so they must not overlap.
+Keep `parallel: false` for the commit stage so refresh, staged validation, and
+enforcement run in that order. `check` validates the vault independently of
+published editor State.
 
 Manual task entry points are:
 
@@ -345,21 +346,15 @@ npm --prefix extensions/vscode-criv run package
 ```
 
 The integration command launches the VS Code extension test host and fails on
-JSON diagnostics for extension manifest and language configuration files. Its
+JSON diagnostics for the extension manifest. Its
 short temporary user-data and extension-installation paths avoid macOS IPC path
 limits. Hosted CI runs this command under Xvfb; it is not part of local hooks.
 
-The extension uses a read-only LikeC4 preview as the default `.c4` editor. It
-selects the named view owned by the opened file. There is no fallback view: a
-file that owns none states so and points at a file that declares a view.
-Navigating inside the
-diagram opens the file that owns the target view in the same editor group, so
-the tab tracks the diagram. Use
-**Reopen Editor With → Text Editor** to edit the DSL. The preview webview uses packaged extension
-resources and does not use a CDN or a global LikeC4 command. Run `criv watch
---once` after architecture or extension source changes. This keeps architecture
-state current. The coding agent authors the repository Code model and views under
-`docs/architecture/code/`, so watch does not replace them.
+The extension consumes State for source navigation, documentation assets,
+registered policies, and diagnostics. It has no architecture preview or C4
+editor registration. The repository's `docs/architecture/` files remain
+architecture documentation; neither watch nor check compiles them.
+[[0155-remove-likec4-from-criv|ADR-0155]] records the removal.
 
 `npm --prefix extensions/vscode-criv run package` and `mise run
 vscode-package` build a local `vscode-criv.vsix` without publishing. `mise run

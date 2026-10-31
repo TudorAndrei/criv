@@ -73,7 +73,7 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
         crate::adr::check_base(root, &base_ref)?;
     }
 
-    let diagnostics = check::validate_vault(&vault, None, &policy_plan);
+    let diagnostics = check::validate_vault(&vault, &policy_plan);
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();
 
@@ -129,7 +129,7 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
                 .as_ref()
                 .map_or(&[][..], |failure| &failure.violations),
             code: failure.as_ref().map(|failure| failure.code),
-            fix: failure.as_ref().and_then(|failure| failure.code.fix()),
+            fix: failure.as_ref().map(|failure| failure.code.fix()),
         };
         let json = serde_json::to_string_pretty(&report).map_err(|err| {
             CrivError::new(format!("failed to serialize enforcement report: {err}"))

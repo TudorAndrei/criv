@@ -206,11 +206,7 @@ fn target_expectations(case: EdgeCase) -> BTreeMap<&'static str, TargetExpectati
     match case {
         EdgeCase::MatchedParity => {
             success(&mut expected, "source", "source", &["src/a.rs"]);
-            success_groups(
-                &mut expected,
-                "vault",
-                &[("markdown", &["docs/a.md"]), ("c4", &["docs/model.c4"])],
-            );
+            success_groups(&mut expected, "vault", &[("markdown", &["docs/a.md"])]);
             success(
                 &mut expected,
                 "markdown",
@@ -234,10 +230,7 @@ fn target_expectations(case: EdgeCase) -> BTreeMap<&'static str, TargetExpectati
         EdgeCase::VaultShape => success_groups(
             &mut expected,
             "vault",
-            &[
-                ("markdown", &["docs/.hidden.md", "docs/a.md"]),
-                ("c4", &["docs/model.c4"]),
-            ],
+            &[("markdown", &["docs/.hidden.md", "docs/a.md"])],
         ),
         EdgeCase::VaultLink => error(&mut expected, "vault"),
         EdgeCase::MarkdownShape => success(
@@ -254,7 +247,7 @@ fn target_expectations(case: EdgeCase) -> BTreeMap<&'static str, TargetExpectati
         EdgeCase::MarkdownInvalidPattern => error(&mut expected, "markdown"),
         EdgeCase::MissingRoots => {
             success(&mut expected, "source", "source", &[]);
-            success_groups(&mut expected, "vault", &[("markdown", &[]), ("c4", &[])]);
+            success_groups(&mut expected, "vault", &[("markdown", &[])]);
         }
         EdgeCase::NonUtf8Source => error(&mut expected, "source"),
     }

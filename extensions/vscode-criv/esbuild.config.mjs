@@ -25,24 +25,9 @@ const context = await esbuild.context({
   logLevel: "info",
 });
 
-const webviewContext = await esbuild.context({
-  entryPoints: ["src/c4/webview.ts"],
-  bundle: true,
-  format: "iife",
-  platform: "browser",
-  target: "es2022",
-  alias: {
-    "node:module": "./src/nodeModuleShim.ts",
-  },
-  outfile: "media/likec4-preview.js",
-  sourcemap: false,
-  minify: production,
-  logLevel: "info",
-});
-
 if (watch) {
-  await Promise.all([context.watch(), webviewContext.watch()]);
+  await context.watch();
 } else {
-  await Promise.all([context.rebuild(), webviewContext.rebuild()]);
-  await Promise.all([context.dispose(), webviewContext.dispose()]);
+  await context.rebuild();
+  await context.dispose();
 }

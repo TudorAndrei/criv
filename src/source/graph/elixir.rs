@@ -2938,7 +2938,7 @@ end
     }
 
     #[test]
-    fn interface_hash_ignores_bodies_and_tracks_elixir_contract_changes() {
+    fn interface_ignores_bodies_and_tracks_elixir_contract_changes() {
         let before = parse(
             "lib/sample.ex",
             r#"
@@ -2966,18 +2966,17 @@ defmodule Sample do
 end
 "#,
         );
-        let hash = |file: &SourceFile| {
+        let signature = |file: &SourceFile| {
             file.symbols
                 .iter()
                 .find(|symbol| symbol.name == "run")
                 .unwrap()
                 .interface_signature
-                .as_ref()
+                .clone()
                 .unwrap()
-                .hash()
         };
 
-        assert_eq!(hash(&before), hash(&body_change));
-        assert_ne!(hash(&before), hash(&contract_change));
+        assert_eq!(signature(&before), signature(&body_change));
+        assert_ne!(signature(&before), signature(&contract_change));
     }
 }

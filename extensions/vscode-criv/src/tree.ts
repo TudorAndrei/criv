@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 
 import { assetTreePresentation } from "./assets";
-import type { CrivArtifactEntry, CrivAssetEntry, CrivStateSnapshot } from "./state/model";
+import type { CrivAssetEntry, CrivStateSnapshot } from "./state/model";
 import type { WorkspaceStateStatus } from "./state/store";
 import type { CrivSourceEntry } from "./state/wasm";
 
@@ -50,12 +50,12 @@ export class CrivStateTreeProvider implements vscode.TreeDataProvider<CrivTreeIt
   }
 }
 
-type TreeSection = "summary" | "sources" | "assets" | "patterns" | "c4";
+type TreeSection = "summary" | "sources" | "assets" | "patterns";
 
 class CrivTreeItem extends vscode.TreeItem {
   constructor(
     label: string,
-    readonly kind: "section" | "message" | "source" | "asset" | "pattern" | "artifact",
+    readonly kind: "section" | "message" | "source" | "asset" | "pattern",
     readonly section?: TreeSection,
   ) {
     super(
@@ -73,7 +73,6 @@ function readyRootItems(snapshot: CrivStateSnapshot): CrivTreeItem[] {
     sectionItem("Source Files", "sources", `${snapshot.sources.length}`),
     sectionItem("Documentation Assets", "assets", `${snapshot.assets.length}`),
     sectionItem("Registered Patterns", "patterns", `${snapshot.registeredPatterns.length}`),
-    sectionItem(".c4 Artifacts", "c4", `${snapshot.c4Artifacts.length}`),
   ];
 }
 
@@ -91,10 +90,6 @@ function sectionChildren(section: TreeSection, snapshot: CrivStateSnapshot): Cri
       return snapshot.registeredPatterns.length > 0
         ? snapshot.registeredPatterns.map(patternItem)
         : [new CrivTreeItem("No registered patterns", "message")];
-    case "c4":
-      return snapshot.c4Artifacts.length > 0
-        ? snapshot.c4Artifacts.map(artifactItem)
-        : [new CrivTreeItem("No .c4 artifacts", "message")];
   }
 }
 
@@ -140,15 +135,4 @@ function assetItem(asset: CrivAssetEntry): CrivTreeItem {
 
 function patternItem(pattern: string): CrivTreeItem {
   return new CrivTreeItem(pattern, "pattern");
-}
-
-function artifactItem(artifact: CrivArtifactEntry): CrivTreeItem {
-  const item = new CrivTreeItem(artifact.label, "artifact");
-  item.description = artifact.path === artifact.label ? undefined : artifact.path;
-  item.command = {
-    command: "criv.openSourceTarget",
-    title: "Open Source Target",
-    arguments: [artifact.target],
-  };
-  return item;
 }

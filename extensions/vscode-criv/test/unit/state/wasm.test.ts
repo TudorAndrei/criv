@@ -5,9 +5,6 @@ import { resolve } from "node:path";
 import test from "node:test";
 
 import {
-  CRIV_LIKEC4_ARCHITECTURE_INVALID,
-  CRIV_LIKEC4_MODEL_INVALID,
-  CRIV_LIKEC4_PROTOCOL_UNSUPPORTED,
   CRIV_STATE_JSON_INVALID,
   CRIV_STATE_SCHEMA_UNSUPPORTED,
   CRIV_WASM_LOAD_ERROR,
@@ -36,12 +33,6 @@ const lookupFixture = JSON.parse(
     total_candidate_count?: number;
   }[];
 };
-const architectureFixture = JSON.parse(
-  readFileSync(
-    resolve(__dirname, "../../../../../fixtures/editor/likec4-projection.v1.json"),
-    "utf8",
-  ),
-) as { state: unknown; expected: { architecture: unknown; c4Artifacts: unknown } };
 
 test("loads the generated package through the VS Code Wasm adapter", async () => {
   const bridge = createCrivWasmBridge(async () => compiledWasm);
@@ -89,29 +80,13 @@ test("keeps VS Code recovery text in its package loader adapter", async () => {
   assert.equal(attempts, 1);
 });
 
-test("loads the shared architecture projection without host conversion", async () => {
-  const bridge = createCrivWasmBridge(async () => compiledWasm);
-  const revision = await bridge.loadState(JSON.stringify(architectureFixture.state));
-  const projections = revision.initialProjections();
-
-  assert.deepEqual(projections.architecture, architectureFixture.expected.architecture);
-  assert.deepEqual(projections.c4Artifacts, architectureFixture.expected.c4Artifacts);
-  revision.dispose();
-});
-
 test("reports every generated Wasm State failure with a stable code", async () => {
   const bridge = createCrivWasmBridge(async () => compiledWasm);
-  const valid = architectureFixture.state as Record<string, unknown>;
+  const valid = JSON.parse(stateRaw) as Record<string, unknown>;
   const cases: [string, unknown][] = [
     [CRIV_STATE_JSON_INVALID, "{"],
     [CRIV_STATE_JSON_INVALID, { ...valid, graph: { nodes: true } }],
     [CRIV_STATE_SCHEMA_UNSUPPORTED, { ...valid, schema: "criv.state.v2" }],
-    [CRIV_LIKEC4_ARCHITECTURE_INVALID, { ...valid, architecture: true }],
-    [CRIV_LIKEC4_PROTOCOL_UNSUPPORTED, withArchitecture(valid, { protocolVersion: 2 })],
-    [
-      CRIV_LIKEC4_MODEL_INVALID,
-      withArchitecture(valid, { model: { raw: true, views: [], sourceLinks: [] } }),
-    ],
   ];
 
   for (const [code, input] of cases) {
@@ -141,16 +116,3 @@ test("uses the shared source-target lookup contract", async () => {
   }
   revision.dispose();
 });
-
-function withArchitecture(
-  state: Record<string, unknown>,
-  changes: Record<string, unknown>,
-): Record<string, unknown> {
-  return {
-    ...state,
-    architecture: {
-      ...(state.architecture as Record<string, unknown>),
-      ...changes,
-    },
-  };
-}

@@ -1,14 +1,10 @@
 import type {
-  CrivArtifactEntry,
   CrivAssetEntry,
   CrivGraphNode,
   CrivInitialProjections,
   CrivSourceEntry,
   CrivStateSummary,
 } from "./wasm";
-import type { CrivLikeC4Model } from "@criv/likec4/protocol";
-
-export type { CrivArtifactEntry } from "./wasm";
 export type { CrivAssetEntry } from "./wasm";
 
 export interface CrivStateSnapshot {
@@ -17,8 +13,6 @@ export interface CrivStateSnapshot {
   assets: CrivAssetEntry[];
   graphNodes: CrivGraphNode[];
   registeredPatterns: string[];
-  c4Artifacts: CrivArtifactEntry[];
-  architecture?: CrivLikeC4Model;
 }
 
 export function buildStateSnapshot(projections: CrivInitialProjections): CrivStateSnapshot {
@@ -28,7 +22,5 @@ export function buildStateSnapshot(projections: CrivInitialProjections): CrivSta
     assets: projections.assets,
     graphNodes: projections.nodes,
     registeredPatterns: projections.registeredPatterns,
-    c4Artifacts: projections.c4Artifacts,
-    architecture: projections.architecture,
   };
 }

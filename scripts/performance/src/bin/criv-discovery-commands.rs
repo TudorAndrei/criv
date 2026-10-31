@@ -170,8 +170,6 @@ struct StateIdentity {
     source_path_digest: String,
     vault_markdown_paths: usize,
     vault_markdown_path_digest: String,
-    vault_c4_paths: usize,
-    vault_c4_path_digest: String,
 }
 
 struct StateObservation {
@@ -1255,21 +1253,17 @@ fn state_observation(
         .filter_map(|entry| entry["path"].as_str().map(str::to_string))
         .collect::<Vec<_>>();
     let mut vault_markdown = Vec::new();
-    let mut vault_c4 = Vec::new();
     for node in state["graph"]["nodes"].as_array().into_iter().flatten() {
         let Some(path) = node["path"].as_str() else {
             continue;
         };
-        match node["kind"].as_str() {
-            Some("doc" | "decision") => vault_markdown.push(path.to_string()),
-            Some("architecture-source") => vault_c4.push(path.to_string()),
-            _ => {}
+        if let Some("doc" | "decision") = node["kind"].as_str() {
+            vault_markdown.push(path.to_string());
         }
     }
     let source_paths = sorted_unique(source_paths);
     let source_path_set = source_paths.iter().cloned().collect();
     let vault_markdown = sorted_unique(vault_markdown);
-    let vault_c4 = sorted_unique(vault_c4);
     let identity = StateIdentity {
         state_digest: bytes_digest(&state_bytes),
         snapshot_digest: Some(bytes_digest(&state_bytes)),
@@ -1278,8 +1272,7 @@ fn state_observation(
         source_path_digest: path_digest("source", &source_paths),
         vault_markdown_paths: vault_markdown.len(),
         vault_markdown_path_digest: path_digest("vault-markdown", &vault_markdown),
-        vault_c4_paths: vault_c4.len(),
-        vault_c4_path_digest: path_digest("vault-c4", &vault_c4),
+
         latest_snapshot,
     };
     Ok(StateObservation {
@@ -1296,8 +1289,6 @@ fn published_state_unchanged(before: &StateIdentity, after: &StateIdentity) -> b
         && before.source_path_digest == after.source_path_digest
         && before.vault_markdown_paths == after.vault_markdown_paths
         && before.vault_markdown_path_digest == after.vault_markdown_path_digest
-        && before.vault_c4_paths == after.vault_c4_paths
-        && before.vault_c4_path_digest == after.vault_c4_path_digest
 }
 
 fn changed_markdown_reported_expected_diagnostic(
@@ -1487,8 +1478,6 @@ fn stable_output_identity(row: &SampleRow) -> String {
                 "source_path_digest": state.source_path_digest,
                 "vault_markdown_paths": state.vault_markdown_paths,
                 "vault_markdown_path_digest": state.vault_markdown_path_digest,
-                "vault_c4_paths": state.vault_c4_paths,
-                "vault_c4_path_digest": state.vault_c4_path_digest,
             })
         });
         serde_json::json!({
@@ -1923,8 +1912,7 @@ mod tests {
             "source-index": [{"path": "src/lib.rs"}],
             "graph": {"nodes": [
                 {"kind": "doc", "path": "docs/readme.md"},
-                {"kind": "decision", "path": "docs/adr/0001.md"},
-                {"kind": "architecture-source", "path": "docs/model.c4"}
+                {"kind": "decision", "path": "docs/adr/0001.md"}
             ]}
         });
         let bytes = serde_json::to_vec(&state).unwrap();
@@ -1942,7 +1930,6 @@ mod tests {
         assert_eq!(identity.source_paths, 1);
         assert!(observation.source_paths.contains("src/lib.rs"));
         assert_eq!(identity.vault_markdown_paths, 2);
-        assert_eq!(identity.vault_c4_paths, 1);
         assert_ne!(
             identity.source_path_digest,
             identity.vault_markdown_path_digest
@@ -1960,8 +1947,6 @@ mod tests {
             source_path_digest: "source".into(),
             vault_markdown_paths: 1,
             vault_markdown_path_digest: "markdown".into(),
-            vault_c4_paths: 1,
-            vault_c4_path_digest: "c4".into(),
         };
         let mut after = before.clone();
         after.source_graph_digest = Some("new-cache".into());
@@ -2081,8 +2066,6 @@ mod tests {
             source_path_digest: source_digest.into(),
             vault_markdown_paths: 1,
             vault_markdown_path_digest: "markdown".into(),
-            vault_c4_paths: 1,
-            vault_c4_path_digest: "c4".into(),
         }
     }
 }

@@ -1,12 +1,10 @@
 use super::{
-    C4Artifact, DirectiveKind, EdgeKind, Graph, GraphBuilder, ModuleRelationshipRole, NodeKind,
-    Note, NoteKind, PartitionDependencies, PartitionKey, Relationship, RelationshipKind,
-    RelationshipTarget, ResolvedLink, RowPartition, SourceFile, SourcePartition,
-    SourceTargetResolution, Symbol, Vault, c4_artifact_input_fingerprint, c4_artifact_node_id,
-    code_node_id, directive_node_id, external_call_node_id, external_module_node_id, graph_root,
-    graph_rows, hashed_node, interface_anchor_hash, likec4_element_node_id,
-    likec4_interface_node_id, model_array, note_input_fingerprint, note_node_id, partition_meta,
-    pattern_node_id, relationship_endpoint, source_input_fingerprint, symbol_label, symbol_node_id,
+    DirectiveKind, EdgeKind, GraphBuilder, ModuleRelationshipRole, NodeKind, Note, NoteKind,
+    PartitionDependencies, PartitionKey, Relationship, RelationshipKind, RelationshipTarget,
+    ResolvedLink, RowPartition, SourceFile, SourcePartition, SourceTargetResolution, Symbol, Vault,
+    code_node_id, directive_node_id, external_call_node_id, external_module_node_id, graph_rows,
+    hashed_node, note_input_fingerprint, note_node_id, partition_meta, pattern_node_id,
+    source_input_fingerprint, symbol_label, symbol_node_id,
 };
 use crate::source::SymbolKind;
 
@@ -310,8 +308,6 @@ pub(super) fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
         }
     }
 
-    collect_graph_source_dependencies(graph.graph(), &mut dependencies);
-
     RowPartition {
         meta: partition_meta(
             PartitionKey::Note(note.rel_path.clone()),
@@ -320,111 +316,4 @@ pub(super) fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
         ),
         rows: graph_rows(graph.finish()),
     }
-}
-
-pub(super) fn build_c4_artifact_partition(artifact: &C4Artifact) -> RowPartition {
-    let mut graph = GraphBuilder::default();
-    graph.node(
-        c4_artifact_node_id(&artifact.rel_path),
-        NodeKind::ArchitectureSource,
-        artifact.rel_path.clone(),
-        Some(artifact.rel_path.clone()),
-    );
-    RowPartition {
-        meta: partition_meta(
-            PartitionKey::C4Artifact(artifact.rel_path.clone()),
-            c4_artifact_input_fingerprint(artifact),
-            PartitionDependencies::default(),
-        ),
-        rows: graph_rows(graph.finish()),
-    }
-}
-
-fn collect_graph_source_dependencies(graph: &Graph, dependencies: &mut PartitionDependencies) {
-    for node in &graph.nodes {
-        if node.kind == NodeKind::ArchitectureInterface
-            && let Some(path) = node
-                .path
-                .as_deref()
-                .and_then(|target| target.split('#').next())
-        {
-            dependencies.source_content_paths.insert(path.to_string());
-        }
-    }
-}
-
-pub(super) fn with_likec4_model(graph: Graph, vault: &Vault, model: &serde_json::Value) -> Graph {
-    let mut graph = GraphBuilder::extending(graph);
-    let workspace_id = "architecture:likec4";
-    graph.node(
-        workspace_id.into(),
-        NodeKind::ArchitectureWorkspace,
-        "LikeC4 architecture".into(),
-        Some(vault.likec4_workspace.path.clone()),
-    );
-
-    for element in model_array(model, "elements") {
-        let Some(id) = element.get("id").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        let element_id = likec4_element_node_id(id);
-        graph.node(
-            element_id.clone(),
-            NodeKind::ArchitectureElement,
-            element
-                .get("title")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or(id)
-                .to_string(),
-            Some(vault.likec4_workspace.path.clone()),
-        );
-        graph.edge(workspace_id, &element_id, EdgeKind::Contains);
-    }
-
-    for relationship in model_array(model, "relationships") {
-        let Some(source) = relationship_endpoint(relationship, "source") else {
-            continue;
-        };
-        let Some(target) = relationship_endpoint(relationship, "target") else {
-            continue;
-        };
-        graph.edge(
-            &likec4_element_node_id(source),
-            &likec4_element_node_id(target),
-            EdgeKind::Relates,
-        );
-    }
-
-    for link in model_array(model, "sourceLinks") {
-        let Some(element) = link.get("element").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        let Some(target) = link.get("target").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        let SourceTargetResolution::Resolved { path, .. } = vault.resolve_source_target(target)
-        else {
-            continue;
-        };
-        let element_id = likec4_element_node_id(element);
-        graph.edge(&element_id, &code_node_id(&path), EdgeKind::References);
-        if let Some((target, interface_hash)) = interface_anchor_hash(vault, target, &path) {
-            let interface_id = likec4_interface_node_id(element);
-            graph.node(
-                interface_id.clone(),
-                NodeKind::ArchitectureInterface,
-                interface_hash,
-                Some(target),
-            );
-            graph.edge(&element_id, &interface_id, EdgeKind::TracksInterface);
-        }
-    }
-
-    let mut graph = graph.finish();
-    graph.nodes.sort_by(|left, right| left.id.cmp(&right.id));
-    graph.edges.sort_by(|left, right| {
-        (&left.from, &left.to, &left.kind).cmp(&(&right.from, &right.to, &right.kind))
-    });
-    graph.root = graph_root(&graph);
-    graph
 }

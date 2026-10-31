@@ -67,7 +67,6 @@ export interface SourceResolver {
 export interface CrivState {
   registeredPatterns: string[];
   patternMatches: Record<string, PatternMatch[]>;
-  architecture?: import("@criv/likec4/protocol").CrivLikeC4Model;
 }
 
 export interface FrontmatterPatternTarget {

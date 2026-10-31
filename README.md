@@ -1,9 +1,14 @@
 # criv
 
-`criv` is a local CLI for keeping repository documentation connected to the code
-it describes. It turns a repo's `docs/` folder into a validated knowledge graph
-of notes, source references, architectural decisions, policy patterns, and local
-state that other tools can read.
+`criv` is a local ADR system of record and policy enforcement tool. It keeps
+architectural decisions connected to the documents and code they govern, with
+validated source references, structural policies, queries, and local State that
+other tools can read.
+
+Architecture rendering and Gherkin integration belong in the separate
+[Concord toolkit](https://github.com/TudorAndrei/concord). criv has no LikeC4
+runtime dependency. See [the extraction guide](docs/likec4-integration.md) for
+the breaking changes.
 
 ## What
 
@@ -373,8 +378,8 @@ validation, policy enforcement, and graph generation remain owned by the CLI.
 The companion extension under `extensions/vscode-criv/` targets VS Code and
 VS Code-derived editors such as Cursor. It reads `.criv/state.json`, shows a
 native state tree and status summary, opens AST-aware source selectors, surfaces
-`criv check --format json` diagnostics, previews standalone `.c4` artifacts,
-and opens verified documentation images and PDFs with the native editor.
+`criv check --format json` diagnostics, and opens verified documentation images
+and PDFs with the native editor.
 
 For local development:
 
@@ -384,12 +389,6 @@ npm --prefix extensions/vscode-criv run build
 npm --prefix extensions/vscode-criv run test
 npm --prefix extensions/vscode-criv run test:integration
 ```
-
-The default `.c4` editor renders the matching named LikeC4 view from
-`.criv/state.json`. Use **Reopen Editor With → Text Editor** to edit the DSL.
-The extension packages the renderer and its assets. It does not use a global
-LikeC4 command or a network service. The `.c4` workspace remains the source of
-truth; the preview is only a projection.
 
 ## Releases
 

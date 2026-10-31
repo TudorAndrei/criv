@@ -26,9 +26,3 @@ export interface StatePort {
   patternIds(): Promise<string[]>;
   readState(): Promise<CrivStateSummary | null>;
 }
-
-export interface C4ViewPort {
-  currentStateStatus(): ObsidianStateStatus;
-  onStateStatusChange(listener: (status: ObsidianStateStatus) => void): DisposableSubscription;
-  openValidatedSource(target: string): void;
-}

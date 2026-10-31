@@ -6,22 +6,17 @@ for VS Code API-compatible desktop editors, including VS Code and Cursor.
 ## Features
 
 - Loads `.criv/state.json` for the current workspace and shows source,
-  documentation asset, pattern, and `.c4` artifact state.
+  documentation asset, and policy pattern state.
 - Opens verified documentation images and PDFs from the active State asset
   inventory with the native editor.
 - Provides source selector links, hovers, completions, and lightweight
-  diagnostics for Markdown and `.c4` files.
+  diagnostics for Markdown files.
 - Runs trusted workspace commands for `criv watch --once`, `criv check
   --format json`, and selected read-only `criv query` flows.
-- Renders the validated LikeC4 workspace from criv state. The preview supports
-  named views, drill-down navigation, navigation history, pan, zoom, search,
-  source links, and SVG export. It is the default read-only editor for `.c4`
-  files and selects the view owned by the opened file.
 
-LikeC4 owns the architecture language and its validation. The Rust CLI calls
-the pinned local LikeC4 package and publishes its layout model in criv state.
-The extension consumes that model and uses the packaged WASM helper for other
-editor-local state lookups.
+The extension consumes the packaged Wasm runtime for State validation, source
+lookup, and selector suggestions. It does not compile or render architecture
+models.
 
 ## Compatibility
 
@@ -40,16 +35,6 @@ criv install-editor --editor cursor
 
 Direct installation is an explicit editor-level action. `criv init` does not
 recommend or install the extension.
-
-Use **Reopen Editor With → Text Editor** when an agent or maintainer must edit
-the LikeC4 DSL. The `criv: Preview C4 Artifact` command can open a second
-preview beside that text editor.
-
-The workspace can recommend the official `likec4.likec4-vscode` extension for
-LikeC4 syntax highlighting, completion, formatting, and language-server
-features. It does not register a competing custom editor. Criv remains the
-default validated preview and accepts both the official `likec4` language ID
-and its standalone `criv-c4` language ID.
 
 ## Development
 
