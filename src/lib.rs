@@ -11,7 +11,6 @@
 )]
 
 mod adr;
-mod c4;
 mod check;
 mod config;
 mod diagnostic;
@@ -53,10 +52,9 @@ fn discovery_probe_source_candidates(root: &std::path::Path) -> Result<Vec<Strin
 }
 
 #[cfg(test)]
-fn discovery_probe_vault_files(root: &std::path::Path) -> Result<(Vec<String>, Vec<String>)> {
+fn discovery_probe_vault_files(root: &std::path::Path) -> Result<Vec<String>> {
     let config = config::Config::load(root)?;
-    let selected = discovery::discover_vault(root, &config.docs_dir)?;
-    Ok((selected.markdown, selected.c4))
+    Ok(discovery::discover_vault(root, &config.docs_dir)?.markdown)
 }
 
 use std::ffi::{OsStr, OsString};
@@ -70,7 +68,7 @@ pub type Result<T> = std::result::Result<T, CrivError>;
 pub enum CrivError {
     #[error("{0}")]
     Message(String),
-    #[error("[{code}] {message}{}", fix_suffix(code.fix()))]
+    #[error("[{code}] {message}\nfix: {}", code.fix())]
     Coded {
         code: diagnostic::DiagnosticCode,
         message: String,
@@ -81,10 +79,6 @@ pub enum CrivError {
     UsageReported,
     #[error(transparent)]
     Io(#[from] std::io::Error),
-}
-
-fn fix_suffix(fix: Option<&str>) -> String {
-    fix.map_or_else(String::new, |fix| format!("\nfix: {fix}"))
 }
 
 impl CrivError {

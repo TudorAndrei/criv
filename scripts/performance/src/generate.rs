@@ -21,7 +21,6 @@ pub fn generate(root: &Path, manifest: &WorkloadManifest) -> Result<GeneratedWor
     }
     fs::create_dir_all(root.join("src")).map_err(display_error)?;
     fs::create_dir_all(root.join("docs/adr")).map_err(display_error)?;
-    fs::create_dir_all(root.join("docs/architecture")).map_err(display_error)?;
 
     let source_paths = source_paths(manifest);
     let mut contents = source_contents(manifest, &source_paths)?;
@@ -35,7 +34,6 @@ pub fn generate(root: &Path, manifest: &WorkloadManifest) -> Result<GeneratedWor
 
     write_config(root)?;
     write_notes(root, manifest, &source_paths)?;
-    write_c4_artifacts(root, manifest.c4_artifacts)?;
     fs::write(root.join(".gitignore"), ".criv/\n").map_err(display_error)?;
     initialize_git(root)?;
 
@@ -337,25 +335,6 @@ fn note_body(title: &str, links: &[String]) -> String {
     body
 }
 
-fn write_c4_artifacts(root: &Path, count: usize) -> Result<(), String> {
-    for index in 0..count {
-        let specification = if index == 0 {
-            "specification {\n  element person\n  element softwareSystem\n}\n\n"
-        } else {
-            ""
-        };
-        fs::write(
-            root.join("docs/architecture")
-                .join(format!("generated-context-{index:04}.c4")),
-            format!(
-                "{specification}model {{\n  person_{index} = person 'Person {index}' {{\n    description 'Uses the generated system'\n  }}\n  system_{index} = softwareSystem 'System {index}' {{\n    description 'Generated system'\n  }}\n  person_{index} -> system_{index} 'Uses'\n}}\n"
-            ),
-        )
-        .map_err(display_error)?;
-    }
-    Ok(())
-}
-
 fn initialize_git(root: &Path) -> Result<(), String> {
     run_git(root, &["init", "-q", "-b", "main"])?;
     run_git(root, &["config", "user.email", "performance@criv.invalid"])?;
@@ -490,17 +469,6 @@ mod tests {
                     .success(),
                 "generated workloads need an explicit CI comparison base"
             );
-            if loaded.manifest.c4_artifacts > 0 {
-                let c4 = fs::read_to_string(
-                    first
-                        .path()
-                        .join("docs/architecture/generated-context-0000.c4"),
-                )
-                .unwrap();
-                assert!(c4.starts_with("specification {\n"));
-                assert!(c4.contains("model {\n"));
-                assert!(c4.contains("Uses the generated system"));
-            }
         }
     }
 

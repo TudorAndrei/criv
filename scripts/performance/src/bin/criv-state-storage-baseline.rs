@@ -29,7 +29,6 @@ struct Args {
 struct StateShape {
     state_bytes: usize,
     compact_bytes: usize,
-    architecture_compact_bytes: usize,
     node_count: usize,
     edge_count: usize,
     source_count: usize,
@@ -240,12 +239,6 @@ fn analyze_state(bytes: &[u8]) -> Result<StateShape, String> {
     let compact_bytes = serde_json::to_vec(&state)
         .map_err(|error| format!("failed to compact criv state: {error}"))?
         .len();
-    let architecture_compact_bytes = state
-        .get("architecture")
-        .map(serde_json::to_vec)
-        .transpose()
-        .map_err(|error| format!("failed to compact architecture state: {error}"))?
-        .map_or(0, |value| value.len());
     let mut value_strings = StringInventory::default();
     let mut object_keys = StringInventory::default();
     collect_strings(&state, &mut value_strings, &mut object_keys);
@@ -253,7 +246,6 @@ fn analyze_state(bytes: &[u8]) -> Result<StateShape, String> {
     Ok(StateShape {
         state_bytes: bytes.len(),
         compact_bytes,
-        architecture_compact_bytes,
         node_count: nodes.len(),
         edge_count: edges.len(),
         source_count,
@@ -296,7 +288,6 @@ mod tests {
 
     const STATE: &str = r#"{
   "schema": "criv.state.v1",
-  "architecture": {"model":{"name":"A"}},
   "graph": {
     "root": "",
     "nodes": [{"id":"n","hash":"h","kind":"code","label":"n","path":"src/a.rs"}],
@@ -315,7 +306,6 @@ mod tests {
         assert_eq!(shape.edge_count, 1);
         assert_eq!(shape.source_count, 1);
         assert_eq!(shape.pattern_count, 1);
-        assert_eq!(shape.architecture_compact_bytes, 22);
         assert_eq!(shape.edge_endpoint_occurrences, 2);
         assert_eq!(shape.edge_endpoint_bytes, 2);
         assert_eq!(shape.unique_edge_endpoint_count, 1);

@@ -4,12 +4,8 @@ import {
   type CrivWasmHost,
   type CrivWasmModuleLoader,
 } from "@criv/editor-state";
-import type { CrivLikeC4Model } from "@criv/likec4/protocol";
 
 export {
-  CRIV_LIKEC4_ARCHITECTURE_INVALID,
-  CRIV_LIKEC4_MODEL_INVALID,
-  CRIV_LIKEC4_PROTOCOL_UNSUPPORTED,
   CRIV_LOADED_STATE_DISPOSED,
   CRIV_STATE_JSON_INVALID,
   CRIV_STATE_SCHEMA_UNSUPPORTED,
@@ -83,12 +79,6 @@ export interface CrivPatternMatch {
   captures: Record<string, string>;
 }
 
-export interface CrivArtifactEntry {
-  path: string;
-  label: string;
-  target: string;
-}
-
 export interface CrivInitialProjections {
   summary: CrivStateSummary;
   sources: CrivSourceEntry[];
@@ -96,8 +86,6 @@ export interface CrivInitialProjections {
   nodes: CrivGraphNode[];
   registeredPatterns: string[];
   patternMatches: Record<string, CrivPatternMatch[]>;
-  architecture?: CrivLikeC4Model;
-  c4Artifacts: CrivArtifactEntry[];
 }
 
 export type CrivLoadedState = SharedLoadedState<

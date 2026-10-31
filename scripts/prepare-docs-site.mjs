@@ -1,10 +1,10 @@
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
-import path from 'node:path';
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
 
 const root = process.cwd();
-const source = path.join(root, 'docs');
-const book = path.join(root, '.site-build', 'docs-book');
-const bookSource = path.join(book, 'src');
+const source = path.join(root, "docs");
+const book = path.join(root, ".site-build", "docs-book");
+const bookSource = path.join(book, "src");
 
 await rm(book, { recursive: true, force: true });
 await mkdir(bookSource, { recursive: true });
@@ -14,67 +14,72 @@ async function markdownFiles(directory) {
   const files = [];
   for (const entry of entries) {
     const entryPath = path.join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...await markdownFiles(entryPath));
-    if (entry.isFile() && entry.name.endsWith('.md')) files.push(entryPath);
+    if (entry.isDirectory()) files.push(...(await markdownFiles(entryPath)));
+    if (entry.isFile() && entry.name.endsWith(".md")) files.push(entryPath);
   }
   return files;
 }
 
 function frontmatter(sourceText) {
-  if (!sourceText.startsWith('---\n')) return '';
-  const end = sourceText.indexOf('\n---\n', 4);
-  return end === -1 ? '' : sourceText.slice(4, end);
+  if (!sourceText.startsWith("---\n")) return "";
+  const end = sourceText.indexOf("\n---\n", 4);
+  return end === -1 ? "" : sourceText.slice(4, end);
 }
 
 function withoutFrontmatter(sourceText) {
-  if (!sourceText.startsWith('---\n')) return sourceText;
-  const end = sourceText.indexOf('\n---\n', 4);
+  if (!sourceText.startsWith("---\n")) return sourceText;
+  const end = sourceText.indexOf("\n---\n", 4);
   return end === -1 ? sourceText : sourceText.slice(end + 5);
 }
 
 function field(sourceText, name) {
-  return frontmatter(sourceText).match(new RegExp(`^${name}: (.+)$`, 'm'))?.[1]
-    ?.replace(/^['"]|['"]$/g, '');
+  return frontmatter(sourceText)
+    .match(new RegExp(`^${name}: (.+)$`, "m"))?.[1]
+    ?.replace(/^['"]|['"]$/g, "");
 }
 
 function titleFor(sourceText, relativePath) {
-  const frontmatterTitle = field(sourceText, 'title');
-  if (frontmatterTitle) return frontmatterTitle.replace(/^['"]|['"]$/g, '');
+  const frontmatterTitle = field(sourceText, "title");
+  if (frontmatterTitle) return frontmatterTitle.replace(/^['"]|['"]$/g, "");
   const heading = sourceText.match(/^#\s+(.+)$/m)?.[1];
-  return heading ?? path.basename(relativePath, '.md');
+  return heading ?? path.basename(relativePath, ".md");
 }
 
 const documents = [];
 for (const file of await markdownFiles(source)) {
-  const sourceText = await readFile(file, 'utf8');
-  if (field(sourceText, 'kind') !== 'doc') continue;
-  const relativePath = path.relative(source, file).replaceAll(path.sep, '/');
+  const sourceText = await readFile(file, "utf8");
+  if (field(sourceText, "kind") !== "doc") continue;
+  const relativePath = path.relative(source, file).replaceAll(path.sep, "/");
   documents.push({
     file,
     relativePath,
     sourceText,
-    id: field(sourceText, 'id'),
+    id: field(sourceText, "id"),
   });
 }
 
 const documentsByTarget = new Map();
 for (const document of documents) {
-  const basename = path.basename(document.relativePath, '.md');
+  const basename = path.basename(document.relativePath, ".md");
   for (const target of [document.id, basename]) {
     if (target) documentsByTarget.set(target, document);
   }
 }
 
 function convertWikiLinks(sourceText, currentDocument) {
-  return sourceText.replace(/\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|([^\]]+))?\]\]/g, (_match, target, label) => {
-    const text = label ?? target;
-    const destination = documentsByTarget.get(target);
-    if (!destination) return text;
-    let relativePath = path.relative(path.dirname(currentDocument.relativePath), destination.relativePath)
-      .replaceAll(path.sep, '/');
-    if (!relativePath.startsWith('.')) relativePath = `./${relativePath}`;
-    return `[${text}](${relativePath})`;
-  });
+  return sourceText.replace(
+    /\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|([^\]]+))?\]\]/g,
+    (_match, target, label) => {
+      const text = label ?? target;
+      const destination = documentsByTarget.get(target);
+      if (!destination) return text;
+      let relativePath = path
+        .relative(path.dirname(currentDocument.relativePath), destination.relativePath)
+        .replaceAll(path.sep, "/");
+      if (!relativePath.startsWith(".")) relativePath = `./${relativePath}`;
+      return `[${text}](${relativePath})`;
+    },
+  );
 }
 
 for (const document of documents) {
@@ -84,25 +89,29 @@ for (const document of documents) {
   await writeFile(outputPath, output);
 }
 
-await writeFile(path.join(bookSource, 'README.md'), `# criv documentation\n\nBrowse the documentation, architecture decisions, and repository guides.\n`);
+await writeFile(
+  path.join(bookSource, "README.md"),
+  `# criv documentation\n\nBrowse the documentation, architecture decisions, and repository guides.\n`,
+);
 
-const chapters = (await markdownFiles(bookSource))
-  .map(async (file) => {
-    const relativePath = path.relative(bookSource, file).replaceAll(path.sep, '/');
-    const sourceText = await readFile(file, 'utf8');
-    return { relativePath, title: titleFor(sourceText, relativePath) };
-  });
+const chapters = (await markdownFiles(bookSource)).map(async (file) => {
+  const relativePath = path.relative(bookSource, file).replaceAll(path.sep, "/");
+  const sourceText = await readFile(file, "utf8");
+  return { relativePath, title: titleFor(sourceText, relativePath) };
+});
 const pages = await Promise.all(chapters);
 pages.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
 
-const summary = ['# Summary', '', '[Overview](README.md)', '', '---', ''];
+const summary = ["# Summary", "", "[Overview](README.md)", "", "---", ""];
 for (const page of pages) {
-  if (page.relativePath === 'README.md') continue;
+  if (page.relativePath === "README.md") continue;
   summary.push(`- [${page.title}](${page.relativePath})`);
 }
-await writeFile(path.join(bookSource, 'SUMMARY.md'), `${summary.join('\n')}\n`);
+await writeFile(path.join(bookSource, "SUMMARY.md"), `${summary.join("\n")}\n`);
 
-await writeFile(path.join(book, 'architecture.css'), `
+await writeFile(
+  path.join(book, "documentation.css"),
+  `
 :root {
   --site-bg: #fff;
   --site-fg: #1c1c1c;
@@ -328,9 +337,12 @@ table th {
   }
 
 }
-`);
+`,
+);
 
-await writeFile(path.join(book, 'book.toml'), `
+await writeFile(
+  path.join(book, "book.toml"),
+  `
 [book]
 authors = ["Tudor Andrei"]
 language = "en"
@@ -341,8 +353,9 @@ title = "criv documentation"
 build-dir = "../../site/docs"
 
 [output.html]
-additional-css = ["architecture.css"]
+additional-css = ["documentation.css"]
 git-repository-icon = "fab-github"
 git-repository-url = "https://github.com/TudorAndrei/criv"
 site-url = "/criv/docs/"
-`);
+`,
+);

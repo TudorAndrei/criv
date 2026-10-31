@@ -64,8 +64,8 @@ fn run_source_candidates(root: &Path) -> Result<ProbeOutput> {
 }
 
 fn run_vault(root: &Path) -> Result<ProbeOutput> {
-    let (markdown, c4) = crate::discovery_probe_vault_files(root)?;
-    output(root, "vault", vec![("markdown", markdown), ("c4", c4)])
+    let markdown = crate::discovery_probe_vault_files(root)?;
+    output(root, "vault", vec![("markdown", markdown)])
 }
 
 fn output(

@@ -19,9 +19,6 @@ const lookupFixture = JSON.parse(
     "utf8",
   ),
 );
-const architectureFixture = JSON.parse(
-  readFileSync(resolve(pluginRoot, "../../../fixtures/editor/likec4-projection.v1.json"), "utf8"),
-);
 
 await esbuild.build({
   entryPoints: [resolve(pluginRoot, "src/state/wasm.ts")],
@@ -49,12 +46,6 @@ assert.deepEqual(
 );
 assert.equal(revision.suggestSelectors("run", 10)[0].target, "src/lib.rs#fn:run");
 revision.dispose();
-
-const architectureRevision = await bridge.loadState(JSON.stringify(architectureFixture.state));
-const architectureProjections = architectureRevision.initialProjections();
-assert.deepEqual(architectureProjections.architecture, architectureFixture.expected.architecture);
-assert.deepEqual(architectureProjections.c4Artifacts, architectureFixture.expected.c4Artifacts);
-architectureRevision.dispose();
 
 const lookupRevision = await bridge.loadState(JSON.stringify(lookupFixture.state));
 for (const expected of lookupFixture.cases) {

@@ -8,7 +8,6 @@ use std::sync::Arc;
 #[cfg(test)]
 use std::fs;
 
-use criv_state_wire::{NodeKind, StateDocument};
 use serde::Serialize;
 use usage_rs::{Args as UsageArgs, ValueEnum};
 
@@ -19,7 +18,6 @@ use crate::git::{ChangeStatus, ChangedSet};
 use crate::identity::{is_adr_id, kebab};
 use crate::policy_scan::{PolicyDiagnostic, PolicyDiagnosticKind, PolicyScanPlan};
 use crate::repository::RepositoryFiles;
-use crate::state::{self, State};
 use crate::vault::{
     Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault, is_typed_source_target,
     source_target_body,
@@ -70,8 +68,7 @@ struct JsonDiagnostic<'a> {
     message: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     range: Option<LspRange>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    fix: Option<&'static str>,
+    fix: &'static str,
 }
 
 impl Diagnostic {
@@ -160,12 +157,7 @@ pub fn validate_all_from(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
     let vault = Vault::load_from(files)?;
     let policy_plan = PolicyScanPlan::new(&vault);
-    let previous_interface_hashes = previous_architecture_interface_hashes(files)?;
-    diagnostics.extend(validate_with_previous_architecture_interfaces(
-        &vault,
-        previous_interface_hashes.as_ref(),
-        &policy_plan,
-    ));
+    diagnostics.extend(validate_vault(&vault, &policy_plan));
     diagnostics.extend(
         policy_plan
             .scan(&vault, None)?
@@ -206,13 +198,7 @@ fn validate_changed(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
     let mut diagnostics = Vec::new();
     let vault = Vault::load_from(files)?;
     let policy_plan = PolicyScanPlan::new(&vault);
-    let previous_interface_hashes = previous_architecture_interface_hashes(files)?;
-    diagnostics.extend(validate_changed_vault(
-        &vault,
-        previous_interface_hashes.as_ref(),
-        &policy_plan,
-        &changed_paths,
-    ));
+    diagnostics.extend(validate_changed_vault(&vault, &policy_plan, &changed_paths));
     diagnostics.extend(
         policy_plan
             .scan(&vault, Some(&changed_paths))?
@@ -257,23 +243,10 @@ fn changed_scope_requires_full_check(changes: &ChangedSet, adr_prefix: &str) -> 
 #[cfg(test)]
 fn validate(vault: &Vault) -> Vec<Diagnostic> {
     let policy_plan = PolicyScanPlan::new(vault);
-    validate_vault(vault, None, &policy_plan)
+    validate_vault(vault, &policy_plan)
 }
 
-pub fn validate_vault(
-    vault: &Vault,
-    previous: Option<&State>,
-    policy_plan: &PolicyScanPlan,
-) -> Vec<Diagnostic> {
-    let previous_hashes = previous.map(State::architecture_interface_hashes);
-    validate_with_previous_architecture_interfaces(vault, previous_hashes.as_ref(), policy_plan)
-}
-
-fn validate_with_previous_architecture_interfaces(
-    vault: &Vault,
-    previous_interface_hashes: Option<&BTreeMap<String, String>>,
-    policy_plan: &PolicyScanPlan,
-) -> Vec<Diagnostic> {
+pub fn validate_vault(vault: &Vault, policy_plan: &PolicyScanPlan) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     validate_notes(vault, &mut diagnostics);
     diagnostics.extend(
@@ -285,54 +258,14 @@ fn validate_with_previous_architecture_interfaces(
     validate_pattern_collisions(vault, &mut diagnostics);
     validate_links(vault, &mut diagnostics);
     validate_supersession(vault, &mut diagnostics);
-    validate_c4_artifacts(vault, &mut diagnostics);
-    validate_likec4_workspace(vault, &mut diagnostics);
-    validate_architecture_interface_drift(vault, previous_interface_hashes, &mut diagnostics);
     diagnostics.sort_by(|a, b| {
         (&a.path, a.line.unwrap_or(0), a.code).cmp(&(&b.path, b.line.unwrap_or(0), b.code))
     });
     diagnostics
 }
 
-fn validate_likec4_workspace(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
-    diagnostics.extend(vault.likec4_workspace.diagnostics.iter().map(|diagnostic| {
-        error_with_location(
-            diagnostic.kind.code(),
-            &diagnostic.path,
-            diagnostic.line,
-            diagnostic.location.clone(),
-            diagnostic.message.clone(),
-        )
-    }));
-    let Some(model) = &vault.likec4_workspace.model else {
-        return;
-    };
-    for link in model
-        .get("sourceLinks")
-        .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        let Some(target) = link.get("target").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        if !matches!(
-            vault.resolve_source_target(target),
-            SourceTargetResolution::Resolved { .. }
-        ) {
-            diagnostics.push(error(
-                DiagnosticCode::InvalidLikeC4Source,
-                &vault.likec4_workspace.path,
-                None,
-                format!("LikeC4 source link does not resolve: `{target}`"),
-            ));
-        }
-    }
-}
-
 fn validate_changed_vault(
     vault: &Vault,
-    previous_interface_hashes: Option<&BTreeMap<String, String>>,
     policy_plan: &PolicyScanPlan,
     changed_paths: &BTreeSet<String>,
 ) -> Vec<Diagnostic> {
@@ -354,26 +287,6 @@ fn validate_changed_vault(
             .iter()
             .filter(|diagnostic| changed_paths.contains(&diagnostic.path))
             .map(policy_diagnostic),
-    );
-    for artifact in vault
-        .c4_artifacts
-        .iter()
-        .filter(|artifact| changed_paths.contains(&artifact.rel_path))
-    {
-        validate_c4_artifact(artifact, &mut diagnostics);
-    }
-    if changed_paths.iter().any(|path| {
-        Path::new(path)
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("c4"))
-    }) {
-        validate_likec4_workspace(vault, &mut diagnostics);
-    }
-    validate_architecture_interface_drift_for_paths(
-        vault,
-        previous_interface_hashes,
-        Some(changed_paths),
-        &mut diagnostics,
     );
     diagnostics.sort_by(|a, b| {
         (&a.path, a.line.unwrap_or(0), a.code).cmp(&(&b.path, b.line.unwrap_or(0), b.code))
@@ -421,27 +334,6 @@ fn policy_diagnostic(diagnostic: &PolicyDiagnostic) -> Diagnostic {
         ),
     };
     error(code, &diagnostic.path, Some(diagnostic.line), message)
-}
-
-fn previous_architecture_interface_hashes(
-    files: &RepositoryFiles,
-) -> Result<Option<BTreeMap<String, String>>> {
-    let Some(contents) = files.read_optional_string(Path::new(".criv/state.json"))? else {
-        return Ok(None);
-    };
-    let document: StateDocument = serde_json::from_str(&contents).map_err(|err| {
-        CrivError::new(format!(
-            "failed to parse .criv/state.json: {err}; run `criv watch --once` to rebuild it"
-        ))
-    })?;
-    let hashes = document
-        .graph
-        .nodes
-        .into_iter()
-        .filter(|node| node.kind == NodeKind::ArchitectureInterface)
-        .map(|node| (node.id, node.label))
-        .collect::<BTreeMap<_, _>>();
-    Ok(Some(hashes))
 }
 
 fn validate_notes(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
@@ -688,72 +580,6 @@ pub fn publication_blocking_diagnostics(vault: &Vault) -> Vec<Diagnostic> {
         .collect::<Vec<_>>();
     diagnostics.sort_by(|a, b| (&a.path, a.code).cmp(&(&b.path, b.code)));
     diagnostics
-}
-
-fn validate_c4_artifacts(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
-    for artifact in &vault.c4_artifacts {
-        validate_c4_artifact(artifact, diagnostics);
-    }
-}
-
-fn validate_c4_artifact(artifact: &crate::c4::C4Artifact, diagnostics: &mut Vec<Diagnostic>) {
-    for artifact_diagnostic in &artifact.diagnostics {
-        diagnostics.push(error_with_location(
-            artifact_diagnostic.code,
-            &artifact.rel_path,
-            artifact_diagnostic.line,
-            artifact_diagnostic.location.clone(),
-            artifact_diagnostic.message.clone(),
-        ));
-    }
-}
-
-fn validate_architecture_interface_drift(
-    vault: &Vault,
-    previous_interface_hashes: Option<&BTreeMap<String, String>>,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    validate_architecture_interface_drift_for_paths(
-        vault,
-        previous_interface_hashes,
-        None,
-        diagnostics,
-    );
-}
-
-fn validate_architecture_interface_drift_for_paths(
-    vault: &Vault,
-    previous_interface_hashes: Option<&BTreeMap<String, String>>,
-    changed_paths: Option<&BTreeSet<String>>,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    let Some(previous_interface_hashes) = previous_interface_hashes else {
-        return;
-    };
-    for record in state::architecture_interface_hash_records(vault) {
-        if changed_paths.is_some_and(|paths| {
-            !paths.contains(&record.source_path)
-                && !paths.iter().any(|path| {
-                    path == &record.path || path.starts_with(&format!("{}/", record.path))
-                })
-        }) {
-            continue;
-        }
-        let Some(previous_hash) = previous_interface_hashes.get(&record.id) else {
-            continue;
-        };
-        if previous_hash != &record.hash {
-            diagnostics.push(warning(
-                DiagnosticCode::ArchitectureInterfaceDrift,
-                &record.path,
-                Some(record.line),
-                format!(
-                    "LikeC4 source `{}` interface changed since the previous state; review the architecture model",
-                    record.target
-                ),
-            ));
-        }
-    }
 }
 
 fn validate_pattern_collisions(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
@@ -1009,9 +835,7 @@ fn print_text(diagnostics: &[Diagnostic]) {
         } else {
             println!("{severity}[{}] {}: {}", diag.code, diag.path, diag.message);
         }
-        if let Some(fix) = diag.code.fix() {
-            println!("  fix: {fix}");
-        }
+        println!("  fix: {}", diag.code.fix());
     }
 }
 
@@ -1132,67 +956,6 @@ fn warning_with_location(
 mod tests {
     use super::*;
     use crate::vault::WikiLink;
-
-    const EMITTED_CODES: [DiagnosticCode; 35] = [
-        DiagnosticCode::AdrDirNonDecision,
-        DiagnosticCode::AdrFilename,
-        DiagnosticCode::AmbiguousPolicyPatternBody,
-        DiagnosticCode::AmbiguousSourceLink,
-        DiagnosticCode::ArchitectureInterfaceDrift,
-        DiagnosticCode::BrokenLink,
-        DiagnosticCode::DecisionLocation,
-        DiagnosticCode::DuplicateDocPattern,
-        DiagnosticCode::DuplicateId,
-        DiagnosticCode::DuplicatePatternId,
-        DiagnosticCode::DuplicatePolicyPattern,
-        DiagnosticCode::EmptyPolicyPattern,
-        DiagnosticCode::EmptyTargetScope,
-        DiagnosticCode::InconsistentSupersession,
-        DiagnosticCode::InvalidAdrId,
-        DiagnosticCode::InvalidFrontmatter,
-        DiagnosticCode::InvalidKind,
-        DiagnosticCode::InvalidLikeC4Source,
-        DiagnosticCode::InvalidPolicyPattern,
-        DiagnosticCode::LegacySourceTarget,
-        DiagnosticCode::DocumentFormat,
-        DiagnosticCode::MissingId,
-        DiagnosticCode::MissingPolicyPatternBody,
-        DiagnosticCode::MissingPolicyPatternDefinition,
-        DiagnosticCode::MissingPolicyPatternId,
-        DiagnosticCode::MissingPolicyPatternLanguage,
-        DiagnosticCode::NonPortableNoteLink,
-        DiagnosticCode::PolicyViolation,
-        DiagnosticCode::SourceWikilink,
-        DiagnosticCode::SupersessionCycle,
-        DiagnosticCode::UnknownSupersededBy,
-        DiagnosticCode::UnknownSupersedes,
-        DiagnosticCode::UnresolvedGoverns,
-        DiagnosticCode::UnresolvedPattern,
-        DiagnosticCode::UnresolvedTarget,
-    ];
-
-    #[test]
-    fn every_emitted_code_carries_a_repair() {
-        for code in EMITTED_CODES {
-            assert!(
-                code.fix().is_some(),
-                "diagnostic code `{code}` reaches a caller with no repair"
-            );
-        }
-        for code in [
-            DiagnosticCode::NotAVault,
-            DiagnosticCode::CheckFailed,
-            DiagnosticCode::PolicyViolation,
-            DiagnosticCode::ImportPolicyViolation,
-            DiagnosticCode::AdrImmutabilityViolation,
-            DiagnosticCode::EnforcementFailed,
-        ] {
-            assert!(
-                code.fix().is_some(),
-                "failure code `{code}` reaches a caller with no repair"
-            );
-        }
-    }
 
     #[test]
     fn next_command_names_the_repair_criv_can_run() {
@@ -1757,73 +1520,6 @@ See [[does-not-exist]].
         let _ = fs::remove_dir_all(root);
     }
 
-    #[test]
-    fn likec4_interface_drift_ignores_body_only_changes() {
-        let root = architecture_interface_drift_fixture(
-            r#"
-pub fn run(input: String) -> usize {
-  input.len()
-}
-"#,
-        );
-        let previous_vault = likec4_interface_vault(&root);
-        let previous_state = State::build(&previous_vault).unwrap();
-        fs::write(
-            root.join("src/lib.rs"),
-            r#"
-pub fn run(input: String) -> usize {
-  println!("{}", input);
-  42
-}
-"#,
-        )
-        .unwrap();
-
-        let vault = likec4_interface_vault(&root);
-        let diagnostics =
-            validate_vault(&vault, Some(&previous_state), &PolicyScanPlan::new(&vault));
-
-        assert!(
-            diagnostics
-                .iter()
-                .all(|diag| diag.code != DiagnosticCode::ArchitectureInterfaceDrift)
-        );
-        let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn likec4_interface_drift_warns_on_signature_changes() {
-        let root = architecture_interface_drift_fixture(
-            r#"
-pub fn run(input: String) -> usize {
-  input.len()
-}
-"#,
-        );
-        let previous_vault = likec4_interface_vault(&root);
-        let previous_state = State::build(&previous_vault).unwrap();
-        fs::write(
-            root.join("src/lib.rs"),
-            r#"
-pub fn run(input: String, fallback: usize) -> usize {
-  fallback
-}
-"#,
-        )
-        .unwrap();
-
-        let vault = likec4_interface_vault(&root);
-        let diagnostics =
-            validate_vault(&vault, Some(&previous_state), &PolicyScanPlan::new(&vault));
-
-        assert!(diagnostics.iter().any(|diag| {
-            diag.code == DiagnosticCode::ArchitectureInterfaceDrift
-                && diag.path == "docs/architecture"
-                && diag.is_warning()
-        }));
-        let _ = fs::remove_dir_all(root);
-    }
-
     fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let unique = std::time::SystemTime::now()
@@ -1927,35 +1623,5 @@ title: Source Note
         )
         .unwrap();
         Vault::load(&root).unwrap()
-    }
-
-    fn architecture_interface_drift_fixture(source: &str) -> std::path::PathBuf {
-        let root = unique_temp_dir("criv-c4-interface-drift");
-        fs::create_dir_all(root.join("src")).unwrap();
-        fs::create_dir_all(root.join("docs/architecture")).unwrap();
-        fs::write(
-            root.join("criv.toml"),
-            r#"
-[source]
-roots = ["src"]
-"#,
-        )
-        .unwrap();
-        fs::write(root.join("src/lib.rs"), source).unwrap();
-        root
-    }
-
-    fn likec4_interface_vault(root: &Path) -> Vault {
-        let mut vault = Vault::load(root).unwrap();
-        vault.likec4_workspace.path = "docs/architecture".into();
-        vault.likec4_workspace.model = Some(serde_json::json!({
-            "elements": [{ "id": "cli", "title": "criv CLI" }],
-            "relationships": [],
-            "sourceLinks": [{
-                "element": "cli",
-                "target": "src/lib.rs#fn:run"
-            }]
-        }));
-        vault
     }
 }

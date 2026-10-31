@@ -11,10 +11,7 @@ use wasm_bindgen::prelude::*;
 
 use super::PreparedState;
 #[cfg(not(target_arch = "wasm32"))]
-use super::{
-    EditorAssetEntry, EditorC4Artifact, EditorGraphNode, EditorLikeC4Model, EditorSourceEntry,
-    StateSummary,
-};
+use super::{EditorAssetEntry, EditorGraphNode, EditorSourceEntry, StateSummary};
 
 #[cfg(target_arch = "wasm32")]
 pub fn initial_projections_from_js(prepared: &PreparedState) -> Result<JsValue, JsValue> {
@@ -48,16 +45,6 @@ pub fn initial_projections_from_js(prepared: &PreparedState) -> Result<JsValue, 
         &projections,
         "patternMatches",
         &js_projection_value(&prepared.pattern_matches)?,
-    )?;
-    set_js_field(
-        &projections,
-        "architecture",
-        &js_projection_value(&prepared.architecture)?,
-    )?;
-    set_js_field(
-        &projections,
-        "c4Artifacts",
-        &js_projection_value(&prepared.c4_artifacts)?,
     )?;
     Ok(projections.into())
 }
@@ -99,9 +86,6 @@ pub struct InitialProjections<'a> {
     registered_patterns: &'a [String],
     #[serde(rename = "patternMatches")]
     pattern_matches: &'a BTreeMap<String, Vec<PatternMatch>>,
-    architecture: &'a Option<EditorLikeC4Model>,
-    #[serde(rename = "c4Artifacts")]
-    c4_artifacts: &'a [EditorC4Artifact],
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -114,8 +98,6 @@ impl<'a> From<&'a PreparedState> for InitialProjections<'a> {
             nodes: &prepared.nodes,
             registered_patterns: &prepared.registered_patterns,
             pattern_matches: &prepared.pattern_matches,
-            architecture: &prepared.architecture,
-            c4_artifacts: &prepared.c4_artifacts,
         }
     }
 }

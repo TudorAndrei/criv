@@ -13,8 +13,6 @@ pub const STATE_SCHEMA: &str = "criv.state.v1";
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StateDocument {
     pub schema: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub architecture: Option<LikeC4ArchitectureState>,
     #[serde(default)]
     pub graph: Graph,
     #[serde(default, rename = "registered-patterns")]
@@ -37,7 +35,6 @@ impl StateDocument {
     ) -> Self {
         Self {
             schema: STATE_SCHEMA.to_string(),
-            architecture: None,
             graph,
             registered_patterns,
             patterns,
@@ -51,16 +48,6 @@ impl Default for StateDocument {
     fn default() -> Self {
         Self::new(Graph::default(), Vec::new(), BTreeMap::new(), Vec::new())
     }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LikeC4ArchitectureState {
-    pub protocol_version: u32,
-    pub likec4_version: String,
-    pub revision: u64,
-    pub workspace: String,
-    pub model: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -105,10 +92,6 @@ pub struct Node {
 #[strum(serialize_all = "kebab-case")]
 pub enum NodeKind {
     Alias,
-    ArchitectureElement,
-    ArchitectureInterface,
-    ArchitectureSource,
-    ArchitectureWorkspace,
     Behaviour,
     Callback,
     Class,
@@ -182,9 +165,7 @@ pub enum EdgeKind {
     Imports,
     ProtocolImplementation,
     References,
-    Relates,
     Supersedes,
-    TracksInterface,
 }
 
 impl EdgeKind {

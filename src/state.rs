@@ -7,12 +7,11 @@ use std::{cell::Cell, thread_local};
 #[cfg(test)]
 use criv_state_wire::STATE_SCHEMA;
 use criv_state_wire::{
-    AssetIndexEntry, Edge, EdgeKind, Graph, LikeC4ArchitectureState, Node, NodeKind, PatternMatch,
-    SourceIndexEntry, StateDocument, source_identity::SourceIdentity,
+    AssetIndexEntry, Edge, EdgeKind, Graph, Node, NodeKind, PatternMatch, SourceIndexEntry,
+    StateDocument, source_identity::SourceIdentity,
 };
 use serde::{Serialize, Serializer};
 
-use crate::c4::C4Artifact;
 use crate::policy_scan::PolicyScanPlan;
 use crate::source::{
     DirectiveKind, Import, Language, ModuleRelationshipRole, Relationship, RelationshipKind,
@@ -48,7 +47,6 @@ pub(crate) struct WorkCounts {
     pub(crate) partitions_rebuilt: usize,
     pub(crate) source_partitions_rebuilt: usize,
     pub(crate) note_partitions_rebuilt: usize,
-    pub(crate) c4_partitions_rebuilt: usize,
     pub(crate) policy_partitions_rebuilt: usize,
     pub(crate) source_index_partitions_rebuilt: usize,
     pub(crate) serializations: usize,
@@ -61,7 +59,6 @@ thread_local! {
         partitions_rebuilt: 0,
         source_partitions_rebuilt: 0,
         note_partitions_rebuilt: 0,
-        c4_partitions_rebuilt: 0,
         policy_partitions_rebuilt: 0,
         source_index_partitions_rebuilt: 0,
         serializations: 0,
@@ -90,9 +87,6 @@ fn record_partition_rebuilt(kind: PartitionKind) {
             PartitionKind::Note => {
                 counts.note_partitions_rebuilt = counts.note_partitions_rebuilt.saturating_add(1);
             }
-            PartitionKind::C4Artifact => {
-                counts.c4_partitions_rebuilt = counts.c4_partitions_rebuilt.saturating_add(1);
-            }
             PartitionKind::Policy => {
                 counts.policy_partitions_rebuilt =
                     counts.policy_partitions_rebuilt.saturating_add(1);
@@ -112,7 +106,6 @@ const fn record_partition_rebuilt(_: PartitionKind) {}
 enum PartitionKey {
     Source(String),
     Note(String),
-    C4Artifact(String),
     Policy(String),
     SourceIndex(String),
 }
@@ -121,7 +114,6 @@ enum PartitionKey {
 struct StatePartitions {
     sources: BTreeMap<String, Arc<SourcePartition>>,
     notes: BTreeMap<String, Arc<RowPartition>>,
-    c4_artifacts: BTreeMap<String, Arc<RowPartition>>,
     policies: BTreeMap<String, Arc<PolicyPartition>>,
     source_index: BTreeMap<String, Arc<SourceIndexPartition>>,
     reverse_dependencies: partitions::ReverseDependencies,
@@ -180,19 +172,8 @@ struct GraphRows {
 enum PartitionKind {
     Source,
     Note,
-    C4Artifact,
     Policy,
     SourceIndex,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct ArchitectureInterfaceHashRecord {
-    pub(crate) id: String,
-    pub(crate) hash: String,
-    pub(crate) path: String,
-    pub(crate) source_path: String,
-    pub(crate) line: usize,
-    pub(crate) target: String,
 }
 
 impl State {
@@ -233,21 +214,6 @@ impl State {
                 hash: asset.hash.clone(),
             })
             .collect();
-        state.wire.architecture = vault.likec4_workspace.model.clone().map(|model| {
-            state.wire.graph =
-                projection::with_likec4_model(std::mem::take(&mut state.wire.graph), vault, &model);
-            LikeC4ArchitectureState {
-                protocol_version: 1,
-                likec4_version: vault
-                    .likec4_workspace
-                    .version
-                    .clone()
-                    .unwrap_or_else(|| "1.60.0".into()),
-                revision: 0,
-                workspace: vault.likec4_workspace.path.clone(),
-                model,
-            }
-        });
         Ok(state)
     }
 
@@ -423,12 +389,6 @@ fn note_catalog_fingerprint(vault: &Vault) -> String {
     hasher.finish()
 }
 
-fn c4_artifact_input_fingerprint(artifact: &C4Artifact) -> String {
-    StableHasher::new("c4-artifact-partition")
-        .str(&format!("{artifact:#?}"))
-        .finish()
-}
-
 fn source_index_input_fingerprint(entry: &SourceIndexEntry) -> String {
     StableHasher::new("source-index-partition")
         .str(&entry.path)
@@ -565,83 +525,6 @@ fn changed_paths_in_scopes(paths: &[String], scopes: &[String]) -> Vec<String> {
         .collect()
 }
 
-pub fn architecture_interface_hash_records(vault: &Vault) -> Vec<ArchitectureInterfaceHashRecord> {
-    let mut records = Vec::new();
-    collect_likec4_interface_hashes(vault, &mut records);
-    records
-}
-
-impl State {
-    pub(crate) fn architecture_interface_hashes(&self) -> BTreeMap<String, String> {
-        self.wire
-            .graph
-            .nodes
-            .iter()
-            .filter(|node| node.kind == NodeKind::ArchitectureInterface)
-            .map(|node| (node.id.clone(), node.label.clone()))
-            .collect()
-    }
-}
-
-fn collect_likec4_interface_hashes(
-    vault: &Vault,
-    records: &mut Vec<ArchitectureInterfaceHashRecord>,
-) {
-    let Some(model) = &vault.likec4_workspace.model else {
-        return;
-    };
-    for link in model_array(model, "sourceLinks") {
-        let Some(element) = link.get("element").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        let Some(source) = link.get("target").and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        let SourceTargetResolution::Resolved { path, .. } = vault.resolve_source_target(source)
-        else {
-            continue;
-        };
-        let Some((target, hash)) = interface_anchor_hash(vault, source, &path) else {
-            continue;
-        };
-        records.push(ArchitectureInterfaceHashRecord {
-            id: likec4_interface_node_id(element),
-            hash,
-            path: vault.likec4_workspace.path.clone(),
-            source_path: path,
-            line: 1,
-            target,
-        });
-    }
-}
-
-fn model_array<'a>(model: &'a serde_json::Value, key: &str) -> &'a [serde_json::Value] {
-    model
-        .get(key)
-        .and_then(serde_json::Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default()
-}
-
-fn relationship_endpoint<'a>(relationship: &'a serde_json::Value, key: &str) -> Option<&'a str> {
-    relationship.get(key)?.get("model")?.as_str()
-}
-
-fn likec4_element_node_id(element: &str) -> String {
-    format!("architecture:element:{element}")
-}
-
-fn likec4_interface_node_id(element: &str) -> String {
-    format!("architecture:interface:{element}")
-}
-
-fn interface_anchor_hash(vault: &Vault, source: &str, path: &str) -> Option<(String, String)> {
-    let fragment = crate::vault::source_fragment_name(source)?;
-    let target = format!("{path}#{fragment}");
-    let hash = vault.source_graph().interface_hash(&target)?;
-    Some((target, hash))
-}
-
 /// A graph whose node ids and edges are unique, in first-insertion order.
 #[derive(Default)]
 struct GraphBuilder {
@@ -651,20 +534,6 @@ struct GraphBuilder {
 }
 
 impl GraphBuilder {
-    fn extending(graph: Graph) -> Self {
-        let seen_nodes = graph.nodes.iter().map(|node| node.id.clone()).collect();
-        let seen_edges = graph
-            .edges
-            .iter()
-            .map(|edge| (edge.from.clone(), edge.to.clone(), edge.kind))
-            .collect();
-        Self {
-            graph,
-            seen_nodes,
-            seen_edges,
-        }
-    }
-
     fn node(&mut self, id: String, kind: NodeKind, label: String, path: Option<String>) {
         if !self.seen_nodes.contains(&id) {
             self.push_node(hashed_node(id, kind, label, path));
@@ -703,10 +572,6 @@ impl GraphBuilder {
         for edge in &rows.edges {
             self.edge(&edge.from, &edge.to, edge.kind);
         }
-    }
-
-    const fn graph(&self) -> &Graph {
-        &self.graph
     }
 
     fn finish(self) -> Graph {
@@ -780,10 +645,6 @@ fn external_call_node_id(id: &str) -> String {
 
 fn external_module_node_id(id: &str) -> String {
     format!("external-module:{id}")
-}
-
-fn c4_artifact_node_id(path: &str) -> String {
-    format!("architecture-source:{path}")
 }
 
 fn symbol_label(symbol: &Symbol) -> String {
@@ -1051,59 +912,6 @@ end
     }
 
     #[test]
-    fn likec4_model_adds_architecture_relationships_and_source_edges() {
-        let root = unique_temp_dir("criv-likec4-graph");
-        std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::write(root.join("criv.toml"), "[source]\nroots = [\"src\"]\n").unwrap();
-        std::fs::write(
-            root.join("src/lib.rs"),
-            "pub fn run(input: String) -> usize { input.len() }\n",
-        )
-        .unwrap();
-        let mut vault = Vault::load(&root).unwrap();
-        vault.likec4_workspace.path = "docs/architecture".into();
-        vault.likec4_workspace.model = Some(serde_json::json!({
-            "elements": [
-                { "id": "app", "title": "Application" },
-                { "id": "app.cli", "title": "CLI" }
-            ],
-            "relationships": [{
-                "source": { "model": "app.cli" },
-                "target": { "model": "app" }
-            }],
-            "sourceLinks": [{
-                "element": "app.cli",
-                "target": "src/lib.rs#fn:run"
-            }]
-        }));
-
-        let state = State::build(&vault).unwrap();
-        let json = serde_json::to_value(&state).unwrap();
-        let nodes = json["graph"]["nodes"].as_array().unwrap();
-        let edges = json["graph"]["edges"].as_array().unwrap();
-
-        assert!(nodes.iter().any(|node| {
-            node["id"] == "architecture:element:app.cli" && node["kind"] == "architecture-element"
-        }));
-        assert!(nodes.iter().any(|node| {
-            node["id"] == "architecture:interface:app.cli"
-                && node["kind"] == "architecture-interface"
-        }));
-        assert!(edges.iter().any(|edge| {
-            edge["from"] == "architecture:element:app.cli"
-                && edge["to"] == "architecture:element:app"
-                && edge["kind"] == "relates"
-        }));
-        assert!(edges.iter().any(|edge| {
-            edge["from"] == "architecture:element:app.cli"
-                && edge["to"] == "code:src/lib.rs"
-                && edge["kind"] == "references"
-        }));
-
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
     fn state_and_snapshot_writes_are_parseable() {
         let root = unique_temp_dir("criv-state-atomic-writes");
         std::fs::create_dir_all(root.join("src")).unwrap();
@@ -1144,7 +952,6 @@ roots = ["src"]
                 partitions_rebuilt: 2,
                 source_partitions_rebuilt: 1,
                 note_partitions_rebuilt: 0,
-                c4_partitions_rebuilt: 0,
                 policy_partitions_rebuilt: 0,
                 source_index_partitions_rebuilt: 1,
                 serializations: 1,
@@ -1266,7 +1073,6 @@ policy:
                 partitions_rebuilt: 5,
                 source_partitions_rebuilt: 1,
                 note_partitions_rebuilt: 2,
-                c4_partitions_rebuilt: 0,
                 policy_partitions_rebuilt: 1,
                 source_index_partitions_rebuilt: 1,
                 serializations: 1,

@@ -1,35 +1,9 @@
 //! State envelope decoding and schema validation.
 
-use criv_state_wire::LikeC4ArchitectureState;
 #[cfg(not(target_arch = "wasm32"))]
 use criv_state_wire::STATE_SCHEMA;
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
-
-#[cfg(target_arch = "wasm32")]
-pub fn validate_architecture_wrapper_wasm(envelope: &JsValue) -> Result<(), JsValue> {
-    let architecture = js_sys::Reflect::get(envelope, &JsValue::from_str("architecture"))
-        .unwrap_or(JsValue::UNDEFINED);
-    if architecture.is_undefined() || architecture.is_null() {
-        return Ok(());
-    }
-    serde_wasm_bindgen::from_value::<LikeC4ArchitectureState>(architecture)
-        .map(|_| ())
-        .map_err(|error| JsValue::from_str(&format!("criv-likec4-architecture-invalid: {error}")))
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn validate_architecture_wrapper(envelope: &serde_json::Value) -> Result<(), String> {
-    let Some(architecture) = envelope
-        .get("architecture")
-        .filter(|value| !value.is_null())
-    else {
-        return Ok(());
-    };
-    serde_json::from_value::<LikeC4ArchitectureState>(architecture.clone())
-        .map(|_| ())
-        .map_err(|error| format!("criv-likec4-architecture-invalid: {error}"))
-}
 
 #[cfg(target_arch = "wasm32")]
 pub fn js_error_message(error: &JsValue) -> String {

@@ -224,7 +224,6 @@ class FakeRevision implements CrivLoadedState {
       nodes: [],
       registeredPatterns: [],
       patternMatches: {},
-      c4Artifacts: [],
     };
   }
 

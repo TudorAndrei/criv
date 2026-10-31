@@ -2,7 +2,7 @@
 name: criv
 description: Use when working in a criv vault, refreshing criv state, looking for undocumented code, or choosing which criv skill covers a task.
 metadata:
-  criv-template: blake3:cf236582e48e27cf
+  criv-template: blake3:ed7b5ad048c61d07
 ---
 
 # criv
@@ -42,7 +42,6 @@ Never guess a flag: read it from `criv <command> --help`, or from
 - `referencing-code` — wiki-link syntax from a document or ADR to source.
 - `writing-decisions` — ADR frontmatter, governs scopes, and policy patterns.
 - `checking-drift` — the check loop, its flags, and how to read a diagnostic.
-- `c4-authoring` — the LikeC4 architecture workspace.
 - `criv-me` — developing a decision with the user before writing it down.
 
 The work is complete when the change is written, `criv watch --once` has run

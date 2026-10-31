@@ -92,7 +92,6 @@ export class ObsidianStateOwner implements StatePort {
       this.state = {
         registeredPatterns: result.value.registeredPatterns,
         patternMatches: result.value.patternMatches,
-        architecture: result.value.architecture,
       };
       this.stateSources = result.value.sources;
       this.stateAssets = result.value.assets;

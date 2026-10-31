@@ -5,7 +5,6 @@ export const COMMAND_OPEN_ASSET = "criv.openAsset";
 export const COMMAND_RUN_WATCH_ONCE = "criv.runWatchOnce";
 export const COMMAND_RUN_CHECK = "criv.runCheck";
 export const COMMAND_QUERY_UNDOCUMENTED_CODE = "criv.queryUndocumentedCode";
-export const COMMAND_PREVIEW_C4 = "criv.previewC4";
 
 export const CRIV_COMMANDS = [
   COMMAND_REFRESH_STATE_VIEW,
@@ -15,5 +14,4 @@ export const CRIV_COMMANDS = [
   COMMAND_RUN_WATCH_ONCE,
   COMMAND_RUN_CHECK,
   COMMAND_QUERY_UNDOCUMENTED_CODE,
-  COMMAND_PREVIEW_C4,
 ] as const;

@@ -237,6 +237,5 @@ function projectedState(state) {
   return {
     registeredPatterns: state["registered-patterns"] ?? [],
     patternMatches: state.patterns ?? {},
-    architecture: state.architecture,
   };
 }

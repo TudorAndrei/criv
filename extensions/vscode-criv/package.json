@@ -2,43 +2,59 @@
   "name": "vscode-criv",
   "displayName": "criv",
   "version": "0.1.0",
-  "publisher": "criv",
   "description": "VS Code-compatible companion extension for criv repository state.",
-  "license": "MIT",
-  "homepage": "https://github.com/TudorAndrei/criv#readme",
-  "bugs": {
-    "url": "https://github.com/TudorAndrei/criv/issues"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/TudorAndrei/criv"
-  },
-  "main": "./dist/extension.js",
-  "extensionKind": [
-    "workspace"
-  ],
-  "engines": {
-    "vscode": "^1.85.0"
-  },
   "categories": [
     "Other",
     "Visualization"
   ],
   "keywords": [
+    "adr",
     "criv",
+    "cursor",
     "documentation",
-    "architecture",
-    "c4",
-    "cursor"
+    "policy"
   ],
-  "activationEvents": [
-    "workspaceContains:criv.toml"
-  ],
-  "capabilities": {
-    "untrustedWorkspaces": {
-      "supported": "limited",
-      "description": "The extension can inspect workspace files, but criv command execution requires workspace trust."
-    }
+  "homepage": "https://github.com/TudorAndrei/criv#readme",
+  "bugs": {
+    "url": "https://github.com/TudorAndrei/criv/issues"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TudorAndrei/criv"
+  },
+  "publisher": "criv",
+  "main": "./dist/extension.js",
+  "scripts": {
+    "build": "npm run build:wasm && npm run build:host && npm run smoke:wasm",
+    "build:host": "npm run check-types && node esbuild.config.mjs --production",
+    "build:wasm": "mise exec cargo:wasm-pack@0.15.1 rust@1.99.1 -- wasm-pack build --target nodejs --out-dir ../../extensions/vscode-criv/pkg ../../crates/criv-wasm -- --locked",
+    "check-types": "tsc --noEmit",
+    "compile": "npm run check-types && node esbuild.config.mjs",
+    "compile:integration-tests": "esbuild test/integration/runner.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist-test/integration/runner.js",
+    "compile:unit-tests": "node scripts/compile-unit-tests.mjs",
+    "format": "oxfmt --write src test scripts esbuild.config.mjs",
+    "format:check": "oxfmt --check src test scripts esbuild.config.mjs",
+    "lint": "oxlint src test scripts esbuild.config.mjs",
+    "package": "vsce package --no-dependencies --out vscode-criv.vsix",
+    "smoke:wasm": "node scripts/wasm-smoke.mjs",
+    "test": "npm run build:wasm && npm run compile && npm run compile:unit-tests && node --test \"dist-test/unit/**/*.test.js\"",
+    "test:integration": "npm run compile && npm run compile:integration-tests && node test/run-integration.mjs",
+    "vscode:prepublish": "npm run build",
+    "watch": "node esbuild.config.mjs --watch"
+  },
+  "dependencies": {
+    "@criv/editor-state": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "@types/vscode": "1.85.0",
+    "@vscode/test-electron": "3.1.0",
+    "@vscode/vsce": "4.1.0",
+    "esbuild": "0.28.2",
+    "oxfmt": "0.75.0",
+    "oxlint": "1.90.0",
+    "typescript": "7.0.2"
   },
   "contributes": {
     "commands": [
@@ -69,23 +85,6 @@
       {
         "command": "criv.queryUndocumentedCode",
         "title": "criv: Query Undocumented Code"
-      },
-      {
-        "command": "criv.previewC4",
-        "title": "criv: Preview C4 Artifact",
-        "icon": "$(open-preview)"
-      }
-    ],
-    "customEditors": [
-      {
-        "viewType": "criv.c4Preview",
-        "displayName": "criv LikeC4 Preview",
-        "selector": [
-          {
-            "filenamePattern": "*.c4"
-          }
-        ],
-        "priority": "default"
       }
     ],
     "views": {
@@ -98,13 +97,6 @@
       ]
     },
     "menus": {
-      "editor/title": [
-        {
-          "command": "criv.previewC4",
-          "when": "resourceLangId =~ /^(criv-c4|likec4)$/ && activeCustomEditorId != criv.c4Preview",
-          "group": "navigation"
-        }
-      ],
       "view/title": [
         {
           "command": "criv.refreshStateView",
@@ -113,19 +105,6 @@
         }
       ]
     },
-    "languages": [
-      {
-        "id": "criv-c4",
-        "aliases": [
-          "criv C4",
-          "C4"
-        ],
-        "extensions": [
-          ".c4"
-        ],
-        "configuration": "./language-configuration.json"
-      }
-    ],
     "configuration": {
       "title": "criv",
       "properties": {
@@ -144,41 +123,24 @@
           "type": "boolean",
           "scope": "machine",
           "default": false,
-          "description": "Run criv check when Markdown or .c4 files are saved in a trusted workspace."
+          "description": "Run criv check when Markdown files are saved in a trusted workspace."
         }
       }
     }
   },
-  "scripts": {
-    "build": "npm run build:wasm && npm run build:host && npm run smoke:wasm",
-    "build:host": "npm run check-types && node esbuild.config.mjs --production",
-    "build:wasm": "mise exec cargo:wasm-pack@0.15.1 rust@1.99.1 -- wasm-pack build --target nodejs --out-dir ../../extensions/vscode-criv/pkg ../../crates/criv-wasm -- --locked",
-    "check-types": "tsc --noEmit",
-    "compile": "npm run check-types && node esbuild.config.mjs",
-    "compile:integration-tests": "esbuild test/integration/runner.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist-test/integration/runner.js",
-    "compile:unit-tests": "node scripts/compile-unit-tests.mjs",
-    "format": "oxfmt --write src test scripts esbuild.config.mjs",
-    "format:check": "oxfmt --check src test scripts esbuild.config.mjs",
-    "lint": "oxlint src test scripts esbuild.config.mjs",
-    "package": "vsce package --no-dependencies --out vscode-criv.vsix",
-    "smoke:wasm": "node scripts/wasm-smoke.mjs",
-    "test": "npm run build:wasm && npm run compile && npm run compile:unit-tests && node --test \"dist-test/unit/**/*.test.js\"",
-    "test:integration": "npm run compile && npm run compile:integration-tests && node test/run-integration.mjs",
-    "vscode:prepublish": "npm run build",
-    "watch": "node esbuild.config.mjs --watch"
+  "activationEvents": [
+    "workspaceContains:criv.toml"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "engines": {
+    "vscode": "^1.85.0"
   },
-  "devDependencies": {
-    "@types/node": "26.6.6",
-    "@types/vscode": "1.85.0",
-    "@vscode/test-electron": "3.1.0",
-    "@vscode/vsce": "4.1.0",
-    "esbuild": "0.28.2",
-    "oxfmt": "0.75.0",
-    "oxlint": "1.90.0",
-    "typescript": "7.0.2"
-  },
-  "dependencies": {
-    "@criv/editor-state": "0.1.0",
-    "@criv/likec4": "0.1.0"
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "The extension can inspect workspace files, but criv command execution requires workspace trust."
+    }
   }
 }

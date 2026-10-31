@@ -17,12 +17,13 @@ use criv_state_wire::STATE_SCHEMA;
 #[cfg(test)]
 use criv_state_wire::{Node, SourceIndexEntry};
 use criv_state_wire::{NodeKind, PatternMatch, StateDocument};
-use serde::{Deserialize, Serialize};
+#[cfg(not(target_arch = "wasm32"))]
+use serde::Deserialize;
+use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
 mod asset;
 mod decode;
-mod likec4;
 mod projection;
 mod source;
 
@@ -119,10 +120,9 @@ impl LoadedState {
                 "criv-state-schema-unsupported: unsupported criv state schema: {schema}"
             )));
         }
-        decode::validate_architecture_wrapper_wasm(&envelope)?;
         let state = serde_wasm_bindgen::from_value::<StateDocument>(envelope)
             .map_err(|error| JsValue::from_str(&format!("criv-state-json-invalid: {error}")))?;
-        let prepared = PreparedState::new(state).map_err(|error| JsValue::from_str(&error))?;
+        let prepared = PreparedState::new(state);
         let initial_projections = projection::initial_projections_from_js(&prepared)?;
         Ok(Self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -153,10 +153,9 @@ impl LoadedState {
     #[cfg(not(target_arch = "wasm32"))]
     fn load(raw: &str) -> Result<Self, String> {
         let envelope = decode::decode_state_value(raw)?;
-        decode::validate_architecture_wrapper(&envelope)?;
         let state = StateDocument::deserialize(&envelope)
             .map_err(|error| format!("criv-state-json-invalid: {error}"))?;
-        let prepared = PreparedState::new(state)?;
+        let prepared = PreparedState::new(state);
         let initial_envelope =
             serde_json::to_value(projection::InitialProjections::from(&prepared))
                 .map_err(|error| format!("failed to encode criv initial projections: {error}"))?;
@@ -176,10 +175,9 @@ impl LoadedState {
 }
 
 impl PreparedState {
-    fn new(state: StateDocument) -> Result<Self, String> {
+    fn new(state: StateDocument) -> Self {
         let StateDocument {
             schema,
-            architecture,
             graph,
             mut registered_patterns,
             patterns,
@@ -192,8 +190,6 @@ impl PreparedState {
         let nodes = source::take_editor_graph_nodes(nodes);
         registered_patterns.sort();
         registered_patterns.dedup();
-        let architecture = likec4::prepare_architecture(architecture)?;
-        let c4_artifacts = likec4::prepare_c4_artifacts(&sources, &nodes);
         let summary = StateSummary {
             schema,
             node_count: nodes.len(),
@@ -208,20 +204,18 @@ impl PreparedState {
             first_source_path: sources.first().map(|source| source.path.clone()),
             first_asset_path: assets.first().map(|asset| asset.path.clone()),
         };
-        Ok(Self::from_parts(
+        Self::from_parts(
             summary,
             EditorInventory { sources, assets },
             nodes,
             registered_patterns,
             patterns,
-            architecture,
-            c4_artifacts,
-        ))
+        )
     }
 
     #[cfg(test)]
     fn from_borrowed(state: &StateDocument) -> Self {
-        Self::new(state.clone()).expect("test State must prepare")
+        Self::new(state.clone())
     }
 }
 
@@ -246,8 +240,6 @@ struct PreparedState {
     nodes: Vec<EditorGraphNode>,
     registered_patterns: Vec<String>,
     pattern_matches: BTreeMap<String, Vec<PatternMatch>>,
-    architecture: Option<EditorLikeC4Model>,
-    c4_artifacts: Vec<EditorC4Artifact>,
     exact_source_lookup: HashMap<u64, Vec<usize>>,
     legacy_source_lookup: HashMap<u64, Vec<usize>>,
     selectors: Vec<PreparedSelector>,
@@ -283,47 +275,6 @@ struct EditorGraphNode {
     line_range: Option<String>,
     #[serde(skip)]
     source_identity: Option<Box<criv_state_wire::source_identity::SourceIdentity>>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-struct EditorLikeC4View {
-    id: String,
-    title: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    source_path: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-struct EditorLikeC4SourceLink {
-    element: String,
-    target: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct EditorLikeC4Model {
-    protocol_version: u32,
-    likec4_version: String,
-    workspace: String,
-    model: serde_json::Value,
-    views: Vec<EditorLikeC4View>,
-    source_links: Vec<EditorLikeC4SourceLink>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PublishedLikeC4Model {
-    raw: serde_json::Value,
-    views: Vec<EditorLikeC4View>,
-    source_links: Vec<EditorLikeC4SourceLink>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct EditorC4Artifact {
-    path: String,
-    label: String,
-    target: String,
 }
 
 const MAX_AMBIGUOUS_SOURCE_CANDIDATES: usize = 5;
@@ -398,66 +349,6 @@ mod tests {
         unique_source_entries, unique_source_paths,
     };
     use super::*;
-
-    #[test]
-    fn prepares_the_complete_editor_projection_from_the_shared_fixture() {
-        let fixture = serde_json::from_str::<serde_json::Value>(include_str!(
-            "../../../fixtures/editor/likec4-projection.v1.json"
-        ))
-        .unwrap();
-        let loaded = LoadedState::load(&fixture["state"].to_string()).unwrap();
-
-        assert_eq!(
-            serde_json::to_value(&loaded.prepared.registered_patterns).unwrap(),
-            fixture["expected"]["registeredPatterns"]
-        );
-        assert_eq!(
-            serde_json::to_value(&loaded.prepared.pattern_matches).unwrap(),
-            fixture["state"]["patterns"]
-        );
-        assert_eq!(
-            serde_json::to_value(&loaded.prepared.c4_artifacts).unwrap(),
-            fixture["expected"]["c4Artifacts"]
-        );
-        assert_eq!(
-            serde_json::to_value(&loaded.prepared.architecture).unwrap(),
-            fixture["expected"]["architecture"]
-        );
-    }
-
-    #[test]
-    fn rejects_each_invalid_architecture_contract() {
-        let fixture = serde_json::from_str::<serde_json::Value>(include_str!(
-            "../../../fixtures/editor/likec4-projection.v1.json"
-        ))
-        .unwrap();
-
-        let mut wrong_protocol = fixture["state"].clone();
-        wrong_protocol["architecture"]["protocolVersion"] = 2.into();
-        assert!(
-            load_error(&wrong_protocol.to_string())
-                .starts_with("criv-likec4-protocol-unsupported:")
-        );
-
-        let mut different_version = fixture["state"].clone();
-        different_version["architecture"]["likec4Version"] = "2.0.0".into();
-        let loaded = LoadedState::load(&different_version.to_string()).unwrap();
-        assert_eq!(
-            loaded.prepared.architecture.unwrap().likec4_version,
-            "2.0.0"
-        );
-
-        let mut invalid_model = fixture["state"].clone();
-        invalid_model["architecture"]["model"]["raw"] = true.into();
-        assert!(load_error(&invalid_model.to_string()).starts_with("criv-likec4-model-invalid:"));
-    }
-
-    fn load_error(raw: &str) -> String {
-        match LoadedState::load(raw) {
-            Ok(_) => panic!("expected State load to fail"),
-            Err(error) => error,
-        }
-    }
 
     #[test]
     fn loaded_state_prepares_one_revision_for_all_operations() {

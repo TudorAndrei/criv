@@ -1,8 +1,7 @@
 import { Plugin } from "obsidian";
 import type { App, PluginManifest } from "obsidian";
-import { C4_VIEW_TYPE, CrivC4View, patchNativeSaveCommand, shutdownC4Views } from "./c4-view";
 import type { CrivState } from "./source/model";
-import type { C4ViewPort, DisposableSubscription, ObsidianStateStatus } from "./ports";
+import type { DisposableSubscription, ObsidianStateStatus } from "./ports";
 import { ObsidianSettingsOwner, type CrivSettings } from "./settings";
 import { ObsidianSourcePanelOwner, SOURCE_PANEL_VIEW_TYPE } from "./source/panel";
 import { ObsidianSourceReferencesOwner } from "./source/references";
@@ -15,7 +14,6 @@ import {
 
 const STATE_POLL_INTERVAL_MS = 2_000;
 
-export { CrivC4View };
 export type { ObsidianStateStatus } from "./ports";
 
 export default class CrivPlugin extends Plugin {
@@ -51,12 +49,6 @@ export default class CrivPlugin extends Plugin {
   async onload(): Promise<void> {
     await this.settingsOwner.load();
     this.settings = this.settingsOwner.settings;
-    const c4Port: C4ViewPort = {
-      currentStateStatus: () => this.stateOwner.currentStateStatus(),
-      onStateStatusChange: (listener) => this.stateOwner.onStateStatusChange(listener),
-      openValidatedSource: (target) => this.sourceReferencesOwner.openValidatedSource(target),
-    };
-
     this.addRibbonIcon("network", "criv status", async () => this.stateOwner.showStatus());
     this.addCommand({
       id: "show-criv-status",
@@ -73,11 +65,8 @@ export default class CrivPlugin extends Plugin {
       name: "Reload criv state",
       callback: async () => this.stateOwner.loadState(),
     });
-    patchNativeSaveCommand(this.app, (cleanup) => this.register(cleanup));
     this.registerEditorExtension(this.sourceReferencesOwner.editorExtension());
     this.registerView(SOURCE_PANEL_VIEW_TYPE, (leaf) => this.sourcePanelOwner.createView(leaf));
-    this.registerView(C4_VIEW_TYPE, (leaf) => new CrivC4View(leaf, c4Port));
-    this.registerExtensions(["c4"], C4_VIEW_TYPE);
     this.registerMarkdownPostProcessor((el, ctx) =>
       this.sourceReferencesOwner.decorateLinks(el, ctx),
     );
@@ -112,7 +101,6 @@ export default class CrivPlugin extends Plugin {
   }
 
   onunload(): void {
-    shutdownC4Views(this.app);
     this.stateStatusSubscription?.dispose();
     this.stateStatusSubscription = null;
     this.sourceReferencesOwner.dispose();

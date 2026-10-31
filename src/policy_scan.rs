@@ -435,7 +435,7 @@ mod tests {
             BTreeSet::from(["src/left.rs".to_string(), "src/right.rs".to_string()])
         );
 
-        let _diagnostics = crate::check::validate_vault(&vault, None, &plan);
+        let _diagnostics = crate::check::validate_vault(&vault, &plan);
         assert_eq!(
             structural::work_counts().policy_compilations,
             2,

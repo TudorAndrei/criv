@@ -363,7 +363,6 @@ dependencies = [
  "tree-sitter-typescript",
  "usage-lib",
  "usage-rs",
- "wait-timeout",
 ]
 
 [[package]]

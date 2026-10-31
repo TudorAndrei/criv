@@ -105,9 +105,6 @@ impl RefreshSession {
             .as_ref()
             .map(|previous| previous.vault.source_state());
         let previous_state = self.previous.as_ref().map(|previous| &previous.state);
-        let diagnostic_previous_state = matches!(cause, RefreshCause::SourceChanged)
-            .then_some(previous_state)
-            .flatten();
         let source = match (cause, previous_source, self.source_refresh_pending) {
             (RefreshCause::DocsChanged, Some(source), false) => source.reuse_for_docs(),
             _ => SourceState::refresh_from(&self.files, &self.config, previous_source)?,
@@ -125,7 +122,6 @@ impl RefreshSession {
             &self.files,
             &self.config,
             previous_state,
-            diagnostic_previous_state,
             source,
             precommit_check,
         )?;
@@ -143,7 +139,6 @@ fn execute(
     files: &RepositoryFiles,
     config: &Config,
     previous_state: Option<&State>,
-    diagnostic_previous_state: Option<&State>,
     source: SourceState,
     precommit_check: impl FnOnce() -> Result<()>,
 ) -> Result<RefreshResult> {
@@ -162,7 +157,7 @@ fn execute(
     let changed_files = vault.source_state().changed_files().to_vec();
 
     let policy_plan = PolicyScanPlan::new(&vault);
-    let diagnostics = check::validate_vault(&vault, diagnostic_previous_state, &policy_plan);
+    let diagnostics = check::validate_vault(&vault, &policy_plan);
     let (snapshot, state) = match previous_state {
         Some(previous_state) => state::write_state_incremental_with_policy_plan_and_check(
             &vault,

@@ -1,6 +1,5 @@
 import * as vscode from "vscode";
 
-import { C4PreviewEditorProvider, C4PreviewManager, C4_PREVIEW_VIEW_TYPE } from "./c4/preview";
 import { CrivCheckDiagnostics } from "./diagnostics/publisher";
 import { CHECK_MAX_OUTPUT_BYTES, completeCheckStdout } from "./diagnostics/output";
 import { CheckRunOwner } from "./diagnostics/runs";
@@ -8,7 +7,6 @@ import {
   COMMAND_OPEN_ASSET,
   COMMAND_OPEN_SOURCE_TARGET,
   COMMAND_OPEN_STATE_JSON,
-  COMMAND_PREVIEW_C4,
   COMMAND_REFRESH_STATE_VIEW,
   COMMAND_QUERY_UNDOCUMENTED_CODE,
   COMMAND_RUN_CHECK,
@@ -32,8 +30,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const treeProvider = new CrivStateTreeProvider();
   const checkDiagnostics = new CrivCheckDiagnostics();
   const checkRuns = new CheckRunOwner();
-  const c4Preview = new C4PreviewManager(context, store);
-  const c4PreviewEditor = new C4PreviewEditorProvider(context, store);
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBar.command = COMMAND_REFRESH_STATE_VIEW;
 
@@ -42,21 +38,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     treeProvider.update(status);
   };
 
-  context.subscriptions.push(
-    store,
-    treeProvider,
-    checkDiagnostics,
-    checkRuns,
-    c4Preview,
-    statusBar,
-  );
+  context.subscriptions.push(store, treeProvider, checkDiagnostics, checkRuns, statusBar);
   context.subscriptions.push(store.onDidChangeStatus(updateSurfaces));
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider("criv.stateView", treeProvider),
-    vscode.window.registerCustomEditorProvider(C4_PREVIEW_VIEW_TYPE, c4PreviewEditor, {
-      webviewOptions: { retainContextWhenHidden: true },
-      supportsMultipleEditorsPerDocument: true,
-    }),
   );
   registerSourceLanguageFeatures(context, store);
 
@@ -81,9 +66,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.commands.registerCommand(COMMAND_QUERY_UNDOCUMENTED_CODE, async () => {
       await runUndocumentedCodeQuery(store);
-    }),
-    vscode.commands.registerCommand(COMMAND_PREVIEW_C4, async () => {
-      await c4Preview.open();
     }),
     vscode.workspace.onDidSaveTextDocument(async (document) => {
       await maybeRunCheckOnSave(store, checkDiagnostics, checkRuns, document);
@@ -376,11 +358,7 @@ function commandFailureMessage(command: string, result: CommandResult): string {
 }
 
 function isCheckOnSaveDocument(document: vscode.TextDocument): boolean {
-  return (
-    document.languageId === "markdown" ||
-    document.languageId === "criv-c4" ||
-    document.languageId === "likec4"
-  );
+  return document.languageId === "markdown";
 }
 
 export function deactivate(): void {
@@ -514,7 +492,6 @@ function updateStatusBar(statusBar: vscode.StatusBarItem, status: WorkspaceState
           `Schema: ${status.snapshot.summary.schema}`,
           `Nodes: ${status.snapshot.summary.node_count}`,
           `Edges: ${status.snapshot.summary.edge_count}`,
-          `.c4 artifacts: ${status.snapshot.c4Artifacts.length}`,
         ].join("\n\n"),
       );
       statusBar.show();

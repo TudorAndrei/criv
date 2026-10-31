@@ -4,7 +4,7 @@ version = "0.13.0"
 edition = "2024"
 rust-version = "1.97.1"
 license = "MIT"
-description = "Local docs-to-code knowledge graph validator and query tool"
+description = "ADR system of record, documentation validator, and policy enforcement tool"
 repository = "https://github.com/TudorAndrei/criv"
 homepage = "https://github.com/TudorAndrei/criv"
 
@@ -79,7 +79,6 @@ tree-sitter-python = "0.25"
 tree-sitter-rust = "0.24"
 tree-sitter-typescript = "0.23"
 usage-rs = "7.1.4"
-wait-timeout = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 junction = "2"

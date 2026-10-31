@@ -63,7 +63,7 @@ test("accepts additive exact ranges and ignores unknown fields", () => {
     JSON.stringify([
       {
         severity: "warning",
-        code: "invalid-likec4",
+        code: "unresolved-target",
         path: "docs/architecture/model.c4",
         line: 3,
         message: "invalid model",

@@ -13,9 +13,6 @@ import type {
 } from "../source/model";
 
 export {
-  CRIV_LIKEC4_ARCHITECTURE_INVALID,
-  CRIV_LIKEC4_MODEL_INVALID,
-  CRIV_LIKEC4_PROTOCOL_UNSUPPORTED,
   CRIV_LOADED_STATE_DISPOSED,
   CRIV_STATE_JSON_INVALID,
   CRIV_STATE_SCHEMA_UNSUPPORTED,
@@ -53,8 +50,6 @@ export interface CrivInitialProjections {
   nodes: CrivNode[];
   registeredPatterns: CrivState["registeredPatterns"];
   patternMatches: CrivState["patternMatches"];
-  architecture?: CrivState["architecture"];
-  c4Artifacts: { path: string; label: string; target: string }[];
 }
 
 export type CrivLoadedState = SharedLoadedState<

@@ -1,15 +1,15 @@
 ---
 name: c4-authoring
 description: Author or review the LikeC4 architecture map in docs/architecture. Use for C4 elements, boundaries, named views, view titles, source links, and architecture drift.
-metadata:
-  criv-template: blake3:3602b7d9968339ea
 ---
 
 # C4 authoring
 
 Treat `docs/architecture/` as one architecture **map**. LikeC4 source defines
 the map. A named view is one **zoom** that tells one story to one audience. The
-coding agent owns the meaning; criv validates it; LikeC4 renders it.
+coding agent owns the meaning. These files are repository documentation;
+criv does not compile, validate, or render them. This repository-only skill is
+not installed by `criv init`.
 
 ## 1. Set the story
 
@@ -100,18 +100,22 @@ every included element helps answer the stated question.
 
 ## 5. Anchor the map
 
-A `source` link resolves from `docs/architecture/` and accepts a criv file,
-line, symbol, or pattern selector. Prefer a stable module or public interface.
-Use one link for each implementation boundary that the map claims.
+A `source` link documents an implementation anchor relative to
+`docs/architecture/`. Prefer a stable module or public interface. Verify the
+file and symbol against the source or criv's public source queries; there is no
+automatic LikeC4 source-link validation in criv. Use one link for each
+implementation boundary that the map claims.
 
 This step is complete when every changed implementation element has a
 resolvable source link and no link points outside the boundary it claims.
 
 ## 6. Prove the zoom
 
-Run `criv watch --once`, then `criv check`, as the `checking-drift` skill
-describes. Open each changed named view in the editor preview. Check its title,
-level, boundary, labels, layout, navigation, and source actions.
+Review each changed view's title, level, boundary, labels, and source evidence.
+If an independent LikeC4 installation is available, use it to validate and
+inspect the changed views. Report when that visual validation was not run;
+`criv check` does not validate architecture files and cannot substitute for it.
 
-The work is complete when the vault is green and every changed zoom tells its
-stated story with valid source evidence.
+Run the normal criv vault checks separately if documentation or ADRs changed.
+The work is complete when every changed zoom tells its stated story, source
+anchors have been verified, and the validation performed is stated explicitly.

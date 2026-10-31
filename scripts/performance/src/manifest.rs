@@ -25,7 +25,6 @@ pub struct WorkloadManifest {
     pub note_links: usize,
     pub source_references: usize,
     pub policies: usize,
-    pub c4_artifacts: usize,
     pub changed_source_files: usize,
     pub changed_file_fraction: f64,
     pub extensions: BTreeMap<String, usize>,

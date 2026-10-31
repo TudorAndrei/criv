@@ -8,10 +8,9 @@ use criv_state_wire::{Node, SourceIndexEntry, source_identity::SourceIdentity};
 #[cfg(test)]
 use super::StateDocument;
 use super::{
-    BTreeMap, EditorC4Artifact, EditorGraphNode, EditorInventory, EditorLikeC4Model,
-    EditorSourceEntry, MAX_AMBIGUOUS_SOURCE_CANDIDATES, PatternMatch, PreparedSelector,
-    PreparedState, SelectorEntry, SourceSelectorSuggestion, SourceTargetCandidate,
-    SourceTargetLookupResult, StateSummary, SuggestionKind,
+    BTreeMap, EditorGraphNode, EditorInventory, EditorSourceEntry, MAX_AMBIGUOUS_SOURCE_CANDIDATES,
+    PatternMatch, PreparedSelector, PreparedState, SelectorEntry, SourceSelectorSuggestion,
+    SourceTargetCandidate, SourceTargetLookupResult, StateSummary, SuggestionKind,
 };
 
 #[cfg(test)]
@@ -193,8 +192,6 @@ impl PreparedState {
         nodes: Vec<EditorGraphNode>,
         registered_patterns: Vec<String>,
         pattern_matches: BTreeMap<String, Vec<PatternMatch>>,
-        architecture: Option<EditorLikeC4Model>,
-        c4_artifacts: Vec<EditorC4Artifact>,
     ) -> Self {
         let EditorInventory { sources, assets } = inventory;
         let source_paths = sources
@@ -257,8 +254,6 @@ impl PreparedState {
             nodes,
             registered_patterns,
             pattern_matches,
-            architecture,
-            c4_artifacts,
             exact_source_lookup,
             legacy_source_lookup,
             selectors,

@@ -12,7 +12,6 @@ use criv_state_wire::source_identity::{SourceIdentity, SourceSelector};
 
 use super::paths::read_source_bytes;
 use crate::repository::RepositoryFiles;
-use crate::stable_hash::StableHasher;
 use crate::{CrivError, Result};
 
 mod elixir;
@@ -565,39 +564,6 @@ fn graph_cache_path(root: &Path) -> std::path::PathBuf {
     root.join(".criv/source-graph.json")
 }
 
-impl InterfaceSignature {
-    fn hash(&self) -> String {
-        let mut hasher = StableHasher::new("interface");
-        hasher
-            .str(self.language.as_str())
-            .str(self.symbol_kind.as_str())
-            .str(&self.qualified_name)
-            .option_str(self.visibility.as_deref())
-            .option_usize(self.arity)
-            .strs(&self.inputs)
-            .option_str(self.output.as_deref())
-            .strs(&self.guards)
-            .strs(&self.defaults)
-            .strs(&self.specifications);
-        let mut fields = self.fields.iter().collect::<Vec<_>>();
-        fields.sort();
-        hasher.usize(fields.len());
-        for field in fields {
-            hasher.str(&field.name).option_str(field.ty.as_deref());
-        }
-        let mut variants = self.variants.iter().collect::<Vec<_>>();
-        variants.sort();
-        hasher.usize(variants.len());
-        for variant in variants {
-            hasher.str(&variant.name).usize(variant.fields.len());
-            for field in &variant.fields {
-                hasher.str(&field.name).option_str(field.ty.as_deref());
-            }
-        }
-        hasher.finish()
-    }
-}
-
 impl SourceGraph {
     #[cfg(test)]
     fn build_incremental(
@@ -852,13 +818,6 @@ impl SourceGraph {
         relationship: &Relationship,
     ) -> String {
         elixir::ElixirRelationships::target_label(&self.files, caller, relationship)
-    }
-
-    pub(crate) fn interface_hash(&self, query: &str) -> Option<String> {
-        let symbol_id = self.resolve_symbol(query)?;
-        self.symbol(&symbol_id)
-            .and_then(|symbol| symbol.interface_signature.as_ref())
-            .map(InterfaceSignature::hash)
     }
 
     pub(crate) fn canonical_symbol_target(&self, query: &str) -> Option<String> {
@@ -2295,7 +2254,7 @@ use crate::infra as infra;
     }
 
     #[test]
-    fn rust_interface_hash_ignores_function_body_changes() {
+    fn rust_interface_ignores_function_body_changes() {
         let before = parse_source_file(
             "src/lib.rs",
             r#"
@@ -2315,21 +2274,13 @@ pub fn run(input: String) -> usize {
         );
 
         assert_eq!(
-            before.symbols[0]
-                .interface_signature
-                .as_ref()
-                .unwrap()
-                .hash(),
-            after.symbols[0]
-                .interface_signature
-                .as_ref()
-                .unwrap()
-                .hash()
+            before.symbols[0].interface_signature,
+            after.symbols[0].interface_signature
         );
     }
 
     #[test]
-    fn rust_interface_hash_changes_when_function_signature_changes() {
+    fn rust_interface_changes_when_function_signature_changes() {
         let before = parse_source_file("src/lib.rs", "pub fn run(input: String) -> usize { 1 }\n");
         let after = parse_source_file(
             "src/lib.rs",
@@ -2337,21 +2288,13 @@ pub fn run(input: String) -> usize {
         );
 
         assert_ne!(
-            before.symbols[0]
-                .interface_signature
-                .as_ref()
-                .unwrap()
-                .hash(),
-            after.symbols[0]
-                .interface_signature
-                .as_ref()
-                .unwrap()
-                .hash()
+            before.symbols[0].interface_signature,
+            after.symbols[0].interface_signature
         );
     }
 
     #[test]
-    fn rust_interface_hash_tracks_struct_fields_and_enum_variants() {
+    fn rust_interface_tracks_struct_fields_and_enum_variants() {
         let before = parse_source_file(
             "src/lib.rs",
             r#"
@@ -2401,12 +2344,12 @@ pub enum Mode {
             .unwrap();
 
         assert_ne!(
-            before_config.interface_signature.as_ref().unwrap().hash(),
-            after_config.interface_signature.as_ref().unwrap().hash()
+            before_config.interface_signature.as_ref().unwrap(),
+            after_config.interface_signature.as_ref().unwrap()
         );
         assert_ne!(
-            before_mode.interface_signature.as_ref().unwrap().hash(),
-            after_mode.interface_signature.as_ref().unwrap().hash()
+            before_mode.interface_signature.as_ref().unwrap(),
+            after_mode.interface_signature.as_ref().unwrap()
         );
     }
 
@@ -2873,7 +2816,7 @@ const helper = () => api();
     }
 
     #[test]
-    fn typescript_interface_hash_tracks_function_and_class_shapes() {
+    fn typescript_interface_tracks_function_and_class_shapes() {
         let before = parse_source_file(
             "src/app.ts",
             r#"
@@ -2932,13 +2875,10 @@ export class Service {
             .find(|symbol| symbol.name == "run" && symbol.kind == SymbolKind::Function)
             .unwrap();
 
-        assert_eq!(
-            before_run.interface_signature.as_ref().unwrap().hash(),
-            body_run.interface_signature.as_ref().unwrap().hash()
-        );
+        assert_eq!(before_run.interface_signature, body_run.interface_signature);
         assert_ne!(
-            before_run.interface_signature.as_ref().unwrap().hash(),
-            changed_run.interface_signature.as_ref().unwrap().hash()
+            before_run.interface_signature,
+            changed_run.interface_signature
         );
     }
 

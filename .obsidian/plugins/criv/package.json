@@ -2,8 +2,14 @@
   "name": "criv-obsidian-plugin",
   "version": "0.1.0",
   "description": "Obsidian companion plugin for criv vault state.",
-  "main": "main.js",
+  "keywords": [
+    "criv",
+    "obsidian",
+    "obsidian-plugin"
+  ],
+  "license": "MIT",
   "type": "module",
+  "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "npm run build:wasm && npm run build:plugin && npm run smoke:wasm",
@@ -16,12 +22,10 @@
     "format": "oxfmt --write src test scripts esbuild.config.mjs version-bump.mjs",
     "format:check": "oxfmt --check src test scripts esbuild.config.mjs version-bump.mjs"
   },
-  "keywords": [
-    "obsidian",
-    "obsidian-plugin",
-    "criv"
-  ],
-  "license": "MIT",
+  "dependencies": {
+    "@criv/editor-state": "0.1.0",
+    "obsidian": "1.14.4"
+  },
   "devDependencies": {
     "@types/node": "26.6.6",
     "esbuild": "0.28.2",
@@ -29,10 +33,5 @@
     "oxlint": "1.90.0",
     "tslib": "2.9.1",
     "typescript": "7.0.2"
-  },
-  "dependencies": {
-    "@criv/editor-state": "0.1.0",
-    "@criv/likec4": "0.1.0",
-    "obsidian": "1.14.4"
   }
 }

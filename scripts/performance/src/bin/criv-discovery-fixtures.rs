@@ -49,7 +49,6 @@ struct Manifest {
 struct Expected {
     source_files: usize,
     vault_markdown_files: usize,
-    vault_c4_files: usize,
     markdown_files: usize,
     errors: Vec<String>,
 }
@@ -146,7 +145,7 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
     let files = manifest.generated_entries - manifest.generated_directories;
     let expected_files = match manifest.profile {
         Profile::Source => manifest.expected.source_files,
-        Profile::Vault => manifest.expected.vault_markdown_files + manifest.expected.vault_c4_files,
+        Profile::Vault => manifest.expected.vault_markdown_files,
         Profile::Markdown => manifest.expected.markdown_files,
     };
     if expected_files != files {
@@ -333,7 +332,6 @@ mod tests {
             expected: Expected {
                 source_files: 16,
                 vault_markdown_files: 0,
-                vault_c4_files: 0,
                 markdown_files: 0,
                 errors: vec![],
             },

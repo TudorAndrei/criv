@@ -29,7 +29,7 @@ struct RefreshSnapshot {
 }
 
 #[test]
-fn refresh_does_not_create_architecture_source() {
+fn refresh_publishes_source_and_documentation_state() {
     let temp = TempDir::new().unwrap();
     write_source_fixture(temp.path());
     state::reset_work_counts();
@@ -41,12 +41,12 @@ fn refresh_does_not_create_architecture_source() {
     assert_eq!(work.partitions_rebuilt, 2);
     assert_eq!(work.source_partitions_rebuilt, 1);
     assert_eq!(work.note_partitions_rebuilt, 0);
-    assert_eq!(work.c4_partitions_rebuilt, 0);
     assert_eq!(work.policy_partitions_rebuilt, 0);
     assert_eq!(work.source_index_partitions_rebuilt, 1);
     assert_eq!(work.serializations, 1);
-    assert!(result.vault().c4_artifacts.is_empty());
-    assert!(!temp.path().join("docs/architecture/04-code.c4").exists());
+    let state: serde_json::Value =
+        serde_json::from_str(&result.state().to_json().unwrap()).unwrap();
+    assert_eq!(state["source-index"].as_array().unwrap().len(), 1);
 }
 
 #[test]
@@ -220,10 +220,10 @@ fn invalid_graph_cache_schema_converges_with_a_cache_free_build() {
     let mut incremental_session = one_shot_session(incremental.path());
     let incremental_result = incremental_session.refresh(RefreshCause::Initial).unwrap();
     let work = refresh_work();
-    let incremental_snapshot = refresh_snapshot(incremental.path(), incremental_result, None);
+    let incremental_snapshot = refresh_snapshot(incremental.path(), incremental_result);
     let mut full_session = one_shot_session(full.path());
     let full_result = full_session.refresh(RefreshCause::Initial).unwrap();
-    let full_snapshot = refresh_snapshot(full.path(), full_result, None);
+    let full_snapshot = refresh_snapshot(full.path(), full_result);
 
     assert_refresh_eq(
         "invalid graph cache schema",
@@ -272,14 +272,13 @@ fn failed_source_refresh_forces_the_next_docs_refresh_to_rescan_source() {
 
     fs::remove_file(corrupt_snapshot).unwrap();
     fs::write(full.path().join("src/lib.rs"), "pub fn recovered() {}\n").unwrap();
-    let previous = session.previous.as_ref().unwrap().state().clone();
     reset_refresh_work();
     let recovered = session.refresh(RefreshCause::DocsChanged).unwrap();
     assert!(refresh_work().source_graph.parsed_files > 0);
-    let recovered = refresh_snapshot(incremental.path(), recovered, Some(&previous));
+    let recovered = refresh_snapshot(incremental.path(), recovered);
     let mut full_session = one_shot_session(full.path());
     let full_result = full_session.refresh(RefreshCause::Initial).unwrap();
-    let full_snapshot = refresh_snapshot(full.path(), full_result, None);
+    let full_snapshot = refresh_snapshot(full.path(), full_result);
 
     assert_refresh_eq("failed refresh retry", &recovered, &full_snapshot);
 }
@@ -449,11 +448,7 @@ fn assert_source_catalog_work(work: RefreshWork, materializations: usize) {
     );
 }
 
-fn refresh_snapshot(
-    root: &Path,
-    result: &RefreshResult,
-    previous_state: Option<&State>,
-) -> RefreshSnapshot {
+fn refresh_snapshot(root: &Path, result: &RefreshResult) -> RefreshSnapshot {
     let state_json = fs::read_to_string(root.join(".criv/state.json")).unwrap();
     assert_eq!(
         state_json,
@@ -475,7 +470,6 @@ fn refresh_snapshot(
         snapshot_json,
         diagnostics: check::validate_vault(
             result.vault(),
-            previous_state,
             &crate::policy_scan::PolicyScanPlan::new(result.vault()),
         ),
     }

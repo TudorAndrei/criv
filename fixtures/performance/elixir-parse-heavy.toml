@@ -13,7 +13,6 @@ symbols = 8192
 note_links = 4
 source_references = 4
 policies = 0
-c4_artifacts = 0
 changed_source_files = 1
 changed_file_fraction = 0.0078125
 

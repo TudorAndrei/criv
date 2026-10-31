@@ -40,7 +40,6 @@ Never guess a flag: read it from `criv <command> --help`, or from
 - `referencing-code` — wiki-link syntax from a document or ADR to source.
 - `writing-decisions` — ADR frontmatter, governs scopes, and policy patterns.
 - `checking-drift` — the check loop, its flags, and how to read a diagnostic.
-- `c4-authoring` — the LikeC4 architecture workspace.
 - `criv-me` — developing a decision with the user before writing it down.
 
 The work is complete when the change is written, `criv watch --once` has run

@@ -50,32 +50,6 @@ fn init_does_not_create_editor_files() {
 }
 
 #[test]
-fn init_installs_c4_authoring_skill() {
-    let root = unique_temp_dir("criv-init-c4-authoring-skill");
-    let options = InitOptions {
-        no_skills: false,
-        force_skills: false,
-    };
-
-    run(&root, &options).unwrap();
-
-    for path in [
-        ".agents/skills/c4-authoring/SKILL.md",
-        ".claude/skills/c4-authoring/SKILL.md",
-    ] {
-        let skill = std::fs::read_to_string(root.join(path)).unwrap();
-        assert!(skill.contains("name: c4-authoring"));
-        assert!(skill.contains("one architecture **map**"));
-        assert!(skill.contains("coding agent owns the meaning"));
-        assert!(skill.contains("has one component as its scope"));
-        assert!(skill.contains("Run `criv watch --once`"));
-        assert!(skill.contains("The work is complete when the vault is green"));
-    }
-
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
 fn init_force_skills_refreshes_existing_skills_but_plain_init_preserves_them() {
     let root = unique_temp_dir("criv-init-force-skills");
     let mut options = fast_options();
