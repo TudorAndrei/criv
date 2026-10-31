@@ -164,3 +164,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0151-retain-watch-generation-ownership-in-standard-form|ADR-0151]] - Retain Watch generation ownership in standard form
 - [[0152-retain-local-cargo-cache-policy-in-standard-form|ADR-0152]] - Retain local Cargo cache policy in standard form
 - [[0153-retain-workspace-lint-policy-in-standard-form|ADR-0153]] - Retain workspace lint policy in standard form
+- [[0154-cache-hosted-toolchains-with-mise-and-compiler-results-with-mbx|ADR-0154]] - Cache hosted toolchains with mise and compiler results with mbx

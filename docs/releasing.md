@@ -25,7 +25,11 @@ mise run release-plan
 ```
 
 Each native build lane builds the exact release commit once and uploads that
-binary. The package job does not rebuild it. It records the commit, version,
+binary. Tool versions come from that commit's mise configuration through the
+shared setup action. Tool installations and source downloads may be restored;
+release validation and native builds use mbx's local backend and never restore
+or publish shared compiler outputs, per
+[[0154-cache-hosted-toolchains-with-mise-and-compiler-results-with-mbx|ADR-0154]]. The package job does not rebuild it. It records the commit, version,
 target, archive, byte size, and SHA-256 digest in `release-manifest.json`.
 Native jobs verify each archive, the binary digest and version, one-shot State
 publication, and operation without a Git executable. The workflow then pushes

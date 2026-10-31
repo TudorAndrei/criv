@@ -1,0 +1,83 @@
+name: Set up cached build tools
+description: Cache mise-managed Rust installations and use one mbx compiler cache
+inputs:
+  tools:
+    description: Optional mise install arguments; empty installs the repository tool set
+    default: ""
+  compiler-cache:
+    description: Set up Cargo input and compiler caches
+    default: "true"
+  compiler-cache-backend:
+    description: Use github for CI or local for release artifacts
+    default: github
+  save-cargo-cache:
+    description: Own Cargo download publication for this operating system on main
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: Configure cached toolchain homes
+      shell: bash
+      env:
+        SETUP_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        action_path="$SETUP_ACTION_PATH"
+        if [ "$RUNNER_OS" = Windows ]; then
+          action_path="$(cygpath -u "$action_path")"
+        fi
+        bash "$action_path/configure-env.sh"
+
+    - name: Cache Cargo downloads on main
+      if: >-
+        inputs.compiler-cache == 'true' && inputs.save-cargo-cache == 'true' &&
+        github.event_name == 'push' &&
+        github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ${{ env.CARGO_HOME }}/git/db
+          ${{ env.CARGO_HOME }}/registry/cache
+          ${{ env.CARGO_HOME }}/registry/index
+        key: cargo-inputs-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+        restore-keys: |
+          cargo-inputs-${{ runner.os }}-
+
+    - name: Restore Cargo downloads
+      if: >-
+        inputs.compiler-cache == 'true' && !(
+          inputs.save-cargo-cache == 'true' && github.event_name == 'push' &&
+          github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        )
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: |
+          ${{ env.CARGO_HOME }}/git/db
+          ${{ env.CARGO_HOME }}/registry/cache
+          ${{ env.CARGO_HOME }}/registry/index
+        key: cargo-inputs-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+        restore-keys: |
+          cargo-inputs-${{ runner.os }}-
+
+    - name: Install and cache mise tools
+      uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+      with:
+        install: true
+        install_args: ${{ inputs.tools }}
+        cache: true
+        cache_key_prefix: criv-tools-v1
+        cache_save: >-
+          ${{ github.event_name == 'push' &&
+              github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+    - name: Configure compiler-result caching
+      if: inputs.compiler-cache == 'true'
+      uses: jdx/mr-boxington-action@88acf2bb50552c7c508cbac13e5f8c576b95b1de # v1.7.3
+      with:
+        backend: ${{ inputs.compiler-cache-backend }}
+        github-cache-mode: objects
+        isolate-objects-cache: ${{ inputs.compiler-cache-backend == 'github' }}
+        cache-key-suffix: ${{ github.job }}
+        # Default policy: only successful pushes to main publish compiler results.
+        save-on-pull-request: false
+        save-on-protected-branch: false
+        save-on-workflow-dispatch: false

@@ -65,11 +65,10 @@ local hawk = new Step {
     "crates/**/*.rs",
     "hk.pkl",
   )
-  check = "cargo +1.99.0 hawk check --manifest-path Cargo.toml --target-dir target/hawk --exclude-crate criv_wasm -D warnings"
+  check = "mise exec rust@1.99.0 -- cargo hawk check --manifest-path Cargo.toml --target-dir target/hawk --exclude-crate criv_wasm -D warnings"
   env {
     ["MBX_DISABLE"] = "1"
     ["RUSTC_WRAPPER"] = ""
-    ["SCCACHE_GHA_ENABLED"] = "false"
   }
 }
 
@@ -87,7 +86,7 @@ local cargo_deny = new Step {
 
 local actionlint = new Step {
   glob = List(".github/workflows/*.yml", ".github/workflows/*.yaml")
-  check = "actionlint"
+  check = "bash scripts/lint-workflows.sh"
 }
 
 local shellcheck = new Step {

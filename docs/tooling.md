@@ -66,7 +66,7 @@ case.
 ## Local Rust cache
 
 Mise 2026.8.16 or later routes this project's `cargo` commands through
-Mr. Boxington `mbx` 1.9.0. Run these commands after pulling the configuration:
+the pinned Mr. Boxington `mbx` release. Run these commands after pulling the configuration:
 
 ```sh
 mise install
@@ -86,10 +86,10 @@ Do not migrate a criv worktree to an mbx-managed target while this copy policy
 is in use. Give simultaneous Cargo builds separate output directories, for
 example `--target-dir target/clippy` for Clippy beside workspace tests.
 
-The wrapper bypasses mbx when `CI` or `GITHUB_ACTIONS` is nonempty. Hosted builds
-keep the compiler cache policy from
-[[0108-bounded-hosted-rust-compilation|ADR-0108]]. Hawk also sets `MBX_DISABLE=1`,
-clears `RUSTC_WRAPPER`, and keeps `target/hawk` for its build files.
+The wrapper respects an explicit `MBX_DISABLE` in both local and hosted builds.
+Hawk sets `MBX_DISABLE=1`, clears `RUSTC_WRAPPER`, and keeps `target/hawk` for
+its build files. It runs through `mise exec rust@1.99.0`, selecting both its
+compiler path and environment rather than relying only on a Cargo override.
 
 Inspect the shared cache and preview its cleanup with:
 
@@ -114,7 +114,7 @@ Then run `mise reshim`. Existing
 `target/` directories remain valid Cargo output directories. The mbx tool pin
 and shared cache can be removed separately.
 
-[[0142-use-mbx-for-local-cargo-caching|ADR-0142]] records this integration.
+[[0154-cache-hosted-toolchains-with-mise-and-compiler-results-with-mbx|ADR-0154]] records the current local and hosted policy.
 [Issue #196](https://github.com/TudorAndrei/criv/issues/196) holds the proposed
 performance comparison. A local trial on 8 September 2026 used three runs per
 case on macOS/APFS, Rust 1.97.1, and mbx 1.9.0, before integration with PR #197.
@@ -125,6 +125,32 @@ simultaneous tests and Clippy took 238 s versus 46 s. Warm and small-edit test
 times showed no clear gain. Disk estimates used free-space changes after
 deleting isolated trial outputs; they do not predict long-term cache growth.
 Use `MBX_DISABLE=1` when build speed is the priority for these workloads.
+
+## Hosted tool and compiler caches
+
+All hosted tool installation uses the shared setup action in
+`.github/actions/setup-build-tools`. It stores the actual Rust toolchains,
+components, and targets inside mise-action's cached data directory. Cargo's
+home remains separate so downloaded crates are not duplicated in tool archives.
+The setup handles Linux, macOS, and native Windows paths.
+
+Ordinary correctness and performance-evidence lanes use mbx objects caching,
+not full target archives or a second compiler wrapper. Compiler keys distinguish
+OS, architecture, compiler, revision, and job. Tool caches publish after a
+successful installation on a main-branch push; compiler outputs publish after
+successful main-branch jobs. Pull requests restore only. Core owns Linux Cargo
+and npm downloads; Windows and macOS watch jobs own their Cargo download caches.
+
+Exact release validation and native artifact builds use mbx's local backend,
+without importing or exporting shared compiler outputs. Tool installations and
+source downloads may still be restored. No cache speedup is claimed without
+hosted timings and cache-hit evidence.
+
+Workflows use GitHub's `$/` action references, so the setup code comes from the
+workflow revision rather than the checked-out release source. Pinned actionlint
+predates that spelling. `scripts/lint-workflows.sh` translates uses lines only
+for its input parser, retaining local action/input validation. zizmor checks the
+original workflow and composite-action files.
 
 ## Running criv from a hook runner
 

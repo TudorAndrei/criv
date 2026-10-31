@@ -32,9 +32,8 @@ vale = "3.25.1"
 
 [env]
 HK_MISE = "1"
-# Hosted builds keep their existing compiler cache. Preserve local bypasses,
-# including Hawk's step environment, when mise dispatches Cargo again.
-MBX_DISABLE = "{% if env.CI | default(value='') != '' or env.GITHUB_ACTIONS | default(value='') != '' %}1{% else %}{{ env.MBX_DISABLE | default(value='0') }}{% endif %}"
+# Preserve explicit bypasses, including Hawk, in local and hosted builds.
+MBX_DISABLE = "{{ env.MBX_DISABLE | default(value='0') }}"
 
 [wrappers.cargo]
 command = "mbx"
