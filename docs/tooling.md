@@ -263,6 +263,10 @@ hk check --all --plan                        # list every step
 hk check --all --step hawk
 ```
 
+Workspace tests include the Cucumber acceptance target, which executes Gherkin
+files under `tests/features/` against the built CLI. Feature-only changes also
+select the hk test step. See [[testing]] for feature authoring and migration.
+
 Pre-push runs Clippy, workspace tests, Hawk, and criv push enforcement. Hawk is
 kept in both pre-push and the hosted CI profile so unnecessary public Rust APIs
 fail before hosted CI during normal local development.
