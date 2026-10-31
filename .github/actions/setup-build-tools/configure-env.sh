@@ -6,7 +6,9 @@ set -euo pipefail
 data_dir="${RUNNER_TEMP:?}/criv-mise"
 cargo_home="${CARGO_HOME:-${HOME:?}/.cargo}"
 if [ "${RUNNER_OS:?}" = Windows ]; then
-  data_dir="$(cygpath -m "$data_dir")"
+  # mise-action extracts under the OS temp home (C:), while RUNNER_TEMP is D:.
+  # Its pinned installer uses rename, so keep both ends on the same volume.
+  data_dir="$(cygpath -m "${TEMP:?}/criv-mise")"
   cargo_home="$(cygpath -m "$cargo_home")"
 fi
 

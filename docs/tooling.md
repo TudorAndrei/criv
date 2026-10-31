@@ -132,7 +132,9 @@ All hosted tool installation uses the shared setup action in
 `.github/actions/setup-build-tools`. It stores the actual Rust toolchains,
 components, and targets inside mise-action's cached data directory. Cargo's
 home remains separate so downloaded crates are not duplicated in tool archives.
-The setup handles Linux, macOS, and native Windows paths.
+The setup handles Linux, macOS, and native Windows paths. Windows uses its OS
+`TEMP` directory rather than GitHub's work-volume `RUNNER_TEMP`, keeping the
+mise installer and cached tools on the same volume.
 
 Ordinary correctness and performance-evidence lanes use mbx objects caching,
 not full target archives or a second compiler wrapper. Compiler keys distinguish
