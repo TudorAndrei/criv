@@ -29,7 +29,12 @@ above only for targeted development or diagnosis.
 - `.criv/` is generated local state and stays ignored by git.
 - Files under `docs/` are vault notes; include frontmatter and keep
   `criv check` passing.
-- Accepted ADRs are immutable per ADR-0012; add a new ADR for new decisions.
+- Declare user-facing features and flows as executable Gherkin scenarios in
+  `tests/features/*.feature`, with Rust steps in `tests/acceptance.rs`. See
+  `docs/testing.md` when adding or migrating scenarios.
+- ADRs record architectural decisions and rationale, not feature specifications
+  or user-flow scripts. Accepted ADRs are immutable per ADR-0012; add a new ADR
+  for new decisions.
 - Open findings live in GitHub Issues; settled decisions belong in `docs/adr/`.
   Do not add a findings file to the repository — there is one tracker.
 - Create worktrees with `wt`, which tears down its own. A worktree made with
@@ -53,8 +58,8 @@ settles how criv behaves. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
-Single-context: `docs/adr/` is the primary domain record, with no `CONTEXT.md`
-yet. See `docs/agents/domain.md`.
+Single-context: `tests/features/` specifies user-facing behavior; `docs/adr/`
+records architectural decisions. See `docs/agents/domain.md`.
 
 ## Pointers
 

@@ -51,7 +51,7 @@ local enforce_push = new Step {
 }
 
 local cargo_test = new Step {
-  glob = List("**/*.rs", "Cargo.toml", "Cargo.lock")
+  glob = List("**/*.rs", "tests/features/**/*.feature", "Cargo.toml", "Cargo.lock")
   check = "cargo test --locked --workspace"
 }
 
