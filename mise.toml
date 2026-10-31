@@ -1,12 +1,16 @@
 min_version = "2026.8.16"
 
 [tools]
-rust = { version = "1.99.1", components = [
-  "clippy",
-  "rustfmt",
-], targets = [
-  "wasm32-unknown-unknown",
-] }
+# Hawk's prebuilt driver requires its exact compiler; keep 1.99.1 primary.
+rust = [
+  { version = "1.99.1", components = [
+    "clippy",
+    "rustfmt",
+  ], targets = [
+    "wasm32-unknown-unknown",
+  ] },
+  { version = "1.99.0" },
+]
 # Put standalone npm before Node's bundled npm on PATH.
 "npm:npm" = "12.2.1"
 node = "26.13.0"

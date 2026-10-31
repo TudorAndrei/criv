@@ -28,7 +28,7 @@ The mise postinstall hook runs `hk install --mise`, so Git hook execution goes
 through `mise x` and uses the pinned tool versions, including hk, Rust 1.99.1,
 and actionlint. GitHub Actions security analysis is pinned here too: zizmor
 checks workflow, composite action, and Dependabot definitions for risky CI/CD
-patterns. Hawk uses the same Rust toolchain to check whether public Rust APIs
+patterns. Hawk uses its matching Rust 1.99.0 toolchain to check whether public Rust APIs
 are required by the shipped `criv` binary. Release tooling is also pinned here:
 Cocogitto calculates the next SemVer version from conventional commits, and
 cargo-release updates Cargo workspace versions. hk 2 evaluates `hk.pkl` with its

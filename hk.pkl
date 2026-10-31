@@ -65,7 +65,7 @@ local hawk = new Step {
     "crates/**/*.rs",
     "hk.pkl",
   )
-  check = "cargo hawk check --manifest-path Cargo.toml --target-dir target/hawk --exclude-crate criv_wasm -D warnings"
+  check = "cargo +1.99.0 hawk check --manifest-path Cargo.toml --target-dir target/hawk --exclude-crate criv_wasm -D warnings"
   env {
     ["MBX_DISABLE"] = "1"
     ["RUSTC_WRAPPER"] = ""
