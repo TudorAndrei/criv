@@ -18,10 +18,10 @@ The CLI is the reference for commands and flags, as
 
 ## `[vault]`
 
-| Key | Type | Default | Meaning |
-| --- | --- | --- | --- |
-| `docs` | string | `docs` | The directory that holds vault notes. |
-| `adr` | string | `adr` | The decision directory, relative to `docs`. |
+| Key    | Type   | Default | Meaning                                     |
+| ------ | ------ | ------- | ------------------------------------------- |
+| `docs` | string | `docs`  | The directory that holds vault notes.       |
+| `adr`  | string | `adr`   | The decision directory, relative to `docs`. |
 
 Both paths stay inside the repository. An absolute path or a `..` component is
 refused.
@@ -34,10 +34,10 @@ adr = "decisions"
 
 ## `[source]`
 
-| Key | Type | Default | Meaning |
-| --- | --- | --- | --- |
-| `roots` | array of strings | `["src", "lib"]` | Directories criv indexes for the source graph. |
-| `exclude` | array of glob strings | `["**/target/**", "**/node_modules/**"]` | Paths the source walk skips. |
+| Key       | Type                  | Default                                  | Meaning                                        |
+| --------- | --------------------- | ---------------------------------------- | ---------------------------------------------- |
+| `roots`   | array of strings      | `["src", "lib"]`                         | Directories criv indexes for the source graph. |
+| `exclude` | array of glob strings | `["**/target/**", "**/node_modules/**"]` | Paths the source walk skips.                   |
 
 An `exclude` glob that matches a directory prunes the whole subtree, so a large
 build directory costs nothing to skip.
@@ -50,26 +50,26 @@ exclude = ["**/target/**", "**/node_modules/**", "**/generated/**"]
 
 ## `[index]`
 
-| Key | Type | Default | Meaning |
-| --- | --- | --- | --- |
-| `source` | boolean | `true` | Whether to build the source graph at all. |
+| Key      | Type    | Default | Meaning                                   |
+| -------- | ------- | ------- | ----------------------------------------- |
+| `source` | boolean | `true`  | Whether to build the source graph at all. |
 
 Set `source = false` for a documentation-only vault. Every `criv query` that
 needs source data then returns nothing.
 
 ## `[state]`
 
-| Key | Type | Default | Meaning |
-| --- | --- | --- | --- |
-| `keep` | integer | `20` | How many state snapshots to retain under `.criv/snapshots/`. |
+| Key    | Type    | Default | Meaning                                                      |
+| ------ | ------- | ------- | ------------------------------------------------------------ |
+| `keep` | integer | `20`    | How many state snapshots to retain under `.criv/snapshots/`. |
 
 `keep` must be one or more. See [[state-reference|the state reference]] for what
 a snapshot holds.
 
 ## `[enforce]`
 
-| Key | Type | Default | Meaning |
-| --- | --- | --- | --- |
+| Key      | Type             | Default                    | Meaning                               |
+| -------- | ---------------- | -------------------------- | ------------------------------------- |
 | `stages` | array of strings | `["commit", "push", "ci"]` | Which stages `criv enforce` will run. |
 
 `criv enforce --stage <name>` fails when the stage is not listed. Remove a stage
@@ -85,11 +85,11 @@ stages = ["commit", "ci"]
 An import policy fails the enforcement gate when a file in `scope` imports
 something in `deny`. Each entry needs all three keys.
 
-| Key | Type | Meaning |
-| --- | --- | --- |
-| `id` | string | The identifier reported with the violation. |
-| `scope` | array of glob strings | Files the policy applies to. |
-| `deny` | array of strings | Import targets the scope must not use. A plain string matches the module or any child of it, so `tokio` also denies `tokio::net`. A glob matches the module path with `::` written as `/`. |
+| Key     | Type                  | Meaning                                                                                                                                                                                    |
+| ------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`    | string                | The identifier reported with the violation.                                                                                                                                                |
+| `scope` | array of glob strings | Files the policy applies to.                                                                                                                                                               |
+| `deny`  | array of strings      | Import targets the scope must not use. A plain string matches the module or any child of it, so `tokio` also denies `tokio::net`. A glob matches the module path with `::` written as `/`. |
 
 ```toml
 [[enforce.import_policies]]

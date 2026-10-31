@@ -14,7 +14,7 @@ use testcontainers::runners::{SyncBuilder, SyncRunner};
 use testcontainers::{GenericBuildableImage, ImageExt};
 
 const RUST_IMAGE: &str =
-    "rust:1.97.1-bookworm@sha256:77fac8b98f9f46062bb680b6d25d5bcaabfc400143952ebc572e924bcbedc3fa";
+    "rust:1.99.1-bookworm@sha256:9181b56c2a21ab1d5e73cffe04fc762426d30aa7fac3c91141dd033f49a7fc8b";
 const READY_MESSAGE: &str = "criv-performance-container-ok";
 
 #[test]

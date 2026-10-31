@@ -4,7 +4,7 @@ kind: doc
 title: Domain Docs For Agent Skills
 ---
 
-# Domain Docs
+# Domain Docs For Agent Skills
 
 How the engineering skills should consume this repo's domain documentation when
 exploring the codebase. This is a single-context repo.

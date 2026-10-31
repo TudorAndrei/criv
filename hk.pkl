@@ -1,5 +1,5 @@
-amends "package://github.com/jdx/hk/releases/download/v2.5.0/hk@2.5.0#/Config.pkl"
-import "package://github.com/jdx/hk/releases/download/v2.5.0/hk@2.5.0#/Builtins.pkl"
+amends "package://github.com/jdx/hk/releases/download/v2.10.0/hk@2.10.0#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v2.10.0/hk@2.10.0#/Builtins.pkl"
 
 local large_files = (Builtins.check_added_large_files) {
   // The launch video and its soundtrack are committed on purpose.
@@ -20,17 +20,21 @@ local cargo_clippy = new Step {
 }
 
 local staged_docs = new Step {
-  glob = List("**/*.md", "criv.toml", ".rumdl.toml")
-  check_first = true
+  glob = List("**/*.md", "criv.toml")
   check = "cargo run --locked --quiet -- check --changed"
-  fix = "cargo run --locked --quiet -- check --fix"
 }
 
 local full_docs = new Step {
-  glob = List("**/*.md", "criv.toml", ".rumdl.toml")
-  check_first = true
+  glob = List("**/*.md", "criv.toml")
   check = "cargo run --locked --quiet -- check${GITHUB_ACTIONS:+ --format github}"
-  fix = "cargo run --locked --quiet -- check --fix"
+}
+
+local markdown_format = new Step {
+  glob = List("**/*.md")
+  // Accepted ADRs are immutable, including their presentation.
+  exclude = List("docs/adr/[0-9]*.md", ".agents/**", ".claude/**")
+  check = "npm exec --offline -- oxfmt --check {{files}}"
+  fix = "npm exec --offline -- oxfmt --write {{files}}"
 }
 
 local vale = new Step {
@@ -51,6 +55,8 @@ local cargo_test = new Step {
   check = "cargo test --locked --workspace"
 }
 
+local hawk_command = "mise exec rust@1.99.0 -- cargo hawk check --manifest-path Cargo.toml --target-dir target/hawk --exclude-crate criv_wasm -D warnings"
+
 local hawk = new Step {
   glob = List(
     "Cargo.toml",
@@ -61,11 +67,13 @@ local hawk = new Step {
     "crates/**/*.rs",
     "hk.pkl",
   )
-  check = "cargo hawk check --manifest-path Cargo.toml --target-dir target/hawk --exclude-crate criv_wasm -D warnings"
+  check = new Script {
+    linux = hawk_command
+    macos = hawk_command
+  }
   env {
     ["MBX_DISABLE"] = "1"
     ["RUSTC_WRAPPER"] = ""
-    ["SCCACHE_GHA_ENABLED"] = "false"
   }
 }
 
@@ -83,7 +91,7 @@ local cargo_deny = new Step {
 
 local actionlint = new Step {
   glob = List(".github/workflows/*.yml", ".github/workflows/*.yaml")
-  check = "actionlint"
+  check = "bash scripts/lint-workflows.sh"
 }
 
 local shellcheck = new Step {
@@ -122,6 +130,7 @@ steps {
   ["detect-private-key"] = Builtins.detect_private_key
   ["cargo-fmt"] = cargo_fmt
   ["toml-fmt"] = toml_fmt
+  ["markdown-format"] = markdown_format
   ["actionlint"] = actionlint
   ["shellcheck"] = shellcheck
   ["zizmor"] = zizmor

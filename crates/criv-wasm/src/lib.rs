@@ -439,10 +439,12 @@ mod tests {
                 .starts_with("criv-likec4-protocol-unsupported:")
         );
 
-        let mut wrong_version = fixture["state"].clone();
-        wrong_version["architecture"]["likec4Version"] = "2.0.0".into();
-        assert!(
-            load_error(&wrong_version.to_string()).starts_with("criv-likec4-version-unsupported:")
+        let mut different_version = fixture["state"].clone();
+        different_version["architecture"]["likec4Version"] = "2.0.0".into();
+        let loaded = LoadedState::load(&different_version.to_string()).unwrap();
+        assert_eq!(
+            loaded.prepared.architecture.unwrap().likec4_version,
+            "2.0.0"
         );
 
         let mut invalid_model = fixture["state"].clone();

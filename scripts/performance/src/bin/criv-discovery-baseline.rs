@@ -89,6 +89,9 @@ impl Profile {
     }
 }
 
+// Markdown is retained only for explicitly selected historical probes.
+const DEFAULT_PROFILES: [Profile; 3] = [Profile::Source, Profile::SourceCandidates, Profile::Vault];
+
 const ALL_PROFILES: [Profile; 4] = [
     Profile::Source,
     Profile::SourceCandidates,
@@ -251,7 +254,7 @@ fn run(mut args: Args) -> Result<(), String> {
     validate_executable(&probe_executable)?;
 
     let profiles = if args.profiles.is_empty() {
-        ALL_PROFILES.to_vec()
+        DEFAULT_PROFILES.to_vec()
     } else {
         args.profiles.sort();
         args.profiles.dedup();

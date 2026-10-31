@@ -24,14 +24,12 @@ jobs:
     outputs:
       performance: ${{ steps.classify.outputs.performance }}
       site: ${{ steps.classify.outputs.site }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           persist-credentials: false
-
       - name: Classify changes
         id: classify
         env:
@@ -48,12 +46,12 @@ jobs:
           else
             while IFS= read -r path; do
               case "$path" in
-                docs/*|site/*|scripts/prepare-docs-site.mjs|package.json|package-lock.json|mise.toml|mise.lock|.github/workflows/ci.yml|.github/workflows/pages.yml)
+                docs/*|site/*|scripts/prepare-docs-site.mjs|package.json|package-lock.json|mise.toml|mise.lock|.github/actions/setup-build-tools/*|.github/workflows/ci.yml|.github/workflows/pages.yml)
                   site=true
                   ;;
               esac
               case "$path" in
-                Cargo.toml|Cargo.lock|crates/criv-state-wire/*|scripts/measure-performance.sh|scripts/package-release-assets.sh|scripts/release-auto.sh|scripts/performance/*|tests/hosted_release_scripts.sh|tests/performance_*|tests/fixtures/performance/*|fixtures/performance/*|.github/workflows/ci.yml|.github/workflows/performance-notes.yml|.github/workflows/release.yml)
+                Cargo.toml|Cargo.lock|crates/criv-state-wire/*|scripts/measure-performance.sh|scripts/package-release-assets.sh|scripts/release-auto.sh|scripts/performance/*|tests/ci-cache.sh|tests/hosted_release_scripts.sh|tests/performance_*|tests/fixtures/performance/*|fixtures/performance/*|.github/actions/setup-build-tools/*|.github/workflows/ci.yml|.github/workflows/performance-notes.yml|.github/workflows/release.yml)
                   performance=true
                   ;;
               esac
@@ -68,16 +66,12 @@ jobs:
     env:
       CARGO_BUILD_JOBS: "2"
       HK_TIMING_JSON: hk-timing.json
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           persist-credentials: false
-
       - name: Set criv base ref
         shell: bash
         run: |
@@ -89,46 +83,22 @@ jobs:
             echo "Unable to determine CRIV_BASE_REF for ${{ github.event_name }}" >&2
             exit 1
           fi
-
-      - name: Cache Cargo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/git/db
-            ~/.cargo/registry/cache
-            ~/.cargo/registry/index
-          key: cargo-inputs-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-inputs-${{ runner.os }}-
-
-      - name: Install Rust compiler cache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.16.0
-
-      - name: Cache npm
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Restore npm downloads
+        id: npm-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.npm
           key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
-
-      - name: Install mise tools
-        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+      - name: Set up build tools
+        uses: $/.github/actions/setup-build-tools
         with:
-          install: true
-          cache: true
-
-      - name: Install Rust components
-        run: rustup component add clippy rustfmt --toolchain 1.97.1
-
+          save-cargo-cache: "true"
       - name: Install JavaScript dependencies
         run: npm ci --ignore-scripts
-
       - name: Run core repository checks
         run: hk check --all
-
       - name: Upload hk timing report
         if: ${{ always() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
@@ -137,213 +107,107 @@ jobs:
           path: ${{ env.HK_TIMING_JSON }}
           if-no-files-found: warn
           retention-days: 14
+      - name: Publish npm downloads on main
+        if: >-
+          success() && github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+          steps.npm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: ${{ steps.npm-cache.outputs.cache-primary-key }}
 
   wasm:
     name: Wasm build
     runs-on: ubuntu-24.04
-    env:
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
-      - name: Cache Cargo
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/git/db
-            ~/.cargo/registry/cache
-            ~/.cargo/registry/index
-          key: cargo-inputs-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-inputs-${{ runner.os }}-
-
-      - name: Install Rust compiler cache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.16.0
-
-      - name: Install mise tools
-        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
-        with:
-          install: true
-          cache: true
-
+      - name: Set up build tools
+        uses: $/.github/actions/setup-build-tools
       - name: Build Wasm helper
         run: npm --prefix .obsidian/plugins/criv run build:wasm
 
   editor-contracts:
     name: Shared editor contracts
     runs-on: ubuntu-24.04
-    env:
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
-      - name: Cache Cargo
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/git/db
-            ~/.cargo/registry/cache
-            ~/.cargo/registry/index
-          key: cargo-inputs-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-inputs-${{ runner.os }}-
-
-      - name: Install Rust compiler cache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.16.0
-
-      - name: Cache npm
+      - name: Restore npm downloads
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.npm
           key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
-
-      - name: Install mise tools
-        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
-        with:
-          install: true
-          cache: true
-
+      - name: Set up build tools
+        uses: $/.github/actions/setup-build-tools
       - name: Install dependencies
         run: npm ci --ignore-scripts
-
       - name: Check shared editor contracts
         run: npm run check:editor-contracts
 
   obsidian:
     name: Obsidian companion
     runs-on: ubuntu-24.04
-    env:
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
-      - name: Cache Cargo
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/git/db
-            ~/.cargo/registry/cache
-            ~/.cargo/registry/index
-          key: cargo-inputs-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-inputs-${{ runner.os }}-
-
-      - name: Install Rust compiler cache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.16.0
-
-      - name: Cache npm
+      - name: Restore npm downloads
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.npm
           key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
-
-      - name: Install mise tools
-        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
-        with:
-          install: true
-          cache: true
-
+      - name: Set up build tools
+        uses: $/.github/actions/setup-build-tools
       - name: Install dependencies
         run: npm ci
-
       - name: Audit dependencies
         run: npm audit --workspace criv-obsidian-plugin --audit-level=high
-
       - name: Check formatting
         run: npm --prefix .obsidian/plugins/criv run format:check
-
       - name: Lint
         run: npm --prefix .obsidian/plugins/criv run lint
-
       - name: Test
         run: npm --prefix .obsidian/plugins/criv test
-
       - name: Build plugin
         run: npm --prefix .obsidian/plugins/criv run build:plugin
 
   vscode:
     name: VS Code companion
     runs-on: ubuntu-24.04
-    env:
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
-      - name: Cache Cargo
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/git/db
-            ~/.cargo/registry/cache
-            ~/.cargo/registry/index
-          key: cargo-inputs-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-inputs-${{ runner.os }}-
-
-      - name: Install Rust compiler cache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.16.0
-
-      - name: Cache npm
+      - name: Restore npm downloads
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.npm
           key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
           restore-keys: |
             npm-${{ runner.os }}-
-
-      - name: Install mise tools
-        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
-        with:
-          install: true
-          cache: true
-
+      - name: Set up build tools
+        uses: $/.github/actions/setup-build-tools
       - name: Install dependencies
         run: npm ci
-
       - name: Audit dependencies
         run: npm audit --workspace vscode-criv --audit-level=high
-
       - name: Check formatting
         run: npm --prefix extensions/vscode-criv run format:check
-
       - name: Lint
         run: npm --prefix extensions/vscode-criv run lint
-
       - name: Test
         run: npm --prefix extensions/vscode-criv test
-
       - name: Run extension-host integration tests
         run: xvfb-run -a npm --prefix extensions/vscode-criv run test:integration
 
@@ -351,29 +215,23 @@ jobs:
     name: Site build
     needs: changes
     runs-on: ubuntu-24.04
-
     steps:
       - name: Skip site build for unrelated changes
         if: needs.changes.outputs.site != 'true'
         run: echo "No site input changed."
-
       - name: Checkout
         if: needs.changes.outputs.site == 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
-      - name: Install mise tools
+      - name: Set up site tools
         if: needs.changes.outputs.site == 'true'
-        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+        uses: $/.github/actions/setup-build-tools
         with:
-          install: true
-          cache: true
-
+          compiler-cache: "false"
       - name: Install JavaScript dependencies
         if: needs.changes.outputs.site == 'true'
         run: npm ci --ignore-scripts
-
       - name: Build site
         if: needs.changes.outputs.site == 'true'
         run: npm run build:site
@@ -381,17 +239,15 @@ jobs:
   vale:
     name: Vale prose lint
     runs-on: ubuntu-24.04
-
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
       - name: Lint docs with Vale
         uses: vale-cli/vale-action@518a9136acc6e6668ce7c00d367051e0941e87ff # v3.0.0
         with:
-          version: 3.22.0
+          version: 3.25.1
           files: docs
           sync: false
           filter_mode: nofilter
@@ -400,21 +256,17 @@ jobs:
   commits:
     name: Conventional commits
     runs-on: ubuntu-24.04
-
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Install mise tools
-        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+      - name: Set up commit tools
+        uses: $/.github/actions/setup-build-tools
         with:
-          install: true
-          install_args: cocogitto
-          cache: true
-
+          tools: cocogitto
+          compiler-cache: "false"
       - name: Check commit messages since the latest tag
         run: cog check --from-latest-tag
 
@@ -422,49 +274,22 @@ jobs:
     name: Performance tooling smoke tests
     needs: changes
     runs-on: ubuntu-24.04
-    env:
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-
     steps:
       - name: Skip performance smoke tests for unrelated changes
         if: needs.changes.outputs.performance != 'true'
         run: echo "No performance tooling input changed."
-
       - name: Checkout
         if: needs.changes.outputs.performance == 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
-      - name: Cache Cargo
+      - name: Set up build tools
         if: needs.changes.outputs.performance == 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/git/db
-            ~/.cargo/registry/cache
-            ~/.cargo/registry/index
-          key: cargo-inputs-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-inputs-${{ runner.os }}-
-
-      - name: Install Rust compiler cache
-        if: needs.changes.outputs.performance == 'true'
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.16.0
-
-      - name: Install mise tools
-        if: needs.changes.outputs.performance == 'true'
-        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
-        with:
-          install: true
-          cache: true
-
+        uses: $/.github/actions/setup-build-tools
       - name: Test performance tooling
         if: needs.changes.outputs.performance == 'true'
         run: |
+          bash tests/ci-cache.sh
           bash tests/performance_harness.sh
           bash tests/performance_elixir_workloads.sh
           bash tests/performance_git_note.sh
@@ -489,7 +314,6 @@ jobs:
       - windows
       - macos-watch-lock
     if: ${{ always() }}
-
     steps:
       - name: Require all lanes
         env:
@@ -536,110 +360,51 @@ jobs:
             runner: macos-15
           - name: Windows x86_64
             runner: windows-2025
-    env:
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
-      - name: Cache Cargo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Set up build tools
+        uses: $/.github/actions/setup-build-tools
         with:
-          path: |
-            ~/.cargo/git/db
-            ~/.cargo/registry/cache
-            ~/.cargo/registry/index
-          key: cargo-inputs-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-inputs-${{ runner.os }}-
-
-      - name: Install Rust compiler cache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.16.0
-
-      - name: Install Rust
-        run: rustup toolchain install 1.97.1 --profile minimal --no-self-update
-
+          tools: rust github:jdx/mr-boxington
       - name: Run shared discovery contract corpus
-        run: "cargo +1.97.1 test --locked --lib discovery::tests::"
+        run: "cargo test --locked --lib discovery::tests::"
 
   windows:
     name: Windows build and tests
     runs-on: windows-2025
-    env:
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
-      - name: Cache Cargo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Set up build tools
+        uses: $/.github/actions/setup-build-tools
         with:
-          path: |
-            ~/.cargo/git/db
-            ~/.cargo/registry/cache
-            ~/.cargo/registry/index
-          key: cargo-inputs-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-inputs-${{ runner.os }}-
-
-      - name: Install Rust compiler cache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.16.0
-
-      - name: Install Rust
-        run: rustup toolchain install 1.97.1 --profile minimal --no-self-update
-
+          tools: rust github:jdx/mr-boxington
+          save-cargo-cache: "true"
       - name: Build
-        run: cargo +1.97.1 build --locked --workspace
-
+        run: cargo build --locked --workspace
       - name: Test
-        run: cargo +1.97.1 test --locked --workspace
+        run: cargo test --locked --workspace
 
   macos-watch-lock:
     name: macOS watch lock tests
     runs-on: macos-15
-    env:
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
-      - name: Cache Cargo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - name: Set up build tools
+        uses: $/.github/actions/setup-build-tools
         with:
-          path: |
-            ~/.cargo/git/db
-            ~/.cargo/registry/cache
-            ~/.cargo/registry/index
-          key: cargo-inputs-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-inputs-${{ runner.os }}-
-
-      - name: Install Rust compiler cache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.16.0
-
-      - name: Install Rust
-        run: rustup toolchain install 1.97.1 --profile minimal --no-self-update
-
+          tools: rust github:jdx/mr-boxington
+          save-cargo-cache: "true"
       - name: Test watch lock
         run: |
-          cargo +1.97.1 test --locked --lib watch::tests::
-          cargo +1.97.1 test --locked --test cli_workflows watch_once
-          cargo +1.97.1 test --locked --test cli_workflows long_running_watch_takes_lock_before_startup_rebuild
+          cargo test --locked --lib watch::tests::
+          cargo test --locked --test cli_workflows watch_once
+          cargo test --locked --test cli_workflows long_running_watch_takes_lock_before_startup_rebuild

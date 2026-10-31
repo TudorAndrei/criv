@@ -59,7 +59,7 @@ Tag external people and systems with `external` and use the shared external
 style. When a Code relationship crosses a component boundary, show the same
 dependency at Component level.
 
-A relationship label reads as *Source, label, Destination*: start it with a
+A relationship label reads as _Source, label, Destination_: start it with a
 capital letter and a present-tense verb, and end it on the object. Add a
 `technology` when the relationship crosses a process, language, or storage
 boundary.

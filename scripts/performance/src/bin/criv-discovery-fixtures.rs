@@ -265,6 +265,7 @@ fn initialize_git(root: &Path) -> Result<(), String> {
         &["init", "--quiet"][..],
         &["config", "user.email", "performance@criv.invalid"][..],
         &["config", "user.name", "criv performance"][..],
+        &["config", "commit.gpgsign", "false"][..],
         &["config", "gc.auto", "0"][..],
         &["config", "gc.autoDetach", "false"][..],
         &["config", "maintenance.auto", "false"][..],
@@ -369,11 +370,29 @@ mod tests {
     fn generated_git_commit_is_repeatable() {
         let left = tempfile::TempDir::new().unwrap();
         let right = tempfile::TempDir::new().unwrap();
-        fs::write(left.path().join("input.txt"), "same\n").unwrap();
-        fs::write(right.path().join("input.txt"), "same\n").unwrap();
-
-        initialize_git(left.path()).unwrap();
-        initialize_git(right.path()).unwrap();
+        for root in [left.path(), right.path()] {
+            fs::write(root.join("input.txt"), "same\n").unwrap();
+            // A user's signing preference must not affect synthetic commits.
+            for args in [
+                &["init", "--quiet"][..],
+                &["config", "commit.gpgsign", "true"][..],
+                &[
+                    "config",
+                    "gpg.program",
+                    "criv-fixture-missing-signing-program",
+                ][..],
+            ] {
+                assert!(
+                    Command::new("git")
+                        .args(args)
+                        .current_dir(root)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+            }
+            initialize_git(root).unwrap();
+        }
 
         let revision = |root: &Path| {
             let output = Command::new("git")

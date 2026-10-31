@@ -19,13 +19,13 @@ development checkout is useful for exploration but is not project evidence.
 The canonical workload set has two shapes from observed criv vaults and three
 deterministic Elixir acceptance shapes:
 
-| Manifest | Tier | Notes | Source files | Source bytes | Relationships | Links and references | Policies | C4 artifacts | Changed sources |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `barrs-small.toml` | small | 23 | 12 | 273,948 | 0 | 3 | 0 | 0 | 1 of 12 |
-| `criv-medium.toml` | medium | 77 | 119 | 1,291,218 | 0 | 212 | 4 | 4 | 1 of 119 |
-| `elixir-mixed.toml` | medium | 12 | 24 | 524,288 | 0 | 32 | 1 | 1 | 1 of 24 |
-| `elixir-parse-heavy.toml` | large | 4 | 128 | 4,194,304 | 0 | 8 | 0 | 0 | 1 of 128 |
-| `elixir-relationships.toml` | large | 4 | 128 | 4,194,304 | 8,192 | 8 | 0 | 0 | 1 of 128 |
+| Manifest                    | Tier   | Notes | Source files | Source bytes | Relationships | Links and references | Policies | C4 artifacts | Changed sources |
+| --------------------------- | ------ | ----: | -----------: | -----------: | ------------: | -------------------: | -------: | -----------: | --------------: |
+| `barrs-small.toml`          | small  |    23 |           12 |      273,948 |             0 |                    3 |        0 |            0 |         1 of 12 |
+| `criv-medium.toml`          | medium |    77 |          119 |    1,291,218 |             0 |                  212 |        4 |            4 |        1 of 119 |
+| `elixir-mixed.toml`         | medium |    12 |           24 |      524,288 |             0 |                   32 |        1 |            1 |         1 of 24 |
+| `elixir-parse-heavy.toml`   | large  |     4 |          128 |    4,194,304 |             0 |                    8 |        0 |            0 |        1 of 128 |
+| `elixir-relationships.toml` | large  |     4 |          128 |    4,194,304 |         8,192 |                    8 |        0 |            0 |        1 of 128 |
 
 The checked-in manifests retain repository revision, note split, language/file
 extension distribution, symbols, link categories, and exact changed fraction.

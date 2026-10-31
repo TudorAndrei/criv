@@ -782,13 +782,11 @@ fn print_rows(rows: &[String], output: OutputOptions) -> Result<()> {
             for row in rows {
                 println!("{row}");
             }
-            Ok(())
         }
         Format::Json => {
             let json = serde_json::to_string_pretty(rows)
                 .map_err(|err| CrivError::new(format!("failed to serialize query rows: {err}")))?;
             println!("{json}");
-            Ok(())
         }
         Format::Ndjson => {
             for row in rows {
@@ -797,9 +795,9 @@ fn print_rows(rows: &[String], output: OutputOptions) -> Result<()> {
                 })?;
                 println!("{json}");
             }
-            Ok(())
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]

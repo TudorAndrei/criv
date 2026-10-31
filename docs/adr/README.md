@@ -157,3 +157,11 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0144-apply-strict-lints-across-the-workspace|ADR-0144]] - Apply strict lints across the workspace
 - [[0145-gate-rust-dependencies-with-cargo-deny|ADR-0145]] - Gate Rust dependencies with cargo-deny
 - [[0146-type-diagnostic-codes-graph-kinds-and-hash-inputs|ADR-0146]] - Type diagnostic codes, graph kinds, and hash inputs
+- [[0147-validate-likec4-capabilities-not-runtime-versions|ADR-0147]] - Validate LikeC4 capabilities, not runtime versions
+- [[0148-separate-markdown-formatting-from-vault-validation|ADR-0148]] - Separate Markdown formatting from vault validation
+- [[0149-retain-recoverable-state-publication-in-standard-form|ADR-0149]] - Retain recoverable State publication in standard form
+- [[0150-retain-complete-adr-change-ownership-in-standard-form|ADR-0150]] - Retain complete ADR change ownership in standard form
+- [[0151-retain-watch-generation-ownership-in-standard-form|ADR-0151]] - Retain Watch generation ownership in standard form
+- [[0152-retain-local-cargo-cache-policy-in-standard-form|ADR-0152]] - Retain local Cargo cache policy in standard form
+- [[0153-retain-workspace-lint-policy-in-standard-form|ADR-0153]] - Retain workspace lint policy in standard form
+- [[0154-cache-hosted-toolchains-with-mise-and-compiler-results-with-mbx|ADR-0154]] - Cache hosted toolchains with mise and compiler results with mbx

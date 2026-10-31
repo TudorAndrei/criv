@@ -2,7 +2,7 @@
 name: c4-authoring
 description: Author or review the LikeC4 architecture map in docs/architecture. Use for C4 elements, boundaries, named views, view titles, source links, and architecture drift.
 metadata:
-  criv-template: blake3:8f099f757d561eeb
+  criv-template: blake3:3602b7d9968339ea
 ---
 
 # C4 authoring
@@ -61,7 +61,7 @@ Tag external people and systems with `external` and use the shared external
 style. When a Code relationship crosses a component boundary, show the same
 dependency at Component level.
 
-A relationship label reads as *Source, label, Destination*: start it with a
+A relationship label reads as _Source, label, Destination_: start it with a
 capital letter and a present-tense verb, and end it on the object. Add a
 `technology` when the relationship crosses a process, language, or storage
 boundary.

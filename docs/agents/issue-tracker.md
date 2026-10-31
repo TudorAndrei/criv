@@ -4,7 +4,7 @@ kind: doc
 title: Issue Tracker For Agent Skills
 ---
 
-# Issue tracker: GitHub Issues
+# Issue Tracker For Agent Skills
 
 Issues and specs (you may know a spec as a PRD) for this repo live in GitHub
 Issues on `TudorAndrei/criv`, reached through the `gh` CLI.

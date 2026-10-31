@@ -326,6 +326,6 @@ mod tests {
         assert!(value.get("asset-index").is_none());
 
         let decoded: StateDocument = serde_json::from_str(r#"{"schema":"criv.state.v1"}"#).unwrap();
-        assert!(decoded.asset_index.is_empty());
+        assert_eq!(decoded.asset_index, Vec::new());
     }
 }

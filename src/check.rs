@@ -1,22 +1,18 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+mod document;
+
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+#[cfg(test)]
 use std::sync::Arc;
 
 #[cfg(test)]
 use std::fs;
 
 use criv_state_wire::{NodeKind, StateDocument};
-use rumdl_lib::config::Config as RumdlConfig;
-use rumdl_lib::fix_coordinator::FixCoordinator;
-use rumdl_lib::rule::{LintWarning, Rule};
-use rumdl_lib::rules::{all_rules, filter_rules};
 use serde::Serialize;
 use usage_rs::{Args as UsageArgs, ValueEnum};
 
 use crate::diagnostic::{DiagnosticCode, LspRange, SourceLocation};
-use crate::discovery::{
-    MarkdownPolicy, discover_markdown, read_selected_text_from, select_markdown,
-};
 #[cfg(test)]
 use crate::git::ChangedEntry;
 use crate::git::{ChangeStatus, ChangedSet};
@@ -43,10 +39,8 @@ pub struct CheckOptions {
     format: Format,
     #[usage(long)]
     filter: Option<String>,
-    #[usage(long)]
-    fix: bool,
     /// Validate safely scoped facts for the staged Git transaction.
-    #[usage(long, conflicts = "--fix")]
+    #[usage(long)]
     changed: bool,
 }
 
@@ -78,12 +72,6 @@ struct JsonDiagnostic<'a> {
     range: Option<LspRange>,
     #[serde(skip_serializing_if = "Option::is_none")]
     fix: Option<&'static str>,
-}
-
-#[derive(Clone, Copy)]
-struct MarkdownFixScope<'a> {
-    files: &'a RepositoryFiles,
-    docs_dir: &'a Path,
 }
 
 impl Diagnostic {
@@ -120,7 +108,7 @@ pub fn run(root: &Path, options: &CheckOptions) -> Result<()> {
     let mut diagnostics = if options.changed {
         validate_changed(&files)?
     } else {
-        validate_all_with_fix(&files, options.fix)?
+        validate_all_from(&files)?
     };
 
     if let Some(filter) = &options.filter {
@@ -169,11 +157,7 @@ pub fn run(root: &Path, options: &CheckOptions) -> Result<()> {
 }
 
 pub fn validate_all_from(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
-    validate_all_with_fix(files, false)
-}
-
-fn validate_all_with_fix(files: &RepositoryFiles, fix: bool) -> Result<Vec<Diagnostic>> {
-    let mut diagnostics = validate_markdown_format(files, fix, None)?;
+    let mut diagnostics = Vec::new();
     let vault = Vault::load_from(files)?;
     let policy_plan = PolicyScanPlan::new(&vault);
     let previous_interface_hashes = previous_architecture_interface_hashes(files)?;
@@ -212,14 +196,14 @@ fn validate_changed(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
 
     let config = crate::config::Config::load_from(files)?;
     if changed_scope_requires_full_check(&changes, &config.adr_prefix()) {
-        return validate_all_with_fix(files, false);
+        return validate_all_from(files);
     }
 
     let changed_paths = changes
         .affected_paths()
         .into_iter()
         .collect::<BTreeSet<_>>();
-    let mut diagnostics = validate_markdown_format(files, false, Some(&changed_paths))?;
+    let mut diagnostics = Vec::new();
     let vault = Vault::load_from(files)?;
     let policy_plan = PolicyScanPlan::new(&vault);
     let previous_interface_hashes = previous_architecture_interface_hashes(files)?;
@@ -252,15 +236,7 @@ fn validate_changed(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
     Ok(diagnostics)
 }
 
-const SCOPE_INVALIDATING_CONFIG_FILES: [&str; 7] = [
-    "criv.toml",
-    ".rumdl.toml",
-    "rumdl.toml",
-    ".config/rumdl.toml",
-    "pyproject.toml",
-    ".markdownlint.json",
-    ".markdownlint.yaml",
-];
+const SCOPE_INVALIDATING_CONFIG_FILES: [&str; 1] = ["criv.toml"];
 
 fn changed_scope_requires_full_check(changes: &ChangedSet, adr_prefix: &str) -> bool {
     changes.entries.iter().any(|entry| {
@@ -278,206 +254,6 @@ fn changed_scope_requires_full_check(changes: &ChangedSet, adr_prefix: &str) -> 
     })
 }
 
-fn validate_markdown_format(
-    repository_files: &RepositoryFiles,
-    fix: bool,
-    changed_paths: Option<&BTreeSet<String>>,
-) -> Result<Vec<Diagnostic>> {
-    let root = repository_files.root();
-    let config = load_rumdl_config(root)?;
-    let vault_config = crate::config::Config::load_from(repository_files)?;
-    let policy = MarkdownPolicy {
-        include: &config.global.include,
-        exclude: &config.global.exclude,
-        respect_gitignore: config.global.respect_gitignore,
-    };
-    let files = match changed_paths {
-        Some(paths) => select_markdown(root, policy, paths)?,
-        None => discover_markdown(root, policy)?,
-    };
-    let base_rules = base_rules(&config);
-    let mut diagnostics = Vec::new();
-
-    for rel_path in files {
-        let path = root.join(&rel_path);
-        let mut contents = read_selected_text_from(repository_files, &path)?;
-        if fix {
-            apply_markdown_fixes(
-                MarkdownFixScope {
-                    files: repository_files,
-                    docs_dir: Path::new(&vault_config.docs_dir),
-                },
-                &path,
-                &rel_path,
-                &mut contents,
-                &config,
-                &base_rules,
-                &mut diagnostics,
-            )?;
-        }
-
-        let ignored_rules = config.get_ignored_rules_for_file(&path);
-        let result = if ignored_rules.is_empty() {
-            rumdl_lib::lint(
-                &contents,
-                &base_rules,
-                false,
-                config.get_flavor_for_file(&path),
-                Some(path.clone()),
-                Some(&config),
-            )
-        } else {
-            let rules = rules_for_ignored_rules(&config, &ignored_rules);
-            rumdl_lib::lint(
-                &contents,
-                &rules,
-                false,
-                config.get_flavor_for_file(&path),
-                Some(path.clone()),
-                Some(&config),
-            )
-        };
-        match result {
-            Ok(warnings) => {
-                let source: Arc<str> = Arc::from(contents.as_str());
-                diagnostics.extend(
-                    warnings
-                        .into_iter()
-                        .map(|warning| markdown_diagnostic(&rel_path, source.clone(), &warning)),
-                );
-            }
-            Err(err) => diagnostics.push(error(
-                DiagnosticCode::MarkdownFormat,
-                &rel_path,
-                None,
-                format!("rumdl failed: {err}"),
-            )),
-        }
-    }
-
-    Ok(diagnostics)
-}
-
-fn load_rumdl_config(root: &Path) -> Result<RumdlConfig> {
-    let mut config = match rumdl_lib::config::SourcedConfig::discover_config_for_dir(root, root) {
-        Some(path) => rumdl_lib::config::SourcedConfig::load_config_for_path(&path, root)
-            .map_err(|err| CrivError::new(format!("failed to load rumdl config: {err}")))?,
-        None => RumdlConfig::default(),
-    };
-    config.project_root = Some(root.to_path_buf());
-    Ok(config)
-}
-
-#[cfg(test)]
-pub(crate) fn discovery_probe_markdown_files(root: &Path) -> Result<Vec<String>> {
-    let config = load_rumdl_config(root)?;
-    discover_markdown(
-        root,
-        MarkdownPolicy {
-            include: &config.global.include,
-            exclude: &config.global.exclude,
-            respect_gitignore: config.global.respect_gitignore,
-        },
-    )
-}
-
-fn apply_markdown_fixes(
-    write_scope: MarkdownFixScope<'_>,
-    path: &Path,
-    rel_path: &str,
-    contents: &mut String,
-    config: &RumdlConfig,
-    base_rules: &[Box<dyn Rule>],
-    diagnostics: &mut Vec<Diagnostic>,
-) -> Result<()> {
-    let original = contents.clone();
-    let ignored_rules = config.get_ignored_rules_for_file(path);
-    let result = if ignored_rules.is_empty() {
-        FixCoordinator::new()
-            .apply_fixes_iterative(base_rules, &[], contents, config, 10, Some(path))
-            .map_err(|err| CrivError::new(format!("rumdl failed to fix {rel_path}: {err}")))?
-    } else {
-        let rules = rules_for_ignored_rules(config, &ignored_rules);
-        FixCoordinator::new()
-            .apply_fixes_iterative(&rules, &[], contents, config, 10, Some(path))
-            .map_err(|err| CrivError::new(format!("rumdl failed to fix {rel_path}: {err}")))?
-    };
-    if *contents != original {
-        let destination = path.strip_prefix(write_scope.files.root()).map_err(|_| {
-            CrivError::new(format!(
-                "refusing to fix Markdown outside vault root: {}",
-                path.display()
-            ))
-        })?;
-        // Per ADR-0044, `check --fix` rewrites every Markdown file it lints
-        // inside the repository root, so the allowed directory tracks the file
-        // rather than always being the vault docs directory. Root confinement,
-        // symlink rejection, and relative-path validation still apply at `.`;
-        // only the docs-subdirectory narrowing is dropped.
-        let allowed_dir = if destination.starts_with(write_scope.docs_dir) {
-            write_scope.docs_dir
-        } else {
-            Path::new(".")
-        };
-        write_scope
-            .files
-            .write_scope(allowed_dir)?
-            .write_atomic(destination, contents)?;
-    }
-
-    if !result.converged {
-        let detail = if result.conflicting_rules.is_empty() {
-            "fix loop did not converge".into()
-        } else {
-            format!(
-                "fix loop did not converge; conflicting rules: {}",
-                result.conflicting_rules.join(", ")
-            )
-        };
-        diagnostics.push(error(
-            DiagnosticCode::MarkdownFormat,
-            rel_path,
-            None,
-            detail,
-        ));
-    }
-
-    Ok(())
-}
-
-fn base_rules(config: &RumdlConfig) -> Vec<Box<dyn Rule>> {
-    filter_rules(&all_rules(config), &config.global)
-}
-
-fn rules_for_ignored_rules(
-    config: &RumdlConfig,
-    ignored_rules: &HashSet<String>,
-) -> Vec<Box<dyn Rule>> {
-    base_rules(config)
-        .into_iter()
-        .filter(|rule| !ignored_rules.contains(rule.name()))
-        .collect()
-}
-
-fn markdown_diagnostic(path: &str, source: Arc<str>, warning: &LintWarning) -> Diagnostic {
-    let rule = warning.rule_name.as_deref().unwrap_or("rumdl");
-    let location = SourceLocation::from_one_based_character_range(
-        source,
-        warning.line,
-        warning.column,
-        warning.end_line,
-        warning.end_column,
-    );
-    error_with_location(
-        DiagnosticCode::MarkdownFormat,
-        path,
-        Some(warning.line),
-        location,
-        format!("{rule}: {}", warning.message),
-    )
-}
-
-#[cfg(test)]
 #[cfg(test)]
 fn validate(vault: &Vault) -> Vec<Diagnostic> {
     let policy_plan = PolicyScanPlan::new(vault);
@@ -711,7 +487,7 @@ fn validate_note_local(
         ));
     }
 
-    if note.id.is_none() {
+    if note.id.as_deref().is_none_or(|id| id.trim().is_empty()) {
         diagnostics.push(error(
             DiagnosticCode::MissingId,
             &note.rel_path,
@@ -741,6 +517,7 @@ fn validate_note_local(
         ));
     }
 
+    document::validate(note, vault.is_historical_decision(note), diagnostics);
     validate_targets(vault, note, diagnostics);
 }
 
@@ -1206,12 +983,6 @@ fn visit_supersession(
 fn next_command(diagnostics: &[Diagnostic]) -> &'static str {
     if diagnostics
         .iter()
-        .any(|diag| diag.is_error() && diag.code == DiagnosticCode::MarkdownFormat)
-    {
-        return "criv check --fix";
-    }
-    if diagnostics
-        .iter()
         .any(|diag| diag.is_error() && diag.code == DiagnosticCode::UnresolvedTarget)
     {
         return "criv watch --once";
@@ -1383,7 +1154,7 @@ mod tests {
         DiagnosticCode::InvalidLikeC4Source,
         DiagnosticCode::InvalidPolicyPattern,
         DiagnosticCode::LegacySourceTarget,
-        DiagnosticCode::MarkdownFormat,
+        DiagnosticCode::DocumentFormat,
         DiagnosticCode::MissingId,
         DiagnosticCode::MissingPolicyPatternBody,
         DiagnosticCode::MissingPolicyPatternDefinition,
@@ -1425,12 +1196,6 @@ mod tests {
 
     #[test]
     fn next_command_names_the_repair_criv_can_run() {
-        let markdown = vec![error(
-            DiagnosticCode::MarkdownFormat,
-            "docs/a.md",
-            None,
-            "bad",
-        )];
         let stale = vec![error(
             DiagnosticCode::UnresolvedTarget,
             "docs/a.md",
@@ -1444,18 +1209,20 @@ mod tests {
             "missing",
         )];
 
-        assert_eq!(next_command(&markdown), "criv check --fix");
         assert_eq!(next_command(&stale), "criv watch --once");
         assert!(next_command(&other).contains("criv check"));
     }
 
     #[test]
     fn json_diagnostics_carry_the_repair() {
-        let diagnostic = error(DiagnosticCode::MarkdownFormat, "docs/a.md", None, "bad");
+        let diagnostic = error(DiagnosticCode::DocumentFormat, "docs/a.md", None, "bad");
         let json = serde_json::to_value(diagnostic.json()).expect("serialize");
 
-        assert_eq!(json["code"], "markdown-format");
-        assert_eq!(json["fix"], "Run `criv check --fix`.");
+        assert_eq!(json["code"], "document-format");
+        assert_eq!(
+            json["fix"],
+            "Use required frontmatter and one H1 matching title; active ADRs require Context, Decision, and Consequences H2 sections."
+        );
     }
 
     fn changed_set_fixture(entries: Vec<ChangedEntry>) -> ChangedSet {
@@ -1486,6 +1253,7 @@ mod tests {
         let changes = changed_set_fixture(vec![
             changed_entry(ChangeStatus::Added, "docs/guide.md", None),
             changed_entry(ChangeStatus::Modified, "src/lib.rs", None),
+            changed_entry(ChangeStatus::Modified, ".oxfmtrc.json", None),
         ]);
 
         assert!(!changed_scope_requires_full_check(&changes, "docs/adr/"));
@@ -1498,7 +1266,6 @@ mod tests {
             changed_entry(ChangeStatus::Renamed, "docs/new.md", Some("docs/old.md")),
             changed_entry(ChangeStatus::Modified, "docs/adr/0067-decision.md", None),
             changed_entry(ChangeStatus::Modified, "criv.toml", None),
-            changed_entry(ChangeStatus::Modified, ".rumdl.toml", None),
         ] {
             assert!(changed_scope_requires_full_check(
                 &changed_set_fixture(vec![entry]),
@@ -1560,19 +1327,14 @@ mod tests {
 
     #[test]
     fn exact_diagnostics_serialize_lsp_ranges_and_github_columns() {
-        let diagnostic = markdown_diagnostic(
+        let source: Arc<str> = Arc::from("é😀bad\n");
+        let location = SourceLocation::new(source, 2..6);
+        let diagnostic = error_with_location(
+            DiagnosticCode::DocumentFormat,
             "docs/unicode.md",
-            Arc::from("é😀bad\n"),
-            &LintWarning {
-                message: "bad emoji".into(),
-                line: 1,
-                column: 2,
-                end_line: 1,
-                end_column: 3,
-                severity: rumdl_lib::rule::Severity::Warning,
-                fix: None,
-                rule_name: Some("MD999".into()),
-            },
+            Some(1),
+            location,
+            "bad emoji",
         );
 
         let json = serde_json::to_value(diagnostic.json()).unwrap();
@@ -1585,32 +1347,25 @@ mod tests {
         );
         assert_eq!(
             github_annotation(&diagnostic),
-            "::error file=docs/unicode.md,line=1,col=2,endLine=1,endColumn=2,title=criv markdown-format::MD999: bad emoji"
+            "::error file=docs/unicode.md,line=1,col=2,endLine=1,endColumn=2,title=criv document-format::bad emoji"
         );
     }
 
     #[test]
     fn invalid_exact_locations_keep_the_line_only_shape() {
-        let diagnostic = markdown_diagnostic(
+        let diagnostic = error_with_location(
+            DiagnosticCode::DocumentFormat,
             "docs/invalid.md",
-            Arc::from("short\n"),
-            &LintWarning {
-                message: "invalid range".into(),
-                line: 1,
-                column: 20,
-                end_line: 1,
-                end_column: 21,
-                severity: rumdl_lib::rule::Severity::Warning,
-                fix: None,
-                rule_name: Some("MD999".into()),
-            },
+            Some(1),
+            SourceLocation::new(Arc::from("short\n"), 20..21),
+            "invalid range",
         );
 
         let json = serde_json::to_value(diagnostic.json()).unwrap();
         assert!(json.get("range").is_none());
         assert_eq!(
             github_annotation(&diagnostic),
-            "::error file=docs/invalid.md,line=1,title=criv markdown-format::MD999: invalid range"
+            "::error file=docs/invalid.md,line=1,title=criv document-format::invalid range"
         );
     }
 
@@ -2067,47 +1822,6 @@ pub fn run(input: String, fallback: usize) -> usize {
                 && diag.is_warning()
         }));
         let _ = fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn rumdl_fixes_markdown_content_in_process() {
-        let path = unique_temp_file("criv-rumdl-fix", "README.md");
-        let root = path.parent().unwrap();
-        let mut contents = "# Title\n\n\nBody\n".to_string();
-        fs::write(&path, &contents).unwrap();
-        let config = RumdlConfig::default();
-        let base_rules = base_rules(&config);
-        let mut diagnostics = Vec::new();
-        let files = RepositoryFiles::open(root).unwrap();
-        let path = files.root().join("README.md");
-
-        apply_markdown_fixes(
-            MarkdownFixScope {
-                files: &files,
-                docs_dir: Path::new("."),
-            },
-            &path,
-            "README.md",
-            &mut contents,
-            &config,
-            &base_rules,
-            &mut diagnostics,
-        )
-        .unwrap();
-
-        assert!(diagnostics.is_empty());
-        assert_eq!(contents, "# Title\n\nBody\n");
-        assert_eq!(fs::read_to_string(&path).unwrap(), contents);
-    }
-
-    fn unique_temp_file(prefix: &str, name: &str) -> std::path::PathBuf {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("{prefix}-{}-{unique}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        dir.join(name)
     }
 
     fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {

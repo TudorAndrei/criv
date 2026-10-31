@@ -4,7 +4,7 @@ kind: doc
 title: Triage Labels For Agent Skills
 ---
 
-# Triage Labels
+# Triage Labels For Agent Skills
 
 The skills speak in terms of five canonical triage roles. This file maps those
 roles to the label strings used in this repo's GitHub Issues.
@@ -27,9 +27,9 @@ fails on a label that is already there.
 
 Two more label families are in use, and a new issue should carry one from each.
 
-| Family     | Labels                                                                  |
-| ---------- | ----------------------------------------------------------------------- |
-| `priority:` | `priority:high`, `priority:medium`, `priority:low`, `priority:very-low` |
+| Family      | Labels                                                                                                                                                                                     |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `priority:` | `priority:high`, `priority:medium`, `priority:low`, `priority:very-low`                                                                                                                    |
 | `scope:`    | `scope:adr`, `scope:ci`, `scope:cli`, `scope:init`, `scope:obsidian`, `scope:performance`, `scope:policy`, `scope:source`, `scope:state`, `scope:testing`, `scope:tooling`, `scope:vscode` |
 
 Read the live list with `gh label list` before applying one, because the

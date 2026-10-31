@@ -21,17 +21,18 @@ grep -F '&& !found { print; found=1 }' \
 
 quality_job="$test_root/quality-job.yml"
 sed -n '/  quality:/,/  build:/p' "$workflow" >"$quality_job"
-grep -F 'rustup toolchain install 1.97.1 --profile minimal --no-self-update' \
-  "$quality_job" >/dev/null
-grep -F 'rustup component add clippy rustfmt --toolchain 1.97.1' \
-  "$quality_job" >/dev/null
+# Exact release validation and builds use local compiler caching only.
+grep -F 'uses: $/.github/actions/setup-build-tools' "$quality_job" >/dev/null
+grep -F 'compiler-cache-backend: local' "$quality_job" >/dev/null
 grep -F 'npm --prefix extensions/vscode-criv run package' "$quality_job" >/dev/null
 grep -F 'name: release-vsix-${{ needs.prepare.outputs.commit }}' "$quality_job" >/dev/null
 
 build_job="$test_root/build-job.yml"
 sed -n '/  build:/,/  package:/p' "$workflow" >"$build_job"
 grep -F 'name: Build ${{ matrix.name }}' "$build_job" >/dev/null
-grep -F 'cargo +1.97.1 auditable build --locked --release --target "$RELEASE_TARGET" --package criv --bin criv' \
+grep -F 'uses: $/.github/actions/setup-build-tools' "$build_job" >/dev/null
+grep -F 'compiler-cache-backend: local' "$build_job" >/dev/null
+grep -F 'cargo auditable build --locked --release --target "$RELEASE_TARGET" --package criv --bin criv' \
   "$build_job" >/dev/null
 grep -F 'name: release-binary-${{ matrix.target }}-${{ needs.prepare.outputs.commit }}' \
   "$build_job" >/dev/null

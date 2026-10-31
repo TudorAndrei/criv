@@ -4,7 +4,6 @@ export const CRIV_STATE_JSON_INVALID = "criv-state-json-invalid";
 export const CRIV_STATE_SCHEMA_UNSUPPORTED = "criv-state-schema-unsupported";
 export const CRIV_LIKEC4_ARCHITECTURE_INVALID = "criv-likec4-architecture-invalid";
 export const CRIV_LIKEC4_PROTOCOL_UNSUPPORTED = "criv-likec4-protocol-unsupported";
-export const CRIV_LIKEC4_VERSION_UNSUPPORTED = "criv-likec4-version-unsupported";
 export const CRIV_LIKEC4_MODEL_INVALID = "criv-likec4-model-invalid";
 
 export type CrivStateContractErrorCode =
@@ -12,7 +11,6 @@ export type CrivStateContractErrorCode =
   | typeof CRIV_STATE_SCHEMA_UNSUPPORTED
   | typeof CRIV_LIKEC4_ARCHITECTURE_INVALID
   | typeof CRIV_LIKEC4_PROTOCOL_UNSUPPORTED
-  | typeof CRIV_LIKEC4_VERSION_UNSUPPORTED
   | typeof CRIV_LIKEC4_MODEL_INVALID;
 
 const stateContractErrorCodes = new Set<CrivStateContractErrorCode>([
@@ -20,7 +18,6 @@ const stateContractErrorCodes = new Set<CrivStateContractErrorCode>([
   CRIV_STATE_SCHEMA_UNSUPPORTED,
   CRIV_LIKEC4_ARCHITECTURE_INVALID,
   CRIV_LIKEC4_PROTOCOL_UNSUPPORTED,
-  CRIV_LIKEC4_VERSION_UNSUPPORTED,
   CRIV_LIKEC4_MODEL_INVALID,
 ]);
 

@@ -1,0 +1,17 @@
+{
+  "proseWrap": "preserve",
+  "embeddedLanguageFormatting": "off",
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/target/**",
+    ".criv/**",
+    ".obsidian/**/*.md",
+    ".agents/**",
+    ".claude/**",
+    "docs/adr/[0-9]*.md",
+    "fixtures/**",
+    "brag-output/**",
+    "site/**",
+    ".site-build/**"
+  ]
+}

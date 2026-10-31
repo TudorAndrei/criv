@@ -1,35 +1,45 @@
 min_version = "2026.8.16"
 
 [tools]
-rust = { version = "1.97.1", components = [
-  "clippy",
-  "rustfmt",
-], targets = [
-  "wasm32-unknown-unknown",
-] }
-node = "26.5.1"
-hk = "2.5.0"
+# Hawk's prebuilt driver requires its exact compiler; keep 1.99.1 primary.
+rust = [
+  { version = "1.99.1", profile = "minimal", components = [
+    "clippy",
+    "rustfmt",
+  ], targets = [
+    "wasm32-unknown-unknown",
+  ] },
+  { version = "1.99.0", profile = "minimal", os = [
+    "linux",
+    "macos",
+  ] },
+]
+# Put standalone npm before Node's bundled npm on PATH.
+"npm:npm" = "12.2.1"
+node = "26.13.0"
+hk = "2.10.0"
 actionlint = "1.7.12"
 shellcheck = "0.11.0"
-"aqua:zizmorcore/zizmor" = "1.24.1"
-"cargo:wasm-pack" = "0.15.0"
-"npm:npm" = "10.9.8"
+"aqua:zizmorcore/zizmor" = "1.31.1"
+"cargo:wasm-pack" = "0.15.1"
 cocogitto = "7.0.0"
-"cargo:cargo-release" = "1.1.2"
+"cargo:cargo-release" = "1.1.7"
 "aqua:EmbarkStudios/cargo-deny" = "0.20.2"
 "aqua:gitleaks/gitleaks" = "8.30.1"
 "github:rust-secure-code/cargo-auditable" = "0.7.7"
 "cargo:mdbook" = "0.5.4"
 taplo = "0.10.0"
-"github:astral-sh/hawk" = "0.1.9"
-"github:jdx/mr-boxington" = "1.9.0"
-vale = "3.22.0"
+"github:astral-sh/hawk" = { version = "0.1.17", version_prefix = "", os = [
+  "linux",
+  "macos",
+] }
+"github:jdx/mr-boxington" = "1.29.0"
+vale = "3.25.1"
 
 [env]
 HK_MISE = "1"
-# Hosted builds keep their existing compiler cache. Preserve local bypasses,
-# including Hawk's step environment, when mise dispatches Cargo again.
-MBX_DISABLE = "{% if env.CI | default(value='') != '' or env.GITHUB_ACTIONS | default(value='') != '' %}1{% else %}{{ env.MBX_DISABLE | default(value='0') }}{% endif %}"
+# Preserve explicit bypasses, including Hawk, in local and hosted builds.
+MBX_DISABLE = "{{ env.MBX_DISABLE | default(value='0') }}"
 
 [wrappers.cargo]
 command = "mbx"

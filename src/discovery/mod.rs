@@ -13,7 +13,6 @@ use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
 const VAULT_WALK_THREADS: usize = 8;
-const MARKDOWN_WALK_THREADS: usize = 4;
 const COLLECT_FLUSH_ENTRIES: usize = 1_024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,20 +22,12 @@ pub struct VaultPaths {
     pub(crate) assets: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct MarkdownPolicy<'a> {
-    pub(crate) include: &'a [String],
-    pub(crate) exclude: &'a [String],
-    pub(crate) respect_gitignore: bool,
-}
-
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 enum SelectionKind {
     Source,
     VaultMarkdown,
     VaultC4,
     VaultAsset,
-    Markdown,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
@@ -58,11 +49,6 @@ enum Profile {
         prune: Option<GlobMatcher>,
     },
     Vault,
-    Markdown {
-        include: Option<GlobMatcher>,
-        exclude: GlobMatcher,
-        prune: Option<GlobMatcher>,
-    },
 }
 
 impl Profile {
@@ -73,9 +59,6 @@ impl Profile {
                     || prune.as_ref().is_some_and(|set| set.is_match(relative))
             }
             Self::Vault => matches!(name, ".git" | ".criv" | "target" | "node_modules"),
-            Self::Markdown { prune, .. } => {
-                prune.as_ref().is_some_and(|set| set.is_match(relative))
-            }
         }
     }
 
@@ -83,13 +66,6 @@ impl Profile {
         match self {
             Self::Source { .. } => Some(SelectionKind::Source),
             Self::Vault => vault_selection_kind(path),
-            Self::Markdown { .. } => path
-                .extension()
-                .and_then(|value| value.to_str())
-                .is_some_and(|value| {
-                    value.eq_ignore_ascii_case("md") || value.eq_ignore_ascii_case("markdown")
-                })
-                .then_some(SelectionKind::Markdown),
         }
     }
 
@@ -97,14 +73,6 @@ impl Profile {
         match self {
             Self::Source { exclude, .. } => !exclude.is_match(relative),
             Self::Vault => true,
-            Self::Markdown {
-                include, exclude, ..
-            } => {
-                include
-                    .as_ref()
-                    .is_none_or(|matcher| matcher.is_match(relative))
-                    && !exclude.is_match(relative)
-            }
         }
     }
 }
@@ -254,7 +222,7 @@ pub fn discover_vault(root: &Path, docs_dir: &str) -> Result<VaultPaths> {
             SelectionKind::VaultMarkdown => markdown.push(selection.path),
             SelectionKind::VaultC4 => c4.push(selection.path),
             SelectionKind::VaultAsset => assets.push(selection.path),
-            SelectionKind::Source | SelectionKind::Markdown => {}
+            SelectionKind::Source => {}
         }
     }
     Ok(VaultPaths {
@@ -276,21 +244,6 @@ fn vault_selection_kind(path: &Path) -> Option<SelectionKind> {
         .then_some(SelectionKind::VaultAsset)
 }
 
-pub fn discover_markdown(root: &Path, policy: MarkdownPolicy<'_>) -> Result<Vec<String>> {
-    let include = (!policy.include.is_empty())
-        .then(|| GlobMatcher::new(policy.include))
-        .transpose()?;
-    let exclude = GlobMatcher::new(policy.exclude)?;
-    let profile = Arc::new(Profile::Markdown {
-        include,
-        prune: subtree_prune_matcher(policy.exclude)?,
-        exclude,
-    });
-    let mut builder = markdown_builder(root, policy);
-    finish(walk(root, &mut builder, profile))
-        .map(|selections| selections.into_iter().map(|item| item.path).collect())
-}
-
 #[cfg(test)]
 fn read_selected_text(root: &Path, path: &Path) -> Result<String> {
     let relative = relative_utf8(root, path)?;
@@ -307,106 +260,6 @@ pub fn read_selected_text_from(files: &RepositoryFiles, path: &Path) -> Result<S
             "failed to read selected file `{relative}`: {error}"
         ))
     })
-}
-
-pub fn select_markdown(
-    root: &Path,
-    policy: MarkdownPolicy<'_>,
-    candidates: &BTreeSet<String>,
-) -> Result<Vec<String>> {
-    let include = (!policy.include.is_empty())
-        .then(|| GlobMatcher::new(policy.include))
-        .transpose()?;
-    let exclude = GlobMatcher::new(policy.exclude)?;
-    let profile = Profile::Markdown {
-        include,
-        prune: subtree_prune_matcher(policy.exclude)?,
-        exclude,
-    };
-    let builder = markdown_builder(root, policy);
-    let mut matchers = builder.build_matchers();
-    let mut matcher = matchers
-        .pop()
-        .ok_or_else(|| CrivError::new("Markdown ignore matcher has no repository root"))?;
-    let mut selected = Vec::new();
-    let mut errors = Vec::new();
-    for candidate in candidates {
-        let relative = normalize_relative("changed path", candidate)?;
-        if policy.include.is_empty() && has_hidden_component(&relative) {
-            continue;
-        }
-        let path = root.join(&relative);
-        if profile.candidate_kind(&path) != Some(SelectionKind::Markdown)
-            || !profile.selects(&relative)
-        {
-            continue;
-        }
-        let (ignore_match, error) = matcher.matched_with_errors(Path::new(&relative), false);
-        if let Some(error) = error {
-            errors.push(normalize_walk_error(root, &error));
-        }
-        if ignore_match.is_ignore() {
-            continue;
-        }
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                errors.push(path_error(root, &path, &error));
-                continue;
-            }
-        };
-        if metadata.file_type().is_symlink() || is_junction(&path) {
-            errors.push(format!("refusing to discover file link `{relative}`"));
-            continue;
-        }
-        if !metadata.is_file() {
-            continue;
-        }
-        match fs::File::open(&path) {
-            Ok(_) => selected.push(relative),
-            Err(error) => errors.push(format!(
-                "failed to read selected file `{relative}`: {error}"
-            )),
-        }
-    }
-    errors.sort();
-    errors.dedup();
-    if !errors.is_empty() {
-        return Err(CrivError::new(format!(
-            "file discovery failed:\n{}",
-            errors
-                .into_iter()
-                .map(|error| format!("- {error}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        )));
-    }
-    selected.sort();
-    selected.dedup();
-    Ok(selected)
-}
-
-fn has_hidden_component(relative: &str) -> bool {
-    relative
-        .split('/')
-        .any(|component| component.starts_with('.') && component != ".")
-}
-
-fn markdown_builder(root: &Path, policy: MarkdownPolicy<'_>) -> WalkBuilder {
-    let mut builder = WalkBuilder::new(root);
-    builder
-        .hidden(policy.include.is_empty())
-        .parents(policy.respect_gitignore)
-        .ignore(policy.respect_gitignore)
-        .git_ignore(policy.respect_gitignore)
-        .git_global(policy.respect_gitignore)
-        .git_exclude(policy.respect_gitignore)
-        .require_git(true)
-        .follow_links(false)
-        .threads(MARKDOWN_WALK_THREADS)
-        .current_dir(root);
-    builder
 }
 
 fn walk(root: &Path, builder: &mut WalkBuilder, profile: Arc<Profile>) -> Collected {
@@ -1116,148 +969,6 @@ mod tests {
                 c4: vec![],
                 assets: vec![],
             }
-        );
-    }
-
-    #[test]
-    fn markdown_validates_patterns_and_respect_gitignore() {
-        let temp = TempDir::new().unwrap();
-        let root = temp.path();
-        write(&root.join("README.MARKDOWN"), b"# Readme\n");
-        write(&root.join("docs/keep.md"), b"# Keep\n");
-        write(&root.join("docs/skip.md"), b"# Skip\n");
-        write(&root.join(".gitignore"), b"docs/skip.md\n");
-        fs::create_dir(root.join(".git")).unwrap();
-
-        let policy = MarkdownPolicy {
-            include: &[],
-            exclude: &[],
-            respect_gitignore: true,
-        };
-        assert_eq!(
-            discover_markdown(root, policy).unwrap(),
-            vec!["README.MARKDOWN".to_string(), "docs/keep.md".to_string()]
-        );
-
-        let invalid = ["[".to_string()];
-        assert!(
-            discover_markdown(
-                root,
-                MarkdownPolicy {
-                    include: &invalid,
-                    exclude: &[],
-                    respect_gitignore: false,
-                }
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn markdown_uses_non_git_ignore_rules_only_when_configured() {
-        let temp = TempDir::new().unwrap();
-        let root = temp.path();
-        write(&root.join("git-rule.md"), b"# Git rule\n");
-        write(&root.join("ignore-rule.md"), b"# Ignore rule\n");
-        write(&root.join(".gitignore"), b"git-rule.md\n");
-        write(&root.join(".ignore"), b"ignore-rule.md\n");
-
-        assert_eq!(
-            discover_markdown(
-                root,
-                MarkdownPolicy {
-                    include: &[],
-                    exclude: &[],
-                    respect_gitignore: true,
-                }
-            )
-            .unwrap(),
-            vec!["git-rule.md".to_string()]
-        );
-        assert_eq!(
-            discover_markdown(
-                root,
-                MarkdownPolicy {
-                    include: &[],
-                    exclude: &[],
-                    respect_gitignore: false,
-                }
-            )
-            .unwrap(),
-            vec!["git-rule.md".to_string(), "ignore-rule.md".to_string()]
-        );
-    }
-
-    #[test]
-    fn markdown_explicit_includes_select_hidden_files_and_validate_excludes() {
-        let temp = TempDir::new().unwrap();
-        let root = temp.path();
-        write(&root.join(".hidden.md"), b"# Hidden\n");
-        write(&root.join("visible.md"), b"# Visible\n");
-        let include = vec![".hidden.md".to_string()];
-
-        assert_eq!(
-            discover_markdown(
-                root,
-                MarkdownPolicy {
-                    include: &include,
-                    exclude: &[],
-                    respect_gitignore: false,
-                }
-            )
-            .unwrap(),
-            vec![".hidden.md".to_string()]
-        );
-
-        let invalid = vec!["[".to_string()];
-        assert!(
-            discover_markdown(
-                root,
-                MarkdownPolicy {
-                    include: &[],
-                    exclude: &invalid,
-                    respect_gitignore: false,
-                }
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn changed_markdown_uses_the_same_hidden_file_policy() {
-        let temp = TempDir::new().unwrap();
-        let root = temp.path();
-        write(&root.join(".hidden.md"), b"# Hidden\n");
-        write(&root.join("visible.md"), b"# Visible\n");
-        let candidates = BTreeSet::from([".hidden.md".to_string(), "visible.md".to_string()]);
-
-        assert_eq!(
-            select_markdown(
-                root,
-                MarkdownPolicy {
-                    include: &[],
-                    exclude: &[],
-                    respect_gitignore: false,
-                },
-                &candidates,
-            )
-            .unwrap(),
-            vec!["visible.md".to_string()]
-        );
-
-        let include = vec![".hidden.md".to_string()];
-        assert_eq!(
-            select_markdown(
-                root,
-                MarkdownPolicy {
-                    include: &include,
-                    exclude: &[],
-                    respect_gitignore: false,
-                },
-                &candidates,
-            )
-            .unwrap(),
-            vec![".hidden.md".to_string()]
         );
     }
 

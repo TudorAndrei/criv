@@ -4,7 +4,7 @@ kind: doc
 title: Cucumber messages report contract
 ---
 
-# Cucumber Messages Report Contract Research
+# Cucumber Messages Report Contract
 
 Date: 2026-09-13
 
@@ -56,29 +56,29 @@ is required. See the
 and the
 [Envelope documentation](https://github.com/cucumber/messages/blob/b9b8315eb7564ca350da5d4227dc02a192ec100c/jsonschema/messages.md#envelope).
 
-| Field | Purpose |
-| --- | --- |
-| `meta` | Protocol version, implementation, runtime, OS, CPU, CI data. |
-| `source` | The complete text of one source file. |
-| `gherkinDocument` | The abstract syntax tree of one parsed source file. |
-| `parseError` | A Gherkin parse failure for one source file. |
-| `pickle` | One executable scenario, derived from the syntax tree. |
-| `stepDefinition` | One step definition, with its pattern and its source location. |
-| `parameterType` | One custom parameter type. |
+| Field                    | Purpose                                                        |
+| ------------------------ | -------------------------------------------------------------- |
+| `meta`                   | Protocol version, implementation, runtime, OS, CPU, CI data.   |
+| `source`                 | The complete text of one source file.                          |
+| `gherkinDocument`        | The abstract syntax tree of one parsed source file.            |
+| `parseError`             | A Gherkin parse failure for one source file.                   |
+| `pickle`                 | One executable scenario, derived from the syntax tree.         |
+| `stepDefinition`         | One step definition, with its pattern and its source location. |
+| `parameterType`          | One custom parameter type.                                     |
 | `undefinedParameterType` | A parameter type that an expression uses but does not declare. |
-| `hook` | One hook, with its type and its source location. |
-| `suggestion` | Code snippets that could implement one undefined step. |
-| `testRunStarted` | The start of the run. |
-| `testRunFinished` | The end of the run, with a `success` boolean. |
-| `testRunHookStarted` | The start of one global hook execution. |
-| `testRunHookFinished` | The end of one global hook execution, with a result. |
-| `testCase` | The execution plan of one pickle, as a list of test steps. |
-| `testCaseStarted` | The start of one attempt of one test case. |
-| `testCaseFinished` | The end of one attempt, with a `willBeRetried` boolean. |
-| `testStepStarted` | The start of one test step. |
-| `testStepFinished` | The end of one test step, **with its result**. |
-| `attachment` | An embedded attachment, such as a screenshot. |
-| `externalAttachment` | An attachment that a URL holds, added in `32.0.0`. |
+| `hook`                   | One hook, with its type and its source location.               |
+| `suggestion`             | Code snippets that could implement one undefined step.         |
+| `testRunStarted`         | The start of the run.                                          |
+| `testRunFinished`        | The end of the run, with a `success` boolean.                  |
+| `testRunHookStarted`     | The start of one global hook execution.                        |
+| `testRunHookFinished`    | The end of one global hook execution, with a result.           |
+| `testCase`               | The execution plan of one pickle, as a list of test steps.     |
+| `testCaseStarted`        | The start of one attempt of one test case.                     |
+| `testCaseFinished`       | The end of one attempt, with a `willBeRetried` boolean.        |
+| `testStepStarted`        | The start of one test step.                                    |
+| `testStepFinished`       | The end of one test step, **with its result**.                 |
+| `attachment`             | An embedded attachment, such as a screenshot.                  |
+| `externalAttachment`     | An attachment that a URL holds, added in `32.0.0`.             |
 
 ### Which envelope holds a scenario result
 
@@ -324,18 +324,18 @@ currently sent by these versions, and that emitters for the other languages are
 not yet implemented. See the
 [Message emitters section](https://github.com/cucumber/messages/blob/b9b8315eb7564ca350da5d4227dc02a192ec100c/README.md#message-emitters).
 
-| Implementation | Emits messages | Exact flag | Since |
-| --- | --- | --- | --- |
-| cucumber-js (JavaScript) | Yes | `--format message` for stdout, or `--format "message":"out.ndjson"` for a file | `7.0.0` |
-| cucumber-ruby (Ruby) | Yes | `--format message --out report.ndjson`. There is no `message:file` colon form. | `4.0.0` |
-| cucumber-jvm (Java) | Yes | `--plugin message:report.ndjson` or `-p message:report.ndjson` on the CLI, `@CucumberOptions(plugin = {"message:report.ndjson"})`, or the `cucumber.plugin=message:report.ndjson` property | `6.0.0` |
-| godog (Go) | No | none | not applicable |
-| behave (Python) | No | none | not applicable |
-| pytest-bdd (Python) | No | `--cucumberjson=<path>` writes legacy Cucumber JSON, not messages | not applicable |
-| cucumber-rs (Rust) | No | none | not applicable |
-| pytest-bdd-ng (Python, third party) | Yes | `--messages-ndjson=PATH` | `2.0.0` |
-| cucumber-node (JavaScript) | Yes | Listed as a compatibility kit adopter | unconfirmed |
-| Reqnroll (.NET) | Yes | Not researched; the README names it | `3.0.0` |
+| Implementation                      | Emits messages | Exact flag                                                                                                                                                                                 | Since          |
+| ----------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------- |
+| cucumber-js (JavaScript)            | Yes            | `--format message` for stdout, or `--format "message":"out.ndjson"` for a file                                                                                                             | `7.0.0`        |
+| cucumber-ruby (Ruby)                | Yes            | `--format message --out report.ndjson`. There is no `message:file` colon form.                                                                                                             | `4.0.0`        |
+| cucumber-jvm (Java)                 | Yes            | `--plugin message:report.ndjson` or `-p message:report.ndjson` on the CLI, `@CucumberOptions(plugin = {"message:report.ndjson"})`, or the `cucumber.plugin=message:report.ndjson` property | `6.0.0`        |
+| godog (Go)                          | No             | none                                                                                                                                                                                       | not applicable |
+| behave (Python)                     | No             | none                                                                                                                                                                                       | not applicable |
+| pytest-bdd (Python)                 | No             | `--cucumberjson=<path>` writes legacy Cucumber JSON, not messages                                                                                                                          | not applicable |
+| cucumber-rs (Rust)                  | No             | none                                                                                                                                                                                       | not applicable |
+| pytest-bdd-ng (Python, third party) | Yes            | `--messages-ndjson=PATH`                                                                                                                                                                   | `2.0.0`        |
+| cucumber-node (JavaScript)          | Yes            | Listed as a compatibility kit adopter                                                                                                                                                      | unconfirmed    |
+| Reqnroll (.NET)                     | Yes            | Not researched; the README names it                                                                                                                                                        | `3.0.0`        |
 
 The messages library version that each emitter depends on is close to current.
 cucumber-js depends on `@cucumber/messages` `34.2.1` on `main`. cucumber-jvm
@@ -362,7 +362,7 @@ The same document also says that the legacy `json` formatter is in maintenance
 mode and that `message` is the recommended structured output.
 
 The formatter itself is one statement. It writes
-`` write(`${JSON.stringify(message)}\n`) `` for each `message` event, so the
+``write(`${JSON.stringify(message)}\n`)`` for each `message` event, so the
 output is exactly the envelope objects with no wrapper. See
 [`src/formatter/builtin/message.ts`](https://github.com/cucumber/cucumber-js/blob/f3f489faadc9b310533b9e5b3879bd30239e24c1/src/formatter/builtin/message.ts).
 The formatter first shipped in `7.0.0`.
@@ -384,9 +384,11 @@ Ruby differs from Java in the flag shape. Ruby names the formatter with
 ### Java
 
 <!-- vale Vale.Terms = NO -->
+
 `message` is a built-in plugin, described as "Logs cucumbers execution as a
 stream of json messages". See the
 <!-- vale Vale.Terms = YES -->
+
 [`cucumber-core` README plugin list](https://github.com/cucumber/cucumber-jvm/blob/0c59737eef646f8ce30d26ae6f3e40fb575342ba/cucumber-core/README.md#built-in-plugins).
 
 The plugin is selected with the `cucumber.plugin` property, which takes comma
