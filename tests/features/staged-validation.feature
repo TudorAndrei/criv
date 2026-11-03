@@ -16,7 +16,8 @@ Feature: Validate staged documentation changes
     And stdout is "<output>"
 
     Examples:
-      | format | output           |
-      | text   | criv check: ok\n |
-      | json   | []\n             |
-      | github |                  |
+      | format  | output           |
+      | default | criv check: ok\n |
+      | text    | criv check: ok\n |
+      | json    | []\n             |
+      | github  |                  |

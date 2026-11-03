@@ -62,14 +62,14 @@ fn run_command(world: &mut VaultWorld, arguments: String) {
     );
 }
 
-#[when(regex = r"^I check staged changes in (text|json|github) format$")]
+#[when(regex = r"^I check staged changes in (default|text|json|github) format$")]
 fn check_staged(world: &mut VaultWorld, format: String) {
-    world.output = Some(
-        support::criv(world.directory.path())
-            .args(["check", "--changed", "--format", &format])
-            .output()
-            .expect("run staged check"),
-    );
+    let mut command = support::criv(world.directory.path());
+    command.args(["check", "--changed"]);
+    if format != "default" {
+        command.args(["--format", &format]);
+    }
+    world.output = Some(command.output().expect("run staged check"));
 }
 
 #[then("the command succeeds")]
