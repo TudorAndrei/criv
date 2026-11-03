@@ -5,7 +5,7 @@ architectural decisions connected to the documents and code they govern, with
 validated source references, structural policies, queries, and local State that
 other tools can read.
 
-Architecture rendering and Gherkin integration belong in the separate
+Architecture rendering and runtime Gherkin integration belong in the separate
 [Concord toolkit](https://github.com/TudorAndrei/concord). criv has no LikeC4
 runtime dependency. See [the extraction guide](docs/likec4-integration.md) for
 the breaking changes.
@@ -72,6 +72,12 @@ mise install
 The mise postinstall hook runs `hk install --mise`, so Git hooks execute through
 `mise x` and use the tool versions from `mise.toml`. The hook policy is
 documented in [docs/tooling.md](docs/tooling.md).
+
+User-facing features and flows for criv itself are declared in executable
+Gherkin files under `tests/features/`; ADRs record architectural decisions.
+Run `cargo test --test acceptance` for the Cucumber suite, or
+`cargo test --workspace` to include it with all Rust tests. See
+[the testing guide](docs/testing.md) for authoring and migration conventions.
 
 You can also run the CLI from a checkout without installing it globally:
 

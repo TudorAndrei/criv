@@ -14,27 +14,11 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use assert_cmd::Command;
-use predicates::prelude::*;
-use tempfile::TempDir;
+mod support;
 
-fn criv(root: &Path) -> Command {
-    let mut command = Command::cargo_bin("criv").expect("criv binary");
-    command.current_dir(root);
-    // Git exports these while running hooks. Every fixture owns its repository
-    // context through `current_dir`, so inherited values must never redirect a
-    // spawned CLI to the checkout that invoked the test suite.
-    command.env_remove("GIT_DIR");
-    command.env_remove("GIT_WORK_TREE");
-    command.env_remove("GIT_INDEX_FILE");
-    command.env_remove("GIT_COMMON_DIR");
-    command.env_remove("GIT_PREFIX");
-    command.env_remove("CI");
-    command.env_remove("GITHUB_ACTIONS");
-    command.env_remove("CRIV_BASE_REF");
-    command.env_remove("GITHUB_BASE_REF");
-    command
-}
+use predicates::prelude::*;
+use support::criv;
+use tempfile::TempDir;
 
 fn normalize_newlines(contents: &str) -> String {
     contents.replace("\r\n", "\n")
@@ -113,61 +97,6 @@ fn vault_validation_and_publication_are_independent_of_architecture() {
         fs::read_to_string(root.join("docs/architecture/model.c4")).unwrap(),
         "not a valid diagram\n"
     );
-}
-
-#[test]
-fn changed_check_fails_closed_outside_a_git_worktree() {
-    let temp = TempDir::new().unwrap();
-    init(temp.path());
-
-    criv(temp.path())
-        .args(["check", "--changed"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("failed to open repository"));
-}
-
-#[test]
-fn commands_fail_closed_outside_a_vault() {
-    let temp = TempDir::new().unwrap();
-
-    for args in [
-        vec!["check"],
-        vec!["query", "next-adr-id"],
-        vec!["watch", "--once"],
-        vec!["enforce", "--stage", "ci"],
-    ] {
-        criv(temp.path())
-            .args(&args)
-            .assert()
-            .failure()
-            .stderr(predicate::str::contains("[not-a-vault]"))
-            .stderr(predicate::str::contains("fix: criv init"));
-    }
-}
-
-#[test]
-fn changed_check_with_no_staged_changes_skips_vault_loading_in_all_formats() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    init(root);
-    git(root, &["init", "-b", "main"]);
-
-    criv(root)
-        .args(["check", "--changed"])
-        .assert()
-        .success()
-        .stdout("criv check: ok\n");
-    criv(root)
-        .args(["check", "--changed", "--format", "json"])
-        .assert()
-        .success()
-        .stdout("[]\n");
-    criv(root)
-        .args(["check", "--changed", "--format", "github"])
-        .assert()
-        .success()
-        .stdout(predicate::str::is_empty());
 }
 
 #[test]

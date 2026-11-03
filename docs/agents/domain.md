@@ -13,8 +13,10 @@ exploring the codebase. This is a single-context repo.
 
 - **`CONTEXT.md`** at the repo root, if it exists.
 - **`docs/adr/`** — read ADRs that touch the area you are about to work in.
-  They are the primary record of how criv behaves and why. There are too many to
-  read linearly; use the queries below to find the ones that govern your files.
+  They record architectural decisions and rationale. There are too many to read
+  linearly; use the queries below to find the ones that govern your files.
+- **`tests/features/`** — executable Gherkin specifications for user-facing
+  features and flows. Read [[testing]] when adding or migrating scenarios.
 - **`AGENTS.md`** at the repo root — verification commands and repo conventions.
 
 If `CONTEXT.md` doesn't exist, **proceed silently**. Don't flag its absence and
@@ -31,6 +33,7 @@ when terms actually get resolved.
 │   ├── agents/             ← this configuration
 │   ├── architecture/       ← agent-authored LikeC4 workspace
 │   └── query-reference.md
+├── tests/features/         ← executable user-facing scenarios
 └── src/
 ```
 
