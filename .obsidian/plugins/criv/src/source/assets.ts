@@ -1,15 +1,14 @@
-import type { AssetIndexEntry } from "./model";
-import { safeVaultPath } from "./model";
+import { safeVaultPath, type CrivAssetEntry } from "@criv/editor-state";
 
 export function resolveActiveAsset(
-  assets: readonly AssetIndexEntry[],
+  assets: readonly CrivAssetEntry[],
   requestedPath: unknown,
-): AssetIndexEntry | null {
+): CrivAssetEntry | null {
   const path = safeVaultPath(requestedPath);
   return path ? (assets.find((asset) => asset.path === path) ?? null) : null;
 }
 
-export function isPassiveImage(asset: AssetIndexEntry): boolean {
+export function isPassiveImage(asset: CrivAssetEntry): boolean {
   return asset.mime.startsWith("image/");
 }
 

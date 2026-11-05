@@ -4,6 +4,6 @@
     ".git/",
     "target/",
     ".obsidian/plugins/criv/node_modules/",
-    ".obsidian/plugins/criv/pkg/"
+    ".obsidian/plugins/criv/dist-test/"
   ]
 }

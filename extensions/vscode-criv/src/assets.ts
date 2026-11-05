@@ -1,5 +1,6 @@
-import { safeVaultPath } from "./navigation/target";
-import type { CrivAssetEntry } from "./state/wasm";
+import { formatBytes, safeVaultPath, type CrivAssetEntry } from "@criv/editor-state";
+
+import { CRIV_COMMANDS } from "./commands/identifiers";
 
 export type AssetOpenPlan =
   | { kind: "resolved"; asset: CrivAssetEntry }
@@ -49,11 +50,7 @@ export function assetTreePresentation(asset: CrivAssetEntry): {
   return {
     label: asset.path,
     description: `${asset.mime} · ${formatBytes(asset.bytes)}`,
-    command: "criv.openAsset",
+    command: CRIV_COMMANDS.openAsset,
     arguments: [asset.path],
   };
-}
-
-function formatBytes(bytes: number): string {
-  return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KiB`;
 }

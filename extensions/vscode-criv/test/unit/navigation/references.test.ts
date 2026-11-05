@@ -1,17 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { CrivGraphNode } from "@criv/editor-state";
 
 import {
-  ambiguousSourceTargetMessage,
   analyzeSourceReferences,
   appendSourceHoverContents,
   completionToken,
   planSourceTargetOpen,
-  resolveSourceTarget,
   sourceReferenceDiagnosticCode,
   sourceReferenceDiagnostic,
 } from "../../../src/navigation/references";
-import type { CrivGraphNode } from "../../../src/state/wasm";
 
 const sourceNode: CrivGraphNode = {
   id: "code:src/main.rs",
@@ -85,26 +83,9 @@ test("reports unresolved criv source directives", () => {
   assert.equal(sourceReferenceDiagnosticCode(reference), "unresolved-source-target");
 });
 
-test("strips source wrappers and keeps valid line ranges out of identity", () => {
-  const result = resolveSourceTarget(lookup, "source:src/main.rs#L10-L20");
-
-  assert.equal(result.kind, "resolved");
-  assert.equal(result.kind === "resolved" && result.canonical_target, "src/main.rs");
-});
-
-test("rejects malformed line syntax before lookup", () => {
-  let calls = 0;
-  const result = resolveSourceTarget(() => {
-    calls += 1;
-    return { kind: "unresolved" };
-  }, "src/main.rs#Lx");
-
-  assert.deepEqual(result, { kind: "malformed" });
-  assert.equal(calls, 0);
-});
-
 test("opens only a resolved canonical path and keeps requested line navigation", () => {
   const resolved = planSourceTargetOpen(lookup, "source:src/main.rs#L12-L14");
+  const symbol = planSourceTargetOpen(lookup, "src/main.rs#fn:run");
   const unresolved = planSourceTargetOpen(() => ({ kind: "unresolved" }), "missing.rs");
   const ambiguous = planSourceTargetOpen(
     () => ({ kind: "ambiguous", candidates: [], total_candidate_count: 2 }),
@@ -113,7 +94,13 @@ test("opens only a resolved canonical path and keeps requested line navigation",
 
   assert.deepEqual(resolved, {
     kind: "resolved",
-    target: { path: "src/main.rs", fragment: "L12-L14", line: 11, endLine: 13 },
+    path: "src/main.rs",
+    lines: { start: 12, end: 14 },
+  });
+  assert.deepEqual(symbol, {
+    kind: "resolved",
+    path: "src/main.rs",
+    lines: { start: 10, end: 20 },
   });
   assert.deepEqual(unresolved, { kind: "unresolved" });
   assert.deepEqual(ambiguous, {
@@ -169,13 +156,6 @@ test("reports ambiguous targets with untrusted stable candidates", () => {
       label: "run",
     },
   ];
-  const message = ambiguousSourceTargetMessage("src/a.rs#run", candidates, 3);
-
-  assert.equal(
-    message,
-    "Ambiguous criv source target src/a.rs#run: src/a.rs#fn:run (function: [run](command:unsafe)) [symbol:src/a.rs#fn:run]; src/a.rs#fn:run (method: run) [symbol:src/a.rs#method:run]; 1 more.",
-  );
-
   const [reference] = analyzeSourceReferences("[[source:src/a.rs#run]]", () => ({
     kind: "ambiguous",
     candidates,
@@ -183,6 +163,17 @@ test("reports ambiguous targets with untrusted stable candidates", () => {
   }));
   assert.equal(reference?.resolutionKind, "ambiguous");
   assert.equal(sourceReferenceDiagnosticCode(reference!), "ambiguous-source-target");
+
+  const calls: Array<[string, string]> = [];
+  appendSourceHoverContents(
+    {
+      appendMarkdown: (value) => calls.push(["markdown", value]),
+      appendText: (value) => calls.push(["text", value]),
+    },
+    reference!,
+  );
+  assert.deepEqual(calls, [["text", sourceReferenceDiagnostic(reference!)]]);
+  assert.match(calls[0]![1], /\(function: \[run\]\(command:unsafe\)\)/);
 });
 
 test("navigates exact Elixir selectors and reports legacy arity ambiguity", () => {
@@ -259,11 +250,7 @@ test("navigates exact Elixir selectors and reports legacy arity ambiguity", () =
 
   assert.deepEqual(planSourceTargetOpen(elixirLookup, "lib/sample.ex#My.App.run/1"), {
     kind: "resolved",
-    target: {
-      path: "lib/sample.ex",
-      fragment: "L3-L3",
-      line: 2,
-      endLine: 2,
-    },
+    path: "lib/sample.ex",
+    lines: { start: 3, end: 3 },
   });
 });

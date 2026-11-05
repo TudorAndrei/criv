@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 
-import { executablePathError, hasWorkspaceConfigurationValue, machineScopedValue } from "./model";
+import { hasWorkspaceConfigurationValue, machineScopedValue } from "./model";
 
 export interface CrivExtensionConfiguration {
   binaryPath: string;
@@ -21,5 +21,3 @@ export function crivConfiguration(): CrivExtensionConfiguration {
       hasWorkspaceConfigurationValue(binaryPath) || hasWorkspaceConfigurationValue(checkOnSave),
   };
 }
-
-export { executablePathError };

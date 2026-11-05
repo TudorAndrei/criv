@@ -1,9 +1,9 @@
 import * as vscode from "vscode";
+import type { CrivAssetEntry, CrivInitialProjections, CrivSourceEntry } from "@criv/editor-state";
 
 import { assetTreePresentation } from "./assets";
-import type { CrivAssetEntry, CrivStateSnapshot } from "./state/model";
+import { CRIV_COMMANDS } from "./commands/identifiers";
 import type { WorkspaceStateStatus } from "./state/store";
-import type { CrivSourceEntry } from "./state/wasm";
 
 export class CrivStateTreeProvider implements vscode.TreeDataProvider<CrivTreeItem> {
   private status: WorkspaceStateStatus = { generation: 0, kind: "loading" };
@@ -26,7 +26,7 @@ export class CrivStateTreeProvider implements vscode.TreeDataProvider<CrivTreeIt
     }
 
     if (element.kind === "section" && element.section && this.status.kind === "ready") {
-      return sectionChildren(element.section, this.status.snapshot);
+      return sectionChildren(element.section, this.status.projections);
     }
 
     return [];
@@ -39,7 +39,7 @@ export class CrivStateTreeProvider implements vscode.TreeDataProvider<CrivTreeIt
   private rootItems(): CrivTreeItem[] {
     switch (this.status.kind) {
       case "ready":
-        return readyRootItems(this.status.snapshot);
+        return readyRootItems(this.status.projections);
       case "loading":
         return [new CrivTreeItem("Loading criv state", "message")];
       case "missing":
@@ -67,40 +67,43 @@ class CrivTreeItem extends vscode.TreeItem {
   }
 }
 
-function readyRootItems(snapshot: CrivStateSnapshot): CrivTreeItem[] {
+function readyRootItems(projections: CrivInitialProjections): CrivTreeItem[] {
   return [
-    sectionItem("Summary", "summary", `${snapshot.summary.node_count} nodes`),
-    sectionItem("Source Files", "sources", `${snapshot.sources.length}`),
-    sectionItem("Documentation Assets", "assets", `${snapshot.assets.length}`),
-    sectionItem("Registered Patterns", "patterns", `${snapshot.registeredPatterns.length}`),
+    sectionItem("Summary", "summary", `${projections.summary.node_count} nodes`),
+    sectionItem("Source Files", "sources", `${projections.sources.length}`),
+    sectionItem("Documentation Assets", "assets", `${projections.assets.length}`),
+    sectionItem("Registered Patterns", "patterns", `${projections.registeredPatterns.length}`),
   ];
 }
 
-function sectionChildren(section: TreeSection, snapshot: CrivStateSnapshot): CrivTreeItem[] {
+function sectionChildren(
+  section: TreeSection,
+  projections: CrivInitialProjections,
+): CrivTreeItem[] {
   switch (section) {
     case "summary":
-      return summaryItems(snapshot);
+      return summaryItems(projections);
     case "sources":
-      return snapshot.sources.map(sourceItem);
+      return projections.sources.map(sourceItem);
     case "assets":
-      return snapshot.assets.length > 0
-        ? snapshot.assets.map(assetItem)
+      return projections.assets.length > 0
+        ? projections.assets.map(assetItem)
         : [new CrivTreeItem("No previewable assets", "message")];
     case "patterns":
-      return snapshot.registeredPatterns.length > 0
-        ? snapshot.registeredPatterns.map(patternItem)
+      return projections.registeredPatterns.length > 0
+        ? projections.registeredPatterns.map(patternItem)
         : [new CrivTreeItem("No registered patterns", "message")];
   }
 }
 
-function summaryItems(snapshot: CrivStateSnapshot): CrivTreeItem[] {
+function summaryItems(projections: CrivInitialProjections): CrivTreeItem[] {
   return [
-    new CrivTreeItem(`Schema: ${snapshot.summary.schema}`, "message"),
-    new CrivTreeItem(`Nodes: ${snapshot.summary.node_count}`, "message"),
-    new CrivTreeItem(`Edges: ${snapshot.summary.edge_count}`, "message"),
-    new CrivTreeItem(`Sources: ${snapshot.summary.source_count}`, "message"),
-    new CrivTreeItem(`Assets: ${snapshot.summary.asset_count}`, "message"),
-    new CrivTreeItem(`Patterns: ${snapshot.summary.pattern_count}`, "message"),
+    new CrivTreeItem(`Schema: ${projections.summary.schema}`, "message"),
+    new CrivTreeItem(`Nodes: ${projections.summary.node_count}`, "message"),
+    new CrivTreeItem(`Edges: ${projections.summary.edge_count}`, "message"),
+    new CrivTreeItem(`Sources: ${projections.summary.source_count}`, "message"),
+    new CrivTreeItem(`Assets: ${projections.summary.asset_count}`, "message"),
+    new CrivTreeItem(`Patterns: ${projections.summary.pattern_count}`, "message"),
   ];
 }
 
@@ -114,7 +117,7 @@ function sourceItem(source: CrivSourceEntry): CrivTreeItem {
   const item = new CrivTreeItem(source.path, "source");
   item.description = source.mime;
   item.command = {
-    command: "criv.openSourceTarget",
+    command: CRIV_COMMANDS.openSourceTarget,
     title: "Open Source Target",
     arguments: [source.path],
   };

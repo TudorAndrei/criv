@@ -48,5 +48,5 @@ npm --prefix extensions/vscode-criv run test:integration
 npm --prefix extensions/vscode-criv run package
 ```
 
-The package step builds the TypeScript bundle, rebuilds the WASM runtime into
-`pkg/`, and writes `vscode-criv.vsix` without publishing it.
+The package step rebuilds the Wasm runtime, embeds it in the TypeScript bundle,
+and writes `vscode-criv.vsix` without publishing it.

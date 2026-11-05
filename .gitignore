@@ -8,11 +8,12 @@ packages/*/node_modules/
 .obsidian/workspace.json
 .obsidian/plugins/criv/node_modules/
 .obsidian/plugins/criv/main.js
+.obsidian/plugins/criv/dist-test/
+packages/criv-editor-state/pkg/
 extensions/vscode-criv/dist/
 extensions/vscode-criv/dist-test/
 extensions/vscode-criv/media/
 extensions/vscode-criv/node_modules/
-extensions/vscode-criv/pkg/
 extensions/vscode-criv/.vscode-test/
 extensions/vscode-criv/*.vsix
 .site-build/

@@ -1,6 +1,6 @@
 import type { App } from "obsidian";
+import { safeVaultPath } from "@criv/editor-state";
 import type { LinkedSource } from "./model";
-import { parseLineRange, safeVaultPath } from "./model";
 
 const PREVIEW_LINE_LIMIT = 80;
 
@@ -19,7 +19,7 @@ export async function readSourcePreview(app: App, linked: LinkedSource): Promise
   }
   const raw = await app.vault.adapter.read(sourcePath);
   const lines = raw.split(/\r?\n/);
-  const lineRange = parseLineRange(linked.fragment);
+  const lineRange = linked.lines;
   const start = lineRange?.start ?? 1;
   const end = lineRange?.end ?? Math.min(lines.length, start + PREVIEW_LINE_LIMIT - 1);
   const selected = lines.slice(Math.max(0, start - 1), Math.min(lines.length, end));

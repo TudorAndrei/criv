@@ -167,3 +167,6 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0154-cache-hosted-toolchains-with-mise-and-compiler-results-with-mbx|ADR-0154]] - Cache hosted toolchains with mise and compiler results with mbx
 - [[0155-remove-likec4-from-criv|ADR-0155]] - Remove LikeC4 from criv
 - [[0157-run-rust-tests-with-cargo-nextest|ADR-0157]] - Run Rust tests with cargo-nextest
+- [[0170-share-editor-state-behaviour-and-embed-the-wasm-runtime|ADR-0170]] - Share editor State behaviour and embed the Wasm runtime
+- [[0171-retain-state-wire-and-elixir-rules-after-the-editor-state-move|ADR-0171]] - Retain State wire and Elixir rules after the editor-state move
+- [[0172-retain-the-obsidian-owner-layout-with-typescript-tests|ADR-0172]] - Retain the Obsidian owner layout with TypeScript tests

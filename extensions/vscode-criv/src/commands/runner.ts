@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 
 const DEFAULT_MAX_OUTPUT_BYTES = 1024 * 1024;
-const DEFAULT_FORCE_KILL_AFTER_MS = 2_000;
+const FORCE_KILL_AFTER_MS = 2_000;
 
 export interface CommandResult {
   code: number | null;
@@ -18,7 +18,6 @@ export interface CommandRunOptions {
   cwd: string;
   signal?: AbortSignal;
   maxOutputBytes?: number;
-  forceKillAfterMs?: number;
 }
 
 export function runProcess(
@@ -28,7 +27,6 @@ export function runProcess(
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
     const maxOutputBytes = options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
-    const forceKillAfterMs = options.forceKillAfterMs ?? DEFAULT_FORCE_KILL_AFTER_MS;
     const child = spawn(command, args, {
       cwd: options.cwd,
       stdio: ["ignore", "pipe", "pipe"],
@@ -48,7 +46,7 @@ export function runProcess(
         if (!settled) {
           child.kill("SIGKILL");
         }
-      }, forceKillAfterMs);
+      }, FORCE_KILL_AFTER_MS);
     };
 
     child.stdout.on("data", (chunk: Buffer) => {
