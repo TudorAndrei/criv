@@ -40,7 +40,7 @@ pub fn run(root: &Path, options: &InitOptions) -> Result<()> {
 
     write_template(
         &scope,
-        "criv.toml",
+        crate::config::CONFIG_FILE,
         &templates::default_config(),
         &mut created,
     )?;

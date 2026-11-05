@@ -29,69 +29,6 @@ fn json_pretty(value: &impl Serialize, label: &str) -> Result<String> {
     Ok(json)
 }
 
-#[cfg(test)]
-#[derive(Debug, Serialize)]
-struct DefaultConfig {
-    vault: VaultConfig,
-    source: SourceConfig,
-    index: IndexConfig,
-    state: StateConfig,
-    enforce: EnforceConfig,
-}
-
-#[cfg(test)]
-impl Default for DefaultConfig {
-    fn default() -> Self {
-        Self {
-            vault: VaultConfig {
-                docs: "docs",
-                adr: "adr",
-            },
-            source: SourceConfig {
-                roots: vec!["src", "lib"],
-                exclude: vec!["**/target/**", "**/node_modules/**"],
-            },
-            index: IndexConfig { source: true },
-            state: StateConfig { keep: 20 },
-            enforce: EnforceConfig {
-                stages: vec!["commit", "push", "ci"],
-            },
-        }
-    }
-}
-
-#[cfg(test)]
-#[derive(Debug, Serialize)]
-struct VaultConfig {
-    docs: &'static str,
-    adr: &'static str,
-}
-
-#[cfg(test)]
-#[derive(Debug, Serialize)]
-struct SourceConfig {
-    roots: Vec<&'static str>,
-    exclude: Vec<&'static str>,
-}
-
-#[cfg(test)]
-#[derive(Debug, Serialize)]
-struct IndexConfig {
-    source: bool,
-}
-
-#[cfg(test)]
-#[derive(Debug, Serialize)]
-struct StateConfig {
-    keep: usize,
-}
-
-#[cfg(test)]
-#[derive(Debug, Serialize)]
-struct EnforceConfig {
-    stages: Vec<&'static str>,
-}
-
 #[derive(Debug, Serialize)]
 struct AdrReadmeFrontmatter {
     id: &'static str,
@@ -117,11 +54,30 @@ const DEFAULT_CONFIG: &str = include_str!("fixtures/criv.toml");
 mod tests {
     use super::*;
 
-    #[test]
-    fn default_config_fixture_matches_typed_defaults() {
-        let fixture: toml::Value = toml::from_str(DEFAULT_CONFIG).unwrap();
-        let defaults = toml::Value::try_from(DefaultConfig::default()).unwrap();
+    use crate::config::Config;
 
-        assert_eq!(fixture, defaults);
+    #[test]
+    fn default_config_template_states_the_config_defaults() {
+        let parsed = Config::parse(Some(DEFAULT_CONFIG)).unwrap();
+        assert_eq!(format!("{parsed:?}"), format!("{:?}", Config::default()));
+
+        let template: toml::Value = toml::from_str(DEFAULT_CONFIG).unwrap();
+        for (table, key) in [
+            ("vault", "docs"),
+            ("vault", "adr"),
+            ("source", "roots"),
+            ("source", "exclude"),
+            ("index", "source"),
+            ("state", "keep"),
+            ("enforce", "stages"),
+        ] {
+            assert!(
+                template
+                    .get(table)
+                    .and_then(|value| value.get(key))
+                    .is_some(),
+                "the template must state {table}.{key} rather than rely on the default"
+            );
+        }
     }
 }

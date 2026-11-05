@@ -168,3 +168,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0155-remove-likec4-from-criv|ADR-0155]] - Remove LikeC4 from criv
 - [[0157-run-rust-tests-with-cargo-nextest|ADR-0157]] - Run Rust tests with cargo-nextest
 - [[0158-give-each-note-notation-one-owner|ADR-0158]] - Give each note notation one owner
+- [[0159-derive-configuration-defaults-from-one-type|ADR-0159]] - Derive configuration defaults from one type

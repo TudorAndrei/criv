@@ -7,7 +7,6 @@ use usage_rs::{Args as UsageArgs, Subcommands, ValueEnum};
 use crate::diagnostic::DiagnosticCode;
 use crate::identity::{MAX_ADR_NUMBER, format_adr_id, parse_adr_id};
 use crate::markdown::LinkTarget;
-use crate::repository::RepositoryFiles;
 use crate::source::SymbolKind;
 use crate::state::SnapshotId;
 use crate::vault::{NoteKind, ResolvedLink, SourceTargetResolution, Vault};
@@ -343,7 +342,7 @@ struct DiffOptions {
 }
 
 pub fn run(root: &Path, options: QueryOptions) -> Result<()> {
-    RepositoryFiles::open_vault(root)?;
+    crate::config::open_vault(root)?;
     if let QueryCommand::Diff(options) = &options.command {
         let rows = diff(root, &options.ref_a, &options.ref_b)?;
         return print_rows(&rows, options.output);

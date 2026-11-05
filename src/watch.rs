@@ -36,7 +36,7 @@ pub struct WatchOptions {
 
 /// Acquire the Watch lock before starting a single refresh or a live session.
 pub fn run(root: &Path, options: &WatchOptions) -> Result<()> {
-    let files = RepositoryFiles::open_vault(root)?;
+    let files = crate::config::open_vault(root)?;
     let mode = if options.once {
         WatchMode::Once
     } else {
@@ -619,7 +619,7 @@ impl LiveWatchSession {
 
 /// Read the exact configuration text so a generation can detect any replacement.
 fn read_config_source(files: &RepositoryFiles) -> Result<Option<String>> {
-    files.read_optional_string(Path::new("criv.toml"))
+    files.read_optional_string(Path::new(crate::config::CONFIG_FILE))
 }
 
 impl WatchTopology {

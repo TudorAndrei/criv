@@ -11,6 +11,7 @@ use std::fs;
 use serde::Serialize;
 use usage_rs::{Args as UsageArgs, ValueEnum};
 
+use crate::config::CONFIG_FILE;
 use crate::diagnostic::{self, Diagnostic, DiagnosticCode, LspRange, Severity, SourceLocation};
 #[cfg(test)]
 use crate::git::ChangedEntry;
@@ -68,7 +69,7 @@ impl<'a> JsonDiagnostic<'a> {
 }
 
 pub fn run(root: &Path, options: &CheckOptions) -> Result<()> {
-    let files = RepositoryFiles::open_vault(root)?;
+    let files = crate::config::open_vault(root)?;
     let mut diagnostics = if options.changed {
         validate_changed(&files)?
     } else {
@@ -154,8 +155,6 @@ fn validate_changed(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
     Ok(diagnostics)
 }
 
-const SCOPE_INVALIDATING_CONFIG_FILES: [&str; 1] = ["criv.toml"];
-
 fn changed_scope_requires_full_check(changes: &ChangedSet, adr_prefix: &str) -> bool {
     changes.entries.iter().any(|entry| {
         matches!(
@@ -166,9 +165,7 @@ fn changed_scope_requires_full_check(changes: &ChangedSet, adr_prefix: &str) -> 
             entry.previous_path.as_ref().unwrap_or(&entry.path),
         ]
         .into_iter()
-        .any(|path| {
-            SCOPE_INVALIDATING_CONFIG_FILES.contains(&path.as_str()) || path.starts_with(adr_prefix)
-        })
+        .any(|path| path == CONFIG_FILE || path.starts_with(adr_prefix))
     })
 }
 

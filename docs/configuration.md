@@ -39,6 +39,9 @@ adr = "decisions"
 | `roots`   | array of strings      | `["src", "lib"]`                         | Directories criv indexes for the source graph. |
 | `exclude` | array of glob strings | `["**/target/**", "**/node_modules/**"]` | Paths the source walk skips.                   |
 
+Each root stays inside the repository, as the `[vault]` paths do. An absolute
+path or a `..` component is refused.
+
 An `exclude` glob that matches a directory prunes the whole subtree, so a large
 build directory costs nothing to skip.
 
@@ -73,7 +76,8 @@ a snapshot holds.
 | `stages` | array of strings | `["commit", "push", "ci"]` | Which stages `criv enforce` will run. |
 
 `criv enforce --stage <name>` fails when the stage is not listed. Remove a stage
-to disable its gate without uninstalling the hook.
+to disable its gate without uninstalling the hook. A name other than `commit`,
+`push`, or `ci` is a configuration error.
 
 ```toml
 [enforce]

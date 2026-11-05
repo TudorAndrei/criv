@@ -7,18 +7,12 @@ use serde::Serialize;
 use usage_rs::{Args as UsageArgs, ValueEnum};
 
 use crate::check;
+use crate::config::{CONFIG_FILE, Stage};
 use crate::diagnostic::{Diagnostic, DiagnosticCode};
-use crate::git::{ChangedSet, ChangedSetComparison, GitRepository};
+use crate::git::{ChangedSet, ChangedSetComparison, GitRepository, is_zero_oid};
 use crate::policy_scan::PolicyScanPlan;
 use crate::vault::Vault;
 use crate::{CrivError, Result};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum Stage {
-    Commit,
-    Push,
-    Ci,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum Format {
@@ -42,10 +36,6 @@ pub struct EnforceOptions {
     remote_url: Option<String>,
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "enforcement assembles one stage report from related vault and policy checks"
-)]
 /// Validate the selected Git transaction and report stage-specific failures.
 pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
     if options.pre_push && options.stage != Stage::Push {
@@ -53,31 +43,27 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
             "--pre-push is only valid with --stage push",
         ));
     }
-    let files = crate::repository::RepositoryFiles::open_vault(root)?;
+    let files = crate::config::open_vault(root)?;
     let vault = Vault::load_from(&files)?;
     let policy_plan = PolicyScanPlan::new(&vault);
-    if !vault
-        .config
-        .enforce_stages
-        .iter()
-        .any(|stage| stage == options.stage.as_str())
-    {
+    if !vault.config.enforce_stages.contains(&options.stage) {
         return Err(CrivError::new(format!(
-            "stage `{}` is not enabled in criv.toml",
+            "stage `{}` is not enabled in {CONFIG_FILE}",
             options.stage.as_str()
         )));
     }
-    if options.stage == Stage::Ci
-        && let Some(base_ref) = env_string("CRIV_BASE_REF")
-    {
-        crate::adr::check_base(root, &base_ref)?;
+    let ci_base_ref = (options.stage == Stage::Ci)
+        .then(|| env_string("CRIV_BASE_REF"))
+        .flatten();
+    if let Some(base_ref) = &ci_base_ref {
+        crate::adr::check_base(root, base_ref)?;
     }
 
     let diagnostics = check::validate_vault(&vault, &policy_plan);
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();
 
-    let changed_entries = changed_entries(root, options)?;
+    let changed_entries = changed_entries(root, options, ci_base_ref.as_deref())?;
     let changed_files = if options.stage == Stage::Ci {
         None
     } else {
@@ -96,11 +82,7 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
         &files,
         &vault.config,
         changed_entries.as_ref(),
-        match options.stage {
-            Stage::Commit => crate::adr::ChangeMode::Commit,
-            Stage::Push => crate::adr::ChangeMode::Push,
-            Stage::Ci => crate::adr::ChangeMode::Ci,
-        },
+        options.stage,
     );
     let changed_count = changed_files.as_ref().map_or(0, Vec::len);
     let basis = changed_entries
@@ -237,14 +219,7 @@ fn import_policy_violations(vault: &Vault, changed_files: Option<&Vec<String>>) 
                 continue;
             }
             for import in &file.imports {
-                if policy
-                    .deny
-                    .iter()
-                    .zip(&policy.deny_matchers)
-                    .any(|(pattern, matcher)| {
-                        import_matches(pattern, matcher.as_ref(), &import.module)
-                    })
-                {
+                if policy.deny.iter().any(|rule| rule.matches(&import.module)) {
                     violations.push(format!(
                         "{}:{}: import policy `{}` denies `{}`",
                         file.path, import.line, policy.id, import.module
@@ -258,7 +233,11 @@ fn import_policy_violations(vault: &Vault, changed_files: Option<&Vec<String>>) 
     violations
 }
 
-fn changed_entries(root: &Path, options: &EnforceOptions) -> Result<Option<ChangedSet>> {
+fn changed_entries(
+    root: &Path,
+    options: &EnforceOptions,
+    ci_base_ref: Option<&str>,
+) -> Result<Option<ChangedSet>> {
     let repository = GitRepository::discover(root)?;
     match options.stage {
         Stage::Commit => repository
@@ -291,29 +270,31 @@ fn changed_entries(root: &Path, options: &EnforceOptions) -> Result<Option<Chang
                 })
             })
             .transpose(),
-        Stage::Ci => ci_changed_entries(repository.as_ref()),
+        Stage::Ci => ci_changed_entries(
+            repository.as_ref(),
+            ci_base_ref,
+            env_string("GITHUB_BASE_REF"),
+            is_ci_environment(),
+        ),
     }
 }
 
-fn ci_changed_entries(repository: Option<&GitRepository>) -> Result<Option<ChangedSet>> {
-    ci_changed_entries_with_env(repository, env_string, is_ci_environment())
-}
-
-fn ci_changed_entries_with_env(
+fn ci_changed_entries(
     repository: Option<&GitRepository>,
-    env_value: impl Fn(&str) -> Option<String>,
+    criv_base_ref: Option<&str>,
+    github_base_ref: Option<String>,
     ci_environment: bool,
 ) -> Result<Option<ChangedSet>> {
-    if let Some(base_ref) = env_value("CRIV_BASE_REF") {
+    if let Some(base_ref) = criv_base_ref {
         return required_repository(repository)?
             .changed_set(&ChangedSetComparison::Trees {
-                old_ref: &base_ref,
+                old_ref: base_ref,
                 new_ref: "HEAD",
             })
             .map(Some);
     }
 
-    if let Some(base_ref) = env_value("GITHUB_BASE_REF") {
+    if let Some(base_ref) = github_base_ref {
         let origin_ref = format!("origin/{base_ref}");
         if let Some(repository) = repository
             && let Ok(changes) = repository.changed_set(&ChangedSetComparison::Trees {
@@ -425,28 +406,6 @@ fn pre_push_changed_entries(
     })
 }
 
-fn is_zero_oid(oid: &str) -> bool {
-    oid.bytes().all(|byte| byte == b'0')
-}
-
-fn import_matches(pattern: &str, matcher: Option<&crate::glob::GlobMatcher>, module: &str) -> bool {
-    if let Some(matcher) = matcher {
-        let normalized = module.replace("::", "/");
-        return matcher.is_match(&normalized);
-    }
-    module == pattern || module.starts_with(&format!("{pattern}::"))
-}
-
-impl Stage {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Commit => "commit",
-            Self::Push => "push",
-            Self::Ci => "ci",
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,7 +442,7 @@ mod tests {
                 &files,
                 &crate::config::Config::default(),
                 Some(&changes),
-                crate::adr::ChangeMode::Commit,
+                Stage::Commit,
             )
             .is_empty()
         };
@@ -499,23 +458,6 @@ mod tests {
             std::os::unix::fs::symlink(external.path(), root.path().join(path)).unwrap();
             assert!(!permitted());
         }
-    }
-
-    #[test]
-    fn import_patterns_match_exact_prefix_and_glob_forms() {
-        assert!(import_matches("crate::infra", None, "crate::infra::db"));
-        let glob = crate::glob::GlobMatcher::new(&["crate/infra/*".into()]).unwrap();
-        assert!(import_matches(
-            "crate::infra::*",
-            Some(&glob),
-            "crate::infra::db"
-        ));
-        assert!(import_matches("sqlx", None, "sqlx"));
-        assert!(!import_matches(
-            "crate::infra",
-            None,
-            "crate::infrastructure"
-        ));
     }
 
     #[test]
@@ -561,7 +503,7 @@ mod tests {
             &files,
             &crate::config::Config::default(),
             Some(&changes),
-            crate::adr::ChangeMode::Push,
+            Stage::Push,
         );
 
         assert_eq!(violations.len(), 1);
@@ -570,7 +512,7 @@ mod tests {
 
     #[test]
     fn ci_changed_entries_fails_closed_without_base_in_ci() {
-        let error = ci_changed_entries_with_env(None, |_| None, true)
+        let error = ci_changed_entries(None, None, None, true)
             .expect_err("ci without a base ref should fail");
 
         assert!(error.to_string().contains("CRIV_BASE_REF"));
@@ -591,13 +533,9 @@ mod tests {
         git(root.path(), &["commit", "-m", "change"]);
 
         let repository = GitRepository::discover(root.path()).unwrap();
-        let changes = ci_changed_entries_with_env(
-            repository.as_ref(),
-            |name| (name == "CRIV_BASE_REF").then(|| base.clone()),
-            true,
-        )
-        .unwrap()
-        .expect("changes from explicit base ref");
+        let changes = ci_changed_entries(repository.as_ref(), Some(&base), None, true)
+            .unwrap()
+            .expect("changes from explicit base ref");
 
         assert_eq!(changes.old_ref.as_deref(), Some(base.as_str()));
         assert_eq!(changes.new_ref.as_deref(), Some("HEAD"));
@@ -610,12 +548,8 @@ mod tests {
         let root = tempfile::TempDir::new().unwrap();
         git(root.path(), &["init"]);
         let repository = GitRepository::discover(root.path()).unwrap();
-        let error = ci_changed_entries_with_env(
-            repository.as_ref(),
-            |name| (name == "CRIV_BASE_REF").then(|| "missing-base".into()),
-            true,
-        )
-        .unwrap_err();
+        let error =
+            ci_changed_entries(repository.as_ref(), Some("missing-base"), None, true).unwrap_err();
 
         assert!(error.to_string().contains("missing-base"));
         assert!(error.to_string().contains("git diff"));
@@ -641,7 +575,9 @@ mod tests {
             remote_name: None,
             remote_url: None,
         };
-        let changes = changed_entries(root.path(), &options).unwrap().unwrap();
+        let changes = changed_entries(root.path(), &options, None)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(changes.entries[0].path, "tracked.txt");
         assert!(changes.basis.contains("HEAD~1..HEAD"));

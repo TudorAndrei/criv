@@ -9,7 +9,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use usage_rs::{Args as UsageArgs, Subcommands};
 
-use crate::config::Config;
+use crate::config::{CONFIG_FILE, Config, Stage};
 use crate::git::{self, ChangeStatus, ChangedEntry, ChangedSet};
 use crate::repository::RepositoryFiles;
 use crate::vault::Vault;
@@ -24,26 +24,19 @@ use source_reconcile::{
     receipt_is_current as source_receipt_is_current,
 };
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum ChangeMode {
-    Commit,
-    Push,
-    Ci,
-}
-
 /// Validate the complete selected ADR transaction in enforcement order.
 pub fn change_violations(
     files: &RepositoryFiles,
     config: &Config,
     changes: Option<&git::ChangedSet>,
-    mode: ChangeMode,
+    stage: Stage,
 ) -> Vec<String> {
     let root = files.root();
     let receipt_is_current = receipt_is_current(root);
-    let receipt_allows_transaction = mode == ChangeMode::Commit
+    let receipt_allows_transaction = stage == Stage::Commit
         && changes.is_some_and(|changes| receipt_allows_transaction(root, &changes.entries));
     let source_receipt_is_current = source_receipt_is_current(root);
-    let source_receipt_allows_transaction = mode == ChangeMode::Commit
+    let source_receipt_allows_transaction = stage == Stage::Commit
         && changes.is_some_and(|changes| source_receipt_allows_transaction(root, &changes.entries));
     let mut adr_violations = adr_immutability_violations(
         config,
@@ -52,7 +45,7 @@ pub fn change_violations(
             (receipt_allows_transaction
                 || source_receipt_allows_transaction
                 || is_allowed_adr_change(files, changes, entry))
-                || (mode == ChangeMode::Ci && is_branch_local_ci_change(root, entry))
+                || (stage == Stage::Ci && is_branch_local_ci_change(root, entry))
         },
     );
     if receipt_is_current && !receipt_allows_transaction {
@@ -239,14 +232,14 @@ fn config_scope_violations(
             .flat_map(|entry| [Some(entry.path.as_str()), entry.previous_path.as_deref()])
             .flatten()
     };
-    if !paths().any(|path| path == "criv.toml") {
+    if !paths().any(|path| path == CONFIG_FILE) {
         return Vec::new();
     }
     let Some(old_ref) = changes.old_ref.as_deref() else {
         return Vec::new();
     };
     let Ok(previous) =
-        git::blob(root, old_ref, "criv.toml").and_then(|contents| Config::parse(Some(&contents)))
+        git::blob(root, old_ref, CONFIG_FILE).and_then(|contents| Config::parse(Some(&contents)))
     else {
         return Vec::new();
     };
@@ -257,7 +250,7 @@ fn config_scope_violations(
         return Vec::new();
     }
     vec![format!(
-        "criv.toml moves the decision scope from `{}/{}` to `{}/{}` in the same transaction as a decision change; the immutability gate would read the new scope",
+        "{CONFIG_FILE} moves the decision scope from `{}/{}` to `{}/{}` in the same transaction as a decision change; the immutability gate would read the new scope",
         previous.docs_dir, previous.adr_dir, current.docs_dir, current.adr_dir
     )]
 }
@@ -353,7 +346,7 @@ struct ReceiptSource {
 }
 
 pub fn run(root: &Path, options: &AdrOptions) -> Result<()> {
-    RepositoryFiles::open_vault(root)?;
+    crate::config::open_vault(root)?;
     match &options.command {
         AdrCommand::Reconcile(options) => reconcile(root, options),
         AdrCommand::ReconcileSources(options) => source_reconcile::run(root, options),
@@ -657,11 +650,11 @@ fn build_plan_from(
     let root = files.root();
     let vault = Vault::load_from(files)?;
     let current_config = &vault.config;
-    let target_config = if git::tree_paths(root, target_sha, "criv.toml")?
+    let target_config = if git::tree_paths(root, target_sha, CONFIG_FILE)?
         .iter()
-        .any(|path| path == "criv.toml")
+        .any(|path| path == CONFIG_FILE)
     {
-        Some(git::blob(root, target_sha, "criv.toml")?)
+        Some(git::blob(root, target_sha, CONFIG_FILE)?)
     } else {
         None
     };
@@ -1768,7 +1761,7 @@ mod tests {
             docs_dir: "other".into(),
             ..Config::default()
         };
-        for mode in [ChangeMode::Commit, ChangeMode::Push] {
+        for mode in [Stage::Commit, Stage::Push] {
             let violations = change_violations(&files, &config, Some(&changes), mode);
             assert_eq!(violations.len(), 4);
             assert!(violations[0].starts_with("other/adr/0002-existing.md:"));
@@ -1782,11 +1775,11 @@ mod tests {
             );
             assert!(violations[3].starts_with("criv.toml moves the decision scope"));
         }
-        let violations = change_violations(&files, &config, None, ChangeMode::Commit);
+        let violations = change_violations(&files, &config, None, Stage::Commit);
         assert_eq!(violations.len(), 2);
         git(root.path(), &["add", "."]);
         git(root.path(), &["commit", "-m", "advance beyond receipts"]);
-        assert!(change_violations(&files, &config, None, ChangeMode::Commit).is_empty());
+        assert!(change_violations(&files, &config, None, Stage::Commit).is_empty());
     }
 
     #[test]
@@ -1796,7 +1789,7 @@ mod tests {
         let files = RepositoryFiles::open(root.path()).unwrap();
         fs::create_dir_all(root.path().join(".criv")).unwrap();
         fs::write(root.path().join(RECEIPT_PATH), "invalid receipt").unwrap();
-        for mode in [ChangeMode::Commit, ChangeMode::Push, ChangeMode::Ci] {
+        for mode in [Stage::Commit, Stage::Push, Stage::Ci] {
             assert!(change_violations(&files, &Config::default(), None, mode).is_empty());
         }
         fs::write(
@@ -1806,13 +1799,7 @@ mod tests {
         .unwrap();
         let changes = git::worktree_changes_in(root.path(), &["criv.toml", "docs/adr"]).unwrap();
         assert_eq!(
-            change_violations(
-                &files,
-                &Config::default(),
-                Some(&changes),
-                ChangeMode::Commit
-            )
-            .len(),
+            change_violations(&files, &Config::default(), Some(&changes), Stage::Commit).len(),
             1
         );
     }
@@ -1833,7 +1820,7 @@ mod tests {
             docs_dir: "other".into(),
             ..Config::default()
         };
-        let violations = change_violations(&files, &current, Some(&changes), ChangeMode::Commit);
+        let violations = change_violations(&files, &current, Some(&changes), Stage::Commit);
         assert_eq!(violations.len(), 1);
         assert_eq!(
             violations[0],
@@ -1863,12 +1850,11 @@ mod tests {
         git(root.path(), &["add", "."]);
         git(root.path(), &["commit", "-m", "edit published decision"]);
         let changes = git::changes_between(root.path(), "target", "HEAD").unwrap();
-        let violations =
-            change_violations(&files, &Config::default(), Some(&changes), ChangeMode::Ci);
+        let violations = change_violations(&files, &Config::default(), Some(&changes), Stage::Ci);
         assert_eq!(violations.len(), 1);
         assert!(violations[0].starts_with("docs/adr/0001-base.md:"));
         assert_eq!(
-            change_violations(&files, &Config::default(), Some(&changes), ChangeMode::Push).len(),
+            change_violations(&files, &Config::default(), Some(&changes), Stage::Push).len(),
             2
         );
     }
@@ -1915,12 +1901,8 @@ mod tests {
             new_ref: None,
             basis: "test".into(),
         };
-        let violations = change_violations(
-            &files,
-            &Config::default(),
-            Some(&changes),
-            ChangeMode::Commit,
-        );
+        let violations =
+            change_violations(&files, &Config::default(), Some(&changes), Stage::Commit);
 
         assert_eq!(violations.len(), 2);
         assert!(violations[0].contains("0002-existing"));

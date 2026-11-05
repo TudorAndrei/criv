@@ -483,7 +483,7 @@ fn parse_oid(value: &str, context: &str) -> Result<git2::Oid> {
         .map_err(|error| CrivError::new(format!("invalid {context} `{value}`: {error}")))
 }
 
-fn is_zero_oid(oid: &str) -> bool {
+pub fn is_zero_oid(oid: &str) -> bool {
     oid.bytes().all(|byte| byte == b'0')
 }
 

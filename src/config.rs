@@ -2,9 +2,33 @@ use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
+use usage_rs::ValueEnum;
 
+use crate::diagnostic::DiagnosticCode;
+use crate::glob::GlobMatcher;
 use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
+
+/// The repository-relative path of the vault configuration.
+pub const CONFIG_FILE: &str = "criv.toml";
+
+/// Open a repository that holds a vault, which is one with a [`CONFIG_FILE`].
+pub fn open_vault(root: &Path) -> Result<RepositoryFiles> {
+    let files = RepositoryFiles::open(root)?;
+    if files
+        .read_optional_string(Path::new(CONFIG_FILE))?
+        .is_some()
+    {
+        return Ok(files);
+    }
+    Err(CrivError::coded(
+        DiagnosticCode::NotAVault,
+        format!(
+            "not a criv vault: no {CONFIG_FILE} in {}",
+            files.root().display()
+        ),
+    ))
+}
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -14,16 +38,69 @@ pub struct Config {
     pub(crate) source_exclude: Vec<String>,
     pub(crate) source_index: bool,
     pub(crate) state_keep: usize,
-    pub(crate) enforce_stages: Vec<String>,
+    pub(crate) enforce_stages: Vec<Stage>,
     pub(crate) import_policies: Vec<ImportPolicy>,
+}
+
+/// A Git transaction that `criv enforce` validates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum Stage {
+    Commit,
+    Push,
+    Ci,
+}
+
+impl Stage {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Commit => "commit",
+            Self::Push => "push",
+            Self::Ci => "ci",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct ImportPolicy {
     pub(crate) id: String,
-    pub(crate) scope_matcher: crate::glob::GlobMatcher,
-    pub(crate) deny: Vec<String>,
-    pub(crate) deny_matchers: Vec<Option<crate::glob::GlobMatcher>>,
+    pub(crate) scope_matcher: GlobMatcher,
+    pub(crate) deny: Vec<DenyRule>,
+}
+
+/// One denied import: a module path, or a glob over `/`-separated module paths.
+#[derive(Debug, Clone)]
+pub struct DenyRule {
+    pub(crate) pattern: String,
+    matcher: Option<GlobMatcher>,
+}
+
+impl DenyRule {
+    fn new(pattern: String, policy_id: &str) -> Result<Self> {
+        let matcher = pattern
+            .contains(['*', '?', '['])
+            .then(|| {
+                GlobMatcher::new(&[pattern.replace("::", "/")]).map_err(|err| {
+                    CrivError::new(format!(
+                        "invalid enforce.imports deny glob for policy `{policy_id}`: {err}"
+                    ))
+                })
+            })
+            .transpose()?;
+        Ok(Self { pattern, matcher })
+    }
+
+    /// A module path matches the exact path, any path below it, or the glob.
+    pub(crate) fn matches(&self, module: &str) -> bool {
+        self.matcher.as_ref().map_or_else(
+            || {
+                module
+                    .strip_prefix(self.pattern.as_str())
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
+            },
+            |matcher| matcher.is_match(&module.replace("::", "/")),
+        )
+    }
 }
 
 impl Default for Config {
@@ -35,7 +112,7 @@ impl Default for Config {
             source_exclude: vec!["**/target/**".into(), "**/node_modules/**".into()],
             source_index: true,
             state_keep: 20,
-            enforce_stages: vec!["commit".into(), "push".into(), "ci".into()],
+            enforce_stages: vec![Stage::Commit, Stage::Push, Stage::Ci],
             import_policies: Vec::new(),
         }
     }
@@ -49,7 +126,7 @@ impl Config {
     }
 
     pub(crate) fn load_from(files: &RepositoryFiles) -> Result<Self> {
-        let contents = files.read_optional_string(Path::new("criv.toml"))?;
+        let contents = files.read_optional_string(Path::new(CONFIG_FILE))?;
         Self::parse(contents.as_deref())
     }
 
@@ -60,7 +137,7 @@ impl Config {
             return Ok(Self::default());
         };
         let raw: RawConfig = toml::from_str(contents)
-            .map_err(|err| CrivError::new(format!("failed to parse criv.toml: {err}")))?;
+            .map_err(|err| CrivError::new(format!("failed to parse {CONFIG_FILE}: {err}")))?;
         raw.into_config()
     }
 
@@ -69,9 +146,16 @@ impl Config {
     }
 
     /// The repository-relative ADR directory with a trailing `/`, as Git and
-    /// vault paths spell it.
+    /// vault paths spell it. A `.` directory adds no segment.
     pub(crate) fn adr_prefix(&self) -> String {
-        format!("{}/{}/", self.docs_dir, self.adr_dir)
+        let mut prefix = String::new();
+        for segment in [&self.docs_dir, &self.adr_dir] {
+            if segment != "." {
+                prefix.push_str(segment);
+                prefix.push('/');
+            }
+        }
+        prefix
     }
 
     /// A decision file: Markdown in the ADR directory, other than its README.
@@ -99,21 +183,21 @@ struct RawConfig {
 impl RawConfig {
     fn into_config(self) -> Result<Config> {
         let defaults = Config::default();
-        let docs_dir = vault_path("vault.docs", &self.vault.docs.unwrap_or(defaults.docs_dir))?;
+        let docs_dir = relative_path("vault.docs", &self.vault.docs.unwrap_or(defaults.docs_dir))?;
         if !self.patterns.is_empty() {
-            return Err(CrivError::new(
-                "criv.toml [patterns.*] is no longer supported; move persistent patterns into an ADR policy.patterns entry and use its ADR-NNNN/local-id",
-            ));
+            return Err(CrivError::new(format!(
+                "{CONFIG_FILE} [patterns.*] is no longer supported; move persistent patterns into an ADR policy.patterns entry and use its ADR-NNNN/local-id",
+            )));
         }
         Ok(Config {
             docs_dir,
-            adr_dir: vault_path("vault.adr", &self.vault.adr.unwrap_or(defaults.adr_dir))?,
+            adr_dir: relative_path("vault.adr", &self.vault.adr.unwrap_or(defaults.adr_dir))?,
             source_roots: self
                 .source
                 .roots
                 .unwrap_or(defaults.source_roots)
                 .into_iter()
-                .map(|root| source_path(&root))
+                .map(|root| relative_path("source.roots", &root))
                 .collect::<Result<Vec<_>>>()?,
             source_exclude: self.source.exclude.unwrap_or(defaults.source_exclude),
             source_index: self.index.source.unwrap_or(defaults.source_index),
@@ -129,66 +213,23 @@ impl RawConfig {
     }
 }
 
-fn source_path(value: &str) -> Result<String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return Err(CrivError::new("source.roots must not be empty"));
-    }
-    let path = Path::new(value);
-    if path.is_absolute() {
-        return Err(CrivError::new(
-            "source.roots must be relative to the criv vault root",
-        ));
-    }
-    let mut parts = Vec::new();
-    for component in path.components() {
-        match component {
-            Component::Normal(part) => parts.push(part.to_str().ok_or_else(|| {
-                CrivError::new("source.roots must use valid UTF-8 path components")
-            })?),
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if parts.pop().is_none() {
-                    return Err(CrivError::new(
-                        "source.roots must not escape the criv vault root",
-                    ));
-                }
-            }
-            Component::RootDir | Component::Prefix(_) => {
-                return Err(CrivError::new(
-                    "source.roots must be relative to the criv vault root",
-                ));
-            }
-        }
-    }
-    Ok(if parts.is_empty() {
-        ".".into()
-    } else {
-        parts.join("/")
-    })
-}
-
-fn vault_path(field: &str, value: &str) -> Result<String> {
+/// Normalize a configured path to `/`-separated segments below the vault
+/// root, or `.` for the root itself.
+fn relative_path(field: &str, value: &str) -> Result<String> {
     let value = value.trim();
     if value.is_empty() {
         return Err(CrivError::new(format!("{field} must not be empty")));
     }
-
-    let path = Path::new(value);
-    if path.is_absolute() {
-        return Err(CrivError::new(format!(
-            "{field} must be relative to the criv vault root"
-        )));
-    }
-
     let mut parts = Vec::new();
-    for component in path.components() {
+    for component in Path::new(value).components() {
         match component {
-            Component::Normal(part) => parts.push(part.to_string_lossy().to_string()),
+            Component::Normal(part) => parts.push(part.to_str().ok_or_else(|| {
+                CrivError::new(format!("{field} must use valid UTF-8 path components"))
+            })?),
             Component::CurDir => {}
             Component::ParentDir => {
                 return Err(CrivError::new(format!(
-                    "{field} must not contain parent-directory segments"
+                    "{field} must not escape the criv vault root with a `..` component"
                 )));
             }
             Component::RootDir | Component::Prefix(_) => {
@@ -198,11 +239,11 @@ fn vault_path(field: &str, value: &str) -> Result<String> {
             }
         }
     }
-
-    if parts.is_empty() {
-        return Ok(".".into());
-    }
-    Ok(parts.join("/"))
+    Ok(if parts.is_empty() {
+        ".".into()
+    } else {
+        parts.join("/")
+    })
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -238,7 +279,7 @@ fn positive_state_keep(keep: usize) -> Result<usize> {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct RawEnforce {
-    stages: Option<Vec<String>>,
+    stages: Option<Vec<Stage>>,
     imports: Vec<RawImportPolicy>,
 }
 
@@ -258,31 +299,20 @@ impl RawImportPolicy {
         } else {
             self.scope
         };
-        let scope_matcher = crate::glob::GlobMatcher::new(&scope).map_err(|err| {
+        let scope_matcher = GlobMatcher::new(&scope).map_err(|err| {
             CrivError::new(format!(
                 "invalid enforce.imports scope for policy `{id}`: {err}"
             ))
         })?;
-        let deny_matchers = self
+        let deny = self
             .deny
-            .iter()
-            .map(|deny| {
-                (deny.contains('*') || deny.contains('?') || deny.contains('['))
-                    .then(|| {
-                        crate::glob::GlobMatcher::new(&[deny.replace("::", "/")]).map_err(|err| {
-                            CrivError::new(format!(
-                                "invalid enforce.imports deny glob for policy `{id}`: {err}"
-                            ))
-                        })
-                    })
-                    .transpose()
-            })
+            .into_iter()
+            .map(|pattern| DenyRule::new(pattern, &id))
             .collect::<Result<Vec<_>>>()?;
         Ok(ImportPolicy {
             id,
             scope_matcher,
-            deny: self.deny,
-            deny_matchers,
+            deny,
         })
     }
 }
@@ -318,7 +348,7 @@ deny = ["crate::db"]
         .unwrap();
 
         let config = raw.into_config().unwrap();
-        assert_eq!(config.enforce_stages, vec!["ci"]);
+        assert_eq!(config.enforce_stages, vec![Stage::Ci]);
         assert_eq!(config.import_policies.len(), 1);
         assert_eq!(config.import_policies[0].id, "no-db-from-ui");
         assert!(
@@ -326,7 +356,27 @@ deny = ["crate::db"]
                 .scope_matcher
                 .is_match("src/ui/view.rs")
         );
-        assert_eq!(config.import_policies[0].deny, vec!["crate::db"]);
+        let deny = &config.import_policies[0].deny;
+        assert_eq!(deny.len(), 1);
+        assert_eq!(deny[0].pattern, "crate::db");
+    }
+
+    #[test]
+    fn deny_rules_match_exact_prefix_and_glob_forms() {
+        let rule = |pattern: &str| DenyRule::new(pattern.into(), "test").unwrap();
+        assert!(rule("crate::infra").matches("crate::infra::db"));
+        assert!(rule("crate::infra::*").matches("crate::infra::db"));
+        assert!(rule("sqlx").matches("sqlx"));
+        assert!(!rule("crate::infra").matches("crate::infrastructure"));
+    }
+
+    #[test]
+    fn adr_prefix_omits_root_directory_segments() {
+        let config = Config::parse(Some("[vault]\ndocs = \".\"\n")).unwrap();
+
+        assert_eq!(config.adr_prefix(), "adr/");
+        assert!(config.is_adr_path("adr/0001-choice.md"));
+        assert!(!config.is_adr_path("adr/README.md"));
     }
 
     #[test]
