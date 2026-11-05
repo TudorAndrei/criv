@@ -259,6 +259,24 @@ fn write_padded(
     file.write_all(b"\n").map_err(display_error)
 }
 
+/// A Git command for `root` that cannot target the checkout that started the run.
+fn fixture_git(root: &Path) -> Command {
+    let mut command = Command::new("git");
+    command.current_dir(root);
+    for variable in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_PREFIX",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ] {
+        command.env_remove(variable);
+    }
+    command
+}
+
 fn initialize_git(root: &Path) -> Result<(), String> {
     for args in [
         &["init", "--quiet"][..],
@@ -273,11 +291,10 @@ fn initialize_git(root: &Path) -> Result<(), String> {
         &["commit", "--quiet", "-m", "fixture root"][..],
         &["gc", "--quiet"][..],
     ] {
-        let output = Command::new("git")
+        let output = fixture_git(root)
             .args(args)
             .env("GIT_AUTHOR_DATE", FIXTURE_COMMIT_DATE)
             .env("GIT_COMMITTER_DATE", FIXTURE_COMMIT_DATE)
-            .current_dir(root)
             .output()
             .map_err(display_error)?;
         if !output.status.success() {
@@ -380,22 +397,14 @@ mod tests {
                     "criv-fixture-missing-signing-program",
                 ][..],
             ] {
-                assert!(
-                    Command::new("git")
-                        .args(args)
-                        .current_dir(root)
-                        .status()
-                        .unwrap()
-                        .success()
-                );
+                assert!(fixture_git(root).args(args).status().unwrap().success());
             }
             initialize_git(root).unwrap();
         }
 
         let revision = |root: &Path| {
-            let output = Command::new("git")
+            let output = fixture_git(root)
                 .args(["rev-parse", "HEAD"])
-                .current_dir(root)
                 .output()
                 .unwrap();
             assert!(output.status.success());
@@ -411,17 +420,15 @@ mod tests {
 
         initialize_git(root.path()).unwrap();
 
-        let config = Command::new("git")
+        let config = fixture_git(root.path())
             .args(["config", "--get", "gc.auto"])
-            .current_dir(root.path())
             .output()
             .unwrap();
         assert!(config.status.success());
         assert_eq!(String::from_utf8(config.stdout).unwrap().trim(), "0");
 
-        let counts = Command::new("git")
+        let counts = fixture_git(root.path())
             .args(["count-objects", "-v"])
-            .current_dir(root.path())
             .output()
             .unwrap();
         assert!(counts.status.success());

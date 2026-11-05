@@ -349,7 +349,19 @@ fn initialize_git(root: &Path) -> Result<(), String> {
         &["add", "--all"][..],
         &["commit", "--quiet", "-m", "edge fixture root"][..],
     ] {
-        let output = Command::new("git")
+        let mut command = Command::new("git");
+        for variable in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_INDEX_FILE",
+            "GIT_COMMON_DIR",
+            "GIT_PREFIX",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        ] {
+            command.env_remove(variable);
+        }
+        let output = command
             .args(args)
             .env("GIT_AUTHOR_DATE", FIXTURE_COMMIT_DATE)
             .env("GIT_COMMITTER_DATE", FIXTURE_COMMIT_DATE)
