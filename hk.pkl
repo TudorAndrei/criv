@@ -52,7 +52,7 @@ local enforce_push = new Step {
 
 local cargo_test = new Step {
   glob = List("**/*.rs", "tests/features/**/*.feature", "Cargo.toml", "Cargo.lock")
-  check = "cargo test --locked --workspace"
+  check = "cargo nextest run --locked --workspace"
 }
 
 local hawk_command = "mise exec rust@1.99.0 -- cargo hawk check --manifest-path Cargo.toml --target-dir target/hawk --exclude-crate criv_wasm -D warnings"

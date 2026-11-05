@@ -87,6 +87,7 @@ mdBook
 (?i)mock
 (?i)musl
 (?i)namespaces?
+(?i)nextest
 (?i)noncanonical
 (?i)npm
 (?i)Ouro

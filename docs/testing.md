@@ -26,13 +26,20 @@ changes; do not rewrite accepted ADRs to remove those descriptions.
 ## Run the scenarios
 
 ```sh
-cargo test --locked --test acceptance
-cargo test --locked --test acceptance -- --name "Refuse vault commands"
-cargo test --locked --workspace
+cargo nextest run --locked --test acceptance
+cargo nextest run --locked --workspace
 ```
 
 The workspace test command includes acceptance tests, so existing pre-push and
-hosted Rust checks run them. The hk test step also selects `.feature` changes.
+hosted Rust checks run them. Nextest runs the Cucumber suite as one test named
+`acceptance`. Nextest does not send Cucumber options to the suite. To run one
+scenario, use the Cargo test harness:
+
+```sh
+cargo test --locked --test acceptance -- --name "Refuse vault commands"
+```
+
+The hk test step also selects `.feature` changes.
 No Node.js runner, browser, or separate Cucumber installation is needed.
 Undefined or skipped steps fail the suite rather than silently passing.
 Each scenario gets its own temporary directory and invokes the built binary;

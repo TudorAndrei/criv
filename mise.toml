@@ -24,6 +24,7 @@ shellcheck = "0.11.0"
 "cargo:wasm-pack" = "0.15.1"
 cocogitto = "7.0.0"
 "cargo:cargo-release" = "1.1.7"
+"aqua:nextest-rs/nextest/cargo-nextest" = "0.9.150"
 "aqua:EmbarkStudios/cargo-deny" = "0.20.2"
 "aqua:gitleaks/gitleaks" = "8.30.1"
 "github:rust-secure-code/cargo-auditable" = "0.7.7"
@@ -70,7 +71,7 @@ run = "bash scripts/measure-performance.sh"
 
 [tasks.perf-container]
 description = "Smoke-test the performance harness in a pinned Docker environment"
-run = "cargo test --locked --manifest-path scripts/performance/container-test/Cargo.toml --test performance_container performance_harness_runs_in_pinned_container -- --ignored --nocapture"
+run = "cargo nextest run --locked --manifest-path scripts/performance/container-test/Cargo.toml --test performance_container --run-ignored only --no-capture performance_harness_runs_in_pinned_container"
 
 [tasks.vscode-build]
 description = "Build the VS Code-compatible companion extension"

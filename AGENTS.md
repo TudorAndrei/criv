@@ -12,7 +12,7 @@ repository.
 
 | Command                                                 | When to use                                           |
 | ------------------------------------------------------- | ----------------------------------------------------- |
-| `cargo test --workspace`                                | Rust CLI, wasm crate, and integration tests.          |
+| `cargo nextest run --workspace`                         | Rust CLI, wasm crate, and integration tests.          |
 | `cargo clippy --workspace --all-targets -- -D warnings` | Rust lint gate.                                       |
 | `cargo run --quiet -- check`                            | Fast criv vault validation after docs/code edits.     |
 | `npm --prefix .obsidian/plugins/criv test`              | Obsidian companion plugin tests.                      |
