@@ -15,13 +15,11 @@ use crate::diagnostic::{self, Diagnostic, DiagnosticCode, LspRange, Severity, So
 #[cfg(test)]
 use crate::git::ChangedEntry;
 use crate::git::{ChangeStatus, ChangedSet};
-use crate::identity::{is_adr_id, kebab};
+use crate::identity::{adr_filename, is_adr_id, parse_adr_id, parse_adr_stem, pattern_id, slug};
+use crate::markdown::LinkTarget;
 use crate::policy_scan::PolicyScanPlan;
 use crate::repository::RepositoryFiles;
-use crate::vault::{
-    Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault, is_typed_source_target,
-    source_target_body,
-};
+use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -197,15 +195,12 @@ fn validate_changed_vault(
     changed_paths: &BTreeSet<String>,
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
-    let adr_prefix = vault.config.adr_prefix();
-    let adr_readme = format!("{adr_prefix}README.md");
-
     for note in vault
         .notes
         .iter()
         .filter(|note| changed_paths.contains(&note.rel_path))
     {
-        validate_note_local(vault, note, &adr_prefix, &adr_readme, &mut diagnostics);
+        validate_note_local(vault, note, &mut diagnostics);
         validate_note_links(vault, note, &mut diagnostics);
     }
     diagnostics.extend(
@@ -221,11 +216,8 @@ fn validate_changed_vault(
 
 fn validate_notes(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
     let mut ids: BTreeMap<&str, Vec<&Note>> = BTreeMap::new();
-    let adr_prefix = vault.config.adr_prefix();
-    let adr_readme = format!("{adr_prefix}README.md");
-
     for note in &vault.notes {
-        validate_note_local(vault, note, &adr_prefix, &adr_readme, diagnostics);
+        validate_note_local(vault, note, diagnostics);
         if let Some(id) = &note.id {
             ids.entry(id).or_default().push(note);
         }
@@ -245,13 +237,7 @@ fn validate_notes(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
     }
 }
 
-fn validate_note_local(
-    vault: &Vault,
-    note: &Note,
-    adr_prefix: &str,
-    adr_readme: &str,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+fn validate_note_local(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
     if let Some(err) = &note.frontmatter_error {
         diagnostics.push(
             Diagnostic::error(
@@ -284,8 +270,8 @@ fn validate_note_local(
     }
 
     if note.kind == NoteKind::Decision {
-        validate_decision_note(vault, note, adr_prefix, diagnostics);
-    } else if note.rel_path.starts_with(adr_prefix) && note.rel_path != adr_readme {
+        validate_decision_note(vault, note, diagnostics);
+    } else if vault.config.is_adr_path(&note.rel_path) {
         diagnostics.push(Diagnostic::error(
             DiagnosticCode::AdrDirNonDecision,
             &note.rel_path,
@@ -298,12 +284,7 @@ fn validate_note_local(
     validate_targets(vault, note, diagnostics);
 }
 
-fn validate_decision_note(
-    vault: &Vault,
-    note: &Note,
-    adr_prefix: &str,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
+fn validate_decision_note(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
     let adr_id = note.id.as_deref().filter(|id| is_adr_id(id));
     if adr_id.is_none() {
         diagnostics.push(Diagnostic::error(
@@ -314,7 +295,7 @@ fn validate_decision_note(
         ));
     }
 
-    if !note.rel_path.starts_with(adr_prefix) {
+    if !note.rel_path.starts_with(&vault.config.adr_prefix()) {
         diagnostics.push(Diagnostic::error(
             DiagnosticCode::DecisionLocation,
             &note.rel_path,
@@ -326,28 +307,25 @@ fn validate_decision_note(
         ));
     }
 
-    if let Some(filename) = note.path.file_name().map(|value| value.to_string_lossy())
-        && let Some(id) = adr_id
+    let title_slug = note.title.as_deref().map(slug).unwrap_or_default();
+    if let Some(number) = adr_id.and_then(parse_adr_id)
+        && !title_slug.is_empty()
+        && !note
+            .path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .and_then(parse_adr_stem)
+            .is_some_and(|(stem_number, stem_slug)| stem_number == number && stem_slug.is_some())
     {
-        let Some(suffix) = id.get(4..) else {
-            return;
-        };
-        let expected_prefix = format!("{suffix}-");
-        let title_kebab = note.title.as_deref().map(kebab).unwrap_or_default();
-        let title_matches = title_kebab.is_empty()
-            || filename == format!("{suffix}-{title_kebab}.md")
-            || filename.starts_with(&expected_prefix);
-
-        if !title_matches {
-            diagnostics.push(Diagnostic::error(
-                DiagnosticCode::AdrFilename,
-                &note.rel_path,
-                None,
-                format!(
-                    "ADR filename should start with `{expected_prefix}` and follow NNNN-kebab-case-title.md"
-                ),
-            ));
-        }
+        diagnostics.push(Diagnostic::error(
+            DiagnosticCode::AdrFilename,
+            &note.rel_path,
+            None,
+            format!(
+                "ADR filename should follow NNNN-kebab-case-title.md, as in `{}`",
+                adr_filename(number, &title_slug)
+            ),
+        ));
     }
 }
 
@@ -478,9 +456,9 @@ fn validate_pattern_collisions(vault: &Vault, diagnostics: &mut Vec<Diagnostic>)
         }
         if let Some(id) = &note.id {
             for pattern in &note.policy_patterns {
-                if let Some(pattern_id) = pattern.id.as_deref() {
+                if let Some(local_id) = pattern.id.as_deref() {
                     declarations
-                        .entry(format!("{id}/{pattern_id}"))
+                        .entry(pattern_id(id, local_id))
                         .or_default()
                         .push(note.rel_path.clone());
                 }
@@ -594,8 +572,8 @@ fn warn_legacy_source_target(
     let Some(canonical) = vault.canonical_source_target(target) else {
         return;
     };
-    let normalized = source_target_body(target);
-    if is_typed_source_target(target) || normalized != canonical {
+    let written = LinkTarget::parse(target);
+    if written.is_source() || written.source_body() != canonical {
         diagnostics.push(Diagnostic::warning(
             DiagnosticCode::LegacySourceTarget,
             path,

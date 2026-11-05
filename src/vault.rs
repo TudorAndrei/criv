@@ -12,8 +12,11 @@ use crate::config::Config;
 use crate::diagnostic::SourceLocation;
 use crate::discovery::{discover_vault, read_selected_text_from};
 use crate::glob::GlobMatcher;
-use crate::identity::{is_adr_id, kebab, strip_prefix};
-use crate::markdown::{find_wiki_links_with_lines, markdown_headings as parse_markdown_headings};
+use crate::identity::{pattern_id, slug, split_pattern_id, strip_prefix};
+use crate::markdown::{
+    LinkTarget, find_wiki_links_with_lines, line_index, line_number,
+    markdown_headings as parse_markdown_headings, split_frontmatter,
+};
 use crate::repository::RepositoryFiles;
 use crate::source::{IndexedSource, SourceGraph, SourceState};
 use crate::structural::PolicyLanguage;
@@ -291,8 +294,7 @@ impl Vault {
     }
 
     pub(crate) fn is_file_backed_note_target(&self, target: &str) -> bool {
-        let target = target.split('|').next().unwrap_or(target).trim();
-        let target_without_heading = target.split('#').next().unwrap_or(target).trim();
+        let target_without_heading = LinkTarget::parse(target).path();
         let key = target_without_heading.to_lowercase();
         let Some(note) = self.resolve_note(target_without_heading) else {
             return false;
@@ -310,15 +312,11 @@ impl Vault {
     }
 
     pub(crate) fn portable_note_target(&self, target: &str) -> Option<String> {
-        let target = target.split('|').next().unwrap_or(target).trim();
-        let (target_without_heading, heading) = target
-            .split_once('#')
-            .map_or((target, None), |(base, heading)| (base, Some(heading)));
-        let note = self.resolve_note(target_without_heading.trim())?;
+        let link = LinkTarget::parse(target);
+        let target = link.as_str();
+        let note = self.resolve_note(link.path())?;
         let mut portable = note.filename_stem()?;
-        if let Some(heading) = heading
-            && !heading.is_empty()
-        {
+        if let Some(heading) = link.fragment() {
             portable.push('#');
             portable.push_str(heading);
         }
@@ -330,7 +328,7 @@ impl Vault {
     }
 
     pub(crate) fn resolve_link(&self, target: &str) -> ResolvedLink {
-        let target = normalized_link_target(target);
+        let target = LinkTarget::parse(target).as_str();
         self.link_resolutions
             .get(target)
             .cloned()
@@ -338,11 +336,12 @@ impl Vault {
     }
 
     fn resolve_link_uncached(&self, target: &str) -> ResolvedLink {
-        if is_typed_source_target(target) {
+        let link = LinkTarget::parse(target);
+        if link.is_source() {
             return self.resolve_source_link(target);
         }
 
-        if let Some(pattern_id) = pattern_link_id(target) {
+        if let Some(pattern_id) = link.pattern_id() {
             if self.resolve_policy_pattern(pattern_id).is_some() {
                 return ResolvedLink::Pattern {
                     id: pattern_id.to_string(),
@@ -351,10 +350,8 @@ impl Vault {
             return ResolvedLink::Broken;
         }
 
-        let note_target = target.split('#').next().unwrap_or(target);
-        if let Some(note) = self.resolve_note(note_target) {
-            if let Some((_, heading)) = target.split_once('#')
-                && !heading.is_empty()
+        if let Some(note) = self.resolve_note(link.path()) {
+            if let Some(heading) = link.fragment()
                 && !note_has_heading(note, heading)
             {
                 return ResolvedLink::Broken;
@@ -387,7 +384,7 @@ impl Vault {
             .notes
             .iter()
             .flat_map(|note| note.wiki_links.iter())
-            .map(|link| normalized_link_target(&link.target).to_string())
+            .map(|link| LinkTarget::parse(&link.target).as_str().to_string())
             .collect::<BTreeSet<_>>();
         self.link_resolutions = targets
             .into_iter()
@@ -408,11 +405,11 @@ impl Vault {
             counts.source_target_resolutions = counts.source_target_resolutions.saturating_add(1);
         });
 
-        let target = source_target_body(target);
-        let Some((path, ambiguous)) = self.resolve_source_path(source_fragment_path(target)) else {
+        let link = LinkTarget::parse(target);
+        let Some((path, ambiguous)) = self.resolve_source_path(link.path()) else {
             return SourceTargetResolution::MissingFile;
         };
-        let Some(fragment) = source_fragment_name(target) else {
+        let Some(fragment) = link.symbol() else {
             return SourceTargetResolution::Resolved { path, ambiguous };
         };
 
@@ -429,8 +426,7 @@ impl Vault {
     }
 
     pub(crate) fn canonical_source_target(&self, target: &str) -> Option<String> {
-        let target = source_target_body(target);
-        let (path, _) = self.resolve_source_path(source_fragment_path(target))?;
+        let (path, _) = self.resolve_source_path(LinkTarget::parse(target).path())?;
         self.canonical_source_target_for_path(target, &path)
     }
 
@@ -439,8 +435,7 @@ impl Vault {
         target: &str,
         path: &str,
     ) -> Option<String> {
-        let target = source_target_body(target);
-        let Some(fragment) = source_fragment_name(target) else {
+        let Some(fragment) = LinkTarget::parse(target).symbol() else {
             return Some(path.to_string());
         };
         self.source
@@ -530,10 +525,7 @@ impl Vault {
         &self,
         pattern_id: &str,
     ) -> Option<(&Note, &PolicyPattern)> {
-        let (adr_id, local_id) = pattern_id.split_once('/')?;
-        if !is_adr_id(adr_id) || local_id.trim().is_empty() {
-            return None;
-        }
+        let (adr_id, local_id) = split_pattern_id(pattern_id)?;
         let note = self
             .note_ids
             .get(&adr_id.to_lowercase())
@@ -544,7 +536,7 @@ impl Vault {
         let policy = note
             .policy_patterns
             .iter()
-            .find(|policy| policy.id.as_deref() == Some(local_id))?;
+            .find(|policy| policy.id.as_deref().map(str::trim) == Some(local_id))?;
         Some((note, policy))
     }
 
@@ -684,7 +676,8 @@ fn registered_policy_patterns(
                 pattern
                     .id
                     .as_deref()
-                    .map(|local_id| format!("{id}/{local_id}"))
+                    .filter(|local_id| !local_id.trim().is_empty())
+                    .map(|local_id| pattern_id(id, local_id))
             })
         })
         .collect()
@@ -725,14 +718,20 @@ fn parse_note(files: &RepositoryFiles, docs_path: &Path, path: &Path) -> Result<
     let contents = read_selected_text_from(files, path)?;
     let source: Arc<str> = Arc::from(contents.as_str());
     let rel_path = strip_prefix(path, root);
-    let (frontmatter, body, frontmatter_lines, frontmatter_start, body_start) =
-        split_frontmatter(&contents);
+    let frontmatter = split_frontmatter(&contents);
+    let (yaml, frontmatter_start, body_start) = frontmatter.map_or(("", 0, 0), |frontmatter| {
+        (
+            frontmatter.yaml,
+            frontmatter.yaml_start,
+            frontmatter.body_start,
+        )
+    });
+    let body = contents.get(body_start..).unwrap_or_default().to_string();
     let doc_rel_path = strip_prefix(path, docs_path);
     // Positions are file-relative (ADR-0045). The frontmatter offset applies to
     // the parsed-note body only; the error branch below keeps the whole file as
     // the body, so it needs no offset at all.
-    let mut line_offset = frontmatter_lines;
-    let mut note = match parse_frontmatter(frontmatter, path.to_path_buf(), doc_rel_path, body) {
+    let mut note = match parse_frontmatter(yaml, path.to_path_buf(), doc_rel_path, body) {
         Ok(note) => note,
         Err(err) => Note {
             path: path.to_path_buf(),
@@ -759,13 +758,15 @@ fn parse_note(files: &RepositoryFiles, docs_path: &Path, path: &Path) -> Result<
             frontmatter_error: Some(err.message),
         },
     };
-    if note.frontmatter_error.is_some() {
-        line_offset = 0;
-    }
+    let (line_offset, body_start) = if note.frontmatter_error.is_some() {
+        (0, 0)
+    } else {
+        (line_index(&contents, body_start), body_start)
+    };
     note.wiki_links = find_wiki_links_with_lines(&note.body)
         .into_iter()
         .map(|(line, raw, span)| WikiLink {
-            target: raw.split('|').next().unwrap_or(&raw).trim().to_string(),
+            target: LinkTarget::parse(&raw).as_str().to_string(),
             raw,
             line: line.saturating_add(line_offset),
             location: SourceLocation::new(
@@ -784,53 +785,6 @@ fn parse_note(files: &RepositoryFiles, docs_path: &Path, path: &Path) -> Result<
         .collect();
     note.rel_path = rel_path;
     Ok(note)
-}
-
-/// Splits a note into its frontmatter block and its body, plus the number of
-/// lines the frontmatter consumed — both `---` delimiters included. Callers add
-/// that count back to body-relative positions so every line they report is
-/// file-relative (see ADR-0045).
-fn split_frontmatter(contents: &str) -> (&str, String, usize, usize, usize) {
-    let Some((opening, frontmatter_start)) = delimiter_line(contents, 0) else {
-        return ("", contents.to_string(), 0, 0, 0);
-    };
-    if opening != "---" {
-        return ("", contents.to_string(), 0, 0, 0);
-    }
-
-    let mut cursor = frontmatter_start;
-    while let Some((line, next)) = delimiter_line(contents, cursor) {
-        if line == "---" {
-            let consumed = contents
-                .get(..next)
-                .map_or(0, |prefix| prefix.matches('\n').count());
-            let frontmatter = contents.get(frontmatter_start..cursor).unwrap_or_default();
-            let body = contents.get(next..).unwrap_or_default();
-            return (
-                frontmatter,
-                body.to_string(),
-                consumed,
-                frontmatter_start,
-                next,
-            );
-        }
-        cursor = next;
-    }
-
-    ("", contents.to_string(), 0, 0, 0)
-}
-
-/// Returns the line without its LF/CRLF terminator plus the next byte offset.
-/// A final unterminated line is deliberately not a frontmatter delimiter.
-fn delimiter_line(contents: &str, start: usize) -> Option<(&str, usize)> {
-    let tail = contents.get(start..)?;
-    let newline = tail.find('\n')?.checked_add(start)?;
-    let raw_line = contents.get(start..newline)?;
-    let line_end = raw_line
-        .strip_suffix('\r')
-        .map_or(newline, |_| newline.saturating_sub(1));
-    let next = newline.checked_add(1)?;
-    Some((contents.get(start..line_end)?, next))
 }
 
 fn parse_frontmatter(
@@ -935,75 +889,19 @@ struct FrontmatterParseError {
     offset: Option<usize>,
 }
 
-fn pattern_link_id(target: &str) -> Option<&str> {
-    if let Some(id) = target.strip_prefix("match:") {
-        return Some(id);
-    }
-    target
-        .split_once("#match:")
-        .map(|(_, pattern_id)| pattern_id)
-}
-
-fn normalized_link_target(target: &str) -> &str {
-    target.split('|').next().unwrap_or(target).trim()
-}
-
-pub fn source_fragment_path(value: &str) -> &str {
-    let value = source_target_body(value);
-    value.split('#').next().unwrap_or(value)
-}
-
-pub fn source_fragment_name(value: &str) -> Option<&str> {
-    let value = source_target_body(value);
-    let fragment = value.split_once('#')?.1;
-    (!fragment.is_empty() && !is_line_fragment(fragment)).then_some(fragment)
-}
-
-pub fn source_target_body(value: &str) -> &str {
-    value
-        .split('|')
-        .next()
-        .unwrap_or(value)
-        .trim()
-        .strip_prefix("source:")
-        .unwrap_or_else(|| value.split('|').next().unwrap_or(value).trim())
-}
-
-pub fn is_typed_source_target(value: &str) -> bool {
-    value
-        .split('|')
-        .next()
-        .unwrap_or(value)
-        .trim()
-        .starts_with("source:")
-}
-
-fn is_line_fragment(fragment: &str) -> bool {
-    let parse_line = |value: &str| {
-        value
-            .strip_prefix('L')
-            .and_then(|line| line.parse::<usize>().ok())
-            .is_some_and(|line| line > 0)
-    };
-    match fragment.split_once('-') {
-        Some((start, end)) => parse_line(start) && parse_line(end),
-        None => parse_line(fragment),
-    }
-}
-
 fn note_has_heading(note: &Note, heading: &str) -> bool {
     let normalized = heading.trim();
     note.headings.iter().any(|candidate| {
-        candidate.text.eq_ignore_ascii_case(normalized)
-            || kebab(&candidate.text) == kebab(normalized)
+        candidate.text.eq_ignore_ascii_case(normalized) || slug(&candidate.text) == slug(normalized)
     })
 }
 
+/// The file line of the first frontmatter line containing `needle`, or of the
+/// first frontmatter line; the opening `---` is line 1.
 fn frontmatter_line(frontmatter: &str, needle: &str) -> usize {
-    frontmatter
-        .lines()
-        .position(|line| line.contains(needle))
-        .map_or(2, |index| index.saturating_add(2))
+    frontmatter.find(needle).map_or(2, |offset| {
+        line_number(frontmatter, offset).saturating_add(1)
+    })
 }
 
 fn raw_pattern_line(frontmatter: &str, pattern: &RawPatternRef) -> usize {
@@ -1203,67 +1101,6 @@ mod tests {
         let after = Vault::load_docs_only(root.path()).unwrap();
 
         assert_ne!(before_hash, after.documentation_assets()[0].hash);
-    }
-
-    #[test]
-    fn splits_exact_frontmatter_delimiters_with_lf_and_crlf() {
-        for contents in [
-            "---\nid: doc\n---\n# Body\n",
-            "---\r\nid: doc\r\n---\r\n# Body\r\n",
-            "---\r\nid: doc\n---\r\n# Body\n",
-        ] {
-            let (frontmatter, body, frontmatter_lines, _, _) = split_frontmatter(contents);
-            assert!(frontmatter.contains("id: doc"));
-            assert!(body.starts_with("# Body"));
-            assert_eq!(frontmatter_lines, 3, "both delimiters and the field line");
-        }
-    }
-
-    #[test]
-    fn ignores_delimiter_like_or_unclosed_frontmatter() {
-        for contents in [
-            "---\nid: doc\n---suffix\n# Body\n",
-            "---\nid: doc\n# Body\n",
-            "\u{feff}---\nid: doc\n---\n# Body\n",
-        ] {
-            assert_eq!(
-                split_frontmatter(contents),
-                ("", contents.to_string(), 0, 0, 0)
-            );
-        }
-    }
-
-    proptest::proptest! {
-        #[test]
-        fn frontmatter_split_is_lossless(
-            contents in r"(?s)(---|-|\r|\n|[a-z: ]|é){0,120}"
-        ) {
-            let (frontmatter, body, lines, start, next) = split_frontmatter(&contents);
-            if next == 0 {
-                proptest::prop_assert_eq!(body.as_str(), contents.as_str());
-                proptest::prop_assert_eq!((frontmatter, lines, start), ("", 0, 0));
-            } else {
-                let frontmatter_end = start.checked_add(frontmatter.len());
-                proptest::prop_assert_eq!(
-                    frontmatter_end.and_then(|end| contents.get(start..end)),
-                    Some(frontmatter)
-                );
-                proptest::prop_assert_eq!(contents.get(next..), Some(body.as_str()));
-                proptest::prop_assert_eq!(
-                    contents.get(..next).map(|prefix| prefix.matches('\n').count()),
-                    Some(lines)
-                );
-                proptest::prop_assert!(contents.starts_with("---\n") || contents.starts_with("---\r\n"));
-            }
-        }
-    }
-
-    #[test]
-    fn supports_empty_frontmatter() {
-        assert_eq!(
-            split_frontmatter("---\n---\nbody\n"),
-            ("", "body\n".into(), 2, 4, 8)
-        );
     }
 
     #[test]
@@ -1498,15 +1335,6 @@ supersedes:
             vault.patterns(),
             &BTreeSet::from(["ADR-0001/old".to_string()])
         );
-    }
-
-    #[test]
-    fn extracts_markdown_headings() {
-        let headings = parse_markdown_headings("# One\ntext\n### Three ###\nnot heading");
-        assert_eq!(headings.len(), 2);
-        assert_eq!(headings[0].0, 1);
-        assert_eq!(headings[0].1, "One");
-        assert_eq!(headings[1].2, 3);
     }
 
     #[test]

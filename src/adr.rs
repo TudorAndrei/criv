@@ -14,6 +14,7 @@ use crate::git::{self, ChangeStatus, ChangedEntry, ChangedSet};
 use crate::repository::RepositoryFiles;
 use crate::vault::Vault;
 use crate::{CrivError, Result};
+use crate::{identity, markdown};
 
 use self::reconcile_transaction::Snapshot;
 
@@ -45,7 +46,7 @@ pub fn change_violations(
     let source_receipt_allows_transaction = mode == ChangeMode::Commit
         && changes.is_some_and(|changes| source_receipt_allows_transaction(root, &changes.entries));
     let mut adr_violations = adr_immutability_violations(
-        &config.adr_prefix(),
+        config,
         changes.map(|changes| changes.entries.as_slice()),
         |entry| {
             (receipt_allows_transaction
@@ -70,7 +71,7 @@ pub fn change_violations(
 
 /// Report protected ADR edits in Git entry order, after testing allowed exceptions.
 fn adr_immutability_violations(
-    adr_prefix: &str,
+    config: &Config,
     changed_entries: Option<&[ChangedEntry]>,
     mut is_allowed_change: impl FnMut(&ChangedEntry) -> bool,
 ) -> Vec<String> {
@@ -85,7 +86,7 @@ fn adr_immutability_violations(
         }
 
         let path = entry.previous_path.as_deref().unwrap_or(&entry.path);
-        if !is_adr_file(adr_prefix, path) {
+        if !config.is_adr_path(path) {
             continue;
         }
         if is_allowed_change(entry) {
@@ -179,32 +180,11 @@ fn is_mechanical_wikilink_portability_migration(old: &str, new: &str) -> bool {
 fn normalize_portable_adr_links(markdown: &str) -> String {
     let mut normalized = String::with_capacity(markdown.len());
     let mut start = 0;
-    while let Some(tail) = markdown.get(start..) {
-        let Some(relative_open) = tail.find("[[") else {
-            break;
-        };
-        let Some(open) = start.checked_add(relative_open) else {
-            break;
-        };
-        let Some(body_start) = open.checked_add(2) else {
-            break;
-        };
-        let Some(body_tail) = markdown.get(body_start..) else {
-            break;
-        };
-        let Some(relative_close) = body_tail.find("]]") else {
-            break;
-        };
-        let Some(close) = body_start.checked_add(relative_close) else {
-            break;
-        };
-        let Some(end) = close.checked_add(2) else {
-            break;
-        };
+    for span in markdown::wiki_link_spans(markdown) {
         let (Some(prefix), Some(body), Some(link)) = (
-            markdown.get(start..open),
-            markdown.get(body_start..close),
-            markdown.get(open..end),
+            markdown.get(start..span.outer.start),
+            markdown.get(span.body),
+            markdown.get(span.outer.clone()),
         ) else {
             break;
         };
@@ -216,7 +196,7 @@ fn normalize_portable_adr_links(markdown: &str) -> String {
         } else {
             normalized.push_str(link);
         }
-        start = end;
+        start = span.outer.end;
     }
     normalized.push_str(markdown.get(start..).unwrap_or_default());
     normalized
@@ -224,25 +204,23 @@ fn normalize_portable_adr_links(markdown: &str) -> String {
 
 /// Return the ADR alias only when its ID and fragment match the target.
 fn portable_adr_link_alias(body: &str) -> Option<&str> {
-    let (target, alias) = body.split_once('|')?;
-    let alias = alias.trim();
-    let alias_base = alias.split('#').next().unwrap_or(alias);
-    if !crate::identity::is_adr_id(alias_base) {
-        return None;
-    }
-    let target_fragment = target.split_once('#').map(|(_, fragment)| fragment);
-    let alias_fragment = alias.split_once('#').map(|(_, fragment)| fragment);
+    let (target, alias) = markdown::split_alias(body);
+    let alias = alias?.trim();
+    let (alias_base, alias_fragment) = markdown::split_fragment(alias);
+    let number = identity::parse_adr_id(alias_base)?;
+    let (target_base, target_fragment) = markdown::split_fragment(target);
     if target_fragment != alias_fragment {
         return None;
     }
-    let number = alias_base.get(4..)?;
-    let target_base = target.split('#').next().unwrap_or(target).trim();
+    let target_base = target_base.trim();
     let basename = target_base
         .trim_end_matches(".md")
         .split('/')
         .next_back()
         .unwrap_or(target_base);
-    (basename == number || basename.starts_with(&format!("{number}-"))).then_some(alias)
+    identity::parse_adr_stem(basename)
+        .is_some_and(|(target_number, _)| target_number == number)
+        .then_some(alias)
 }
 
 /// Reject a decision edit that also moves the configured decision directory.
@@ -264,9 +242,6 @@ fn config_scope_violations(
     if !paths().any(|path| path == "criv.toml") {
         return Vec::new();
     }
-    if !paths().any(looks_like_decision) {
-        return Vec::new();
-    }
     let Some(old_ref) = changes.old_ref.as_deref() else {
         return Vec::new();
     };
@@ -278,28 +253,13 @@ fn config_scope_violations(
     if previous.docs_dir == current.docs_dir && previous.adr_dir == current.adr_dir {
         return Vec::new();
     }
+    if !paths().any(|path| previous.is_adr_path(path) || current.is_adr_path(path)) {
+        return Vec::new();
+    }
     vec![format!(
         "criv.toml moves the decision scope from `{}/{}` to `{}/{}` in the same transaction as a decision change; the immutability gate would read the new scope",
         previous.docs_dir, previous.adr_dir, current.docs_dir, current.adr_dir
     )]
-}
-
-/// Recognize decision-shaped Markdown paths independently of the current scope.
-fn looks_like_decision(path: &str) -> bool {
-    Path::new(path)
-        .extension()
-        .is_some_and(|extension| extension == "md")
-        && path.split('/').any(|component| component == "adr")
-        && !path.ends_with("/README.md")
-}
-
-/// Match Markdown decisions under the configured scope, excluding its index.
-fn is_adr_file(adr_prefix: &str, path: &str) -> bool {
-    path.starts_with(adr_prefix)
-        && path != format!("{adr_prefix}README.md")
-        && Path::new(path)
-            .extension()
-            .is_some_and(|extension| extension == "md")
 }
 
 const RECEIPT_SCHEMA: &str = "criv.adr-reconcile/3";
@@ -721,7 +681,7 @@ fn build_plan_from(
         .collect::<BTreeSet<_>>();
     let target = target_paths
         .iter()
-        .filter(|path| is_adr_path(&adr_prefix, path))
+        .filter(|path| vault.config.is_adr_path(path))
         .map(|path| {
             git::blob(root, target_sha, path).and_then(|contents| parse_adr(path, contents))
         })
@@ -770,14 +730,14 @@ fn build_plan_from(
         .entries
         .iter()
         .filter(|entry| entry.status == git::ChangeStatus::Added)
-        .filter(|entry| is_adr_path(&adr_prefix, &entry.path))
+        .filter(|entry| vault.config.is_adr_path(&entry.path))
         .map(|entry| entry.path.clone())
         .collect::<Vec<_>>();
     let mut receipt_sources = Vec::new();
     let mut branch_adrs = changes
         .entries
         .iter()
-        .filter(|entry| is_adr_path(&adr_prefix, &entry.path))
+        .filter(|entry| vault.config.is_adr_path(&entry.path))
         .filter(|entry| {
             !source_reconcile::allows_history_change(root, &history_changes, entry)
         })
@@ -829,7 +789,7 @@ fn build_plan_from(
         .map(|adr| adr.path.clone())
         .collect::<BTreeSet<_>>();
     for entry in &worktree_changes.entries {
-        if !is_adr_path(&adr_prefix, &entry.path) {
+        if !vault.config.is_adr_path(&entry.path) {
             continue;
         }
         match entry.status {
@@ -994,27 +954,20 @@ struct AdrSemanticContent {
 }
 
 fn adr_semantic_content(contents: &str) -> AdrSemanticContent {
-    let mut in_frontmatter = false;
+    let frontmatter = markdown::split_frontmatter(contents);
+    let title = frontmatter
+        .and_then(|frontmatter| frontmatter.raw_scalar("title"))
+        .map(|title| title.trim_matches(['\'', '"']).to_owned());
+    let body_start = frontmatter.map_or(0, |frontmatter| frontmatter.body_start);
     let mut in_code_fence = false;
-    let mut title = None;
     let mut body = BTreeSet::new();
-    for line in contents.lines() {
+    for line in contents.get(body_start..).unwrap_or_default().lines() {
         let line = line.trim();
-        if !in_frontmatter && (line.starts_with("```") || line.starts_with("~~~")) {
+        if line.starts_with("```") || line.starts_with("~~~") {
             in_code_fence = !in_code_fence;
             continue;
         }
         if in_code_fence {
-            continue;
-        }
-        if line == "---" {
-            in_frontmatter = !in_frontmatter;
-            continue;
-        }
-        if in_frontmatter {
-            if let Some(value) = line.strip_prefix("title:") {
-                title = Some(value.trim().trim_matches(['\'', '"']).to_owned());
-            }
             continue;
         }
         if line.is_empty()
@@ -1061,10 +1014,11 @@ fn allocation_mappings(
                 .map_err(|_| CrivError::new("ADR ID allocation count exceeds u32"))?,
         )
         .ok_or_else(|| CrivError::new("ADR ID allocation overflow"))?;
-    if allocation_end > 9999 {
-        return Err(CrivError::new(
-            "ADR reconciliation allocation exceeds ADR-9999",
-        ));
+    if allocation_end > identity::MAX_ADR_NUMBER {
+        return Err(CrivError::new(format!(
+            "ADR reconciliation allocation exceeds {}",
+            identity::format_adr_id(identity::MAX_ADR_NUMBER)
+        )));
     }
     ordered
         .into_iter()
@@ -1077,7 +1031,7 @@ fn allocation_mappings(
                         .saturating_add(1),
                 )
                 .ok_or_else(|| CrivError::new("ADR ID allocation overflow"))?;
-            let new_name = filename(new_id, &adr.slug);
+            let new_name = identity::adr_filename(new_id, &adr.slug);
             let parent = Path::new(&adr.path)
                 .parent()
                 .unwrap_or_else(|| Path::new(""));
@@ -1091,68 +1045,40 @@ fn allocation_mappings(
         .collect()
 }
 
-fn is_adr_path(prefix: &str, path: &str) -> bool {
-    path.starts_with(prefix)
-        && path != format!("{prefix}README.md")
-        && Path::new(path)
-            .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+fn adr_stem(path: &str) -> Option<(u32, Option<&str>)> {
+    Path::new(path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .and_then(identity::parse_adr_stem)
 }
 
 fn same_adr_slug(first: &str, second: &str) -> bool {
-    [first, second]
-        .into_iter()
-        .map(|path| {
-            Path::new(path)
-                .file_stem()
-                .and_then(|stem| stem.to_str())
-                .and_then(|stem| stem.split_once('-').map(|(_, slug)| slug))
-        })
-        .collect::<Option<Vec<_>>>()
-        .is_some_and(|slugs| {
-            slugs
-                .first()
-                .zip(slugs.get(1))
-                .is_some_and(|(first, second)| first == second)
-        })
+    adr_stem(first)
+        .and_then(|(_, slug)| slug)
+        .zip(adr_stem(second).and_then(|(_, slug)| slug))
+        .is_some_and(|(first, second)| first == second)
 }
 
 fn parse_adr(path: &str, contents: String) -> Result<AdrFile> {
-    let name = Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| CrivError::new(format!("ADR path `{path}` is not valid UTF-8")))?;
-    let stem = name
-        .strip_suffix(".md")
-        .ok_or_else(|| CrivError::new(format!("ADR `{path}` must be Markdown")))?;
-    let (number, slug) = stem.split_once('-').ok_or_else(|| {
-        CrivError::new(format!(
-            "branch-local ADR `{path}` must use NNNN-kebab-title.md"
-        ))
-    })?;
-    if number.len() != 4 || !number.bytes().all(|byte| byte.is_ascii_digit()) || slug.is_empty() {
-        return Err(CrivError::new(format!(
-            "branch-local ADR `{path}` has a malformed filename"
-        )));
+    if Path::new(path)
+        .extension()
+        .is_none_or(|extension| extension != "md")
+    {
+        return Err(CrivError::new(format!("ADR `{path}` must be Markdown")));
     }
-    let id = number
-        .parse::<u32>()
-        .map_err(|error| CrivError::new(format!("ADR `{path}` has an invalid ID: {error}")))?;
-    let normalized = contents.replace("\r\n", "\n");
-    let frontmatter = normalized
-        .strip_prefix("---\n")
-        .and_then(|rest| {
-            rest.split_once("\n---\n")
-                .map(|(frontmatter, _)| frontmatter)
-        })
-        .ok_or_else(|| {
-            CrivError::new(format!("branch-local ADR `{path}` has no YAML frontmatter"))
-        })?;
-    let expected_id = format!("ADR-{number}");
-    let actual_id = frontmatter
-        .lines()
-        .find_map(|line| line.strip_prefix("id:").map(str::trim));
-    if actual_id != Some(expected_id.as_str()) {
+    let Some((id, Some(slug))) = adr_stem(path).filter(|(_, slug)| slug != &Some("")) else {
+        return Err(CrivError::new(format!(
+            "branch-local ADR `{path}` must use NNNN-kebab-title.md"
+        )));
+    };
+    let frontmatter = markdown::split_frontmatter(&contents).ok_or_else(|| {
+        CrivError::new(format!("branch-local ADR `{path}` has no YAML frontmatter"))
+    })?;
+    if frontmatter
+        .raw_scalar("id")
+        .and_then(identity::parse_adr_id)
+        != Some(id)
+    {
         return Err(CrivError::new(format!(
             "ADR `{path}` filename and frontmatter id must agree"
         )));
@@ -1170,24 +1096,22 @@ fn ensure_unique(adrs: &[AdrFile], owner: &str) -> Result<()> {
     for adr in adrs {
         if !ids.insert(adr.id) {
             return Err(CrivError::new(format!(
-                "duplicate {owner} ADR ID ADR-{:04}",
-                adr.id
+                "duplicate {owner} ADR ID {}",
+                identity::format_adr_id(adr.id)
             )));
         }
     }
     Ok(())
 }
 
-fn filename(id: u32, slug: &str) -> String {
-    format!("{id:04}-{slug}.md")
-}
-
 fn print_mapping(mappings: &[Mapping]) {
     println!("ADR reconciliation mapping:");
     for mapping in mappings {
         println!(
-            "  ADR-{:04} -> ADR-{:04} ({})",
-            mapping.old_id, mapping.new_id, mapping.new_path
+            "  {} -> {} ({})",
+            identity::format_adr_id(mapping.old_id),
+            identity::format_adr_id(mapping.new_id),
+            mapping.new_path
         );
     }
 }
@@ -1620,15 +1544,11 @@ fn rewrite_owned_lines(
     Ok(output)
 }
 
+/// Non-UTF-8 bytes read as replacement characters, which neither form nor
+/// extend an ADR id or a wiki-link.
 fn contains_reference(bytes: &[u8], mappings: &[Mapping]) -> bool {
-    std::str::from_utf8(bytes).is_ok_and(|text| {
-        !reference_edits(text, mappings)
-            .unwrap_or_default()
-            .is_empty()
-    }) || mappings
-        .iter()
-        .any(|mapping| contains_exact_id(bytes, mapping.old_id))
-        || contains_wikilink_reference_bytes(bytes, mappings)
+    reference_edits(&String::from_utf8_lossy(bytes), mappings)
+        .map_or(true, |edits| !edits.is_empty())
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -1653,8 +1573,8 @@ fn reference_edits(contents: &str, mappings: &[Mapping]) -> Result<Vec<TextEdit>
     let bytes = contents.as_bytes();
     let mut edits = Vec::new();
     for mapping in mappings {
-        let old_id = format!("ADR-{:04}", mapping.old_id);
-        let new_id = format!("ADR-{:04}", mapping.new_id);
+        let old_id = identity::format_adr_id(mapping.old_id);
+        let new_id = identity::format_adr_id(mapping.new_id);
         for (start, _) in contents.match_indices(&old_id) {
             let Some(end) = start.checked_add(old_id.len()) else {
                 continue;
@@ -1668,31 +1588,8 @@ fn reference_edits(contents: &str, mappings: &[Mapping]) -> Result<Vec<TextEdit>
             }
         }
     }
-    let mut cursor = 0;
-    while let Some(tail) = contents.get(cursor..) {
-        let Some(relative_start) = tail.find("[[") else {
-            break;
-        };
-        let Some(start) = cursor.checked_add(relative_start) else {
-            break;
-        };
-        let Some(body_start) = start.checked_add(2) else {
-            break;
-        };
-        let Some(body_tail) = contents.get(body_start..) else {
-            break;
-        };
-        let Some(relative_end) = body_tail.find("]]") else {
-            break;
-        };
-        let Some(end) = body_start.checked_add(relative_end) else {
-            break;
-        };
-        add_wikilink_edits(contents, body_start, end, mappings, &mut edits);
-        let Some(next) = end.checked_add(2) else {
-            break;
-        };
-        cursor = next;
+    for span in markdown::wiki_link_spans(contents) {
+        add_wikilink_edits(contents, span.body, mappings, &mut edits);
     }
     edits.sort_by_key(|edit| (edit.start, edit.end));
     for pair in edits.windows(2) {
@@ -1715,19 +1612,22 @@ fn reference_edits(contents: &str, mappings: &[Mapping]) -> Result<Vec<TextEdit>
     Ok(edits)
 }
 
+/// Rewrite the link target and the alias when either names a mapped ADR file.
 fn add_wikilink_edits(
     contents: &str,
-    start: usize,
-    end: usize,
+    body: std::ops::Range<usize>,
     mappings: &[Mapping],
     edits: &mut Vec<TextEdit>,
 ) {
-    let Some(body) = contents.get(start..end) else {
+    let Some(text) = contents.get(body.clone()) else {
         return;
     };
-    let mut part_start = start;
-    for part in body.split('|') {
-        let link_target = part.split_once('#').map_or(part, |(target, _)| target);
+    let (target, alias) = markdown::split_alias(text);
+    let alias_start = body.start.saturating_add(target.len()).saturating_add(1);
+    for (part_start, part) in
+        std::iter::once((body.start, target)).chain(alias.map(|alias| (alias_start, alias)))
+    {
+        let link_target = markdown::split_fragment(part).0;
         for mapping in mappings {
             let old_name = Path::new(&mapping.old_path)
                 .file_name()
@@ -1756,68 +1656,7 @@ fn add_wikilink_edits(
                 });
             }
         }
-        part_start = part_start.saturating_add(part.len()).saturating_add(1);
     }
-}
-
-fn contains_exact_id(bytes: &[u8], id: u32) -> bool {
-    let needle = format!("ADR-{id:04}");
-    bytes
-        .windows(needle.len())
-        .enumerate()
-        .any(|(start, window)| {
-            window == needle.as_bytes()
-                && start
-                    .checked_add(needle.len())
-                    .is_some_and(|end| is_exact_token(bytes, start, end))
-        })
-}
-
-fn contains_wikilink_reference_bytes(bytes: &[u8], mappings: &[Mapping]) -> bool {
-    let mut cursor = 0;
-    while let Some(tail) = bytes.get(cursor..) {
-        let Some(relative_start) = tail.windows(2).position(|window| window == b"[[") else {
-            break;
-        };
-        let Some(start) = cursor
-            .checked_add(relative_start)
-            .and_then(|offset| offset.checked_add(2))
-        else {
-            break;
-        };
-        let Some(relative_end) = bytes
-            .get(start..)
-            .and_then(|tail| tail.windows(2).position(|window| window == b"]]"))
-        else {
-            break;
-        };
-        let Some(end) = start.checked_add(relative_end) else {
-            break;
-        };
-        let Some(body) = bytes.get(start..end) else {
-            break;
-        };
-        if body.split(|byte| *byte == b'|').any(|part| {
-            let target = part.split(|byte| *byte == b'#').next().unwrap_or(part);
-            mappings.iter().any(|mapping| {
-                let name = Path::new(&mapping.old_path)
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or(&mapping.old_path);
-                let stem = name.strip_suffix(".md").unwrap_or(name);
-                target == mapping.old_path.as_bytes()
-                    || target == name.as_bytes()
-                    || target == stem.as_bytes()
-            })
-        }) {
-            return true;
-        }
-        let Some(next) = end.checked_add(2) else {
-            break;
-        };
-        cursor = next;
-    }
-    false
 }
 
 fn is_exact_token(bytes: &[u8], start: usize, end: usize) -> bool {
@@ -2032,16 +1871,6 @@ mod tests {
             change_violations(&files, &Config::default(), Some(&changes), ChangeMode::Push).len(),
             2
         );
-    }
-
-    #[test]
-    /// Keep scope detection limited to decision Markdown, excluding the index.
-    fn only_a_decision_file_looks_like_a_decision() {
-        assert!(looks_like_decision("docs/adr/0001-example.md"));
-        assert!(looks_like_decision("documentation/adr/0002-other.md"));
-        assert!(!looks_like_decision("docs/adr/README.md"));
-        assert!(!looks_like_decision("docs/guide.md"));
-        assert!(!looks_like_decision("src/adr.rs"));
     }
 
     #[test]

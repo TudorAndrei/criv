@@ -5,6 +5,7 @@ use std::{cell::Cell, thread_local};
 
 use crate::Result;
 use crate::diagnostic::{Diagnostic, DiagnosticCode};
+use crate::identity::pattern_id;
 use crate::structural::{self, CompiledPolicy, PolicyScanRequest};
 use crate::vault::{NoteKind, Vault};
 
@@ -113,7 +114,7 @@ impl PolicyScanPlan {
                 let definition_error = |code, message: String| {
                     Diagnostic::error(code, &note.rel_path, Some(policy.line), message)
                 };
-                let Some(raw_local_id) = policy.id.as_deref() else {
+                let Some(local_id) = policy.id.as_deref() else {
                     if reports_diagnostics {
                         diagnostics.push(definition_error(
                             DiagnosticCode::MissingPolicyPatternId,
@@ -123,7 +124,7 @@ impl PolicyScanPlan {
                     continue;
                 };
 
-                let local_id = raw_local_id.trim();
+                let local_id = local_id.trim();
                 if local_id.is_empty() {
                     if reports_diagnostics {
                         diagnostics.push(definition_error(
@@ -146,22 +147,21 @@ impl PolicyScanPlan {
                     counts.definition_compilations =
                         counts.definition_compilations.saturating_add(1);
                 });
-                let state_pattern_id = active_adr_id.and_then(|adr_id| {
-                    let pattern_id = format!("{adr_id}/{raw_local_id}");
-                    (vault.patterns().contains(&pattern_id)
-                        && vault.resolve_policy_pattern(&pattern_id).is_some_and(
+                let full_id = active_adr_id.map(|adr_id| pattern_id(adr_id, local_id));
+                let state_pattern_id = full_id.clone().filter(|full_id| {
+                    vault.patterns().contains(full_id)
+                        && vault.resolve_policy_pattern(full_id).is_some_and(
                             |(registered_note, registered_policy)| {
                                 std::ptr::eq(registered_note, note)
                                     && std::ptr::eq(registered_policy, policy)
                             },
-                        ))
-                    .then_some(pattern_id)
+                        )
                 });
                 match structural::compile_policy(policy) {
                     Ok(compiled) => {
-                        if let Some(adr_id) = active_adr_id {
+                        if let Some(pattern_id) = full_id {
                             candidates.push(CandidatePolicy {
-                                pattern_id: format!("{adr_id}/{local_id}"),
+                                pattern_id,
                                 state_pattern_id,
                                 fingerprint_material: format!("{policy:#?}"),
                                 compiled,
@@ -510,6 +510,35 @@ mod tests {
             pattern_ids_and_paths(&violations)
                 .iter()
                 .all(|(pattern_id, _)| *pattern_id == "ADR-0001/duplicate")
+        );
+    }
+
+    #[test]
+    fn padded_local_ids_name_one_pattern_in_state_links_and_violations() {
+        let (temp, _) = policy_fixture("two-policies");
+        let adr = temp.path().join("docs/adr/0001-policy.md");
+        let contents = fs::read_to_string(&adr)
+            .unwrap()
+            .replace("- id: functions", "- id: \" functions \"");
+        fs::write(&adr, contents).unwrap();
+        let vault = Vault::load(temp.path()).unwrap();
+
+        let plan = PolicyScanPlan::new(&vault);
+        let violations = plan.scan(&vault, None).unwrap();
+
+        assert_eq!(
+            plan.owners[0].policies[0].state_pattern_id(),
+            Some("ADR-0001/functions")
+        );
+        assert_eq!(
+            pattern_ids_and_paths(&violations)[0].0,
+            "ADR-0001/functions"
+        );
+        assert_eq!(
+            vault.resolve_link("match:ADR-0001/functions"),
+            crate::vault::ResolvedLink::Pattern {
+                id: "ADR-0001/functions".into()
+            }
         );
     }
 

@@ -1,16 +1,8 @@
 //! Criv's document structure, independent of Markdown presentation tools.
 
 use crate::diagnostic::{Diagnostic, DiagnosticCode};
+use crate::identity::slug;
 use crate::vault::{Note, NoteKind};
-
-fn title_key(title: &str) -> String {
-    title
-        .split(|character: char| !character.is_alphanumeric())
-        .filter(|word| !word.is_empty())
-        .map(str::to_lowercase)
-        .collect::<Vec<_>>()
-        .join("-")
-}
 
 pub(super) fn validate(note: &Note, historical: bool, diagnostics: &mut Vec<Diagnostic>) {
     if note.frontmatter_error.is_some() {
@@ -56,7 +48,7 @@ pub(super) fn validate(note: &Note, historical: bool, diagnostics: &mut Vec<Diag
             "note requires exactly one H1 title heading",
         ));
     } else if let (Some(title), Some(heading)) = (title, heading)
-        && title_key(title) != title_key(&heading.text)
+        && slug(title) != slug(&heading.text)
     {
         diagnostics.push(Diagnostic::error(
             DiagnosticCode::DocumentFormat,

@@ -5,13 +5,12 @@ use serde::Deserialize;
 use usage_rs::{Args as UsageArgs, Subcommands, ValueEnum};
 
 use crate::diagnostic::DiagnosticCode;
+use crate::identity::{MAX_ADR_NUMBER, format_adr_id, parse_adr_id};
+use crate::markdown::LinkTarget;
 use crate::repository::RepositoryFiles;
 use crate::source::SymbolKind;
 use crate::state::SnapshotId;
-use crate::vault::{
-    NoteKind, ResolvedLink, SourceTargetResolution, Vault, source_fragment_name,
-    source_fragment_path,
-};
+use crate::vault::{NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -187,9 +186,9 @@ impl QueryReverseIndex {
     }
 
     fn references(&self, vault: &Vault, symbol: &str) -> Vec<String> {
-        let source_path = source_fragment_path(symbol);
-        let requested_fragment = source_fragment_name(symbol);
-        let Some((path, _)) = vault.resolve_source_path(source_path) else {
+        let link = LinkTarget::parse(symbol);
+        let requested_fragment = link.symbol();
+        let Some((path, _)) = vault.resolve_source_path(link.path()) else {
             return Vec::new();
         };
         let key = match requested_fragment {
@@ -212,7 +211,7 @@ fn collect_source_reference_keys(
         return;
     };
     keys.insert(SourceReferenceKey::Path(path.clone()));
-    if let Some(fragment) = source_fragment_name(target) {
+    if let Some(fragment) = LinkTarget::parse(target).symbol() {
         keys.insert(SourceReferenceKey::Symbol {
             path,
             fragment: fragment.to_string(),
@@ -428,15 +427,12 @@ fn load_query_vault(root: &Path, command: &QueryCommand) -> Result<Vault> {
     }
 }
 
-const MAX_ADR_NUMBER: u32 = 9999;
-
 fn next_adr_id(vault: &Vault) -> Result<String> {
     let highest = vault
         .notes
         .iter()
         .filter_map(|note| note.id.as_deref())
-        .filter_map(|id| id.strip_prefix("ADR-"))
-        .filter_map(|digits| digits.parse::<u32>().ok())
+        .filter_map(parse_adr_id)
         .max()
         .unwrap_or(0);
     let next = highest
@@ -446,10 +442,13 @@ fn next_adr_id(vault: &Vault) -> Result<String> {
         || {
             Err(CrivError::coded(
                 DiagnosticCode::AdrIdExhausted,
-                format!("no free ADR id after ADR-{highest:04}; ids are four digits"),
+                format!(
+                    "no free ADR id after {}; ids are four digits",
+                    format_adr_id(highest)
+                ),
             ))
         },
-        |next| Ok(format!("ADR-{next:04}")),
+        |next| Ok(format_adr_id(next)),
     )
 }
 
@@ -528,7 +527,7 @@ fn governs(vault: &Vault, adr_id: &str) -> Result<Vec<String>> {
 }
 
 fn governing(vault: &Vault, symbol: &str) -> Vec<String> {
-    let Some((path, _)) = vault.resolve_source_path(source_fragment_path(symbol)) else {
+    let Some((path, _)) = vault.resolve_source_path(LinkTarget::parse(symbol).path()) else {
         return Vec::new();
     };
     let mut rows = Vec::new();

@@ -10,6 +10,7 @@ use usage_rs::Args as UsageArgs;
 
 use super::reconcile_transaction::Snapshot;
 use crate::git::{self, ChangeStatus, ChangedEntry, ChangedSet};
+use crate::markdown;
 use crate::repository::RepositoryFiles;
 use crate::vault::Vault;
 use crate::{CrivError, Result};
@@ -566,17 +567,12 @@ fn changed_governs_values(
 }
 
 fn governs_scalars(contents: &str) -> Result<Vec<ScalarSpan>> {
-    let lines = indexed_lines(contents);
-    let Some((frontmatter_start, frontmatter_end)) = frontmatter_bounds(&lines) else {
+    let Some(frontmatter) = markdown::split_frontmatter(contents) else {
         return Err(CrivError::new("ADR has no closed YAML frontmatter"));
     };
+    let lines = indexed_lines(frontmatter.yaml, frontmatter.yaml_start);
     let mut field = None;
-    for (index, (_, line)) in lines
-        .iter()
-        .enumerate()
-        .take(frontmatter_end)
-        .skip(frontmatter_start)
-    {
+    for (index, (_, line)) in lines.iter().enumerate() {
         let line = *line;
         if line.starts_with(char::is_whitespace)
             || line.trim().is_empty()
@@ -596,11 +592,7 @@ fn governs_scalars(contents: &str) -> Result<Vec<ScalarSpan>> {
         return Ok(Vec::new());
     };
     let mut spans = Vec::new();
-    for (line_start, line) in lines
-        .iter()
-        .take(frontmatter_end)
-        .skip(field.saturating_add(1))
-    {
+    for (line_start, line) in lines.iter().skip(field.saturating_add(1)) {
         if !line.starts_with(char::is_whitespace) && !line.trim().is_empty() {
             break;
         }
@@ -641,28 +633,17 @@ fn governs_scalars(contents: &str) -> Result<Vec<ScalarSpan>> {
     Ok(spans)
 }
 
-fn indexed_lines(contents: &str) -> Vec<(usize, &str)> {
-    let mut offset = 0_usize;
-    contents
-        .split_inclusive('\n')
+/// Each line of `text` without its terminator, with its offset in the file
+/// that starts `start` bytes before `text`.
+fn indexed_lines(text: &str, start: usize) -> Vec<(usize, &str)> {
+    let mut offset = start;
+    text.split_inclusive('\n')
         .map(|line| {
-            let start = offset;
+            let line_start = offset;
             offset = offset.saturating_add(line.len());
-            (start, line.trim_end_matches(['\r', '\n']))
+            (line_start, line.trim_end_matches(['\r', '\n']))
         })
         .collect()
-}
-
-fn frontmatter_bounds(lines: &[(usize, &str)]) -> Option<(usize, usize)> {
-    if lines.first().map(|line| line.1) != Some("---") {
-        return None;
-    }
-    lines
-        .iter()
-        .enumerate()
-        .skip(1)
-        .find(|(_, line)| line.1 == "---")
-        .map(|(end, _)| (1, end))
 }
 
 fn parse_scalar(raw: &str) -> Result<String> {
@@ -688,15 +669,8 @@ fn render_scalar(value: &str, style: ScalarStyle) -> String {
 }
 
 fn top_level_scalar(contents: &str, key: &str) -> Option<String> {
-    let lines = indexed_lines(contents);
-    let (start, end) = frontmatter_bounds(&lines)?;
-    let prefix = format!("{key}:");
-    lines
-        .get(start..end)?
-        .iter()
-        .filter(|(_, line)| !line.starts_with(char::is_whitespace))
-        .find_map(|(_, line)| line.strip_prefix(&prefix).map(str::trim))
-        .and_then(|raw| serde_norway::from_str::<String>(raw).ok())
+    let raw = markdown::split_frontmatter(contents)?.raw_scalar(key)?;
+    serde_norway::from_str::<String>(raw).ok()
 }
 
 fn read_receipt(root: &Path) -> Result<Receipt> {

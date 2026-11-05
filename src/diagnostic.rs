@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::markdown::line_index;
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum DiagnosticCode {
     AdrDirNonDecision,
@@ -421,11 +423,7 @@ fn inclusive_end_position(source: &str, end: usize) -> Option<LspPosition> {
     if character == '\n'
         || character == '\r' && source.as_bytes().get(offset.checked_add(1)?) == Some(&b'\n')
     {
-        let line = source
-            .get(..offset)?
-            .bytes()
-            .filter(|byte| *byte == b'\n')
-            .count();
+        let line = line_index(source, offset);
         let (line_start, line_end) = line_bounds(source, line)?;
         return Some(LspPosition {
             line,
@@ -457,7 +455,7 @@ fn byte_to_character_position(source: &str, offset: usize) -> Option<LspPosition
         return None;
     }
     let prefix = source.get(..offset)?;
-    let line = prefix.bytes().filter(|byte| *byte == b'\n').count();
+    let line = line_index(source, offset);
     let line_start = prefix
         .rfind('\n')
         .map_or(Some(0), |newline| newline.checked_add(1))?;

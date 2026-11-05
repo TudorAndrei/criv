@@ -26,25 +26,58 @@ pub fn strip_prefix(path: &Path, root: &Path) -> String {
     normalize_rel(path.strip_prefix(root).unwrap_or(path))
 }
 
-pub fn kebab(value: &str) -> String {
-    let mut out = String::new();
-    let mut last_dash = false;
-    for ch in value.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-            last_dash = false;
-        } else if !last_dash {
-            out.push('-');
-            last_dash = true;
-        }
-    }
-    out.trim_matches('-').to_string()
+/// The heading slug: lowercase alphanumeric words joined by `-`.
+pub fn slug(value: &str) -> String {
+    value
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+pub const MAX_ADR_NUMBER: u32 = 9999;
+
+/// The number of an `ADR-NNNN` id.
+pub fn parse_adr_id(value: &str) -> Option<u32> {
+    parse_adr_number(value.strip_prefix("ADR-")?)
 }
 
 pub fn is_adr_id(value: &str) -> bool {
-    value.len() == 8
-        && value.starts_with("ADR-")
-        && value
-            .get(4..)
-            .is_some_and(|suffix| suffix.chars().all(|ch| ch.is_ascii_digit()))
+    parse_adr_id(value).is_some()
+}
+
+pub fn format_adr_id(number: u32) -> String {
+    format!("ADR-{number:04}")
+}
+
+pub fn adr_filename(number: u32, slug: &str) -> String {
+    format!("{number:04}-{slug}.md")
+}
+
+/// Split an ADR file stem, `NNNN` or `NNNN-slug`, into its number and slug.
+pub fn parse_adr_stem(stem: &str) -> Option<(u32, Option<&str>)> {
+    let (number, slug) = stem
+        .split_once('-')
+        .map_or((stem, None), |(number, slug)| (number, Some(slug)));
+    Some((parse_adr_number(number)?, slug))
+}
+
+fn parse_adr_number(digits: &str) -> Option<u32> {
+    (digits.len() == 4 && digits.bytes().all(|byte| byte.is_ascii_digit()))
+        .then(|| digits.parse().ok())
+        .flatten()
+}
+
+/// The full id of an ADR policy pattern: `ADR-NNNN/local-id`. Surrounding
+/// whitespace in the local id is not part of the id.
+pub fn pattern_id(adr_id: &str, local_id: &str) -> String {
+    format!("{adr_id}/{}", local_id.trim())
+}
+
+/// Split a full pattern id into its ADR id and its non-empty local id.
+pub fn split_pattern_id(pattern_id: &str) -> Option<(&str, &str)> {
+    let (adr_id, local_id) = pattern_id.split_once('/')?;
+    let local_id = local_id.trim();
+    (is_adr_id(adr_id) && !local_id.is_empty()).then_some((adr_id, local_id))
 }

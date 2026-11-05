@@ -254,7 +254,7 @@ pub(super) fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
     }
 
     for heading in &note.headings {
-        let heading_id = format!("{note_id}#{}", crate::identity::kebab(&heading.text));
+        let heading_id = format!("{note_id}#{}", crate::identity::slug(&heading.text));
         graph.node(
             heading_id.clone(),
             NodeKind::DocHeading,
@@ -286,7 +286,10 @@ pub(super) fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
             }
             ResolvedLink::Source { path, .. } => {
                 dependencies.catalog_sensitive = true;
-                if crate::vault::source_fragment_name(&link.target).is_some() {
+                if crate::markdown::LinkTarget::parse(&link.target)
+                    .symbol()
+                    .is_some()
+                {
                     dependencies.source_content_paths.insert(path.clone());
                 }
                 graph.edge(&note_id, &code_node_id(&path), EdgeKind::References);

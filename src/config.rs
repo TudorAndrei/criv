@@ -73,6 +73,16 @@ impl Config {
     pub(crate) fn adr_prefix(&self) -> String {
         format!("{}/{}/", self.docs_dir, self.adr_dir)
     }
+
+    /// A decision file: Markdown in the ADR directory, other than its README.
+    pub(crate) fn is_adr_path(&self, path: &str) -> bool {
+        let prefix = self.adr_prefix();
+        path.strip_prefix(&prefix)
+            .is_some_and(|name| name != "README.md")
+            && Path::new(path)
+                .extension()
+                .is_some_and(|extension| extension == "md")
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
