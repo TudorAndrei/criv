@@ -127,7 +127,7 @@ jobs:
       - name: Set up build tools
         uses: $/.github/actions/setup-build-tools
       - name: Build Wasm helper
-        run: npm --prefix .obsidian/plugins/criv run build:wasm
+        run: npm --prefix packages/criv-editor-state run build:wasm
 
   editor-contracts:
     name: Shared editor contracts
@@ -179,7 +179,7 @@ jobs:
       - name: Test
         run: npm --prefix .obsidian/plugins/criv test
       - name: Build plugin
-        run: npm --prefix .obsidian/plugins/criv run build:plugin
+        run: npm --prefix .obsidian/plugins/criv run build
 
   vscode:
     name: VS Code companion
