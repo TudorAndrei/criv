@@ -166,3 +166,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0153-retain-workspace-lint-policy-in-standard-form|ADR-0153]] - Retain workspace lint policy in standard form
 - [[0154-cache-hosted-toolchains-with-mise-and-compiler-results-with-mbx|ADR-0154]] - Cache hosted toolchains with mise and compiler results with mbx
 - [[0155-remove-likec4-from-criv|ADR-0155]] - Remove LikeC4 from criv
+- [[0156-release-breaking-changes-on-any-commit-type-before-1-0|ADR-0156]] - Release breaking changes on any commit type before 1.0
