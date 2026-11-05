@@ -25,7 +25,7 @@ struct RefreshSnapshot {
     state_hash: String,
     latest: String,
     snapshot_json: String,
-    diagnostics: Vec<check::Diagnostic>,
+    diagnostics: Vec<crate::diagnostic::Diagnostic>,
 }
 
 #[test]

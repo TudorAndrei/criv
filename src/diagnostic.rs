@@ -96,8 +96,9 @@ impl DiagnosticCode {
         }
     }
 
-    pub const fn fix(self) -> &'static str {
-        match self {
+    pub const fn fix(self) -> Option<&'static str> {
+        let fix = match self {
+            Self::CheckFailed | Self::EnforcementFailed => return None,
             Self::AdrDirNonDecision => {
                 "Set `kind: decision` in the frontmatter, or move the file out of the ADR directory."
             }
@@ -112,16 +113,16 @@ impl DiagnosticCode {
                 "Name the file in the link, as in `[[src/lib.rs#fn:run]]`, so one source resolves."
             }
             Self::BrokenLink => "Correct the link target, or add the note it names.",
-            Self::CheckFailed => "Repair the diagnostics above, then run `criv check`.",
             Self::DecisionLocation => "Move the decision into the ADR directory.",
             Self::DuplicateDocPattern | Self::DuplicatePatternId => {
                 "Give each pattern a unique `id`."
             }
             Self::DuplicateId => "Give the note an `id` no other note uses.",
             Self::DuplicatePolicyPattern => "Give each policy pattern in the ADR a unique `id`.",
-            Self::EmptyPolicyPattern => "Give the policy pattern a body, or remove it.",
-            Self::EmptyTargetScope => "Name at least one path or symbol under `targets`.",
-            Self::EnforcementFailed => "Run `criv check` for the diagnostics, then repair them.",
+            Self::EmptyPolicyPattern => "Give the policy pattern a non-empty `id`.",
+            Self::EmptyTargetScope => {
+                "Correct the target scope glob so it matches a source file, or remove it."
+            }
             Self::ImportPolicyViolation => {
                 "Remove the import, or widen the import policy in criv.toml."
             }
@@ -141,7 +142,7 @@ impl DiagnosticCode {
             Self::MissingId => "Add an `id` to the note frontmatter.",
             Self::MissingPolicyPatternBody => "Give the pattern a `pattern` or a `rule`.",
             Self::MissingPolicyPatternDefinition => {
-                "Declare the pattern in an ADR `policy.patterns` entry."
+                "Give the policy pattern a `language` and a `pattern` or a `rule`."
             }
             Self::MissingPolicyPatternId => "Give the policy pattern an `id`.",
             Self::MissingPolicyPatternLanguage => "Set `language` on the policy pattern.",
@@ -169,7 +170,8 @@ impl DiagnosticCode {
             Self::VaultOutsideGitRoot => {
                 "Run criv from the worktree root, or make the vault its own repository."
             }
-        }
+        };
+        Some(fix)
     }
 }
 
@@ -196,6 +198,143 @@ impl PartialOrd for DiagnosticCode {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    Error,
+    Warning,
+}
+
+impl Severity {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warning => "warning",
+        }
+    }
+}
+
+/// One finding about a repository path, in the order `sort` gives it.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct Diagnostic {
+    severity: Severity,
+    code: DiagnosticCode,
+    path: String,
+    line: Option<usize>,
+    message: String,
+    location: Option<SourceLocation>,
+}
+
+impl Diagnostic {
+    pub(crate) fn error(
+        code: DiagnosticCode,
+        path: &str,
+        line: Option<usize>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::new(Severity::Error, code, path, line, message)
+    }
+
+    pub(crate) fn warning(
+        code: DiagnosticCode,
+        path: &str,
+        line: Option<usize>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::new(Severity::Warning, code, path, line, message)
+    }
+
+    fn new(
+        severity: Severity,
+        code: DiagnosticCode,
+        path: &str,
+        line: Option<usize>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            severity,
+            code,
+            path: path.into(),
+            line,
+            message: message.into(),
+            location: None,
+        }
+    }
+
+    /// An exact location replaces the line with the location's first line.
+    #[must_use]
+    pub(crate) fn at(mut self, location: Option<SourceLocation>) -> Self {
+        if let Some(line) = location.as_ref().and_then(SourceLocation::line) {
+            self.line = Some(line);
+        }
+        self.location = location;
+        self
+    }
+
+    pub(crate) fn policy_violation(
+        path: &str,
+        line: usize,
+        location: Option<SourceLocation>,
+        adr_id: &str,
+        pattern_id: &str,
+        text: &str,
+    ) -> Self {
+        Self::error(
+            DiagnosticCode::PolicyViolation,
+            path,
+            Some(line),
+            format!("{adr_id} policy `{pattern_id}` matched `{text}`"),
+        )
+        .at(location)
+    }
+
+    pub(crate) const fn severity(&self) -> Severity {
+        self.severity
+    }
+
+    pub(crate) const fn code(&self) -> DiagnosticCode {
+        self.code
+    }
+
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub(crate) const fn line(&self) -> Option<usize> {
+        self.line
+    }
+
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub(crate) const fn location(&self) -> Option<&SourceLocation> {
+        self.location.as_ref()
+    }
+
+    pub(crate) const fn is_error(&self) -> bool {
+        matches!(self.severity, Severity::Error)
+    }
+
+    pub(crate) const fn is_warning(&self) -> bool {
+        matches!(self.severity, Severity::Warning)
+    }
+
+    pub(crate) fn describe(&self) -> String {
+        self.line.map_or_else(
+            || format!("{}: {}", self.path, self.message),
+            |line| format!("{}:{line}: {}", self.path, self.message),
+        )
+    }
+}
+
+/// Order diagnostics by path, then line (a missing line first), then code.
+pub fn sort(diagnostics: &mut [Diagnostic]) {
+    diagnostics.sort_by(|a, b| {
+        (&a.path, a.line.unwrap_or(0), a.code).cmp(&(&b.path, b.line.unwrap_or(0), b.code))
+    });
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]

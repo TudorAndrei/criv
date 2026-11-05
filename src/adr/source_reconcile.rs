@@ -355,7 +355,7 @@ fn apply_plan(files: &RepositoryFiles, plan: &Plan) -> Result<()> {
     }
     let errors = crate::check::validate_all_from(files)?
         .into_iter()
-        .filter(super::super::check::Diagnostic::is_error)
+        .filter(crate::diagnostic::Diagnostic::is_error)
         .map(|diagnostic| diagnostic.describe())
         .collect::<Vec<_>>();
     if !errors.is_empty() {

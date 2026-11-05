@@ -1,7 +1,6 @@
 //! Criv's document structure, independent of Markdown presentation tools.
 
-use super::{Diagnostic, error};
-use crate::diagnostic::DiagnosticCode;
+use crate::diagnostic::{Diagnostic, DiagnosticCode};
 use crate::vault::{Note, NoteKind};
 
 fn title_key(title: &str) -> String {
@@ -23,7 +22,7 @@ pub(super) fn validate(note: &Note, historical: bool, diagnostics: &mut Vec<Diag
         .map(str::trim)
         .filter(|title| !title.is_empty());
     if title.is_none() {
-        diagnostics.push(error(
+        diagnostics.push(Diagnostic::error(
             DiagnosticCode::DocumentFormat,
             &note.rel_path,
             None,
@@ -36,7 +35,7 @@ pub(super) fn validate(note: &Note, historical: bool, diagnostics: &mut Vec<Diag
             Some("draft" | "accepted" | "rejected" | "superseded")
         )
     {
-        diagnostics.push(error(
+        diagnostics.push(Diagnostic::error(
             DiagnosticCode::DocumentFormat,
             &note.rel_path,
             None,
@@ -50,7 +49,7 @@ pub(super) fn validate(note: &Note, historical: bool, diagnostics: &mut Vec<Diag
     let mut titles = note.headings.iter().filter(|heading| heading.level == 1);
     let heading = titles.next();
     if heading.is_none() || titles.next().is_some() {
-        diagnostics.push(error(
+        diagnostics.push(Diagnostic::error(
             DiagnosticCode::DocumentFormat,
             &note.rel_path,
             heading.map(|heading| heading.line),
@@ -59,7 +58,7 @@ pub(super) fn validate(note: &Note, historical: bool, diagnostics: &mut Vec<Diag
     } else if let (Some(title), Some(heading)) = (title, heading)
         && title_key(title) != title_key(&heading.text)
     {
-        diagnostics.push(error(
+        diagnostics.push(Diagnostic::error(
             DiagnosticCode::DocumentFormat,
             &note.rel_path,
             Some(heading.line),
@@ -75,7 +74,7 @@ pub(super) fn validate(note: &Note, historical: bool, diagnostics: &mut Vec<Diag
             .map(|heading| heading.text.as_str())
             .collect::<Vec<_>>();
         if sections != required {
-            diagnostics.push(error(
+            diagnostics.push(Diagnostic::error(
                 DiagnosticCode::DocumentFormat,
                 &note.rel_path,
                 None,

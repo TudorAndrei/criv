@@ -4,42 +4,12 @@ use std::collections::BTreeSet;
 use std::{cell::Cell, thread_local};
 
 use crate::Result;
-use crate::diagnostic::SourceLocation;
-use crate::structural::{self, CompiledPolicy, PolicyCompileError, PolicyScanRequest};
+use crate::diagnostic::{Diagnostic, DiagnosticCode};
+use crate::structural::{self, CompiledPolicy, PolicyScanRequest};
 use crate::vault::{NoteKind, Vault};
 
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub enum PolicyDiagnosticKind {
-    MissingId,
-    EmptyId,
-    DuplicateId { id: String },
-    MissingDefinition { id: String },
-    MissingLanguage { id: String },
-    AmbiguousBody { id: String },
-    MissingBody { id: String },
-    InvalidPattern { id: String, error: String },
-    InvalidRule { id: String, error: String },
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct PolicyDiagnostic {
-    pub(crate) path: String,
-    pub(crate) line: usize,
-    pub(crate) kind: PolicyDiagnosticKind,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct PolicyViolation {
-    pub(crate) path: String,
-    pub(crate) line: usize,
-    pub(crate) adr_id: String,
-    pub(crate) pattern_id: String,
-    pub(crate) text: String,
-    pub(crate) location: Option<SourceLocation>,
-}
-
 pub struct PolicyScanPlan {
-    diagnostics: Vec<PolicyDiagnostic>,
+    diagnostics: Vec<Diagnostic>,
     owners: Vec<PlannedOwner>,
     state_definition_error: Option<String>,
 }
@@ -140,13 +110,15 @@ impl PolicyScanPlan {
             let mut ids = BTreeSet::new();
             let mut candidates = Vec::new();
             for policy in &note.policy_patterns {
+                let definition_error = |code, message: String| {
+                    Diagnostic::error(code, &note.rel_path, Some(policy.line), message)
+                };
                 let Some(raw_local_id) = policy.id.as_deref() else {
                     if reports_diagnostics {
-                        diagnostics.push(PolicyDiagnostic {
-                            path: note.rel_path.clone(),
-                            line: policy.line,
-                            kind: PolicyDiagnosticKind::MissingId,
-                        });
+                        diagnostics.push(definition_error(
+                            DiagnosticCode::MissingPolicyPatternId,
+                            "policy pattern must declare an id".into(),
+                        ));
                     }
                     continue;
                 };
@@ -154,23 +126,19 @@ impl PolicyScanPlan {
                 let local_id = raw_local_id.trim();
                 if local_id.is_empty() {
                     if reports_diagnostics {
-                        diagnostics.push(PolicyDiagnostic {
-                            path: note.rel_path.clone(),
-                            line: policy.line,
-                            kind: PolicyDiagnosticKind::EmptyId,
-                        });
+                        diagnostics.push(definition_error(
+                            DiagnosticCode::EmptyPolicyPattern,
+                            "policy pattern id may not be empty".into(),
+                        ));
                     }
                     continue;
                 }
 
                 if reports_diagnostics && !ids.insert(local_id.to_string()) {
-                    diagnostics.push(PolicyDiagnostic {
-                        path: note.rel_path.clone(),
-                        line: policy.line,
-                        kind: PolicyDiagnosticKind::DuplicateId {
-                            id: local_id.to_string(),
-                        },
-                    });
+                    diagnostics.push(definition_error(
+                        DiagnosticCode::DuplicatePolicyPattern,
+                        format!("policy pattern id `{local_id}` is declared more than once"),
+                    ));
                 }
 
                 #[cfg(test)]
@@ -201,15 +169,12 @@ impl PolicyScanPlan {
                         }
                     }
                     Err(error) => {
-                        if let Some(pattern_id) = state_pattern_id {
-                            state_definition_errors.push((pattern_id, error.to_string()));
-                        }
+                        let message = format!("policy pattern `{local_id}` {error}");
                         if reports_diagnostics {
-                            diagnostics.push(PolicyDiagnostic {
-                                path: note.rel_path.clone(),
-                                line: policy.line,
-                                kind: diagnostic_kind(local_id, error),
-                            });
+                            diagnostics.push(definition_error(error.code(), message.clone()));
+                        }
+                        if let Some(pattern_id) = state_pattern_id {
+                            state_definition_errors.push((pattern_id, message));
                         }
                     }
                 }
@@ -268,7 +233,7 @@ impl PolicyScanPlan {
         }
     }
 
-    pub(crate) fn definition_diagnostics(&self) -> &[PolicyDiagnostic] {
+    pub(crate) fn definition_diagnostics(&self) -> &[Diagnostic] {
         &self.diagnostics
     }
 
@@ -284,7 +249,7 @@ impl PolicyScanPlan {
         &self,
         vault: &Vault,
         changed_files: Option<&BTreeSet<String>>,
-    ) -> Result<Vec<PolicyViolation>> {
+    ) -> Result<Vec<Diagnostic>> {
         let scan_paths = self
             .owners
             .iter()
@@ -322,13 +287,15 @@ impl PolicyScanPlan {
         let mut violations = Vec::new();
         for (key, (owner, policy)) in records.into_iter().enumerate() {
             if let Some(rows) = rows_by_key.get(&key) {
-                violations.extend(rows.iter().map(|row| PolicyViolation {
-                    path: row.path.clone(),
-                    line: row.line,
-                    adr_id: owner.adr_id.clone(),
-                    pattern_id: policy.pattern_id.clone(),
-                    text: row.text.clone(),
-                    location: row.location.clone(),
+                violations.extend(rows.iter().map(|row| {
+                    Diagnostic::policy_violation(
+                        &row.path,
+                        row.line,
+                        row.location.clone(),
+                        &owner.adr_id,
+                        &policy.pattern_id,
+                        &row.text,
+                    )
                 }));
             }
         }
@@ -363,20 +330,6 @@ impl PlannedPolicy {
 
     pub(crate) const fn compiled(&self) -> &CompiledPolicy {
         &self.compiled
-    }
-}
-
-fn diagnostic_kind(local_id: &str, error: PolicyCompileError) -> PolicyDiagnosticKind {
-    let id = local_id.to_string();
-    match error {
-        PolicyCompileError::MissingDefinition => PolicyDiagnosticKind::MissingDefinition { id },
-        PolicyCompileError::MissingLanguage => PolicyDiagnosticKind::MissingLanguage { id },
-        PolicyCompileError::AmbiguousBody => PolicyDiagnosticKind::AmbiguousBody { id },
-        PolicyCompileError::MissingBody => PolicyDiagnosticKind::MissingBody { id },
-        PolicyCompileError::InvalidPattern(error) => {
-            PolicyDiagnosticKind::InvalidPattern { id, error }
-        }
-        PolicyCompileError::InvalidRule(error) => PolicyDiagnosticKind::InvalidRule { id, error },
     }
 }
 
@@ -446,19 +399,11 @@ mod tests {
 
         assert_eq!(structural::work_counts().policy_compilations, 2);
         assert_eq!(structural::work_counts().ast_parses, 2);
-        let exact = violations[0]
-            .location
-            .as_ref()
-            .unwrap()
-            .lsp_range()
-            .unwrap();
+        let exact = violations[0].location().unwrap().lsp_range().unwrap();
         assert_eq!((exact.start.line, exact.start.character), (0, 0));
         assert_eq!((exact.end.line, exact.end.character), (0, 12));
         assert_eq!(
-            violations
-                .iter()
-                .map(|violation| (violation.pattern_id.as_str(), violation.path.as_str()))
-                .collect::<Vec<_>>(),
+            pattern_ids_and_paths(&violations),
             vec![
                 ("ADR-0001/functions", "src/left.rs"),
                 ("ADR-0001/functions", "src/right.rs"),
@@ -477,10 +422,7 @@ mod tests {
         let violations = plan.scan(&vault, Some(&changed)).unwrap();
 
         assert_eq!(
-            violations
-                .iter()
-                .map(|violation| (violation.pattern_id.as_str(), violation.path.as_str()))
-                .collect::<Vec<_>>(),
+            pattern_ids_and_paths(&violations),
             vec![
                 ("ADR-0001/functions", "src/right.rs"),
                 ("ADR-0001/structs", "src/right.rs"),
@@ -520,10 +462,10 @@ mod tests {
 
         assert!(plan.owners.is_empty());
         assert_eq!(plan.diagnostics.len(), 1);
-        assert!(matches!(
-            plan.diagnostics[0].kind,
-            PolicyDiagnosticKind::InvalidRule { .. }
-        ));
+        assert_eq!(
+            plan.diagnostics[0].code(),
+            DiagnosticCode::InvalidPolicyPattern
+        );
         assert!(plan.state_definition_error().is_some());
         assert_eq!(
             work_counts(),
@@ -545,10 +487,7 @@ mod tests {
         assert_eq!(
             plan.diagnostics
                 .iter()
-                .filter(|diagnostic| matches!(
-                    diagnostic.kind,
-                    PolicyDiagnosticKind::DuplicateId { .. }
-                ))
+                .filter(|diagnostic| diagnostic.code() == DiagnosticCode::DuplicatePolicyPattern)
                 .count(),
             1
         );
@@ -568,10 +507,20 @@ mod tests {
         assert_eq!(plan.owners[0].policies[1].state_pattern_id(), None);
         assert_eq!(violations.len(), 4);
         assert!(
-            violations
+            pattern_ids_and_paths(&violations)
                 .iter()
-                .all(|violation| violation.pattern_id == "ADR-0001/duplicate")
+                .all(|(pattern_id, _)| *pattern_id == "ADR-0001/duplicate")
         );
+    }
+
+    fn pattern_ids_and_paths(violations: &[Diagnostic]) -> Vec<(&str, &str)> {
+        violations
+            .iter()
+            .map(|violation| {
+                let pattern_id = violation.message().split('`').nth(1).unwrap_or_default();
+                (pattern_id, violation.path())
+            })
+            .collect()
     }
 
     fn policy_fixture_root() -> PathBuf {

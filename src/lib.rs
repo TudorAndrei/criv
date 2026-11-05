@@ -68,7 +68,10 @@ pub type Result<T> = std::result::Result<T, CrivError>;
 pub enum CrivError {
     #[error("{0}")]
     Message(String),
-    #[error("[{code}] {message}\nfix: {}", code.fix())]
+    #[error(
+        "[{code}] {message}{}",
+        code.fix().map(|fix| format!("\nfix: {fix}")).unwrap_or_default()
+    )]
     Coded {
         code: diagnostic::DiagnosticCode,
         message: String,

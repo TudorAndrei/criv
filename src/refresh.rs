@@ -3,6 +3,7 @@ use std::path::Path;
 
 use crate::check;
 use crate::config::Config;
+use crate::diagnostic::Diagnostic;
 use crate::policy_scan::PolicyScanPlan;
 use crate::repository::RepositoryFiles;
 use crate::source::SourceState;
@@ -149,7 +150,7 @@ fn execute(
             "state publication blocked by unresolved effective ADR governance:\n{}",
             blockers
                 .iter()
-                .map(check::Diagnostic::describe)
+                .map(Diagnostic::describe)
                 .collect::<Vec<_>>()
                 .join("\n")
         )));

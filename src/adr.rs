@@ -1272,7 +1272,7 @@ fn apply_plan(files: &RepositoryFiles, plan: &ReconcilePlan) -> Result<()> {
     }
     let errors = crate::check::validate_all_from(files)?
         .into_iter()
-        .filter(super::check::Diagnostic::is_error)
+        .filter(crate::diagnostic::Diagnostic::is_error)
         .collect::<Vec<_>>();
     if !errors.is_empty() {
         return Err(CrivError::new(format!(

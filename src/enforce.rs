@@ -7,7 +7,7 @@ use serde::Serialize;
 use usage_rs::{Args as UsageArgs, ValueEnum};
 
 use crate::check;
-use crate::diagnostic::DiagnosticCode;
+use crate::diagnostic::{Diagnostic, DiagnosticCode};
 use crate::git::{ChangedSet, ChangedSetComparison, GitRepository};
 use crate::policy_scan::PolicyScanPlan;
 use crate::vault::Vault;
@@ -88,17 +88,8 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
         .map(|paths| paths.iter().cloned().collect::<BTreeSet<_>>());
     let violations = policy_plan
         .scan(&vault, changed_policy_files.as_ref())?
-        .into_iter()
-        .map(|violation| {
-            format!(
-                "{}:{}: {} policy `{}` matched `{}`",
-                violation.path,
-                violation.line,
-                violation.adr_id,
-                violation.pattern_id,
-                violation.text
-            )
-        })
+        .iter()
+        .map(Diagnostic::describe)
         .collect::<Vec<_>>();
     let import_violations = import_policy_violations(&vault, changed_files.as_ref());
     let adr_violations = crate::adr::change_violations(
@@ -129,7 +120,7 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
                 .as_ref()
                 .map_or(&[][..], |failure| &failure.violations),
             code: failure.as_ref().map(|failure| failure.code),
-            fix: failure.as_ref().map(|failure| failure.code.fix()),
+            fix: failure.as_ref().and_then(|failure| failure.code.fix()),
         };
         let json = serde_json::to_string_pretty(&report).map_err(|err| {
             CrivError::new(format!("failed to serialize enforcement report: {err}"))

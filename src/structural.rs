@@ -12,7 +12,7 @@ use ast_grep_core::meta_var::MetaVariable;
 use ast_grep_core::{Doc, NodeMatch, Pattern};
 use ast_grep_language::{Language, LanguageExt, SupportLang};
 
-use crate::diagnostic::SourceLocation;
+use crate::diagnostic::{DiagnosticCode, SourceLocation};
 use crate::source::read_source_to_string_from;
 use crate::vault::{PolicyPattern, Vault};
 use crate::{CrivError, Result};
@@ -72,30 +72,34 @@ pub enum PolicyCompileError {
     InvalidRule(String),
 }
 
-impl fmt::Display for PolicyCompileError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl PolicyCompileError {
+    pub(crate) const fn code(&self) -> DiagnosticCode {
         match self {
-            Self::MissingDefinition => {
-                formatter.write_str("policy pattern must declare language and pattern or rule")
-            }
-            Self::MissingLanguage => {
-                formatter.write_str("inline policy pattern must declare a language")
-            }
-            Self::AmbiguousBody => formatter
-                .write_str("inline policy pattern must declare either pattern or rule, not both"),
-            Self::MissingBody => {
-                formatter.write_str("inline policy pattern must declare pattern or rule")
-            }
-            Self::InvalidPattern(message) | Self::InvalidRule(message) => {
-                formatter.write_str(message)
-            }
+            Self::MissingDefinition => DiagnosticCode::MissingPolicyPatternDefinition,
+            Self::MissingLanguage => DiagnosticCode::MissingPolicyPatternLanguage,
+            Self::AmbiguousBody => DiagnosticCode::AmbiguousPolicyPatternBody,
+            Self::MissingBody => DiagnosticCode::MissingPolicyPatternBody,
+            Self::InvalidPattern(_) | Self::InvalidRule(_) => DiagnosticCode::InvalidPolicyPattern,
         }
     }
 }
 
-impl From<PolicyCompileError> for CrivError {
-    fn from(error: PolicyCompileError) -> Self {
-        Self::new(error.to_string())
+/// The predicate that follows the pattern's name, as in "policy pattern `x` must ...".
+impl fmt::Display for PolicyCompileError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingDefinition => {
+                formatter.write_str("must declare language and pattern or rule")
+            }
+            Self::MissingLanguage => formatter.write_str("must declare a language"),
+            Self::AmbiguousBody => {
+                formatter.write_str("must declare either pattern or rule, not both")
+            }
+            Self::MissingBody => formatter.write_str("must declare pattern or rule"),
+            Self::InvalidPattern(message) | Self::InvalidRule(message) => {
+                write!(formatter, "does not compile: {message}")
+            }
+        }
     }
 }
 
