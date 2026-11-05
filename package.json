@@ -10,7 +10,7 @@
   "scripts": {
     "format:markdown": "oxfmt --write '**/*.md'",
     "format:markdown:check": "oxfmt --check '**/*.md'",
-    "check:editor-contracts": "npm --prefix packages/criv-editor-state run lint && npm --prefix packages/criv-editor-state run format:check && npm --prefix packages/criv-editor-state run check-types && npm --prefix packages/criv-editor-state test && cargo test --locked -p criv-wasm",
+    "check:editor-contracts": "npm --prefix packages/criv-editor-state run lint && npm --prefix packages/criv-editor-state run format:check && npm --prefix packages/criv-editor-state run check-types && npm --prefix packages/criv-editor-state test && cargo nextest run --locked -p criv-wasm",
     "build:site": "node scripts/prepare-docs-site.mjs && mdbook build .site-build/docs-book"
   },
   "devDependencies": {

@@ -75,8 +75,8 @@ documented in [docs/tooling.md](docs/tooling.md).
 
 User-facing features and flows for criv itself are declared in executable
 Gherkin files under `tests/features/`; ADRs record architectural decisions.
-Run `cargo test --test acceptance` for the Cucumber suite, or
-`cargo test --workspace` to include it with all Rust tests. See
+Run `cargo nextest run --test acceptance` for the Cucumber suite, or
+`cargo nextest run --workspace` to include it with all Rust tests. See
 [the testing guide](docs/testing.md) for authoring and migration conventions.
 
 You can also run the CLI from a checkout without installing it globally:

@@ -319,7 +319,8 @@ mod tests {
             .env_remove("GIT_WORK_TREE")
             .env_remove("GIT_INDEX_FILE")
             .env_remove("GIT_COMMON_DIR")
-            .env_remove("GIT_PREFIX");
+            .env_remove("GIT_PREFIX")
+            .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"]);
         command
     }
 

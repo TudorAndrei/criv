@@ -368,9 +368,9 @@ jobs:
       - name: Set up build tools
         uses: $/.github/actions/setup-build-tools
         with:
-          tools: rust github:jdx/mr-boxington
+          tools: rust github:jdx/mr-boxington aqua:nextest-rs/nextest/cargo-nextest
       - name: Run shared discovery contract corpus
-        run: "cargo test --locked --lib discovery::tests::"
+        run: "cargo nextest run --locked --lib discovery::tests::"
 
   windows:
     name: Windows build and tests
@@ -383,12 +383,12 @@ jobs:
       - name: Set up build tools
         uses: $/.github/actions/setup-build-tools
         with:
-          tools: rust github:jdx/mr-boxington
+          tools: rust github:jdx/mr-boxington aqua:nextest-rs/nextest/cargo-nextest
           save-cargo-cache: "true"
       - name: Build
         run: cargo build --locked --workspace
       - name: Test
-        run: cargo test --locked --workspace
+        run: cargo nextest run --locked --workspace
 
   macos-watch-lock:
     name: macOS watch lock tests
@@ -401,10 +401,10 @@ jobs:
       - name: Set up build tools
         uses: $/.github/actions/setup-build-tools
         with:
-          tools: rust github:jdx/mr-boxington
+          tools: rust github:jdx/mr-boxington aqua:nextest-rs/nextest/cargo-nextest
           save-cargo-cache: "true"
       - name: Test watch lock
         run: |
-          cargo test --locked --lib watch::tests::
-          cargo test --locked --test cli_workflows watch_once
-          cargo test --locked --test cli_workflows long_running_watch_takes_lock_before_startup_rebuild
+          cargo nextest run --locked --lib watch::tests::
+          cargo nextest run --locked --test cli_workflows watch_once
+          cargo nextest run --locked --test cli_workflows long_running_watch_takes_lock_before_startup_rebuild

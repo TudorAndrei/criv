@@ -71,7 +71,7 @@ the pinned Mr. Boxington `mbx` release. Run these commands after pulling the con
 ```sh
 mise install
 mise reshim
-mise exec -- cargo test --locked --workspace
+mise exec -- cargo nextest run --locked --workspace
 ```
 
 An active mise shell also wraps plain `cargo` commands. Git hooks use the same
