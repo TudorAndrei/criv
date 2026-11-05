@@ -43,8 +43,9 @@ impl LoadedState {
     ///
     /// # Errors
     ///
-    /// Returns a message when the text is not valid State JSON, names an
-    /// unsupported schema, or cannot be prepared.
+    /// Returns an `Error` whose `code` is a [`decode::StateErrorCode`] when the
+    /// text is not valid State JSON or names an unsupported schema, and a
+    /// message when the State cannot be prepared.
     #[wasm_bindgen(constructor)]
     pub fn new(raw: &str) -> Result<Self, JsValue> {
         #[cfg(target_arch = "wasm32")]
@@ -53,7 +54,7 @@ impl LoadedState {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let mut loaded = Self::load(raw).map_err(|error| JsValue::from_str(&error))?;
+            let mut loaded = Self::load(raw).map_err(LoadError::into_js)?;
             loaded.prepare_initial_projections()?;
             Ok(loaded)
         }
@@ -106,22 +107,17 @@ impl LoadedState {
     #[cfg(target_arch = "wasm32")]
     fn load_wasm(raw: &str) -> Result<Self, JsValue> {
         let envelope = js_sys::JSON::parse(raw).map_err(|error| {
-            JsValue::from_str(&format!(
-                "criv-state-json-invalid: invalid criv state JSON: {}",
-                decode::js_error_message(&error)
-            ))
+            decode::StateError::json_invalid(decode::js_error_message(&error)).into_js()
         })?;
         let schema = js_sys::Reflect::get(&envelope, &JsValue::from_str("schema"))
             .ok()
             .and_then(|value| value.as_string())
             .unwrap_or_else(|| "<missing>".into());
         if schema != STATE_SCHEMA {
-            return Err(JsValue::from_str(&format!(
-                "criv-state-schema-unsupported: unsupported criv state schema: {schema}"
-            )));
+            return Err(decode::StateError::schema_unsupported(&schema).into_js());
         }
         let state = serde_wasm_bindgen::from_value::<StateDocument>(envelope)
-            .map_err(|error| JsValue::from_str(&format!("criv-state-json-invalid: {error}")))?;
+            .map_err(|error| decode::StateError::json_invalid(error).into_js())?;
         let prepared = PreparedState::new(state);
         let initial_projections = projection::initial_projections_from_js(&prepared)?;
         Ok(Self {
@@ -151,14 +147,14 @@ impl LoadedState {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn load(raw: &str) -> Result<Self, String> {
+    fn load(raw: &str) -> Result<Self, LoadError> {
         let envelope = decode::decode_state_value(raw)?;
-        let state = StateDocument::deserialize(&envelope)
-            .map_err(|error| format!("criv-state-json-invalid: {error}"))?;
+        let state =
+            StateDocument::deserialize(&envelope).map_err(decode::StateError::json_invalid)?;
         let prepared = PreparedState::new(state);
         let initial_envelope =
             serde_json::to_value(projection::InitialProjections::from(&prepared))
-                .map_err(|error| format!("failed to encode criv initial projections: {error}"))?;
+                .map_err(LoadError::Encode)?;
         Ok(Self {
             initial_envelope: Some(initial_envelope),
             initial_projections: None,
@@ -171,6 +167,32 @@ impl LoadedState {
         self.initial_envelope
             .take()
             .ok_or_else(|| INITIAL_PROJECTIONS_TAKEN.to_string())
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug)]
+enum LoadError {
+    State(decode::StateError),
+    Encode(serde_json::Error),
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl From<decode::StateError> for LoadError {
+    fn from(error: decode::StateError) -> Self {
+        Self::State(error)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl LoadError {
+    fn into_js(self) -> JsValue {
+        match self {
+            Self::State(error) => error.into_js(),
+            Self::Encode(error) => JsValue::from_str(&format!(
+                "failed to encode criv initial projections: {error}"
+            )),
+        }
     }
 }
 
@@ -414,8 +436,27 @@ mod tests {
         let raw = include_str!("../../../fixtures/state/criv.state.v1.json")
             .replace("criv.state.v1", "criv.state.v2");
 
-        assert!(LoadedState::load(&raw).is_err());
+        let Err(LoadError::State(error)) = LoadedState::load(&raw) else {
+            panic!("expected a State contract error");
+        };
+        assert_eq!(error.code, decode::StateErrorCode::SchemaUnsupported);
+        assert_eq!(
+            error.message,
+            "unsupported criv state schema: criv.state.v2"
+        );
         assert!(decode_state_value(&raw).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_state_json_with_a_stable_code() {
+        let cases = ["{", r#"{"schema":"criv.state.v1","graph":{"nodes":true}}"#];
+        for raw in cases {
+            let Err(LoadError::State(error)) = LoadedState::load(raw) else {
+                panic!("expected a State contract error for {raw}");
+            };
+            assert_eq!(error.code, decode::StateErrorCode::JsonInvalid, "{raw}");
+            assert!(error.message.starts_with("invalid criv state JSON: "));
+        }
     }
 
     #[test]
