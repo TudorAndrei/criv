@@ -10,7 +10,7 @@ mod support;
 
 use std::process::Output;
 
-use cucumber::{World as _, given, then, when};
+use cucumber::{World as _, cli, cli::Parser as _, given, then, when};
 use tempfile::TempDir;
 
 #[derive(Debug, cucumber::World)]
@@ -98,10 +98,27 @@ fn stdout_is(world: &mut VaultWorld, expected: String) {
     assert_eq!(String::from_utf8_lossy(&world.output().stdout), expected);
 }
 
+/// The single test name this harness reports to cargo-nextest.
+const SUITE_NAME: &str = "acceptance";
+
 fn main() {
+    let mut arguments: Vec<String> = std::env::args().collect();
+    if arguments.iter().any(|argument| argument == "--list") {
+        if !arguments.iter().any(|argument| argument == "--ignored") {
+            println!("{SUITE_NAME}: test");
+        }
+        return;
+    }
+    if arguments.iter().any(|argument| argument == "--exact") {
+        arguments.retain(|argument| {
+            !matches!(argument.as_str(), SUITE_NAME | "--exact" | "--nocapture")
+        });
+    }
+    let options = cli::Opts::<_, _, _, cli::Empty>::parse_from(arguments);
     futures::executor::block_on(
         VaultWorld::cucumber()
             .fail_on_skipped()
+            .with_cli(options)
             .run_and_exit(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/features")),
     );
 }
