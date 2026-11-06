@@ -3,7 +3,8 @@
 use std::collections::{BTreeSet, HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 
-use criv_state_wire::{Node, SourceIndexEntry, source_identity::SourceIdentity};
+use criv_state_wire::source_identity::{self, SourceIdentity};
+use criv_state_wire::{Node, SourceIndexEntry, node_id};
 
 #[cfg(test)]
 use super::StateDocument;
@@ -146,14 +147,11 @@ pub fn find_editor_graph_node(state: &StateDocument, target: &str) -> Option<Edi
 }
 
 fn source_target(node: &Node) -> Option<String> {
-    node.id
-        .strip_prefix("symbol:")
-        .or_else(|| node.id.strip_prefix("code:"))
-        .map(ToString::to_string)
+    node_id::source_target(&node.id).map(ToString::to_string)
 }
 
 fn line_range(path: &str) -> Option<String> {
-    path.split_once("#L").map(|(_, range)| format!("L{range}"))
+    node_id::line_suffix(path).map(ToString::to_string)
 }
 
 fn source_match_score_prepared(lower_path: &str, basename: &str, query: &str) -> Option<i64> {
@@ -424,7 +422,7 @@ fn canonical_source_target(node: &EditorGraphNode) -> Option<&str> {
     node.source_target.as_deref().or_else(|| {
         node.path
             .as_deref()
-            .filter(|path| !path.contains("#L") && !path.contains("#l"))
+            .filter(|path| node_id::line_suffix(path).is_none() && !path.contains("#l"))
     })
 }
 
@@ -441,11 +439,12 @@ fn legacy_node_targets(node: &EditorGraphNode) -> Vec<String> {
     let mut targets = Vec::new();
     if let Some(source_target) = &node.source_target {
         if let Some((path, fragment)) = source_target.split_once('#') {
+            let mut selectors = Vec::new();
             if let Some(short_name) = fragment.rsplit(':').next() {
-                targets.push(format!("{path}#{short_name}"));
+                selectors.push(short_name.to_string());
             }
             if !node.label.is_empty() {
-                targets.push(format!("{path}#{}", node.label));
+                selectors.push(node.label.clone());
             }
             if let Some(selector) = node
                 .source_identity
@@ -453,11 +452,22 @@ fn legacy_node_targets(node: &EditorGraphNode) -> Vec<String> {
                 .and_then(SourceIdentity::selector)
                 .and_then(|selector| selector.as_elixir())
                 .filter(|selector| selector.callable_kind().is_some())
-                && let Some((name, _)) = callable_label_parts(&node.label)
+                && let Some((name, arity)) = callable_label_parts(&node.label)
             {
-                targets.push(format!("{path}#{name}"));
-                if let Some(module) = selector.owner_identity().module_name() {
-                    targets.push(format!("{path}#{module}.{}", node.label));
+                selectors.extend(source_identity::compatibility_aliases(
+                    name,
+                    Some(arity),
+                    selector.owner_identity().module_name(),
+                ));
+            }
+            for selector in &selectors {
+                targets.push(format!("{path}#{selector}"));
+            }
+            if let Some(basename) = path.rsplit('/').next().filter(|name| *name != path) {
+                for selector in
+                    std::iter::once(fragment).chain(selectors.iter().map(String::as_str))
+                {
+                    targets.push(format!("{basename}#{selector}"));
                 }
             }
         } else if let Some(basename) = source_target.rsplit('/').next() {

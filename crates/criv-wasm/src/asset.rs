@@ -2,12 +2,9 @@
 
 use std::collections::BTreeSet;
 
-use criv_state_wire::AssetIndexEntry;
+use criv_state_wire::{AssetIndexEntry, asset, content_hash};
 
 use super::{EditorAssetEntry, source::safe_source_path};
-
-const MAX_ASSET_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_ASSET_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
 
 pub fn take_assets(entries: Vec<AssetIndexEntry>) -> Vec<EditorAssetEntry> {
     let mut candidates = entries
@@ -32,7 +29,7 @@ pub fn take_assets(entries: Vec<AssetIndexEntry>) -> Vec<EditorAssetEntry> {
             continue;
         }
         let next = total_bytes.saturating_add(entry.bytes);
-        if next > MAX_ASSET_TOTAL_BYTES {
+        if next > asset::MAX_TOTAL_BYTES {
             break;
         }
         total_bytes = next;
@@ -42,21 +39,9 @@ pub fn take_assets(entries: Vec<AssetIndexEntry>) -> Vec<EditorAssetEntry> {
 }
 
 fn valid_asset(entry: &AssetIndexEntry, path: &str) -> bool {
-    entry.bytes <= MAX_ASSET_BYTES
-        && entry.hash.len() == 64
-        && entry.hash.bytes().all(|byte| byte.is_ascii_hexdigit())
-        && expected_mime(path) == Some(entry.mime.as_str())
-}
-
-fn expected_mime(path: &str) -> Option<&'static str> {
-    match path.rsplit_once('.')?.1 {
-        "png" => Some("image/png"),
-        "jpg" | "jpeg" => Some("image/jpeg"),
-        "gif" => Some("image/gif"),
-        "webp" => Some("image/webp"),
-        "pdf" => Some("application/pdf"),
-        _ => None,
-    }
+    entry.bytes <= asset::MAX_BYTES
+        && content_hash::is_valid(&entry.hash)
+        && asset::mime_for_path(path) == Some(entry.mime.as_str())
 }
 
 #[cfg(test)]
@@ -81,7 +66,7 @@ mod tests {
             entry("docs/a.png", "image/png", 3),
             entry("docs/wrong.png", "image/jpeg", 3),
             entry("docs/upper.PNG", "image/png", 3),
-            entry("docs/too-large.png", "image/png", MAX_ASSET_BYTES + 1),
+            entry("docs/too-large.png", "image/png", asset::MAX_BYTES + 1),
             AssetIndexEntry {
                 hash: "bad".into(),
                 ..entry("docs/bad-hash.png", "image/png", 3)
@@ -100,18 +85,18 @@ mod tests {
     #[test]
     fn keeps_the_total_size_bound_in_lexical_order() {
         let mut entries = (0..7)
-            .map(|index| entry(&format!("docs/{index}.png"), "image/png", MAX_ASSET_BYTES))
+            .map(|index| entry(&format!("docs/{index}.png"), "image/png", asset::MAX_BYTES))
             .collect::<Vec<_>>();
-        entries.push(entry("docs/7.png", "image/png", MAX_ASSET_BYTES / 2));
+        entries.push(entry("docs/7.png", "image/png", asset::MAX_BYTES / 2));
         entries.push(entry(
             "docs/overflow.pdf",
             "application/pdf",
-            MAX_ASSET_BYTES,
+            asset::MAX_BYTES,
         ));
         entries.push(entry(
             "docs/z-after-overflow.png",
             "image/png",
-            MAX_ASSET_BYTES / 2,
+            asset::MAX_BYTES / 2,
         ));
         let assets = take_assets(entries);
 

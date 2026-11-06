@@ -198,9 +198,7 @@ impl PreparedState {
             asset_count: assets.len(),
             pattern_count: registered_patterns.len(),
             first_node_id: nodes.first().map(|node| node.id.clone()),
-            first_edge: edges
-                .first()
-                .map(|edge| format!("{}:{}:{}", edge.from, edge.kind, edge.to)),
+            first_edge: edges.first().map(criv_state_wire::Edge::row),
             first_source_path: sources.first().map(|source| source.path.clone()),
             first_asset_path: assets.first().map(|asset| asset.path.clone()),
         };
@@ -597,6 +595,20 @@ mod tests {
         assert_eq!(by_id.id, by_target.id);
         assert_eq!(by_id.id, by_legacy_symbol.id);
         assert_eq!(by_basename.id, "code:src/lib.rs");
+    }
+
+    #[test]
+    fn lookup_resolves_a_basename_with_a_symbol_fragment_like_the_cli() {
+        let state = editor_state();
+
+        for target in ["lib.rs#run", "lib.rs#fn:run"] {
+            assert_eq!(
+                find_editor_graph_node(&state, target).unwrap().id,
+                "symbol:src/lib.rs#fn:run",
+                "{target}"
+            );
+        }
+        assert!(find_editor_graph_node(&state, "lib.rs#missing").is_none());
     }
 
     #[test]
