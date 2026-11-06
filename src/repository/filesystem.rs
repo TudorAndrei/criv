@@ -12,7 +12,7 @@ use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
 use cap_std::ambient_authority;
 use cap_std::fs::{Dir, OpenOptions as CapOpenOptions, Permissions as CapPermissions};
 
-use super::{LinkLayout, LinkOutcome};
+use super::{EntryKind, LinkLayout, LinkOutcome};
 use crate::{CrivError, Result};
 
 /// One repository root, held as a capability directory handle.
@@ -168,6 +168,31 @@ impl RepositoryFiles {
             Ok(_) => Ok(true),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
             Err(error) => Err(error.into()),
+        }
+    }
+
+    pub(crate) fn entry_kind(&self, source: &Path) -> EntryKind {
+        if source.as_os_str().is_empty() {
+            return EntryKind::Directory;
+        }
+        let Some(name) = source.file_name() else {
+            return EntryKind::Other;
+        };
+        if validate_relative_path("entry source", source).is_err() {
+            return EntryKind::Other;
+        }
+        let parent = source.parent().unwrap_or_else(|| Path::new("."));
+        let directory = match self.open_dir_optional(parent, false) {
+            Ok(Some(directory)) => directory,
+            Ok(None) => return EntryKind::Missing,
+            Err(_) => return EntryKind::Other,
+        };
+        match directory.symlink_metadata(name) {
+            Ok(metadata) if metadata.file_type().is_symlink() => EntryKind::Other,
+            Ok(metadata) if metadata.is_file() => EntryKind::File,
+            Ok(metadata) if metadata.is_dir() => EntryKind::Directory,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => EntryKind::Missing,
+            Ok(_) | Err(_) => EntryKind::Other,
         }
     }
 

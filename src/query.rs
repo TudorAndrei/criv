@@ -69,47 +69,70 @@ enum QueryCommand {
     Diff(DiffOptions),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum QueryCapability {
-    Snapshot,
-    Docs,
-    Sources,
-}
-
 impl QueryCommand {
-    const fn capability(&self) -> QueryCapability {
-        match self {
-            Self::Diff(_) => QueryCapability::Snapshot,
-            Self::NextAdrId(_) | Self::CitedBy(_) | Self::OrphanDocs(_) => QueryCapability::Docs,
-            Self::Nodes(options)
-                if matches!(options.kind, Some(NodeKind::Doc | NodeKind::Decision)) =>
-            {
-                QueryCapability::Docs
+    /// Loads only the data this command reads, then answers it.
+    fn answer(self, files: &RepositoryFiles) -> Result<(Vec<String>, OutputOptions)> {
+        Ok(match self {
+            Self::Diff(options) => (diff(files, &options.ref_a, &options.ref_b)?, options.output),
+            Self::NextAdrId(output) => (
+                vec![next_adr_id(&load_vault(files, SourceLoad::Skip)?)?],
+                output,
+            ),
+            Self::Callers(options) => (
+                load_vault(files, SourceLoad::Refresh)?
+                    .source_graph()
+                    .callers(&options.symbol),
+                options.output,
+            ),
+            Self::Callees(options) => (
+                load_vault(files, SourceLoad::Refresh)?
+                    .source_graph()
+                    .callees(&options.symbol),
+                options.output,
+            ),
+            Self::AttackSurface(output) => (
+                load_vault(files, SourceLoad::Refresh)?
+                    .source_graph()
+                    .attack_surface(),
+                output,
+            ),
+            Self::Targets(options) => (
+                targets(&load_vault(files, SourceLoad::Refresh)?, &options.note_id)?,
+                options.output,
+            ),
+            Self::Cites(options) => (
+                cites(&load_vault(files, SourceLoad::Refresh)?, &options.note_id)?,
+                options.output,
+            ),
+            Self::CitedBy(options) => {
+                let vault = load_vault(files, SourceLoad::Skip)?;
+                let index = QueryReverseIndex::build(&vault, ReverseIndexScope::Notes);
+                (cited_by(&vault, &index, &options.note_id)?, options.output)
             }
-            Self::Callers(_)
-            | Self::Callees(_)
-            | Self::AttackSurface(_)
-            | Self::Targets(_)
-            | Self::Cites(_)
-            | Self::References(_)
-            | Self::Governs(_)
-            | Self::Governing(_)
-            | Self::Coverage(_)
-            | Self::Nodes(_) => QueryCapability::Sources,
-        }
-    }
-
-    const fn reverse_index_scope(&self) -> Option<ReverseIndexScope> {
-        match self {
-            Self::CitedBy(_) | Self::OrphanDocs(_) => Some(ReverseIndexScope::Notes),
-            Self::References(_)
-            | Self::Nodes(NodesOptions {
-                kind: Some(NodeKind::Code),
-                without_docs: true,
-                ..
-            }) => Some(ReverseIndexScope::Sources),
-            _ => None,
-        }
+            Self::OrphanDocs(output) => {
+                let vault = load_vault(files, SourceLoad::Skip)?;
+                let index = QueryReverseIndex::build(&vault, ReverseIndexScope::Notes);
+                (orphan_docs(&vault, &index), output)
+            }
+            Self::References(options) => {
+                let vault = load_vault(files, SourceLoad::Refresh)?;
+                let index = QueryReverseIndex::build(&vault, ReverseIndexScope::Sources);
+                (index.references(&vault, &options.symbol), options.output)
+            }
+            Self::Governs(options) => (
+                governs(&load_vault(files, SourceLoad::Refresh)?, &options.adr_id)?,
+                options.output,
+            ),
+            Self::Governing(options) => (
+                governing(&load_vault(files, SourceLoad::Refresh)?, &options.symbol),
+                options.output,
+            ),
+            Self::Coverage(options) => (
+                coverage(&load_vault(files, SourceLoad::Refresh)?, options.by),
+                options.output,
+            ),
+            Self::Nodes(options) => (nodes(files, &options)?, options.output),
+        })
     }
 }
 
@@ -346,89 +369,11 @@ struct DiffOptions {
 
 pub fn run(root: &Path, options: QueryOptions) -> Result<()> {
     let files = crate::config::open_vault(root)?;
-    if let QueryCommand::Diff(options) = &options.command {
-        let rows = diff(root, &options.ref_a, &options.ref_b)?;
-        return print_rows(&rows, options.output);
-    }
-
-    let vault = load_query_vault(&files, &options.command)?;
-    let reverse_index = options
-        .command
-        .reverse_index_scope()
-        .map(|scope| QueryReverseIndex::build(&vault, scope));
-    let (rows, output) = match options.command {
-        QueryCommand::NextAdrId(output) => (vec![next_adr_id(&vault)?], output),
-        QueryCommand::Callers(options) => {
-            let rows = vault.source_graph().callers(&options.symbol);
-            (rows, options.output)
-        }
-        QueryCommand::Callees(options) => {
-            let rows = vault.source_graph().callees(&options.symbol);
-            (rows, options.output)
-        }
-        QueryCommand::AttackSurface(output) => (vault.source_graph().attack_surface(), output),
-        QueryCommand::Targets(options) => {
-            let rows = targets(&vault, &options.note_id)?;
-            (rows, options.output)
-        }
-        QueryCommand::Cites(options) => {
-            let rows = cites(&vault, &options.note_id, false)?;
-            (rows, options.output)
-        }
-        QueryCommand::CitedBy(options) => {
-            let rows = cited_by(
-                &vault,
-                required_reverse_index(reverse_index.as_ref())?,
-                &options.note_id,
-            )?;
-            (rows, options.output)
-        }
-        QueryCommand::OrphanDocs(output) => (
-            orphan_docs(&vault, required_reverse_index(reverse_index.as_ref())?),
-            output,
-        ),
-        QueryCommand::References(options) => {
-            let rows =
-                required_reverse_index(reverse_index.as_ref())?.references(&vault, &options.symbol);
-            (rows, options.output)
-        }
-        QueryCommand::Governs(options) => {
-            let rows = governs(&vault, &options.adr_id)?;
-            (rows, options.output)
-        }
-        QueryCommand::Governing(options) => {
-            let rows = governing(&vault, &options.symbol);
-            (rows, options.output)
-        }
-        QueryCommand::Coverage(options) => {
-            let rows = coverage(&vault, options.by);
-            (rows, options.output)
-        }
-        QueryCommand::Nodes(options) => {
-            let rows = nodes(
-                &vault,
-                reverse_index.as_ref(),
-                options.kind,
-                options.without_docs,
-            )?;
-            (rows, options.output)
-        }
-        QueryCommand::Diff(_) => {
-            return Err(CrivError::new("snapshot query reached vault loading"));
-        }
-    };
-
+    let (rows, output) = options.command.answer(&files)?;
     print_rows(&rows, output)
 }
 
-fn load_query_vault(files: &RepositoryFiles, command: &QueryCommand) -> Result<Vault> {
-    let source = match command.capability() {
-        QueryCapability::Docs => SourceLoad::Skip,
-        QueryCapability::Sources => SourceLoad::Refresh,
-        QueryCapability::Snapshot => {
-            return Err(CrivError::new("snapshot query does not load a vault"));
-        }
-    };
+fn load_vault(files: &RepositoryFiles, source: SourceLoad) -> Result<Vault> {
     Vault::load(
         files,
         LoadOptions {
@@ -480,7 +425,7 @@ fn targets(vault: &Vault, id: &str) -> Result<Vec<String>> {
     Ok(rows)
 }
 
-fn cites(vault: &Vault, id: &str, note_only: bool) -> Result<Vec<String>> {
+fn cites(vault: &Vault, id: &str) -> Result<Vec<String>> {
     let note = vault
         .resolve_note(id)
         .ok_or_else(|| CrivError::new(format!("note `{id}` does not resolve")))?;
@@ -488,9 +433,9 @@ fn cites(vault: &Vault, id: &str, note_only: bool) -> Result<Vec<String>> {
     for link in note.wiki_links() {
         match vault.resolve_link(&link.target) {
             ResolvedLink::Note { id } => rows.push(id),
-            ResolvedLink::Source { path, .. } if !note_only => rows.push(path),
-            ResolvedLink::Pattern { id } if !note_only => rows.push(format!("match:{id}")),
-            _ => {}
+            ResolvedLink::Source { path, .. } => rows.push(path),
+            ResolvedLink::Pattern { id } => rows.push(format!("match:{id}")),
+            ResolvedLink::Broken => {}
         }
     }
     rows.sort();
@@ -620,74 +565,70 @@ fn coverage_by_adr(vault: &Vault) -> Vec<String> {
     rows
 }
 
-fn required_reverse_index(index: Option<&QueryReverseIndex>) -> Result<&QueryReverseIndex> {
-    index.ok_or_else(|| CrivError::new("query command requires a reverse index"))
-}
-
-fn nodes(
-    vault: &Vault,
-    reverse_index: Option<&QueryReverseIndex>,
-    kind: Option<NodeKind>,
-    without_docs: bool,
-) -> Result<Vec<String>> {
-    let mut rows = Vec::new();
-    match kind {
-        Some(NodeKind::Code) => {
-            for symbol in vault.source_graph().symbols() {
-                let display = symbol.id.display();
-                if without_docs
-                    && !required_reverse_index(reverse_index)?
-                        .references(vault, &display)
-                        .is_empty()
-                {
-                    continue;
-                }
-                rows.push(display);
-            }
+fn nodes(files: &RepositoryFiles, options: &NodesOptions) -> Result<Vec<String>> {
+    let mut rows = match options.kind {
+        Some(NodeKind::Doc) => note_ids(&load_vault(files, SourceLoad::Skip)?, NoteKind::Doc),
+        Some(NodeKind::Decision) => {
+            note_ids(&load_vault(files, SourceLoad::Skip)?, NoteKind::Decision)
         }
-        Some(NodeKind::Doc) => rows.extend(
-            vault
-                .notes()
-                .iter()
-                .filter(|note| note.kind() == NoteKind::Doc)
-                .map(|note| note.display_id().to_string()),
-        ),
-        Some(NodeKind::Decision) => rows.extend(
-            vault
-                .notes()
-                .iter()
-                .filter(|note| note.kind() == NoteKind::Decision)
-                .map(|note| note.display_id().to_string()),
-        ),
+        Some(NodeKind::Code) => {
+            let vault = load_vault(files, SourceLoad::Refresh)?;
+            let index = options
+                .without_docs
+                .then(|| QueryReverseIndex::build(&vault, ReverseIndexScope::Sources));
+            code_nodes(&vault, index.as_ref())
+        }
         Some(kind) => {
             let symbol_kind = kind
                 .symbol_kind()
                 .ok_or_else(|| CrivError::new("node kind does not identify a source symbol"))?;
-            rows.extend(
-                vault
-                    .source_graph()
-                    .symbols()
-                    .filter(|symbol| symbol.kind == symbol_kind)
-                    .map(|symbol| symbol.id.display()),
-            );
+            load_vault(files, SourceLoad::Refresh)?
+                .source_graph()
+                .symbols()
+                .filter(|symbol| symbol.kind == symbol_kind)
+                .map(|symbol| symbol.id.display())
+                .collect()
         }
-        _ => {
-            rows.extend(vault.source_files().iter().cloned());
+        None => {
+            let vault = load_vault(files, SourceLoad::Refresh)?;
+            let mut rows = vault.source_files().to_vec();
             rows.extend(
                 vault
                     .notes()
                     .iter()
                     .map(|note| note.display_id().to_string()),
             );
+            rows
         }
-    }
+    };
     rows.sort();
     Ok(rows)
 }
 
-fn diff(root: &Path, left: &str, right: &str) -> Result<Vec<String>> {
-    let left = load_snapshot(root, left)?;
-    let right = load_snapshot(root, right)?;
+fn note_ids(vault: &Vault, kind: NoteKind) -> Vec<String> {
+    vault
+        .notes()
+        .iter()
+        .filter(|note| note.kind() == kind)
+        .map(|note| note.display_id().to_string())
+        .collect()
+}
+
+/// Every source symbol, or with `undocumented` only those no note references.
+fn code_nodes(vault: &Vault, undocumented: Option<&QueryReverseIndex>) -> Vec<String> {
+    vault
+        .source_graph()
+        .symbols()
+        .map(|symbol| symbol.id.display())
+        .filter(|display| {
+            undocumented.is_none_or(|index| index.references(vault, display).is_empty())
+        })
+        .collect()
+}
+
+fn diff(files: &RepositoryFiles, left: &str, right: &str) -> Result<Vec<String>> {
+    let left = load_snapshot(files, left)?;
+    let right = load_snapshot(files, right)?;
     let left_nodes = left.node_ids();
     let right_nodes = right.node_ids();
     let left_edges = left.edge_rows();
@@ -718,15 +659,15 @@ fn diff(root: &Path, left: &str, right: &str) -> Result<Vec<String>> {
     Ok(rows)
 }
 
-fn load_snapshot(root: &Path, id: &str) -> Result<GraphRowsView> {
+fn load_snapshot(files: &RepositoryFiles, id: &str) -> Result<GraphRowsView> {
     let local = match id.parse::<SnapshotId>() {
-        Ok(snapshot) => crate::state::load_snapshot(root, &snapshot)?,
+        Ok(snapshot) => crate::state::load_snapshot(files, &snapshot)?,
         Err(()) => None,
     };
     let contents = if let Some(contents) = local {
         contents
     } else {
-        load_git_state(root, id)?
+        load_git_state(files.root(), id)?
     };
     serde_json::from_str(&contents)
         .map_err(|err| CrivError::new(format!("failed to parse snapshot `{id}`: {err}")))
@@ -798,96 +739,6 @@ mod tests {
     }
 
     #[test]
-    fn every_query_variant_declares_its_data_capability() {
-        let cases = vec![
-            (
-                QueryCommand::NextAdrId(query_output_options()),
-                QueryCapability::Docs,
-            ),
-            (
-                QueryCommand::Callers(query_symbol_options()),
-                QueryCapability::Sources,
-            ),
-            (
-                QueryCommand::Callees(query_symbol_options()),
-                QueryCapability::Sources,
-            ),
-            (
-                QueryCommand::AttackSurface(query_output_options()),
-                QueryCapability::Sources,
-            ),
-            (
-                QueryCommand::Targets(query_note_options()),
-                QueryCapability::Sources,
-            ),
-            (
-                QueryCommand::Cites(query_note_options()),
-                QueryCapability::Sources,
-            ),
-            (
-                QueryCommand::CitedBy(query_note_options()),
-                QueryCapability::Docs,
-            ),
-            (
-                QueryCommand::OrphanDocs(query_output_options()),
-                QueryCapability::Docs,
-            ),
-            (
-                QueryCommand::References(query_symbol_options()),
-                QueryCapability::Sources,
-            ),
-            (
-                QueryCommand::Governs(query_decision_options()),
-                QueryCapability::Sources,
-            ),
-            (
-                QueryCommand::Governing(query_symbol_options()),
-                QueryCapability::Sources,
-            ),
-            (
-                QueryCommand::Coverage(CoverageOptions {
-                    by: None,
-                    output: query_output_options(),
-                }),
-                QueryCapability::Sources,
-            ),
-            (
-                query_nodes_command(Some(NodeKind::Doc), false),
-                QueryCapability::Docs,
-            ),
-            (
-                query_nodes_command(Some(NodeKind::Doc), true),
-                QueryCapability::Docs,
-            ),
-            (
-                query_nodes_command(Some(NodeKind::Decision), false),
-                QueryCapability::Docs,
-            ),
-            (
-                query_nodes_command(Some(NodeKind::Code), false),
-                QueryCapability::Sources,
-            ),
-            (
-                query_nodes_command(Some(NodeKind::Module), false),
-                QueryCapability::Sources,
-            ),
-            (query_nodes_command(None, false), QueryCapability::Sources),
-            (
-                QueryCommand::Diff(DiffOptions {
-                    ref_a: "latest".into(),
-                    ref_b: "latest".into(),
-                    output: query_output_options(),
-                }),
-                QueryCapability::Snapshot,
-            ),
-        ];
-
-        for (command, expected) in cases {
-            assert_eq!(command.capability(), expected, "{command:?}");
-        }
-    }
-
-    #[test]
     fn source_node_kinds_map_to_native_symbol_kinds() {
         let cases = [
             (NodeKind::Function, SymbolKind::Function),
@@ -926,10 +777,10 @@ mod tests {
         ];
 
         work::reset();
-        for command in &commands {
-            let vault = load_query_vault(&files(temp.path()), command).unwrap();
-            assert!(vault.source_files().is_empty());
-            assert!(vault.source_graph().files().next().is_none());
+        for command in commands {
+            let cited_by = matches!(command, QueryCommand::CitedBy(_));
+            let answer = command.answer(&files(temp.path()));
+            assert_eq!(answer.is_err(), cited_by, "{answer:?}");
         }
 
         assert_eq!(
@@ -952,9 +803,8 @@ mod tests {
         let command = QueryCommand::AttackSurface(query_output_options());
 
         work::reset();
-        let vault = load_query_vault(&files(temp.path()), &command).unwrap();
+        command.answer(&files(temp.path())).unwrap();
 
-        assert_eq!(vault.source_files().len(), 2);
         assert_eq!(
             work::counts([
                 Work::DiscoveryScan,
@@ -971,16 +821,12 @@ mod tests {
     fn source_reverse_index_bounds_work_and_stored_rows() {
         let temp = TempDir::new().unwrap();
         write_reverse_query_fixture(temp.path());
-        let vault = load_query_vault(
-            &files(temp.path()),
-            &QueryCommand::AttackSurface(query_output_options()),
-        )
-        .unwrap();
+        let vault = load_vault(&files(temp.path()), SourceLoad::Refresh).unwrap();
 
         work::reset();
         let reverse_index = QueryReverseIndex::build(&vault, ReverseIndexScope::Sources);
         assert_eq!(
-            nodes(&vault, Some(&reverse_index), Some(NodeKind::Code), true).unwrap(),
+            code_nodes(&vault, Some(&reverse_index)),
             vec!["src/lib.rs#fn:undocumented"]
         );
         let input_targets = vault
@@ -1003,11 +849,7 @@ mod tests {
     fn note_reverse_index_bounds_stored_rows() {
         let temp = TempDir::new().unwrap();
         write_reverse_query_fixture(temp.path());
-        let vault = load_query_vault(
-            &files(temp.path()),
-            &QueryCommand::OrphanDocs(query_output_options()),
-        )
-        .unwrap();
+        let vault = load_vault(&files(temp.path()), SourceLoad::Skip).unwrap();
 
         let reverse_index = QueryReverseIndex::build(&vault, ReverseIndexScope::Notes);
         let input_links = vault
@@ -1038,15 +880,6 @@ mod tests {
         assert!(reverse_index.source_references.is_empty());
     }
 
-    #[test]
-    fn snapshot_id_shape() {
-        assert_eq!("latest".parse(), Ok(SnapshotId::Latest));
-        assert_eq!("abc123".parse(), Ok(SnapshotId::Hash("abc123".into())));
-        assert!("../../etc/passwd".parse::<SnapshotId>().is_err());
-        assert!("HEAD~1".parse::<SnapshotId>().is_err());
-        assert!("".parse::<SnapshotId>().is_err());
-    }
-
     fn query_output_options() -> OutputOptions {
         OutputOptions {
             format: Format::Text,
@@ -1054,23 +887,9 @@ mod tests {
         }
     }
 
-    fn query_symbol_options() -> SymbolOptions {
-        SymbolOptions {
-            symbol: "src/lib.rs#fn:run".into(),
-            output: query_output_options(),
-        }
-    }
-
     fn query_note_options() -> NoteOptions {
         NoteOptions {
             note_id: "c4".into(),
-            output: query_output_options(),
-        }
-    }
-
-    fn query_decision_options() -> DecisionOptions {
-        DecisionOptions {
-            adr_id: "ADR-0001".into(),
             output: query_output_options(),
         }
     }

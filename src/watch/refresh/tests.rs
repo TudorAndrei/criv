@@ -33,9 +33,9 @@ fn refresh_publishes_source_and_documentation_state() {
     let temp = TempDir::new().unwrap();
     write_source_fixture(temp.path());
     work::reset();
-    let mut refresh = one_shot_session(temp.path());
+    let mut refresh = open_session(temp.path());
 
-    let result = refresh.refresh(RefreshCause::Initial).unwrap();
+    refresh.refresh(RefreshCause::Initial, || Ok(())).unwrap();
 
     assert_eq!(
         work::counts([
@@ -46,8 +46,9 @@ fn refresh_publishes_source_and_documentation_state() {
         ]),
         [1, 0, 0, 1]
     );
-    let state: serde_json::Value =
-        serde_json::from_str(&result.state().to_json().unwrap()).unwrap();
+    let state: Value =
+        serde_json::from_str(&fs::read_to_string(temp.path().join(".criv/state.json")).unwrap())
+            .unwrap();
     assert_eq!(state["source-index"].as_array().unwrap().len(), 1);
 }
 
@@ -55,17 +56,17 @@ fn refresh_publishes_source_and_documentation_state() {
 fn warm_one_shot_reuses_the_cached_source_graph() {
     let temp = TempDir::new().unwrap();
     write_source_fixture(temp.path());
-    let mut cold = one_shot_session(temp.path());
-    let cold = cold.refresh(RefreshCause::Initial).unwrap();
+    let mut cold = open_session(temp.path());
+    let cold = cold.refresh(RefreshCause::Initial, || Ok(())).unwrap();
     assert_eq!(
-        cold.vault().source_graph().changed_files(),
+        cold.vault.source_graph().changed_files(),
         &["src/lib.rs".to_string()]
     );
 
-    let mut warm = one_shot_session(temp.path());
-    let warm = warm.refresh(RefreshCause::Initial).unwrap();
+    let mut warm = open_session(temp.path());
+    let warm = warm.refresh(RefreshCause::Initial, || Ok(())).unwrap();
 
-    assert!(warm.vault().source_graph().changed_files().is_empty());
+    assert!(warm.vault.source_graph().changed_files().is_empty());
 }
 
 #[test]
@@ -73,11 +74,13 @@ fn live_refresh_reuses_source_catalog_for_docs_refresh() {
     let _live_test = lock_live_test();
     let fixture = incremental_fixture("one-live-adapter");
     work::reset();
-    let mut session = live_session(fixture.path());
+    let mut session = open_session(fixture.path());
     assert_eq!(work::count(Work::DiscoveryScan), 0);
 
-    session.refresh(RefreshCause::Initial).unwrap();
-    session.refresh(RefreshCause::DocsChanged).unwrap();
+    session.refresh(RefreshCause::Initial, || Ok(())).unwrap();
+    session
+        .refresh(RefreshCause::DocsChanged, || Ok(()))
+        .unwrap();
 
     assert_eq!(work::count(Work::DiscoveryScan), 1);
 }
@@ -85,10 +88,10 @@ fn live_refresh_reuses_source_catalog_for_docs_refresh() {
 #[test]
 fn one_shot_refresh_uses_one_full_source_observation() {
     let fixture = incremental_fixture("one-shot-source-catalog");
-    let mut session = one_shot_session(fixture.path());
+    let mut session = open_session(fixture.path());
     work::reset();
 
-    session.refresh(RefreshCause::Initial).unwrap();
+    session.refresh(RefreshCause::Initial, || Ok(())).unwrap();
 
     assert_eq!(work::count(Work::DiscoveryScan), 1);
 }
@@ -98,16 +101,18 @@ fn live_refresh_rescans_source_after_a_content_event() {
     let _live_test = lock_live_test();
     let fixture = incremental_fixture("one-live-source-catalog");
     let root = fixture.path();
-    let mut session = live_session(root);
+    let mut session = open_session(root);
 
     work::reset();
-    session.refresh(RefreshCause::Initial).unwrap();
+    session.refresh(RefreshCause::Initial, || Ok(())).unwrap();
     let [scans, source_reads] = work::counts([Work::DiscoveryScan, Work::SourceRead]);
     assert_eq!(scans, 1);
     assert!(source_reads > 0);
 
     work::reset();
-    session.refresh(RefreshCause::DocsChanged).unwrap();
+    session
+        .refresh(RefreshCause::DocsChanged, || Ok(()))
+        .unwrap();
     assert_eq!(
         work::counts([Work::DiscoveryScan, Work::SourceRead]),
         [0, 0]
@@ -115,7 +120,9 @@ fn live_refresh_rescans_source_after_a_content_event() {
 
     fs::write(root.join("src/lib.rs"), "pub fn changed() {}\n").unwrap();
     work::reset();
-    session.refresh(RefreshCause::SourceChanged).unwrap();
+    session
+        .refresh(RefreshCause::SourceChanged, || Ok(()))
+        .unwrap();
     assert_eq!(
         work::counts([Work::DiscoveryScan, Work::SourceRead]),
         [1, source_reads]
@@ -132,10 +139,10 @@ fn disabled_source_refresh_materializes_no_source_catalog() {
         "[source]\nroots = [\"src\"]\n\n[index]\nsource = false\n",
     )
     .unwrap();
-    let mut session = one_shot_session(root);
+    let mut session = open_session(root);
 
     work::reset();
-    session.refresh(RefreshCause::Initial).unwrap();
+    session.refresh(RefreshCause::Initial, || Ok(())).unwrap();
 
     assert_eq!(work::count(Work::DiscoveryScan), 0);
 }
@@ -143,10 +150,10 @@ fn disabled_source_refresh_materializes_no_source_catalog() {
 #[test]
 fn one_shot_refresh_reuses_one_compiled_policy_plan_for_state() {
     let fixture = incremental_fixture("shared-policy-plan");
-    let mut session = one_shot_session(fixture.path());
+    let mut session = open_session(fixture.path());
     work::reset();
 
-    session.refresh(RefreshCause::Initial).unwrap();
+    session.refresh(RefreshCause::Initial, || Ok(())).unwrap();
 
     assert_policy_refresh_work(1);
 }
@@ -161,14 +168,16 @@ fn live_refresh_reuses_one_policy_plan_for_no_op_and_changed_sources() {
         "pub fn initial_change() {\n    println!(\"initial\");\n}\n",
     )
     .unwrap();
-    let mut session = live_session(root);
+    let mut session = open_session(root);
 
     work::reset();
-    session.refresh(RefreshCause::Initial).unwrap();
+    session.refresh(RefreshCause::Initial, || Ok(())).unwrap();
     assert_policy_refresh_work(1);
 
     work::reset();
-    session.refresh(RefreshCause::DocsChanged).unwrap();
+    session
+        .refresh(RefreshCause::DocsChanged, || Ok(()))
+        .unwrap();
     assert_policy_refresh_work(0);
 
     fs::write(
@@ -177,7 +186,9 @@ fn live_refresh_reuses_one_policy_plan_for_no_op_and_changed_sources() {
     )
     .unwrap();
     work::reset();
-    session.refresh(RefreshCause::SourceChanged).unwrap();
+    session
+        .refresh(RefreshCause::SourceChanged, || Ok(()))
+        .unwrap();
     assert_policy_refresh_work(1);
 }
 
@@ -192,10 +203,12 @@ fn disabled_source_refresh_stops_before_policy_planning() {
         config.replace("source = true", "source = false"),
     )
     .unwrap();
-    let mut session = one_shot_session(root);
+    let mut session = open_session(root);
 
     work::reset();
-    let error = session.refresh(RefreshCause::Initial).unwrap_err();
+    let error = session
+        .refresh(RefreshCause::Initial, || Ok(()))
+        .unwrap_err();
 
     assert!(error.to_string().contains("state publication blocked"));
     assert_eq!(
@@ -213,8 +226,8 @@ fn disabled_source_refresh_stops_before_policy_planning() {
 fn invalid_graph_cache_schema_converges_with_a_cache_free_build() {
     let incremental = incremental_fixture("invalid-schema-incremental");
     let full = incremental_fixture("invalid-schema-full");
-    let mut initial = one_shot_session(incremental.path());
-    initial.refresh(RefreshCause::Initial).unwrap();
+    let mut initial = open_session(incremental.path());
+    initial.refresh(RefreshCause::Initial, || Ok(())).unwrap();
 
     let cache_path = incremental.path().join(".criv/source-graph.json");
     let cache = fs::read_to_string(&cache_path).unwrap();
@@ -225,12 +238,16 @@ fn invalid_graph_cache_schema_converges_with_a_cache_free_build() {
     .unwrap();
 
     work::reset();
-    let mut incremental_session = one_shot_session(incremental.path());
-    let incremental_result = incremental_session.refresh(RefreshCause::Initial).unwrap();
+    let mut incremental_session = open_session(incremental.path());
+    let incremental_result = incremental_session
+        .refresh(RefreshCause::Initial, || Ok(()))
+        .unwrap();
     let parse_and_publish = work::counts([Work::SourceParse, Work::GraphCachePublication]);
     let incremental_snapshot = refresh_snapshot(incremental.path(), incremental_result);
-    let mut full_session = one_shot_session(full.path());
-    let full_result = full_session.refresh(RefreshCause::Initial).unwrap();
+    let mut full_session = open_session(full.path());
+    let full_result = full_session
+        .refresh(RefreshCause::Initial, || Ok(()))
+        .unwrap();
     let full_snapshot = refresh_snapshot(full.path(), full_result);
 
     assert_refresh_eq(
@@ -246,14 +263,14 @@ fn failed_source_refresh_forces_the_next_docs_refresh_to_rescan_source() {
     let _live_test = lock_live_test();
     let incremental = incremental_fixture("failed-refresh-incremental");
     let full = incremental_fixture("failed-refresh-full");
-    let mut session = live_session(incremental.path());
-    session.refresh(RefreshCause::Initial).unwrap();
-    let before_hash = session.previous.as_ref().unwrap().state().hash().unwrap();
+    let mut session = open_session(incremental.path());
+    session.refresh(RefreshCause::Initial, || Ok(())).unwrap();
+    let before_hash = session.previous.as_ref().unwrap().snapshot.clone();
     let before_source = session
         .previous
         .as_ref()
         .unwrap()
-        .vault()
+        .vault
         .source_graph()
         .clone();
     let corrupt_snapshot = incremental
@@ -267,24 +284,32 @@ fn failed_source_refresh_forces_the_next_docs_refresh_to_rescan_source() {
     )
     .unwrap();
 
-    assert!(session.refresh(RefreshCause::SourceChanged).is_err());
+    assert!(
+        session
+            .refresh(RefreshCause::SourceChanged, || Ok(()))
+            .is_err()
+    );
     assert_eq!(
-        session.previous.as_ref().unwrap().state().hash().unwrap(),
+        session.previous.as_ref().unwrap().snapshot.clone(),
         before_hash
     );
     assert_eq!(
-        session.previous.as_ref().unwrap().vault().source_graph(),
+        session.previous.as_ref().unwrap().vault.source_graph(),
         &before_source
     );
 
     fs::remove_file(corrupt_snapshot).unwrap();
     fs::write(full.path().join("src/lib.rs"), "pub fn recovered() {}\n").unwrap();
     work::reset();
-    let recovered = session.refresh(RefreshCause::DocsChanged).unwrap();
+    let recovered = session
+        .refresh(RefreshCause::DocsChanged, || Ok(()))
+        .unwrap();
     assert!(work::count(Work::SourceParse) > 0);
     let recovered = refresh_snapshot(incremental.path(), recovered);
-    let mut full_session = one_shot_session(full.path());
-    let full_result = full_session.refresh(RefreshCause::Initial).unwrap();
+    let mut full_session = open_session(full.path());
+    let full_result = full_session
+        .refresh(RefreshCause::Initial, || Ok(()))
+        .unwrap();
     let full_snapshot = refresh_snapshot(full.path(), full_result);
 
     assert_refresh_eq("failed refresh retry", &recovered, &full_snapshot);
@@ -326,8 +351,8 @@ policy:
 "#,
     )
     .unwrap();
-    let mut session = live_session(root);
-    session.refresh(RefreshCause::Initial).unwrap();
+    let mut session = open_session(root);
+    session.refresh(RefreshCause::Initial, || Ok(())).unwrap();
     let state_before = fs::read_to_string(root.join(".criv/state.json")).unwrap();
     let latest_before = fs::read_to_string(root.join(".criv/latest")).unwrap();
     let mut snapshots_before = fs::read_dir(root.join(".criv/snapshots"))
@@ -335,15 +360,17 @@ policy:
         .map(|entry| entry.unwrap().file_name())
         .collect::<Vec<_>>();
     snapshots_before.sort();
-    let previous_hash = session.previous.as_ref().unwrap().state().hash().unwrap();
+    let previous_hash = session.previous.as_ref().unwrap().snapshot.clone();
 
     fs::remove_file(root.join("src/retired.rs")).unwrap();
-    let error = session.refresh(RefreshCause::SourceChanged).unwrap_err();
+    let error = session
+        .refresh(RefreshCause::SourceChanged, || Ok(()))
+        .unwrap_err();
 
     assert!(error.to_string().contains("state publication blocked"));
     assert!(error.to_string().contains("src/retired.rs"));
     assert_eq!(
-        session.previous.as_ref().unwrap().state().hash().unwrap(),
+        session.previous.as_ref().unwrap().snapshot.clone(),
         previous_hash
     );
     assert_eq!(
@@ -378,11 +405,13 @@ governs:
 "#,
     )
     .unwrap();
-    let recovered = session.refresh(RefreshCause::DocsChanged).unwrap();
+    let recovered = session
+        .refresh(RefreshCause::DocsChanged, || Ok(()))
+        .unwrap();
     let recovered_state: Value =
         serde_json::from_str(&fs::read_to_string(root.join(".criv/state.json")).unwrap()).unwrap();
 
-    assert_ne!(recovered.state().hash().unwrap(), previous_hash);
+    assert_ne!(recovered.snapshot.clone(), previous_hash);
     assert!(
         recovered_state["registered-patterns"]
             .as_array()
@@ -405,13 +434,9 @@ fn incremental_fixture(prefix: &str) -> TempDir {
     temp
 }
 
-fn one_shot_session(root: &Path) -> RefreshSession {
-    RefreshSession::one_shot(root).unwrap()
-}
-
-fn live_session(root: &Path) -> RefreshSession {
-    let config = Config::load(root).unwrap();
-    RefreshSession::live(root, &config).unwrap()
+fn open_session(root: &Path) -> RefreshSession {
+    let files = RepositoryFiles::open(root).unwrap();
+    RefreshSession::new(&files, &Config::load_from(&files).unwrap())
 }
 
 fn assert_policy_refresh_work(ast_parses: usize) {
@@ -428,11 +453,8 @@ fn assert_policy_refresh_work(ast_parses: usize) {
 
 fn refresh_snapshot(root: &Path, result: &RefreshResult) -> RefreshSnapshot {
     let state_json = fs::read_to_string(root.join(".criv/state.json")).unwrap();
-    assert_eq!(
-        state_json,
-        format!("{}\n", result.state().to_json().unwrap())
-    );
     let latest = fs::read_to_string(root.join(".criv/latest")).unwrap();
+    assert_eq!(latest.trim(), result.snapshot);
     let snapshot_json = fs::read_to_string(
         root.join(".criv/snapshots")
             .join(format!("{}.json", latest.trim())),
@@ -441,12 +463,12 @@ fn refresh_snapshot(root: &Path, result: &RefreshResult) -> RefreshSnapshot {
     assert_eq!(state_json, snapshot_json);
 
     RefreshSnapshot {
-        source_graph: result.vault().source_graph().without_changed_files(),
+        source_graph: result.vault.source_graph().without_changed_files(),
         state_json,
-        state_hash: result.state().hash().unwrap(),
+        state_hash: result.snapshot.clone(),
         latest,
         snapshot_json,
-        diagnostics: check::validate_vault(result.vault()).diagnostics,
+        diagnostics: check::validate_vault(&result.vault).diagnostics,
     }
 }
 

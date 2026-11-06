@@ -2,7 +2,30 @@
 
 mod filesystem;
 
+use std::fs;
+use std::time::{Duration, Instant};
+
 pub use filesystem::{RepositoryFiles, RepositoryWriteScope};
+
+const LOCK_RETRY: Duration = Duration::from_millis(25);
+
+/// Takes the exclusive operating-system lock on `file`, retrying until `wait`
+/// has passed. Returns `false` when another holder keeps the lock.
+pub fn lock_within(file: &fs::File, wait: Duration) -> std::io::Result<bool> {
+    let deadline = Instant::now().checked_add(wait);
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(true),
+            Err(fs::TryLockError::WouldBlock)
+                if deadline.is_some_and(|deadline| Instant::now() < deadline) =>
+            {
+                std::thread::sleep(LOCK_RETRY);
+            }
+            Err(fs::TryLockError::WouldBlock) => return Ok(false),
+            Err(fs::TryLockError::Error(error)) => return Err(error),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum LinkOutcome {
@@ -11,6 +34,17 @@ pub enum LinkOutcome {
     Replaced,
     DirectoryInTheWay,
     Unsupported,
+}
+
+/// What a repository path names, read without following a link in any
+/// component. A link, a junction, a non-directory ancestor, or an unreadable
+/// entry is `Other`.
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum EntryKind {
+    Missing,
+    File,
+    Directory,
+    Other,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]

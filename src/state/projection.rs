@@ -4,12 +4,12 @@ use std::collections::BTreeSet;
 
 use criv_state_wire::{Edge, EdgeKind, Graph, Node, NodeKind, node_id};
 
+use super::stable_hash::StableHasher;
 use crate::markdown::LinkTarget;
 use crate::source::{
     DirectiveKind, EdgeOrigin, Import, ModuleRelationshipRole, Relationship, RelationshipKind,
     RelationshipTarget, SourceFile, Symbol, SymbolId, SymbolKind,
 };
-use crate::stable_hash::StableHasher;
 use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 
 /// The facts outside its own input that a projection read, so a later

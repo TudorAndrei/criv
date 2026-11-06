@@ -7,9 +7,9 @@ use std::sync::Arc;
 use criv_state_wire::{Graph, PatternMatch};
 
 use super::projection::{self, GraphBuilder, NoteRows, PartitionDependencies, SourceRows};
+use super::stable_hash::StableHasher;
 use crate::glob::GlobMatcher;
 use crate::policy_scan::PolicyScanPlan;
-use crate::stable_hash::StableHasher;
 use crate::structural::{self, CompiledPolicy, PolicyPattern, StructuralMatch};
 use crate::vault::{DecisionStatus, Note, Vault};
 #[cfg(test)]
@@ -18,9 +18,9 @@ use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct StatePartitions {
-    pub(super) sources: BTreeMap<String, Arc<SourcePartition>>,
-    pub(super) notes: BTreeMap<String, Arc<NotePartition>>,
-    pub(super) policies: BTreeMap<String, Arc<PolicyPartition>>,
+    sources: BTreeMap<String, Arc<SourcePartition>>,
+    notes: BTreeMap<String, Arc<NotePartition>>,
+    policies: BTreeMap<String, Arc<PolicyPartition>>,
     reverse_dependencies: ReverseDependencies,
     note_catalog_fingerprint: String,
 }

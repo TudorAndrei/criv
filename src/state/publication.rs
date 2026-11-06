@@ -1,18 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use criv_state_wire::{content_hash, layout};
 use serde::{Deserialize, Serialize};
 
 use super::snapshots;
-use crate::repository::RepositoryFiles;
+use crate::repository::{self, RepositoryFiles};
 use crate::{CrivError, Result};
 
 const LOCK_TIMEOUT: Duration = Duration::from_secs(2);
-const LOCK_RETRY: Duration = Duration::from_millis(25);
 const TRANSACTION_SCHEMA: &str = "criv.state-publication.v1";
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -33,8 +31,8 @@ struct TransactionRecord {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum TransactionPhase {
+    #[serde(alias = "staged")]
     Prepared,
-    Staged,
     Quarantined,
     Installed,
     Committed,
@@ -49,9 +47,6 @@ struct PublicationLock {
 enum PublicationStep {
     Preflight,
     Record,
-    StageSnapshot,
-    StageIndex,
-    StageLatest,
     Quarantine,
     InstallSnapshot,
     InstallIndex,
@@ -72,19 +67,14 @@ struct RealPublicationControl;
 
 impl PublicationControl for RealPublicationControl {}
 
-#[cfg(test)]
-fn publish(root: &Path, hash: &str, contents: &str, keep: usize) -> Result<()> {
-    publish_with(root, hash, contents, keep, &RealPublicationControl)
-}
-
-pub fn publish_with_precommit_check(
+pub fn publish(
     files: &RepositoryFiles,
     hash: &str,
     contents: &str,
     keep: usize,
     precommit_check: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
-    publish_with_check(
+    publish_controlled(
         files,
         hash,
         contents,
@@ -94,19 +84,7 @@ pub fn publish_with_precommit_check(
     )
 }
 
-#[cfg(test)]
-fn publish_with(
-    root: &Path,
-    hash: &str,
-    contents: &str,
-    keep: usize,
-    control: &impl PublicationControl,
-) -> Result<()> {
-    let files = RepositoryFiles::open(root)?;
-    publish_with_check(&files, hash, contents, keep, control, || Ok(()))
-}
-
-fn publish_with_check(
+fn publish_controlled(
     files: &RepositoryFiles,
     hash: &str,
     contents: &str,
@@ -138,9 +116,7 @@ fn publish_with_check(
         return Err(error);
     }
 
-    let result = stage_candidate(files, &record, control)
-        .and_then(|()| set_phase(files, &mut record, TransactionPhase::Staged))
-        .and_then(|()| quarantine_removals(files, &record, control))
+    let result = quarantine_removals(files, &record, control)
         .and_then(|()| set_phase(files, &mut record, TransactionPhase::Quarantined))
         .and_then(|()| install_candidate_controlled(files, &record, control))
         .and_then(|()| set_phase(files, &mut record, TransactionPhase::Installed))
@@ -185,12 +161,11 @@ fn publish_with_check(
 }
 
 fn reject_orphan_transaction_workspace(files: &RepositoryFiles) -> Result<()> {
-    for relative in [layout::STAGE, layout::QUARANTINE] {
-        if files.entry_exists(Path::new(relative))? {
-            return Err(CrivError::new(format!(
-                "State transaction workspace `{relative}` exists without a transaction record"
-            )));
-        }
+    if files.entry_exists(Path::new(layout::QUARANTINE))? {
+        return Err(CrivError::new(format!(
+            "State transaction workspace `{}` exists without a transaction record",
+            layout::QUARANTINE
+        )));
     }
     Ok(())
 }
@@ -204,11 +179,13 @@ fn set_phase(
     write_record(files, record)
 }
 
-pub fn load_snapshot(root: &Path, id: &snapshots::SnapshotId) -> Result<Option<String>> {
-    let files = RepositoryFiles::open(root)?;
-    let _lock = PublicationLock::acquire(&files)?;
-    recover_locked(&files)?;
-    snapshots::load_unlocked(&files, id)
+pub fn load_snapshot(
+    files: &RepositoryFiles,
+    id: &snapshots::SnapshotId,
+) -> Result<Option<String>> {
+    let _lock = PublicationLock::acquire(files)?;
+    recover_locked(files)?;
+    snapshots::load_unlocked(files, id)
 }
 
 impl PublicationLock {
@@ -219,26 +196,15 @@ impl PublicationLock {
             .map_err(|error| {
                 CrivError::new(format!("unsafe State publication lock path: {error}"))
             })?;
-        let deadline = Instant::now()
-            .checked_add(LOCK_TIMEOUT)
-            .ok_or_else(|| CrivError::new("State publication lock timeout overflow"))?;
-        loop {
-            match file.try_lock() {
-                Ok(()) => return Ok(Self { _file: file }),
-                Err(fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
-                    thread::sleep(LOCK_RETRY);
-                }
-                Err(fs::TryLockError::WouldBlock) => {
-                    return Err(CrivError::new(
-                        "timed out waiting 2 seconds for the State publication lock",
-                    ));
-                }
-                Err(error) => {
-                    return Err(CrivError::new(format!(
-                        "failed to acquire operating-system State publication lock: {error}"
-                    )));
-                }
-            }
+        match repository::lock_within(&file, LOCK_TIMEOUT) {
+            Ok(true) => Ok(Self { _file: file }),
+            Ok(false) => Err(CrivError::new(format!(
+                "timed out waiting {} seconds for the State publication lock",
+                LOCK_TIMEOUT.as_secs()
+            ))),
+            Err(error) => Err(CrivError::new(format!(
+                "failed to acquire operating-system State publication lock: {error}"
+            ))),
         }
     }
 }
@@ -285,23 +251,6 @@ fn write_record(files: &RepositoryFiles, record: &TransactionRecord) -> Result<(
         Path::new(layout::PUBLICATION_TRANSACTION),
         &format!("{contents}\n"),
     )
-}
-
-fn stage_candidate(
-    files: &RepositoryFiles,
-    record: &TransactionRecord,
-    control: &impl PublicationControl,
-) -> Result<()> {
-    let scope = files.write_scope(Path::new(layout::DIR))?;
-    scope.write_atomic(Path::new(layout::STAGE_SNAPSHOT), &record.candidate_state)?;
-    control.checkpoint(PublicationStep::StageSnapshot)?;
-    scope.write_atomic(Path::new(layout::STAGE_INDEX), &record.candidate_index)?;
-    control.checkpoint(PublicationStep::StageIndex)?;
-    scope.write_atomic(
-        Path::new(layout::STAGE_LATEST),
-        &format!("{}\n", record.candidate_hash),
-    )?;
-    control.checkpoint(PublicationStep::StageLatest)
 }
 
 fn quarantine_removals(
@@ -381,14 +330,6 @@ fn cleanup_transaction(files: &RepositoryFiles, record: &TransactionRecord) -> R
     for hash in &record.removals {
         remove_optional(files, &layout::quarantined_snapshot(hash))?;
     }
-    for path in [
-        layout::STAGE_SNAPSHOT,
-        layout::STAGE_INDEX,
-        layout::STAGE_LATEST,
-    ] {
-        remove_optional(files, path)?;
-    }
-    remove_empty_dir(files, layout::STAGE)?;
     remove_empty_dir(files, layout::QUARANTINE)?;
     remove_optional(files, layout::PUBLICATION_TRANSACTION)
 }
@@ -481,13 +422,33 @@ mod tests {
         (content_hash::of_document(&contents), contents)
     }
 
+    fn publish_root(root: &Path, hash: &str, contents: &str, keep: usize) -> Result<()> {
+        publish(&RepositoryFiles::open(root)?, hash, contents, keep, || {
+            Ok(())
+        })
+    }
+
+    fn publish_root_with(
+        root: &Path,
+        hash: &str,
+        contents: &str,
+        keep: usize,
+        control: &FailAt,
+    ) -> Result<()> {
+        publish_controlled(
+            &RepositoryFiles::open(root)?,
+            hash,
+            contents,
+            keep,
+            control,
+            || Ok(()),
+        )
+    }
+
     #[test]
     fn each_pre_commit_failure_rolls_back_to_the_prior_revision() {
         for step in [
             PublicationStep::Record,
-            PublicationStep::StageSnapshot,
-            PublicationStep::StageIndex,
-            PublicationStep::StageLatest,
             PublicationStep::Quarantine,
             PublicationStep::InstallSnapshot,
             PublicationStep::InstallIndex,
@@ -497,9 +458,9 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             let prior = state("prior");
             let candidate = state("candidate");
-            publish(root.path(), &prior.0, &prior.1, 20).unwrap();
+            publish_root(root.path(), &prior.0, &prior.1, 20).unwrap();
 
-            let error = publish_with(
+            let error = publish_root_with(
                 root.path(),
                 &candidate.0,
                 &candidate.1,
@@ -534,9 +495,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let prior = state("prior");
         let candidate = state("candidate");
-        publish(root.path(), &prior.0, &prior.1, 20).unwrap();
+        publish_root(root.path(), &prior.0, &prior.1, 20).unwrap();
 
-        publish_with(
+        publish_root_with(
             root.path(),
             &candidate.0,
             &candidate.1,
@@ -550,9 +511,12 @@ mod tests {
         .unwrap();
         assert!(root.path().join(layout::PUBLICATION_TRANSACTION).exists());
 
-        let loaded = load_snapshot(root.path(), &snapshots::SnapshotId::Latest)
-            .unwrap()
-            .unwrap();
+        let loaded = load_snapshot(
+            &RepositoryFiles::open(root.path()).unwrap(),
+            &snapshots::SnapshotId::Latest,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(loaded, candidate.1);
         assert_eq!(
             fs::read_to_string(root.path().join(layout::STATE)).unwrap(),
@@ -566,9 +530,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let prior = state("prior");
         let candidate = state("candidate");
-        publish(root.path(), &prior.0, &prior.1, 20).unwrap();
+        publish_root(root.path(), &prior.0, &prior.1, 20).unwrap();
 
-        let error = publish_with(
+        let error = publish_root_with(
             root.path(),
             &candidate.0,
             &candidate.1,
@@ -596,7 +560,7 @@ mod tests {
     fn first_publication_failure_restores_the_no_state_condition() {
         let root = tempfile::tempdir().unwrap();
         let candidate = state("candidate");
-        publish_with(
+        publish_root_with(
             root.path(),
             &candidate.0,
             &candidate.1,
@@ -631,7 +595,7 @@ mod tests {
             threads.push(std::thread::spawn(move || {
                 let candidate = state(seed);
                 start.wait();
-                publish(&root, &candidate.0, &candidate.1, 20)
+                publish_root(&root, &candidate.0, &candidate.1, 20)
             }));
         }
         for thread in threads {
@@ -639,9 +603,12 @@ mod tests {
         }
 
         let state = fs::read_to_string(root.join(layout::STATE)).unwrap();
-        let latest = load_snapshot(&root, &snapshots::SnapshotId::Latest)
-            .unwrap()
-            .unwrap();
+        let latest = load_snapshot(
+            &RepositoryFiles::open(&root).unwrap(),
+            &snapshots::SnapshotId::Latest,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(state, latest);
         assert!(!root.join(layout::PUBLICATION_TRANSACTION).exists());
     }
@@ -653,7 +620,7 @@ mod tests {
         let _held = PublicationLock::acquire(&files).unwrap();
         let candidate = state("candidate");
 
-        let error = publish(root.path(), &candidate.0, &candidate.1, 20).unwrap_err();
+        let error = publish_root(root.path(), &candidate.0, &candidate.1, 20).unwrap_err();
 
         assert_eq!(
             error.to_string(),
@@ -666,7 +633,7 @@ mod tests {
     fn cleanup_failure_keeps_the_committed_revision_for_recovery() {
         let root = tempfile::tempdir().unwrap();
         let candidate = state("candidate");
-        publish_with(
+        publish_root_with(
             root.path(),
             &candidate.0,
             &candidate.1,
@@ -681,7 +648,11 @@ mod tests {
         assert!(root.path().join(layout::PUBLICATION_TRANSACTION).exists());
 
         assert_eq!(
-            load_snapshot(root.path(), &snapshots::SnapshotId::Latest).unwrap(),
+            load_snapshot(
+                &RepositoryFiles::open(root.path()).unwrap(),
+                &snapshots::SnapshotId::Latest
+            )
+            .unwrap(),
             Some(candidate.1)
         );
         assert!(!root.path().join(layout::PUBLICATION_TRANSACTION).exists());
@@ -700,7 +671,7 @@ mod tests {
         .unwrap();
         let candidate = state("candidate");
 
-        let error = publish(root.path(), &candidate.0, &candidate.1, 20).unwrap_err();
+        let error = publish_root(root.path(), &candidate.0, &candidate.1, 20).unwrap_err();
 
         assert!(
             error
@@ -715,10 +686,14 @@ mod tests {
     fn orphan_workspace_file_uses_the_transaction_recovery_error() {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir_all(root.path().join(layout::DIR)).unwrap();
-        fs::write(root.path().join(layout::STAGE), "stale workspace marker\n").unwrap();
+        fs::write(
+            root.path().join(layout::QUARANTINE),
+            "stale workspace marker\n",
+        )
+        .unwrap();
         let candidate = state("candidate");
 
-        let error = publish(root.path(), &candidate.0, &candidate.1, 20).unwrap_err();
+        let error = publish_root(root.path(), &candidate.0, &candidate.1, 20).unwrap_err();
 
         assert!(
             error
@@ -726,6 +701,66 @@ mod tests {
                 .contains("exists without a transaction record")
         );
         assert!(!root.path().join(layout::STATE).exists());
-        assert!(root.path().join(layout::STAGE).is_file());
+        assert!(root.path().join(layout::QUARANTINE).is_file());
+    }
+
+    fn snapshot_files(root: &Path) -> Vec<String> {
+        let mut names = fs::read_dir(root.join(layout::SNAPSHOTS))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "index.json")
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn retention_keeps_unique_hashes_and_moves_a_repeated_hash_newest() {
+        let root = tempfile::tempdir().unwrap();
+        let first = state("first");
+        let second = state("second");
+        let third = state("third");
+        for candidate in [&first, &second, &first, &third] {
+            publish_root(root.path(), &candidate.0, &candidate.1, 2).unwrap();
+        }
+
+        let mut expected = vec![format!("{}.json", first.0), format!("{}.json", third.0)];
+        expected.sort();
+        assert_eq!(snapshot_files(root.path()), expected);
+        let index: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(root.path().join(layout::SNAPSHOT_INDEX)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(index["order"], serde_json::json!([first.0, third.0]));
+        assert_eq!(
+            load_snapshot(
+                &RepositoryFiles::open(root.path()).unwrap(),
+                &snapshots::SnapshotId::Latest
+            )
+            .unwrap(),
+            Some(third.1)
+        );
+        assert_eq!(
+            load_snapshot(
+                &RepositoryFiles::open(root.path()).unwrap(),
+                &snapshots::SnapshotId::Hash(second.0)
+            )
+            .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn retention_of_one_keeps_only_the_new_latest() {
+        let root = tempfile::tempdir().unwrap();
+        let first = state("first");
+        let second = state("second");
+        publish_root(root.path(), &first.0, &first.1, 20).unwrap();
+        publish_root(root.path(), &second.0, &second.1, 1).unwrap();
+
+        assert_eq!(
+            snapshot_files(root.path()),
+            vec![format!("{}.json", second.0)]
+        );
     }
 }

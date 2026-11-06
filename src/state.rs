@@ -12,6 +12,7 @@ mod partitions;
 mod projection;
 mod publication;
 mod snapshots;
+mod stable_hash;
 
 use partitions::StatePartitions;
 pub use publication::load_snapshot;
@@ -80,21 +81,6 @@ impl State {
         Ok(Self { wire, partitions })
     }
 
-    #[cfg(test)]
-    pub(crate) fn to_json(&self) -> Result<String> {
-        Ok(self
-            .serialize()?
-            .published
-            .strip_suffix('\n')
-            .unwrap_or_default()
-            .to_string())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn hash(&self) -> Result<String> {
-        Ok(self.serialize()?.hash)
-    }
-
     fn serialize(&self) -> Result<SerializedState> {
         #[cfg(test)]
         work::record(Work::StateSerialization);
@@ -120,23 +106,13 @@ pub fn write_state(
 ) -> Result<(String, State)> {
     let state = State::build(vault, previous, changed_files, policies)?;
     let serialized = state.serialize()?;
-    publication::publish_with_precommit_check(
+    publication::publish(
         vault.repository_files(),
         &serialized.hash,
         &serialized.published,
         vault.config().state_keep,
         precommit_check,
     )?;
-    #[cfg(test)]
-    work::add(
-        Work::StateBytes,
-        serialized
-            .published
-            .len()
-            .saturating_mul(2)
-            .saturating_add(serialized.hash.len())
-            .saturating_add(1),
-    );
     Ok((serialized.hash, state))
 }
 
@@ -159,7 +135,6 @@ fn source_mime(path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
-    use std::sync::Arc;
 
     use criv_state_wire::{EdgeKind, STATE_SCHEMA};
 
@@ -386,7 +361,8 @@ end
 
         let vault = load(&root).unwrap();
         let first = build(&vault).unwrap();
-        let decoded: StateDocument = serde_json::from_str(&first.to_json().unwrap()).unwrap();
+        let decoded: StateDocument =
+            serde_json::from_value(serde_json::to_value(&first).unwrap()).unwrap();
         assert_eq!(decoded.schema, STATE_SCHEMA);
 
         for kind in [
@@ -552,9 +528,8 @@ roots = ["src"]
                 Work::NotePartitionBuild,
                 Work::PolicyPartitionBuild,
                 Work::StateSerialization,
-                Work::StateBytes,
             ]),
-            [1, 0, 0, 1, state_contents.len() * 2 + latest.len()]
+            [1, 0, 0, 1]
         );
 
         let _ = std::fs::remove_dir_all(root);
@@ -593,6 +568,8 @@ roots = ["src"]
         );
     }
 
+    /// A deliberate compatibility check: a change to the fixture or the pinned
+    /// hash changes the published State for every consumer (ADR-0146).
     #[test]
     fn serialized_state_matches_the_v1_contract_fixture() {
         let root = unique_temp_dir("criv-state-contract-fixture");
@@ -650,8 +627,7 @@ policy:
 
         let vault = load(&root).unwrap();
         work::reset();
-        let actual: serde_json::Value =
-            serde_json::from_str(&build(&vault).unwrap().to_json().unwrap()).unwrap();
+        let actual = serde_json::to_value(build(&vault).unwrap()).unwrap();
         let expected: serde_json::Value =
             serde_json::from_str(include_str!("../fixtures/state/criv.state.v1.json")).unwrap();
 
@@ -670,13 +646,11 @@ policy:
                 Work::SourcePartitionBuild,
                 Work::NotePartitionBuild,
                 Work::PolicyPartitionBuild,
-                Work::StateSerialization,
-                Work::StateBytes,
             ]),
-            [1, 2, 1, 1, 0]
+            [1, 2, 1]
         );
         assert_eq!(
-            build(&vault).unwrap().hash().unwrap(),
+            publish(&vault).unwrap().0,
             "5daebfeb1e0852bba748b8e225dab7469e53f98d3103e242ba0c3bffbbbb199a"
         );
 
@@ -828,7 +802,7 @@ Consequences.
     }
 
     #[test]
-    fn no_op_incremental_build_reuses_partition_allocations() {
+    fn no_op_incremental_build_rebuilds_no_partition() {
         let root = policy_vault("criv-state-partition-allocation-reuse");
         let vault = load(&root).unwrap();
         let first = build(&vault).unwrap();
@@ -844,25 +818,10 @@ Consequences.
             ]),
             [0, 0, 0]
         );
-        for (path, partition) in &first.partitions.sources {
-            assert!(Arc::ptr_eq(
-                partition,
-                second.partitions.sources.get(path).unwrap()
-            ));
-        }
-        for (path, partition) in &first.partitions.notes {
-            assert!(Arc::ptr_eq(
-                partition,
-                second.partitions.notes.get(path).unwrap()
-            ));
-        }
-        for (id, partition) in &first.partitions.policies {
-            assert!(Arc::ptr_eq(
-                partition,
-                second.partitions.policies.get(id).unwrap()
-            ));
-        }
-        assert_eq!(first.to_json().unwrap(), second.to_json().unwrap());
+        assert_eq!(
+            serde_json::to_value(&first).unwrap(),
+            serde_json::to_value(&second).unwrap()
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }

@@ -429,7 +429,25 @@ fn unresolved_governs(vault: &Vault, note: &Note) -> Vec<Diagnostic> {
         .collect()
 }
 
-pub fn publication_blocking_diagnostics(vault: &Vault) -> Vec<Diagnostic> {
+/// The State publication gate. Unresolved effective governance blocks
+/// publication before any policy work; otherwise the full validation, whose
+/// policy plan State publishes.
+pub fn validate_for_publication(vault: &Vault) -> Result<Validation> {
+    let blockers = publication_blocking_diagnostics(vault);
+    if !blockers.is_empty() {
+        return Err(CrivError::new(format!(
+            "state publication blocked by unresolved effective ADR governance:\n{}",
+            blockers
+                .iter()
+                .map(Diagnostic::describe)
+                .collect::<Vec<_>>()
+                .join("\n")
+        )));
+    }
+    Ok(validate_vault(vault))
+}
+
+fn publication_blocking_diagnostics(vault: &Vault) -> Vec<Diagnostic> {
     let mut diagnostics = vault
         .notes()
         .iter()

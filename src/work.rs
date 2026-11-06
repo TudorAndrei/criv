@@ -23,7 +23,6 @@ pub enum Work {
     NotePartitionBuild,
     PolicyPartitionBuild,
     StateSerialization,
-    StateBytes,
 }
 
 thread_local! {

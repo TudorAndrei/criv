@@ -175,6 +175,10 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0163-separate-the-adr-gate-from-one-reconcile-transaction|ADR-0163]] - Separate the ADR gate from one reconcile transaction
 - [[0164-type-git-revisions-on-one-opened-repository|ADR-0164]] - Type Git revisions on one opened repository
 - [[0165-define-repository-files-without-a-forwarding-layer|ADR-0165]] - Define repository files without a forwarding layer
+- [[0166-own-refresh-inside-the-watch-generation|ADR-0166]] - Own refresh inside the watch generation
+- [[0167-publish-state-without-a-staging-copy|ADR-0167]] - Publish State without a staging copy
+- [[0168-keep-state-hashing-inside-state|ADR-0168]] - Keep State hashing inside State
+- [[0169-load-query-data-per-command|ADR-0169]] - Load query data per command
 - [[0170-share-editor-state-behaviour-and-embed-the-wasm-runtime|ADR-0170]] - Share editor State behaviour and embed the Wasm runtime
 - [[0171-retain-state-wire-and-elixir-rules-after-the-editor-state-move|ADR-0171]] - Retain State wire and Elixir rules after the editor-state move
 - [[0172-retain-the-obsidian-owner-layout-with-typescript-tests|ADR-0172]] - Retain the Obsidian owner layout with TypeScript tests
