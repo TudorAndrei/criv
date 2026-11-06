@@ -10,7 +10,6 @@ pub struct SourceIdentity {
 }
 
 impl SourceIdentity {
-    /// Create a file identity with no selector.
     pub fn file(path: impl Into<String>) -> Self {
         Self {
             path: path.into(),
@@ -18,7 +17,6 @@ impl SourceIdentity {
         }
     }
 
-    /// Create a symbol identity with one selector.
     pub fn symbol(path: impl Into<String>, selector: SourceSelector) -> Self {
         Self {
             path: path.into(),
@@ -37,13 +35,11 @@ impl SourceIdentity {
         }
     }
 
-    /// Return the repository-relative source path.
     #[cfg(test)]
     fn path(&self) -> &str {
         &self.path
     }
 
-    /// Return the optional symbol selector.
     #[must_use]
     pub const fn selector(&self) -> Option<&SourceSelector> {
         self.selector.as_ref()
@@ -75,7 +71,6 @@ impl SourceSelector {
         Self::Opaque(text.into())
     }
 
-    /// Create a structured Elixir selector.
     #[must_use]
     pub const fn elixir(selector: ElixirSelector) -> Self {
         Self::Elixir(selector)
@@ -86,7 +81,6 @@ impl SourceSelector {
         parse_elixir_selector(text).map_or_else(|| Self::Opaque(text.to_string()), Self::Elixir)
     }
 
-    /// Return the structured Elixir selector, when this is one.
     #[must_use]
     pub const fn as_elixir(&self) -> Option<&ElixirSelector> {
         match self {
@@ -108,9 +102,7 @@ impl fmt::Display for SourceSelector {
 /// One structured Elixir owner or callable selector.
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ElixirSelector {
-    /// A module or protocol implementation owner.
     Owner(ElixirOwner),
-    /// A callable below one owner.
     Callable {
         owner: ElixirOwner,
         kind: ElixirCallableKind,
@@ -120,13 +112,11 @@ pub enum ElixirSelector {
 }
 
 impl ElixirSelector {
-    /// Create an owner-only selector.
     #[must_use]
     pub const fn owner(owner: ElixirOwner) -> Self {
         Self::Owner(owner)
     }
 
-    /// Create a callable selector.
     pub fn callable(
         owner: ElixirOwner,
         kind: ElixirCallableKind,
@@ -141,7 +131,6 @@ impl ElixirSelector {
         }
     }
 
-    /// Return the owner for this selector.
     #[must_use]
     pub const fn owner_identity(&self) -> &ElixirOwner {
         match self {
@@ -149,7 +138,6 @@ impl ElixirSelector {
         }
     }
 
-    /// Return the callable kind when this selector names a callable.
     #[must_use]
     pub const fn callable_kind(&self) -> Option<ElixirCallableKind> {
         match self {
@@ -158,7 +146,6 @@ impl ElixirSelector {
         }
     }
 
-    /// Return the decoded callable name when this selector names a callable.
     #[cfg(test)]
     fn callable_name(&self) -> Option<&str> {
         match self {
@@ -167,7 +154,6 @@ impl ElixirSelector {
         }
     }
 
-    /// Return the source arity when this selector names a callable.
     #[cfg(test)]
     const fn callable_arity(&self) -> Option<usize> {
         match self {
@@ -199,19 +185,15 @@ impl fmt::Display for ElixirSelector {
 /// The owner part of one Elixir selector.
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ElixirOwner {
-    /// A normal module-like owner.
     Module { name: String },
-    /// A protocol implementation owner.
     Implementation { protocol: String, for_type: String },
 }
 
 impl ElixirOwner {
-    /// Create a module owner.
     pub fn module(name: impl Into<String>) -> Self {
         Self::Module { name: name.into() }
     }
 
-    /// Create a protocol implementation owner.
     pub fn implementation(protocol: impl Into<String>, for_type: impl Into<String>) -> Self {
         Self::Implementation {
             protocol: protocol.into(),
@@ -219,7 +201,6 @@ impl ElixirOwner {
         }
     }
 
-    /// Return the module name for a module owner.
     #[must_use]
     pub fn module_name(&self) -> Option<&str> {
         match self {
@@ -228,7 +209,6 @@ impl ElixirOwner {
         }
     }
 
-    /// Return the protocol and type for an implementation owner.
     #[cfg(test)]
     fn implementation_parts(&self) -> Option<(&str, &str)> {
         match self {

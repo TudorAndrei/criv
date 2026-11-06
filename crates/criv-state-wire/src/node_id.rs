@@ -48,7 +48,6 @@ impl NodeIdKind {
     }
 }
 
-/// Split a node id into its kind and body.
 #[must_use]
 pub fn parse(id: &str) -> Option<(NodeIdKind, &str)> {
     let (prefix, body) = id.split_once(':')?;
