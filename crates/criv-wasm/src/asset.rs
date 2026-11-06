@@ -4,20 +4,14 @@ use std::collections::BTreeSet;
 
 use criv_state_wire::{AssetIndexEntry, asset, content_hash};
 
-use super::EditorAssetEntry;
 use super::path::safe_relative_path;
 
-pub fn take_assets(entries: Vec<AssetIndexEntry>) -> Vec<EditorAssetEntry> {
+pub fn take_assets(entries: Vec<AssetIndexEntry>) -> Vec<AssetIndexEntry> {
     let mut candidates = entries
         .into_iter()
         .filter_map(|entry| {
             let path = safe_relative_path(&entry.path)?;
-            valid_asset(&entry, &path).then_some(EditorAssetEntry {
-                path,
-                mime: entry.mime,
-                bytes: entry.bytes,
-                hash: entry.hash,
-            })
+            valid_asset(&entry, &path).then_some(AssetIndexEntry { path, ..entry })
         })
         .collect::<Vec<_>>();
     candidates.sort_by(|left, right| left.path.cmp(&right.path));

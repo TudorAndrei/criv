@@ -2,8 +2,8 @@
 
 use std::fmt::Display;
 
-#[cfg(not(target_arch = "wasm32"))]
-use criv_state_wire::STATE_SCHEMA;
+use criv_state_wire::{STATE_SCHEMA, StateDocument};
+use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 
 /// Stable reason a State document cannot be loaded.
@@ -56,17 +56,8 @@ impl StateError {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-pub fn js_error_message(error: &JsValue) -> String {
-    js_sys::Reflect::get(error, &JsValue::from_str("message"))
-        .ok()
-        .and_then(|value| value.as_string())
-        .or_else(|| error.as_string())
-        .unwrap_or_else(|| "unknown JavaScript error".into())
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-pub fn decode_state_value(raw: &str) -> Result<serde_json::Value, StateError> {
+/// Decode one State document after checking its schema.
+pub fn decode_state(raw: &str) -> Result<StateDocument, StateError> {
     let state = serde_json::from_str::<serde_json::Value>(raw).map_err(StateError::json_invalid)?;
     let schema = state
         .get("schema")
@@ -75,5 +66,5 @@ pub fn decode_state_value(raw: &str) -> Result<serde_json::Value, StateError> {
     if schema != STATE_SCHEMA {
         return Err(StateError::schema_unsupported(schema));
     }
-    Ok(state)
+    StateDocument::deserialize(state).map_err(StateError::json_invalid)
 }

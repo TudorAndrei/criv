@@ -10,15 +10,12 @@
     )
 )]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
-#[cfg(target_arch = "wasm32")]
-use criv_state_wire::STATE_SCHEMA;
 #[cfg(test)]
-use criv_state_wire::{Node, SourceIndexEntry};
-use criv_state_wire::{NodeKind, PatternMatch, StateDocument};
-#[cfg(not(target_arch = "wasm32"))]
-use serde::Deserialize;
+use criv_state_wire::Node;
+use criv_state_wire::source_identity::SourceIdentity;
+use criv_state_wire::{AssetIndexEntry, NodeKind, PatternMatch, SourceIndexEntry, StateDocument};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -32,8 +29,6 @@ const INITIAL_PROJECTIONS_TAKEN: &str = "criv initial projections were already t
 
 #[wasm_bindgen]
 pub struct LoadedState {
-    #[cfg(not(target_arch = "wasm32"))]
-    initial_envelope: Option<serde_json::Value>,
     initial_projections: Option<JsValue>,
     prepared: PreparedState,
 }
@@ -49,16 +44,13 @@ impl LoadedState {
     /// message when the State cannot be prepared.
     #[wasm_bindgen(constructor)]
     pub fn new(raw: &str) -> Result<Self, JsValue> {
-        #[cfg(target_arch = "wasm32")]
-        {
-            Self::load_wasm(raw)
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let mut loaded = Self::load(raw).map_err(LoadError::into_js)?;
-            loaded.prepare_initial_projections()?;
-            Ok(loaded)
-        }
+        let state = decode::decode_state(raw).map_err(decode::StateError::into_js)?;
+        let prepared = PreparedState::new(state);
+        let initial_projections = projection::InitialProjections::from(&prepared).to_js()?;
+        Ok(Self {
+            initial_projections: Some(initial_projections),
+            prepared,
+        })
     }
 
     /// Take the projections prepared during load.
@@ -104,92 +96,6 @@ impl LoadedState {
     }
 }
 
-impl LoadedState {
-    #[cfg(target_arch = "wasm32")]
-    fn load_wasm(raw: &str) -> Result<Self, JsValue> {
-        let envelope = js_sys::JSON::parse(raw).map_err(|error| {
-            decode::StateError::json_invalid(decode::js_error_message(&error)).into_js()
-        })?;
-        let schema = js_sys::Reflect::get(&envelope, &JsValue::from_str("schema"))
-            .ok()
-            .and_then(|value| value.as_string())
-            .unwrap_or_else(|| "<missing>".into());
-        if schema != STATE_SCHEMA {
-            return Err(decode::StateError::schema_unsupported(&schema).into_js());
-        }
-        let state = serde_wasm_bindgen::from_value::<StateDocument>(envelope)
-            .map_err(|error| decode::StateError::json_invalid(error).into_js())?;
-        let prepared = PreparedState::new(state);
-        let initial_projections = projection::initial_projections_from_js(&prepared)?;
-        Ok(Self {
-            #[cfg(not(target_arch = "wasm32"))]
-            initial_envelope: None,
-            initial_projections: Some(initial_projections),
-            prepared,
-        })
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn prepare_initial_projections(&mut self) -> Result<(), JsValue> {
-        let projections = self
-            .initial_envelope
-            .as_ref()
-            .ok_or_else(|| JsValue::from_str(INITIAL_PROJECTIONS_TAKEN))?;
-        let value = projections
-            .serialize(&serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true))
-            .map_err(|error| {
-                JsValue::from_str(&format!(
-                    "failed to encode criv initial projections: {error}"
-                ))
-            })?;
-        self.initial_envelope = None;
-        self.initial_projections = Some(value);
-        Ok(())
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn load(raw: &str) -> Result<Self, LoadError> {
-        let envelope = decode::decode_state_value(raw)?;
-        let state =
-            StateDocument::deserialize(&envelope).map_err(decode::StateError::json_invalid)?;
-        let prepared = PreparedState::new(state);
-        let initial_envelope =
-            serde_json::to_value(projection::InitialProjections::from(&prepared))
-                .map_err(LoadError::Encode)?;
-        Ok(Self {
-            initial_envelope: Some(initial_envelope),
-            initial_projections: None,
-            prepared,
-        })
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Debug)]
-enum LoadError {
-    State(decode::StateError),
-    Encode(serde_json::Error),
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl From<decode::StateError> for LoadError {
-    fn from(error: decode::StateError) -> Self {
-        Self::State(error)
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl LoadError {
-    fn into_js(self) -> JsValue {
-        match self {
-            Self::State(error) => error.into_js(),
-            Self::Encode(error) => JsValue::from_str(&format!(
-                "failed to encode criv initial projections: {error}"
-            )),
-        }
-    }
-}
-
 impl PreparedState {
     fn new(state: StateDocument) -> Self {
         let StateDocument {
@@ -200,31 +106,29 @@ impl PreparedState {
             source_index,
             asset_index,
         } = state;
-        let criv_state_wire::Graph { nodes, edges, .. } = graph;
         let sources = source::take_unique_source_entries(source_index);
         let assets = asset::take_assets(asset_index);
-        let nodes = source::take_editor_graph_nodes(nodes);
+        let nodes = source::take_editor_graph_nodes(graph.nodes);
         registered_patterns.sort();
         registered_patterns.dedup();
         let summary = StateSummary {
             schema,
             node_count: nodes.len(),
-            edge_count: edges.len(),
+            edge_count: graph.edges.len(),
             source_count: sources.len(),
             asset_count: assets.len(),
             pattern_count: registered_patterns.len(),
-            first_node_id: nodes.first().map(|node| node.id.clone()),
-            first_edge: edges.first().map(criv_state_wire::Edge::row),
-            first_source_path: sources.first().map(|source| source.path.clone()),
-            first_asset_path: assets.first().map(|asset| asset.path.clone()),
         };
-        Self::from_parts(
+        let lookup = source::SourceLookup::new(&sources, &nodes);
+        Self {
             summary,
-            EditorInventory { sources, assets },
+            sources,
+            assets,
             nodes,
             registered_patterns,
-            patterns,
-        )
+            pattern_matches: patterns,
+            lookup,
+        }
     }
 }
 
@@ -236,42 +140,16 @@ struct StateSummary {
     source_count: usize,
     asset_count: usize,
     pattern_count: usize,
-    first_node_id: Option<String>,
-    first_edge: Option<String>,
-    first_source_path: Option<String>,
-    first_asset_path: Option<String>,
 }
 
 struct PreparedState {
     summary: StateSummary,
-    sources: Vec<EditorSourceEntry>,
-    assets: Vec<EditorAssetEntry>,
+    sources: Vec<SourceIndexEntry>,
+    assets: Vec<AssetIndexEntry>,
     nodes: Vec<EditorGraphNode>,
     registered_patterns: Vec<String>,
     pattern_matches: BTreeMap<String, Vec<PatternMatch>>,
-    exact_source_lookup: HashMap<u64, Vec<usize>>,
-    legacy_source_lookup: HashMap<u64, Vec<usize>>,
-    selectors: Vec<PreparedSelector>,
-    empty_selector_order: Vec<usize>,
-}
-
-struct EditorInventory {
-    sources: Vec<EditorSourceEntry>,
-    assets: Vec<EditorAssetEntry>,
-}
-
-#[derive(Debug, Serialize)]
-struct EditorSourceEntry {
-    path: String,
-    mime: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-struct EditorAssetEntry {
-    path: String,
-    mime: String,
-    bytes: u64,
-    hash: String,
+    lookup: source::SourceLookup,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -282,8 +160,9 @@ struct EditorGraphNode {
     path: Option<String>,
     source_target: Option<String>,
     line_range: Option<String>,
+    /// The parsed form of the canonical Source target.
     #[serde(skip)]
-    source_identity: Option<Box<criv_state_wire::source_identity::SourceIdentity>>,
+    identity: Option<Box<SourceIdentity>>,
 }
 
 const MAX_AMBIGUOUS_SOURCE_CANDIDATES: usize = 5;
@@ -340,16 +219,6 @@ impl Serialize for SuggestionKind {
     }
 }
 
-struct PreparedSelector {
-    entry: SelectorEntry,
-}
-
-#[derive(Clone, Copy)]
-enum SelectorEntry {
-    Source(usize),
-    Node(usize),
-}
-
 #[cfg(test)]
 mod tests {
     use super::source::{take_editor_graph_nodes, take_unique_source_entries};
@@ -372,6 +241,14 @@ mod tests {
         }
     }
 
+    fn load(raw: &str) -> Result<PreparedState, decode::StateError> {
+        decode::decode_state(raw).map(PreparedState::new)
+    }
+
+    fn initial_projections(prepared: &PreparedState) -> serde_json::Value {
+        serde_json::to_value(projection::InitialProjections::from(prepared)).unwrap()
+    }
+
     fn source_paths(source_index: Vec<SourceIndexEntry>) -> Vec<String> {
         take_unique_source_entries(source_index)
             .into_iter()
@@ -381,24 +258,23 @@ mod tests {
 
     #[test]
     fn loaded_state_prepares_one_revision_for_all_operations() {
-        let mut loaded =
-            LoadedState::load(include_str!("../../../fixtures/state/criv.state.v1.json")).unwrap();
+        let prepared = load(include_str!("../../../fixtures/state/criv.state.v1.json")).unwrap();
 
-        assert_eq!(loaded.prepared.summary.node_count, 6);
-        assert_eq!(loaded.prepared.sources.len(), 1);
-        assert_eq!(loaded.prepared.nodes.len(), 6);
+        assert_eq!(prepared.summary.node_count, 6);
+        assert_eq!(prepared.sources.len(), 1);
+        assert_eq!(prepared.nodes.len(), 6);
         let SourceTargetLookupResult::Resolved { node, .. } =
-            loaded.prepared.lookup_source_target("src/lib.rs#fn:run")
+            prepared.lookup_source_target("src/lib.rs#fn:run")
         else {
             panic!("expected an exact source target to resolve");
         };
         assert_eq!(node.kind, NodeKind::Function);
         assert_eq!(
-            loaded.prepared.suggest_selectors("run", 10)[0].target,
+            prepared.suggest_selectors("run", 10)[0].target,
             "src/lib.rs#fn:run"
         );
 
-        let projections = loaded.initial_envelope.take().unwrap();
+        let projections = initial_projections(&prepared);
         assert_eq!(projections["summary"]["schema"], "criv.state.v1");
         assert_eq!(projections["registeredPatterns"][0], "ADR-0001/entrypoint");
         assert!(projections["patternMatches"]["ADR-0001/entrypoint"].is_array());
@@ -413,9 +289,7 @@ mod tests {
             bytes: 128,
             hash: "a".repeat(64),
         });
-        let prepared = PreparedState::new(state);
-        let projection =
-            serde_json::to_value(projection::InitialProjections::from(&prepared)).unwrap();
+        let projection = initial_projections(&PreparedState::new(state));
 
         assert_eq!(projection["summary"]["asset_count"], 1);
         assert_eq!(projection["assets"][0]["path"], "docs/diagram.png");
@@ -427,7 +301,7 @@ mod tests {
         let raw = include_str!("../../../fixtures/state/criv.state.v1.json")
             .replace("criv.state.v1", "criv.state.v2");
 
-        let Err(LoadError::State(error)) = LoadedState::load(&raw) else {
+        let Err(error) = load(&raw) else {
             panic!("expected a State contract error");
         };
         assert_eq!(error.code, decode::StateErrorCode::SchemaUnsupported);
@@ -441,7 +315,7 @@ mod tests {
     fn rejects_invalid_state_json_with_a_stable_code() {
         let cases = ["{", r#"{"schema":"criv.state.v1","graph":{"nodes":true}}"#];
         for raw in cases {
-            let Err(LoadError::State(error)) = LoadedState::load(raw) else {
+            let Err(error) = load(raw) else {
                 panic!("expected a State contract error for {raw}");
             };
             assert_eq!(error.code, decode::StateErrorCode::JsonInvalid, "{raw}");
@@ -451,9 +325,9 @@ mod tests {
 
     #[test]
     fn initial_projection_does_not_publish_the_raw_state() {
-        let mut loaded =
-            LoadedState::load(include_str!("../../../fixtures/state/criv.state.v1.json")).unwrap();
-        let projections = loaded.initial_envelope.take().unwrap();
+        let projections = initial_projections(
+            &load(include_str!("../../../fixtures/state/criv.state.v1.json")).unwrap(),
+        );
 
         assert!(projections.get("state").is_none());
         assert!(projections.get("graph").is_none());
