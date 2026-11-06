@@ -10,7 +10,7 @@ import type {
 } from "../src/contract.ts";
 import {
   ambiguousSourceTargetMessage,
-  looksLikeSourceTarget,
+  isSourceLinkTarget,
   parseLineFragment,
   patternTargetId,
   resolvedSourceLocation,
@@ -124,16 +124,21 @@ test("opens the node file at the requested lines or else the node lines", () => 
   );
 });
 
-test("reads wikilink targets without aliases and recognizes file targets", () => {
+test("reads wikilink targets without aliases and recognizes source targets", () => {
   assert.deepEqual(wikilinks("a [[src/lib.rs#run | label]] b [[A note]]"), [
     { target: "src/lib.rs#run", start: 2, end: 28 },
     { target: "A note", start: 31, end: 41 },
   ]);
-  for (const target of ["src/lib.rs", "source:lib.rs#fn:run", "lib/sample.ex#My.App.run/1"]) {
-    assert.equal(looksLikeSourceTarget(target), true, target);
+  for (const target of [
+    "src/lib.rs",
+    "source:lib.rs#fn:run",
+    "source:src/missing",
+    "lib/sample.ex#My.App.run/1",
+  ]) {
+    assert.equal(isSourceLinkTarget(target), true, target);
   }
   for (const target of ["A note", "docs/testing", "match:ADR-0001/x", "src/lib.rs.d/"]) {
-    assert.equal(looksLikeSourceTarget(target), false, target);
+    assert.equal(isSourceLinkTarget(target), false, target);
   }
 });
 

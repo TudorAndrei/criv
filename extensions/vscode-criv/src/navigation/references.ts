@@ -1,5 +1,5 @@
 import {
-  looksLikeSourceTarget,
+  isSourceLinkTarget,
   resolvedSourceLocation,
   resolveSourceTarget,
   SOURCE_WIKILINK,
@@ -36,7 +36,6 @@ export interface MarkdownSink {
 
 const SELECTOR_CANDIDATE =
   /(^|[^\w./:#-])([A-Za-z0-9_.-][A-Za-z0-9_./-]*\.[A-Za-z0-9_-]+(?:#[A-Za-z0-9_:/.-]+)?)/g;
-const SOURCE_PREFIX = "source:";
 
 export function analyzeSourceReferences(
   text: string,
@@ -45,10 +44,7 @@ export function analyzeSourceReferences(
   const references: SourceReference[] = [];
 
   for (const link of wikilinks(text)) {
-    if (
-      !link.target ||
-      (!link.target.startsWith(SOURCE_PREFIX) && !looksLikeSourceTarget(link.target))
-    ) {
+    if (!isSourceLinkTarget(link.target)) {
       continue;
     }
     references.push(

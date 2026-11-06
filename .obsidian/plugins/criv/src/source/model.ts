@@ -1,6 +1,6 @@
 import {
   isRecord,
-  looksLikeSourceTarget,
+  isSourceLinkTarget,
   patternTargetId,
   resolvedSourceLocation,
   resolveSourceTarget,
@@ -109,7 +109,7 @@ export function crivLinkStatus(
     }
   }
   const [first] = targets;
-  return first && (looksLikeSourceTarget(first) || patternTargetId(first) !== undefined)
+  return first && (isSourceLinkTarget(first) || patternTargetId(first) !== undefined)
     ? { kind: "problem", message: sourceTargetProblem(first, { kind: "unresolved" }) }
     : null;
 }

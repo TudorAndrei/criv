@@ -145,9 +145,15 @@ export function wikilinks(text: string): Wikilink[] {
   }));
 }
 
-/** Whether an untyped link names a file: its path, before any fragment, has an extension. */
-export function looksLikeSourceTarget(target: string): boolean {
-  return FILE_EXTENSION.test(sourceTargetParts(target).path);
+/**
+ * Whether a Wikilink target is a source reference: the explicit `source:`
+ * form, or an untyped target whose path, before any fragment, has an
+ * extension. Follows `LinkTarget::is_source` and the source fallback of
+ * `resolve_link` in `src/vault.rs`.
+ */
+export function isSourceLinkTarget(target: string): boolean {
+  const unaliased = (target.split("|", 1)[0] ?? "").trim();
+  return unaliased.startsWith(SOURCE_PREFIX) || FILE_EXTENSION.test(sourceTargetParts(target).path);
 }
 
 /** The diagnostic code `criv check` gives a Wikilink that resolves to source. */
