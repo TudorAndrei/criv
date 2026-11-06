@@ -87,57 +87,6 @@ fn check_and_watch_once_need_no_external_tools_and_replace_a_corrupt_state() {
     assert!(state["graph"]["nodes"].is_array(), "{state}");
 }
 
-#[test]
-fn changed_check_validates_added_and_modified_notes_without_global_diagnostics() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    init_git_vault(root);
-    fs::write(
-        root.join("docs/unchanged-broken.md"),
-        doc(
-            "unchanged-broken",
-            "Unchanged Broken",
-            "See [[missing-global]].",
-        ),
-    )
-    .unwrap();
-    git(root, &["add", "docs/unchanged-broken.md"]);
-    git(root, &["commit", "-m", "add known global defect"]);
-
-    fs::write(
-        root.join("docs/guide.md"),
-        doc("guide", "Guide", "See [[missing-added]]."),
-    )
-    .unwrap();
-    git(root, &["add", "docs/guide.md"]);
-    criv(root)
-        .args(["check", "--changed", "--filter", "broken-link"])
-        .assert()
-        .failure()
-        .stdout(predicate::str::contains("docs/guide.md"))
-        .stdout(predicate::str::contains("docs/unchanged-broken.md").not());
-
-    fs::write(
-        root.join("docs/guide.md"),
-        doc("guide", "Guide", "The added note is valid."),
-    )
-    .unwrap();
-    git(root, &["add", "docs/guide.md"]);
-    git(root, &["commit", "-m", "add valid guide"]);
-    fs::write(
-        root.join("docs/guide.md"),
-        doc("guide", "Guide", "See [[missing-modified]]."),
-    )
-    .unwrap();
-    git(root, &["add", "docs/guide.md"]);
-    criv(root)
-        .args(["check", "--changed", "--format", "json"])
-        .assert()
-        .failure()
-        .stdout(predicate::str::contains("missing-modified"))
-        .stdout(predicate::str::contains("missing-global").not());
-}
-
 #[cfg(unix)]
 #[test]
 fn changed_check_does_not_walk_unselected_markdown_directories() {
@@ -158,103 +107,6 @@ fn changed_check_does_not_walk_unselected_markdown_directories() {
         .assert()
         .success()
         .stdout("[]\n");
-}
-
-#[test]
-fn changed_check_promotes_renames_and_deletions_to_full_validation() {
-    for operation in ["rename", "delete"] {
-        let temp = TempDir::new().unwrap();
-        let root = temp.path();
-        init_git_vault(root);
-        fs::write(
-            root.join("docs/unchanged-broken.md"),
-            doc(
-                "unchanged-broken",
-                "Unchanged Broken",
-                "See [[missing-global]].",
-            ),
-        )
-        .unwrap();
-        fs::write(
-            root.join("docs/change-me.md"),
-            doc("change-me", "Change Me", "Valid content."),
-        )
-        .unwrap();
-        git(root, &["add", "docs"]);
-        git(root, &["commit", "-m", "add validation fixtures"]);
-
-        match operation {
-            "rename" => git(root, &["mv", "docs/change-me.md", "docs/changed-name.md"]),
-            "delete" => git(root, &["rm", "docs/change-me.md"]),
-            _ => continue,
-        }
-
-        criv(root)
-            .args(["check", "--changed", "--filter", "broken-link"])
-            .assert()
-            .failure()
-            .stdout(predicate::str::contains("docs/unchanged-broken.md"));
-    }
-}
-
-#[test]
-fn changed_check_scans_policies_only_for_staged_sources() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    init_git_vault(root);
-    fs::create_dir_all(root.join("src")).unwrap();
-    fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
-    fs::write(
-        root.join("docs/adr/0999-no-println.md"),
-        r#"---
-id: ADR-0999
-kind: decision
-title: No println
-status: accepted
-date: 2026-08-03
-governs:
-  - src/**/*.rs
-policy:
-  patterns:
-    - id: no-println
-      language: rust
-      pattern: "println!($$$ARGS)"
----
-
-# No println
-"#,
-    )
-    .unwrap();
-    git(root, &["add", "src/lib.rs", "docs/adr/0999-no-println.md"]);
-    git(root, &["commit", "-m", "add source policy"]);
-
-    fs::write(
-        root.join("src/lib.rs"),
-        "pub fn run() {\n    println!(\"blocked\");\n}\n",
-    )
-    .unwrap();
-    git(root, &["add", "src/lib.rs"]);
-
-    criv(root)
-        .args(["check", "--changed", "--filter", "policy-violation"])
-        .assert()
-        .failure()
-        .stdout(predicate::str::contains("ADR-0999 policy"))
-        .stdout(predicate::str::contains("src/lib.rs:2"));
-}
-
-#[test]
-fn changed_check_is_read_only() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    git(root, &["init", "-b", "main"]);
-
-    criv(root)
-        .args(["check", "--changed", "--fix"])
-        .assert()
-        .failure()
-        .code(2)
-        .stderr(predicate::str::contains("--fix"));
 }
 
 #[test]
@@ -3053,9 +2905,8 @@ impl WatchProcess {
         let line = self.wait_for_line(description, WATCH_EVENT_BOUND, |line| {
             line.starts_with(SNAPSHOT_LINE)
         });
-        line[SNAPSHOT_LINE.len()..]
-            .split(',')
-            .next()
+        line.strip_prefix(SNAPSHOT_LINE)
+            .and_then(|rest| rest.split(',').next())
             .unwrap_or_default()
             .to_owned()
     }

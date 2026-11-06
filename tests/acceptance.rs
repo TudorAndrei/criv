@@ -47,14 +47,96 @@ fn initialized_vault(world: &mut VaultWorld) {
         .success();
 }
 
+/// Git discovery walks up from the vault, so no ancestor may hold a repository.
 #[given("no Git repository")]
 fn no_git_repository(world: &mut VaultWorld) {
-    assert!(!world.directory.path().join(".git").exists());
+    let enclosing = world
+        .directory
+        .path()
+        .ancestors()
+        .find(|directory| directory.join(".git").exists());
+    assert!(
+        enclosing.is_none(),
+        "the scenario directory is inside the Git repository at {enclosing:?}"
+    );
 }
 
 #[given("a Git repository with no staged changes")]
 fn git_repository(world: &mut VaultWorld) {
     support::git_repository(world.directory.path(), "main");
+}
+
+#[given("a committed vault")]
+fn committed_vault(world: &mut VaultWorld) {
+    support::git_repository(world.directory.path(), "main");
+    initialized_vault(world);
+    commit_all(world.directory.path(), "initial vault");
+}
+
+#[given(expr = "a committed note {string} that links to {string}")]
+fn committed_note_with_link(world: &mut VaultWorld, id: String, link: String) {
+    write_note(world.directory.path(), &id, &format!("See [[{link}]]."));
+    commit_all(world.directory.path(), "add note");
+}
+
+#[given(expr = "a committed note {string} without links")]
+fn committed_note(world: &mut VaultWorld, id: String) {
+    write_note(world.directory.path(), &id, "Valid content.");
+    commit_all(world.directory.path(), "add note");
+}
+
+#[given(expr = "a staged note {string} that links to {string}")]
+fn staged_note_with_link(world: &mut VaultWorld, id: String, link: String) {
+    write_note(world.directory.path(), &id, &format!("See [[{link}]]."));
+    support::git(world.directory.path(), &["add", "docs"]);
+}
+
+#[given(expr = "the note {string} is {word} and staged")]
+fn staged_note_change(world: &mut VaultWorld, id: String, change: String) {
+    let note = format!("docs/{id}.md");
+    let root = world.directory.path();
+    match change.as_str() {
+        "renamed" => support::git(root, &["mv", &note, "docs/renamed-note.md"]),
+        "deleted" => support::git(root, &["rm", &note]),
+        other => panic!("unknown staged change {other}"),
+    }
+}
+
+#[given("a committed decision that forbids println in Rust sources")]
+fn committed_println_policy(world: &mut VaultWorld) {
+    let root = world.directory.path();
+    std::fs::create_dir_all(root.join("src")).expect("create source directory");
+    std::fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").expect("write source");
+    std::fs::write(
+        root.join("docs/adr/0999-no-println.md"),
+        "---\nid: ADR-0999\nkind: decision\ntitle: No println\nstatus: accepted\ndate: 2026-08-03\ngoverns:\n  - src/**/*.rs\npolicy:\n  patterns:\n    - id: no-println\n      language: rust\n      pattern: \"println!($$$ARGS)\"\n---\n\n# No println\n",
+    )
+    .expect("write decision");
+    commit_all(root, "add source policy");
+}
+
+#[given("a staged Rust source that calls println")]
+fn staged_println_source(world: &mut VaultWorld) {
+    let root = world.directory.path();
+    std::fs::write(
+        root.join("src/lib.rs"),
+        "pub fn run() {\n    println!(\"blocked\");\n}\n",
+    )
+    .expect("write source");
+    support::git(root, &["add", "src/lib.rs"]);
+}
+
+fn write_note(root: &Path, id: &str, body: &str) {
+    std::fs::write(
+        root.join(format!("docs/{id}.md")),
+        format!("---\nid: {id}\nkind: doc\ntitle: {id}\n---\n\n# {id}\n\n{body}\n"),
+    )
+    .expect("write note");
+}
+
+fn commit_all(root: &Path, message: &str) {
+    support::git(root, &["add", "."]);
+    support::git(root, &["commit", "-m", message]);
 }
 
 #[given(expr = "a committed vault with documentation at {string} and one decision")]
@@ -119,6 +201,30 @@ fn succeeds(world: &mut VaultWorld) {
 fn fails(world: &mut VaultWorld) {
     let output = world.output();
     assert!(!output.status.success(), "{output:?}");
+}
+
+#[then(expr = "the command fails with exit code {int}")]
+fn fails_with_code(world: &mut VaultWorld, code: i32) {
+    let output = world.output();
+    assert_eq!(output.status.code(), Some(code), "{output:?}");
+}
+
+#[then(expr = "stdout contains {string}")]
+fn stdout_contains(world: &mut VaultWorld, expected: String) {
+    let actual = String::from_utf8_lossy(&world.output().stdout);
+    assert!(
+        actual.contains(&expected),
+        "expected {expected:?} in {actual:?}"
+    );
+}
+
+#[then(expr = "stdout does not contain {string}")]
+fn stdout_lacks(world: &mut VaultWorld, unexpected: String) {
+    let actual = String::from_utf8_lossy(&world.output().stdout);
+    assert!(
+        !actual.contains(&unexpected),
+        "unexpected {unexpected:?} in {actual:?}"
+    );
 }
 
 #[then(expr = "stderr contains {string}")]
