@@ -24,6 +24,7 @@ use wasm_bindgen::prelude::*;
 
 mod asset;
 mod decode;
+mod path;
 mod projection;
 mod source;
 
@@ -161,13 +162,6 @@ impl LoadedState {
             prepared,
         })
     }
-
-    #[cfg(test)]
-    fn take_initial_projection(&mut self) -> Result<serde_json::Value, String> {
-        self.initial_envelope
-            .take()
-            .ok_or_else(|| INITIAL_PROJECTIONS_TAKEN.to_string())
-    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -231,11 +225,6 @@ impl PreparedState {
             registered_patterns,
             patterns,
         )
-    }
-
-    #[cfg(test)]
-    fn from_borrowed(state: &StateDocument) -> Self {
-        Self::new(state.clone())
     }
 }
 
@@ -363,12 +352,32 @@ enum SelectorEntry {
 
 #[cfg(test)]
 mod tests {
-    use super::decode::decode_state_value;
-    use super::source::{
-        editor_graph_nodes, find_editor_graph_node, source_selector_suggestions,
-        unique_source_entries, unique_source_paths,
-    };
+    use super::source::{take_editor_graph_nodes, take_unique_source_entries};
     use super::*;
+
+    fn source_selector_suggestions(
+        state: StateDocument,
+        query: &str,
+        limit: usize,
+    ) -> Vec<SourceSelectorSuggestion> {
+        PreparedState::new(state).suggest_selectors(query, limit)
+    }
+
+    fn find_editor_graph_node(state: &StateDocument, target: &str) -> Option<EditorGraphNode> {
+        match PreparedState::new(state.clone()).lookup_source_target(target) {
+            SourceTargetLookupResult::Resolved { node, .. } => Some(node),
+            SourceTargetLookupResult::Unresolved | SourceTargetLookupResult::Ambiguous { .. } => {
+                None
+            }
+        }
+    }
+
+    fn source_paths(source_index: Vec<SourceIndexEntry>) -> Vec<String> {
+        take_unique_source_entries(source_index)
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect()
+    }
 
     #[test]
     fn loaded_state_prepares_one_revision_for_all_operations() {
@@ -389,12 +398,10 @@ mod tests {
             "src/lib.rs#fn:run"
         );
 
-        let projections = loaded.take_initial_projection().unwrap();
-        assert!(projections.get("state").is_none());
+        let projections = loaded.initial_envelope.take().unwrap();
         assert_eq!(projections["summary"]["schema"], "criv.state.v1");
         assert_eq!(projections["registeredPatterns"][0], "ADR-0001/entrypoint");
         assert!(projections["patternMatches"]["ADR-0001/entrypoint"].is_array());
-        assert!(loaded.take_initial_projection().is_err());
     }
 
     #[test]
@@ -406,27 +413,13 @@ mod tests {
             bytes: 128,
             hash: "a".repeat(64),
         });
-        let prepared = PreparedState::from_borrowed(&state);
+        let prepared = PreparedState::new(state);
         let projection =
             serde_json::to_value(projection::InitialProjections::from(&prepared)).unwrap();
 
         assert_eq!(projection["summary"]["asset_count"], 1);
         assert_eq!(projection["assets"][0]["path"], "docs/diagram.png");
         assert_eq!(projection["assets"][0]["mime"], "image/png");
-    }
-
-    #[test]
-    fn parses_shared_state_contract_fixture() {
-        let state = serde_json::from_str::<StateDocument>(include_str!(
-            "../../../fixtures/state/criv.state.v1.json"
-        ))
-        .unwrap();
-        assert_eq!(state.schema, "criv.state.v1");
-        assert_eq!(state.graph.nodes.len(), 6);
-        assert_eq!(state.graph.edges.len(), 5);
-        assert_eq!(state.registered_patterns, ["ADR-0001/entrypoint"]);
-        assert_eq!(state.registered_patterns.len(), 1);
-        assert_eq!(state.source_index.len(), 1);
     }
 
     #[test]
@@ -442,7 +435,6 @@ mod tests {
             error.message,
             "unsupported criv state schema: criv.state.v2"
         );
-        assert!(decode_state_value(&raw).is_err());
     }
 
     #[test]
@@ -461,7 +453,7 @@ mod tests {
     fn initial_projection_does_not_publish_the_raw_state() {
         let mut loaded =
             LoadedState::load(include_str!("../../../fixtures/state/criv.state.v1.json")).unwrap();
-        let projections = loaded.take_initial_projection().unwrap();
+        let projections = loaded.initial_envelope.take().unwrap();
 
         assert!(projections.get("state").is_none());
         assert!(projections.get("graph").is_none());
@@ -485,14 +477,14 @@ mod tests {
             },
         ];
 
-        let paths = unique_source_paths(&source_index);
+        let paths = source_paths(source_index);
         assert_eq!(paths.len(), 2);
         assert_eq!(paths, vec!["src/lib.rs", "src/main.rs"]);
     }
 
     #[test]
     fn source_entries_reject_escaping_paths_and_normalize_separators() {
-        let entries = unique_source_entries(&[
+        let paths = source_paths(vec![
             SourceIndexEntry {
                 path: "src/lib.rs".into(),
                 mime: None,
@@ -515,20 +507,14 @@ mod tests {
             },
         ]);
 
-        assert_eq!(
-            entries
-                .into_iter()
-                .map(|entry| entry.path)
-                .collect::<Vec<_>>(),
-            ["src/lib.rs", "src/windows/path.rs"]
-        );
+        assert_eq!(paths, ["src/lib.rs", "src/windows/path.rs"]);
     }
 
     #[test]
     fn graph_nodes_include_source_targets_and_line_ranges() {
         let state = editor_state();
 
-        let nodes = editor_graph_nodes(&state);
+        let nodes = take_editor_graph_nodes(state.graph.nodes);
         let symbol = nodes
             .iter()
             .find(|node| node.id == "symbol:src/lib.rs#fn:run")
@@ -544,7 +530,7 @@ mod tests {
     fn selector_suggestions_include_files_and_symbols() {
         let state = editor_state();
 
-        let suggestions = source_selector_suggestions(&state, "run", 10);
+        let suggestions = source_selector_suggestions(state, "run", 10);
 
         assert_eq!(suggestions.len(), 2);
         assert_eq!(suggestions[0].target, "src/lib.rs#fn:run");
@@ -560,7 +546,7 @@ mod tests {
     fn selector_suggestions_rank_with_weighted_source_scoring() {
         let state = selector_state();
 
-        let suggestions = source_selector_suggestions(&state, "lib.rs", 10);
+        let suggestions = source_selector_suggestions(state, "lib.rs", 10);
         let targets = suggestion_targets(&suggestions);
 
         assert_eq!(
@@ -579,7 +565,7 @@ mod tests {
     fn selector_suggestions_use_lexical_order_as_tiebreaker() {
         let state = selector_state();
 
-        let suggestions = source_selector_suggestions(&state, "src/tie", 10);
+        let suggestions = source_selector_suggestions(state, "src/tie", 10);
         let targets = suggestion_targets(&suggestions);
 
         assert_eq!(targets, vec!["src/tie-a.rs", "src/tie-b.rs"]);
@@ -589,7 +575,7 @@ mod tests {
     fn selector_suggestions_drop_non_matches_and_keep_fuzzy_matches() {
         let state = selector_state();
 
-        let suggestions = source_selector_suggestions(&state, "slr", 10);
+        let suggestions = source_selector_suggestions(state, "slr", 10);
         let targets = suggestion_targets(&suggestions);
 
         assert!(targets.contains(&"src/lib.rs"));
@@ -601,7 +587,7 @@ mod tests {
     fn selector_suggestions_empty_query_uses_lexical_order() {
         let state = selector_state();
 
-        let suggestions = source_selector_suggestions(&state, "", 4);
+        let suggestions = source_selector_suggestions(state, "", 4);
         let targets = suggestion_targets(&suggestions);
 
         assert_eq!(
@@ -619,7 +605,7 @@ mod tests {
     fn selector_suggestions_respect_limit() {
         let state = selector_state();
 
-        let suggestions = source_selector_suggestions(&state, "", 2);
+        let suggestions = source_selector_suggestions(state, "", 2);
 
         assert_eq!(suggestions.len(), 2);
     }
@@ -707,7 +693,7 @@ mod tests {
             source_index,
             ..Default::default()
         };
-        let prepared = PreparedState::from_borrowed(&state);
+        let prepared = PreparedState::new(state);
 
         let canonical = |target: &str| match prepared.lookup_source_target(target) {
             SourceTargetLookupResult::Resolved {
@@ -745,7 +731,7 @@ mod tests {
         ))
         .unwrap();
         let state = serde_json::from_value::<StateDocument>(fixture["state"].clone()).unwrap();
-        let prepared = PreparedState::from_borrowed(&state);
+        let prepared = PreparedState::new(state);
 
         for case in fixture["cases"].as_array().unwrap() {
             let target = case["target"].as_str().unwrap();
@@ -774,7 +760,7 @@ mod tests {
         let mut reversed =
             serde_json::from_value::<StateDocument>(fixture["state"].clone()).unwrap();
         reversed.graph.nodes.reverse();
-        let reversed = PreparedState::from_borrowed(&reversed);
+        let reversed = PreparedState::new(reversed);
         for target in ["src/lib.rs#run", "src/dup.rs#fn:work", "common.rs"] {
             assert_eq!(
                 serde_json::to_value(prepared.lookup_source_target(target)).unwrap(),

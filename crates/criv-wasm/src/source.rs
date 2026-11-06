@@ -6,97 +6,23 @@ use std::hash::{Hash, Hasher};
 use criv_state_wire::source_identity::{self, SourceIdentity};
 use criv_state_wire::{Node, SourceIndexEntry, node_id};
 
-#[cfg(test)]
-use super::StateDocument;
+use super::path::safe_relative_path;
 use super::{
     BTreeMap, EditorGraphNode, EditorInventory, EditorSourceEntry, MAX_AMBIGUOUS_SOURCE_CANDIDATES,
     PatternMatch, PreparedSelector, PreparedState, SelectorEntry, SourceSelectorSuggestion,
     SourceTargetCandidate, SourceTargetLookupResult, StateSummary, SuggestionKind,
 };
 
-#[cfg(test)]
-pub fn unique_source_paths(source_index: &[SourceIndexEntry]) -> Vec<String> {
-    unique_source_entries(source_index)
-        .into_iter()
-        .map(|entry| entry.path)
-        .collect()
-}
-
-#[cfg(test)]
-pub fn unique_source_entries(source_index: &[SourceIndexEntry]) -> Vec<EditorSourceEntry> {
-    let mut seen = BTreeSet::new();
-    source_index
-        .iter()
-        .filter_map(|entry| {
-            let path = safe_source_path(&entry.path)?;
-            seen.insert(path.clone()).then_some(EditorSourceEntry {
-                path,
-                mime: entry.mime.clone(),
-            })
-        })
-        .collect()
-}
-
 pub fn take_unique_source_entries(source_index: Vec<SourceIndexEntry>) -> Vec<EditorSourceEntry> {
     let mut seen = BTreeSet::new();
     source_index
         .into_iter()
         .filter_map(|entry| {
-            let path = safe_source_path(&entry.path)?;
+            let path = safe_relative_path(&entry.path)?;
             seen.insert(path.clone()).then_some(EditorSourceEntry {
                 path,
                 mime: entry.mime,
             })
-        })
-        .collect()
-}
-
-pub fn safe_source_path(path: &str) -> Option<String> {
-    let path = path.trim().replace('\\', "/");
-    if path.is_empty()
-        || path.starts_with('/')
-        || path.starts_with("//")
-        || path.contains('\0')
-        || path.as_bytes().get(1) == Some(&b':')
-    {
-        return None;
-    }
-    let mut normalized = Vec::new();
-    for segment in path.split('/') {
-        match segment {
-            "" | "." => {}
-            ".." => return None,
-            segment => normalized.push(segment),
-        }
-    }
-    (!normalized.is_empty()).then(|| normalized.join("/"))
-}
-
-#[cfg(test)]
-pub fn editor_graph_nodes(state: &StateDocument) -> Vec<EditorGraphNode> {
-    state
-        .graph
-        .nodes
-        .iter()
-        .map(|node| {
-            let source_target = source_target(node);
-            let source_identity = source_target
-                .as_deref()
-                .map(SourceIdentity::parse)
-                .map(Box::new);
-            EditorGraphNode {
-                id: node.id.clone(),
-                kind: node.kind,
-                label: if node.label.is_empty() {
-                    node.id.clone()
-                } else {
-                    node.label.clone()
-                },
-                path: node.path.clone(),
-                source_target,
-                line_range: node.path.as_deref().and_then(line_range),
-                source_identity,
-            }
         })
         .collect()
 }
@@ -127,23 +53,6 @@ pub fn take_editor_graph_nodes(nodes: Vec<Node>) -> Vec<EditorGraphNode> {
             }
         })
         .collect()
-}
-
-#[cfg(test)]
-pub fn source_selector_suggestions(
-    state: &StateDocument,
-    query: &str,
-    limit: usize,
-) -> Vec<SourceSelectorSuggestion> {
-    PreparedState::from_borrowed(state).suggest_selectors(query, limit)
-}
-
-#[cfg(test)]
-pub fn find_editor_graph_node(state: &StateDocument, target: &str) -> Option<EditorGraphNode> {
-    match PreparedState::from_borrowed(state).lookup_source_target(target) {
-        SourceTargetLookupResult::Resolved { node, .. } => Some(node),
-        SourceTargetLookupResult::Unresolved | SourceTargetLookupResult::Ambiguous { .. } => None,
-    }
 }
 
 fn source_target(node: &Node) -> Option<String> {
@@ -432,7 +341,7 @@ fn node_has_prepared_source(node: &EditorGraphNode, source_paths: &BTreeSet<&str
     };
     let path = target.split_once('#').map_or(target, |(path, _)| path);
     !path.contains('\\')
-        && safe_source_path(path).is_some_and(|path| source_paths.contains(path.as_str()))
+        && safe_relative_path(path).is_some_and(|path| source_paths.contains(path.as_str()))
 }
 
 fn legacy_node_targets(node: &EditorGraphNode) -> Vec<String> {

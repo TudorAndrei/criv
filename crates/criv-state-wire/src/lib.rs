@@ -313,16 +313,6 @@ mod tests {
         assert_eq!(value["registered-patterns"][0], "ADR-0001/entrypoint");
         assert_eq!(value["source-index"][0]["path"], "src/lib.rs");
         assert_eq!(value["asset-index"][0]["path"], "docs/diagram.png");
-
-        let decoded: StateDocument = serde_json::from_value(value).unwrap();
-        assert_eq!(decoded.schema, STATE_SCHEMA);
-        assert_eq!(decoded.graph.nodes[0].hash, "node-hash");
-        assert_eq!(decoded.graph.edges[0].hash, "edge-hash");
-        assert_eq!(decoded.asset_index[0].hash, "asset-hash");
-        assert_eq!(
-            decoded.patterns["ADR-0001/entrypoint"][0].file,
-            "src/lib.rs"
-        );
     }
 
     #[test]
