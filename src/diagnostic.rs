@@ -30,6 +30,7 @@ pub enum DiagnosticCode {
     InconsistentSupersession,
     InvalidAdrId,
     InvalidFrontmatter,
+    InvalidGlob,
     InvalidKind,
     InvalidPolicyPattern,
     LegacySourceTarget,
@@ -75,6 +76,7 @@ impl DiagnosticCode {
             Self::InconsistentSupersession => "inconsistent-supersession",
             Self::InvalidAdrId => "invalid-adr-id",
             Self::InvalidFrontmatter => "invalid-frontmatter",
+            Self::InvalidGlob => "invalid-glob",
             Self::InvalidKind => "invalid-kind",
             Self::InvalidPolicyPattern => "invalid-policy-pattern",
             Self::LegacySourceTarget => "legacy-source-target",
@@ -133,6 +135,7 @@ impl DiagnosticCode {
             }
             Self::InvalidAdrId => "Take a free id from `criv query next-adr-id`.",
             Self::InvalidFrontmatter => "Correct the YAML frontmatter block.",
+            Self::InvalidGlob => "Correct the glob syntax, as in `src/**/*.rs`.",
             Self::InvalidKind => "Set `kind` to `doc` or to `decision`.",
             Self::InvalidPolicyPattern => "Correct the ast-grep pattern or rule syntax.",
             Self::LegacySourceTarget | Self::SourceWikilink => {

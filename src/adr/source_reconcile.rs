@@ -194,9 +194,9 @@ fn required_reconciliations(
         .iter()
         .filter(|note| vault.is_effective_decision(note))
     {
-        let matches = vault.source_globs_have_matches(note.governs());
-        for (governs, has_match) in note.governs().iter().zip(matches) {
-            if has_match {
+        let selections = vault.source_files_per_glob(note.governs());
+        for (governs, selection) in note.governs().iter().zip(selections) {
+            if selection.is_ok_and(|files| !files.is_empty()) {
                 continue;
             }
             if let Some(new_path) = mapping_by_old.get(governs.as_str()) {

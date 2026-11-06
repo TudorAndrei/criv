@@ -393,18 +393,20 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
     }
 
     if !vault.is_historical_decision(note) {
-        for (scope, has_match) in note
+        for (scope, selection) in note
             .targets_scope()
             .iter()
-            .zip(vault.source_globs_have_matches(note.targets_scope()))
+            .zip(vault.source_files_per_glob(note.targets_scope()))
         {
-            if !has_match {
-                diagnostics.push(Diagnostic::warning(
+            match selection {
+                Ok(files) if files.is_empty() => diagnostics.push(Diagnostic::warning(
                     DiagnosticCode::EmptyTargetScope,
                     note.rel_path(),
                     None,
                     format!("target scope `{scope}` matches no source files"),
-                ));
+                )),
+                Ok(_) => {}
+                Err(error) => diagnostics.push(invalid_glob(note, "target scope", scope, &error)),
             }
         }
 
@@ -416,17 +418,27 @@ fn unresolved_governs(vault: &Vault, note: &Note) -> Vec<Diagnostic> {
     let governs = note.effective_governs();
     governs
         .iter()
-        .zip(vault.source_globs_have_matches(&governs))
-        .filter(|(_, has_match)| !has_match)
-        .map(|(governs, _)| {
-            Diagnostic::error(
+        .zip(vault.source_files_per_glob(&governs))
+        .filter_map(|(governs, selection)| match selection {
+            Ok(files) if files.is_empty() => Some(Diagnostic::error(
                 DiagnosticCode::UnresolvedGoverns,
                 note.rel_path(),
                 None,
                 format!("governs glob `{governs}` matches no source files"),
-            )
+            )),
+            Ok(_) => None,
+            Err(error) => Some(invalid_glob(note, "governs glob", governs, &error)),
         })
         .collect()
+}
+
+fn invalid_glob(note: &Note, label: &str, glob: &str, error: &str) -> Diagnostic {
+    Diagnostic::error(
+        DiagnosticCode::InvalidGlob,
+        note.rel_path(),
+        None,
+        format!("{label} `{glob}` is not a valid glob: {error}"),
+    )
 }
 
 /// The State publication gate. Unresolved effective governance blocks
@@ -1185,6 +1197,29 @@ governs:
                 .iter()
                 .all(|diag| diag.code() != DiagnosticCode::UnresolvedGoverns)
         );
+    }
+
+    #[test]
+    fn an_invalid_governs_glob_is_reported_as_invalid_not_unmatched() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("docs/adr")).unwrap();
+        fs::write(root.join("criv.toml"), "[source]\nroots = [\"src\"]\n").unwrap();
+        fs::write(root.join("src/main.rs"), "fn run() {}\n").unwrap();
+        fs::write(
+            root.join("docs/adr/0001-invalid-glob.md"),
+            "---\nid: ADR-0001\nkind: decision\ntitle: Invalid Glob\nstatus: accepted\ngoverns:\n  - \"src/[\"\n---\n\n# Invalid Glob\n",
+        )
+        .unwrap();
+
+        let codes = validate(&load(root))
+            .iter()
+            .map(Diagnostic::code)
+            .collect::<Vec<_>>();
+
+        assert!(codes.contains(&DiagnosticCode::InvalidGlob));
+        assert!(!codes.contains(&DiagnosticCode::UnresolvedGoverns));
     }
 
     #[test]

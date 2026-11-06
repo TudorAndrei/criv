@@ -421,6 +421,56 @@ governs:
     );
 }
 
+#[test]
+fn changing_a_file_governed_through_a_selector_rescans_its_policy() {
+    let _live_test = lock_live_test();
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    write_source_fixture(root);
+    fs::create_dir_all(root.join("docs/adr")).unwrap();
+    fs::write(
+        root.join("src/lib.rs"),
+        "fn run() {\n    println!(\"before\");\n}\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("docs/adr/0001-selector.md"),
+        r#"---
+id: ADR-0001
+kind: decision
+title: Selector governance
+status: accepted
+governs:
+  - src/lib.rs#fn:run
+policy:
+  patterns:
+    - id: no-println
+      language: rust
+      pattern: println!($$$ARGS)
+---
+
+# Selector governance
+"#,
+    )
+    .unwrap();
+    let mut session = open_session(root);
+    session.refresh(RefreshCause::Initial, || Ok(())).unwrap();
+    assert_eq!(policy_match_count(root, "ADR-0001/no-println"), 1);
+
+    fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
+    session
+        .refresh(RefreshCause::SourceChanged, || Ok(()))
+        .unwrap();
+
+    assert_eq!(policy_match_count(root, "ADR-0001/no-println"), 0);
+}
+
+fn policy_match_count(root: &Path, pattern_id: &str) -> usize {
+    let state: Value =
+        serde_json::from_str(&fs::read_to_string(root.join(".criv/state.json")).unwrap()).unwrap();
+    state["patterns"][pattern_id].as_array().unwrap().len()
+}
+
 fn incremental_fixture(prefix: &str) -> TempDir {
     let temp = tempfile::Builder::new()
         .prefix(&format!("criv-refresh-{prefix}-"))

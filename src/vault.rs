@@ -368,9 +368,14 @@ impl Vault {
             .filter_map(|(id, index)| self.notes.get(*index).map(|note| (id.as_str(), note)))
     }
 
-    /// The Source files that the effective `governs` globs of `note` select.
+    /// The Source files that the effective `governs` globs of `note` select,
+    /// in glob order; an invalid glob selects none.
     pub(crate) fn governed_files(&self, note: &Note) -> Vec<String> {
-        self.source_files_matching_globs(&note.effective_governs())
+        self.source_files_per_glob(&note.effective_governs())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .collect()
     }
 
     pub(crate) fn resolve_note(&self, target: &str) -> Option<&Note> {
@@ -535,54 +540,40 @@ impl Vault {
             .canonical_symbol_target(&format!("{path}#{fragment}"))
     }
 
-    fn source_files_matching_globs(&self, patterns: &[String]) -> Vec<String> {
-        let matcher = GlobMatcher::from_valid_patterns(patterns);
+    /// The Source files each glob selects, by index, or the glob's syntax
+    /// error. A glob that selects no file selects the file of the Source
+    /// selector it spells, if any.
+    pub(crate) fn source_files_per_glob(
+        &self,
+        patterns: &[String],
+    ) -> Vec<std::result::Result<Vec<String>, String>> {
+        let compiled = GlobMatcher::compile_each(patterns);
         let mut files_by_pattern = vec![Vec::new(); patterns.len()];
         let mut indices = Vec::new();
         for source_file in self.source.paths() {
-            matcher.matching_pattern_indices_into(source_file, &mut indices);
+            compiled
+                .matcher
+                .matching_pattern_indices_into(source_file, &mut indices);
             for index in &indices {
                 if let Some(files) = files_by_pattern.get_mut(*index) {
                     files.push(source_file.clone());
                 }
             }
         }
-        let mut resolved_files = Vec::new();
-        for (index, pattern) in patterns.iter().enumerate() {
-            let files = files_by_pattern.get(index).map_or(&[][..], Vec::as_slice);
-            if files.is_empty()
-                && let SourceTargetResolution::Resolved { path, .. } =
-                    self.resolve_source_target(pattern)
-            {
-                resolved_files.push(path);
-            } else {
-                resolved_files.extend(files.iter().cloned());
-            }
-        }
-        resolved_files
-    }
-
-    pub(crate) fn source_globs_have_matches(&self, patterns: &[String]) -> Vec<bool> {
-        let matcher = GlobMatcher::from_valid_patterns(patterns);
-        let mut matched_patterns = vec![false; patterns.len()];
-        let mut indices = Vec::new();
-        for source_file in self.source.paths() {
-            matcher.matching_pattern_indices_into(source_file, &mut indices);
-            for index in &indices {
-                if let Some(value) = matched_patterns.get_mut(*index) {
-                    *value = true;
+        patterns
+            .iter()
+            .zip(files_by_pattern)
+            .zip(compiled.errors)
+            .map(|((pattern, files), error)| {
+                if !files.is_empty() {
+                    return Ok(files);
                 }
-            }
-        }
-        for (index, pattern) in patterns.iter().enumerate() {
-            if let Some(value) = matched_patterns.get_mut(index) {
-                *value |= matches!(
-                    self.resolve_source_target(pattern),
-                    SourceTargetResolution::Resolved { .. }
-                );
-            }
-        }
-        matched_patterns
+                match self.resolve_source_target(pattern) {
+                    SourceTargetResolution::Resolved { path, .. } => Ok(vec![path]),
+                    _ => error.map_or(Ok(Vec::new()), Err),
+                }
+            })
+            .collect()
     }
 
     pub(crate) fn source_files(&self) -> &[String] {
@@ -1510,22 +1501,24 @@ roots = ["src"]
         .unwrap();
 
         let vault = load(root);
+        let files = |patterns: &[&str]| {
+            vault.source_files_per_glob(
+                &patterns.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            )
+        };
+        let ok = |paths: &[&str]| Ok(paths.iter().map(ToString::to_string).collect());
         assert_eq!(
-            vault.source_files_matching_globs(&["src/z.rs#run".into(), "src/a.rs".into()]),
-            vec!["src/z.rs", "src/a.rs"]
+            files(&["src/z.rs#run", "src/a.rs"]),
+            [ok(&["src/z.rs"]), ok(&["src/a.rs"])]
         );
         assert_eq!(
-            vault.source_files_matching_globs(&["src/*.rs".into(), "src/a.rs".into()]),
-            vec!["src/a.rs", "src/z.rs", "src/a.rs"]
+            files(&["src/*.rs", "src/missing.rs"]),
+            [ok(&["src/a.rs", "src/z.rs"]), ok(&[])]
         );
-        assert_eq!(
-            vault.source_files_matching_globs(&["[".into(), "src/a.rs".into()]),
-            vec!["src/a.rs"]
-        );
-        assert_eq!(
-            vault.source_files_matching_globs(&["assets/blob.bin".into()]),
-            vec!["assets/blob.bin"]
-        );
+        let invalid = files(&["[", "src/a.rs"]);
+        assert!(invalid[0].is_err());
+        assert_eq!(invalid[1], ok(&["src/a.rs"]));
+        assert_eq!(files(&["assets/blob.bin"]), [ok(&["assets/blob.bin"])]);
     }
 
     /// Returns the 1-based line of the first line whose content equals `needle`.

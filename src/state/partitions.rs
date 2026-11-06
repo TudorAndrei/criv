@@ -8,7 +8,6 @@ use criv_state_wire::{Graph, PatternMatch};
 
 use super::projection::{self, GraphBuilder, NoteRows, PartitionDependencies, SourceRows};
 use super::stable_hash::StableHasher;
-use crate::glob::GlobMatcher;
 use crate::policy_scan::PolicyScanPlan;
 use crate::structural::{self, CompiledPolicy, PolicyPattern, StructuralMatch};
 use crate::vault::{DecisionStatus, Note, Vault};
@@ -316,10 +315,9 @@ fn build_policy_partitions(
     let mut partitions = BTreeMap::new();
     let mut pending = Vec::new();
     for owner in policies.owners() {
-        let matcher = GlobMatcher::from_valid_patterns(owner.scopes());
         let changed_paths = changed_files
             .iter()
-            .filter(|path| matcher.is_match(path))
+            .filter(|path| owner.paths().contains(*path))
             .cloned()
             .collect::<BTreeSet<_>>();
         for policy in owner
@@ -337,8 +335,12 @@ fn build_policy_partitions(
                 previous.and_then(|previous| previous.policies.get(pattern_id));
             let unchanged =
                 previous_partition.filter(|partition| partition.fingerprint == fingerprint);
+            let still_valid = |matched: &PatternMatch| {
+                owner.paths().contains(&matched.file) && !changed_paths.contains(&matched.file)
+            };
             if let Some(partition) = unchanged
                 && changed_paths.is_empty()
+                && partition.matches.iter().all(still_valid)
             {
                 partitions.insert(pattern_id.to_string(), partition.clone());
                 continue;
@@ -349,7 +351,7 @@ fn build_policy_partitions(
                     let reused = partition
                         .matches
                         .iter()
-                        .filter(|matched| !changed_paths.contains(&matched.file))
+                        .filter(|matched| still_valid(matched))
                         .cloned()
                         .collect();
                     (changed_paths.clone(), reused)
