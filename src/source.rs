@@ -10,8 +10,8 @@ use crate::discovery::{SourceScope, discover_source_candidates};
 use crate::repository::RepositoryFiles;
 
 pub use graph::{
-    DirectiveKind, EdgeOrigin, Import, Language, ModuleRelationshipRole, Relationship,
-    RelationshipKind, RelationshipTarget, SourceFile, SourceGraph, Symbol, SymbolId, SymbolKind,
+    EdgeOrigin, Import, Language, ModuleRelationshipRole, Relationship, RelationshipKind,
+    RelationshipTarget, SourceFile, SourceGraph, Symbol, SymbolId, SymbolKind,
 };
 pub use paths::{read_selected, read_selected_text};
 

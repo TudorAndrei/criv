@@ -112,12 +112,18 @@ pub enum DirectiveKind {
 }
 
 impl DirectiveKind {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Alias => "alias",
-            Self::Import => "import",
-            Self::Require => "require",
-            Self::Use => "use",
+    pub(crate) fn as_str(self) -> &'static str {
+        NodeKind::from(self).as_str()
+    }
+}
+
+impl From<DirectiveKind> for NodeKind {
+    fn from(kind: DirectiveKind) -> Self {
+        match kind {
+            DirectiveKind::Alias => Self::Alias,
+            DirectiveKind::Import => Self::Import,
+            DirectiveKind::Require => Self::Require,
+            DirectiveKind::Use => Self::Use,
         }
     }
 }

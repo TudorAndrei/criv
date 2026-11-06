@@ -7,8 +7,8 @@ use criv_state_wire::{Edge, EdgeKind, Graph, Node, NodeKind, node_id};
 use super::stable_hash::StableHasher;
 use crate::markdown::LinkTarget;
 use crate::source::{
-    DirectiveKind, EdgeOrigin, Import, ModuleRelationshipRole, Relationship, RelationshipKind,
-    RelationshipTarget, SourceFile, Symbol, SymbolId,
+    EdgeOrigin, Import, ModuleRelationshipRole, Relationship, RelationshipKind, RelationshipTarget,
+    SourceFile, Symbol, SymbolId,
 };
 use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 
@@ -148,17 +148,6 @@ fn symbol_label(symbol: &Symbol) -> String {
         || symbol.name.clone(),
         |arity| format!("{}/{arity}", symbol.name),
     )
-}
-
-impl From<DirectiveKind> for NodeKind {
-    fn from(kind: DirectiveKind) -> Self {
-        match kind {
-            DirectiveKind::Alias => Self::Alias,
-            DirectiveKind::Import => Self::Import,
-            DirectiveKind::Require => Self::Require,
-            DirectiveKind::Use => Self::Use,
-        }
-    }
 }
 
 pub(super) fn source_rows(vault: &Vault, file: &SourceFile) -> SourceRows {
