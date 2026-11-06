@@ -511,18 +511,18 @@ fn adr_semantic_content(contents: &str) -> AdrSemanticContent {
 }
 
 fn is_standard_adr_heading(heading: &str) -> bool {
-    matches!(
-        heading.trim().to_ascii_lowercase().as_str(),
-        "context"
-            | "status"
-            | "decision"
-            | "consequences"
-            | "alternatives considered"
-            | "decision drivers"
-            | "considered options"
-            | "pros and cons of the options"
-            | "links"
-    )
+    let heading = heading.trim();
+    identity::ADR_SECTIONS
+        .iter()
+        .chain(&[
+            "Status",
+            "Alternatives Considered",
+            "Decision Drivers",
+            "Considered Options",
+            "Pros and Cons of the Options",
+            "Links",
+        ])
+        .any(|section| section.eq_ignore_ascii_case(heading))
 }
 
 fn allocation_mappings(branch_adrs: &[AdrFile], target_max: u32) -> Result<Vec<IdentityMapping>> {

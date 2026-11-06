@@ -10,6 +10,9 @@ pub fn slug(value: &str) -> String {
 
 pub const MAX_ADR_NUMBER: u32 = 9999;
 
+/// The H2 sections an active ADR holds, in this order.
+pub const ADR_SECTIONS: [&str; 3] = ["Context", "Decision", "Consequences"];
+
 /// The number of an `ADR-NNNN` id.
 pub fn parse_adr_id(value: &str) -> Option<u32> {
     parse_adr_number(value.strip_prefix("ADR-")?)

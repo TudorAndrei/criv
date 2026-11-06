@@ -1,7 +1,7 @@
 //! Criv's document structure, independent of Markdown presentation tools.
 
 use crate::diagnostic::{Diagnostic, DiagnosticCode};
-use crate::identity::slug;
+use crate::identity::{ADR_SECTIONS, slug};
 use crate::vault::{DecisionStatus, Note, NoteKind};
 
 pub(super) fn validate(note: &Note, historical: bool, diagnostics: &mut Vec<Diagnostic>) {
@@ -56,14 +56,13 @@ pub(super) fn validate(note: &Note, historical: bool, diagnostics: &mut Vec<Diag
         ));
     }
     if note.kind() == NoteKind::Decision {
-        let required = ["Context", "Decision", "Consequences"];
         let sections = note
             .headings()
             .iter()
-            .filter(|heading| heading.level == 2 && required.contains(&heading.text.as_str()))
+            .filter(|heading| heading.level == 2 && ADR_SECTIONS.contains(&heading.text.as_str()))
             .map(|heading| heading.text.as_str())
             .collect::<Vec<_>>();
-        if sections != required {
+        if sections != ADR_SECTIONS {
             diagnostics.push(Diagnostic::error(
                 DiagnosticCode::DocumentFormat,
                 note.rel_path(),
