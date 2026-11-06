@@ -169,3 +169,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0157-run-rust-tests-with-cargo-nextest|ADR-0157]] - Run Rust tests with cargo-nextest
 - [[0158-give-each-note-notation-one-owner|ADR-0158]] - Give each note notation one owner
 - [[0159-derive-configuration-defaults-from-one-type|ADR-0159]] - Derive configuration defaults from one type
+- [[0160-own-the-published-state-grammar-in-the-wire-crate|ADR-0160]] - Own the published State grammar in the wire crate
