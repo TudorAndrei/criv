@@ -2,8 +2,7 @@
 
 use std::fmt::Display;
 
-use criv_state_wire::{STATE_SCHEMA, StateDocument};
-use serde::Deserialize;
+use criv_state_wire::{StateDocument, StateReadError};
 use wasm_bindgen::prelude::*;
 
 /// Stable reason a State document cannot be loaded.
@@ -58,13 +57,8 @@ impl StateError {
 
 /// Decode one State document after checking its schema.
 pub fn decode_state(raw: &str) -> Result<StateDocument, StateError> {
-    let state = serde_json::from_str::<serde_json::Value>(raw).map_err(StateError::json_invalid)?;
-    let schema = state
-        .get("schema")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("<missing>");
-    if schema != STATE_SCHEMA {
-        return Err(StateError::schema_unsupported(schema));
-    }
-    StateDocument::deserialize(state).map_err(StateError::json_invalid)
+    criv_state_wire::decode(raw).map_err(|error| match error {
+        StateReadError::Json(error) => StateError::json_invalid(error),
+        StateReadError::UnsupportedSchema(schema) => StateError::schema_unsupported(&schema),
+    })
 }

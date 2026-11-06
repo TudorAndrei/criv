@@ -5,7 +5,7 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use criv_state_wire::{STATE_SCHEMA, content_hash, layout};
+use criv_state_wire::{STATE_SCHEMA, StateReadError, content_hash, layout};
 use serde::{Deserialize, Serialize};
 
 use crate::repository::RepositoryFiles;
@@ -216,13 +216,14 @@ fn validate_snapshot(hash: &str, contents: &str) -> Result<()> {
     if !content_hash::is_valid(hash) {
         return Err(CrivError::new(format!("invalid snapshot hash `{hash}`")));
     }
-    let value = serde_json::from_str::<serde_json::Value>(contents)
-        .map_err(|err| CrivError::new(format!("snapshot `{hash}` is corrupt: {err}")))?;
-    if value.get("schema").and_then(serde_json::Value::as_str) != Some(STATE_SCHEMA) {
-        return Err(CrivError::new(format!(
-            "snapshot `{hash}` is corrupt: expected schema {STATE_SCHEMA}"
-        )));
-    }
+    criv_state_wire::check_schema(contents).map_err(|error| {
+        CrivError::new(match error {
+            StateReadError::Json(err) => format!("snapshot `{hash}` is corrupt: {err}"),
+            StateReadError::UnsupportedSchema(_) => {
+                format!("snapshot `{hash}` is corrupt: expected schema {STATE_SCHEMA}")
+            }
+        })
+    })?;
     let actual = content_hash::of_document(contents);
     if actual != hash {
         return Err(CrivError::new(format!(

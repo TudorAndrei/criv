@@ -684,7 +684,7 @@ fn load_documentation_assets(
     mut paths: Vec<String>,
 ) -> Result<Vec<DocumentationAsset>> {
     paths.sort();
-    let mut total_bytes = 0_u64;
+    let mut budget = asset::TotalBudget::default();
     let mut assets = Vec::new();
     for path in paths {
         let Some(contents) = files.read_bounded(Path::new(&path), asset::MAX_BYTES)? else {
@@ -699,10 +699,9 @@ fn load_documentation_assets(
         let bytes = u64::try_from(contents.len()).map_err(|_| {
             crate::CrivError::new(format!("asset `{path}` exceeds the supported byte range"))
         })?;
-        if total_bytes.saturating_add(bytes) > asset::MAX_TOTAL_BYTES {
+        if !budget.admit(bytes) {
             break;
         }
-        total_bytes = total_bytes.saturating_add(bytes);
         assets.push(DocumentationAsset {
             path,
             mime: expected_mime.to_string(),

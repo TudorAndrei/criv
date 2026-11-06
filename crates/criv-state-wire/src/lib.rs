@@ -54,6 +54,48 @@ impl Default for StateDocument {
     }
 }
 
+/// Why a State document text cannot be read.
+#[derive(Debug)]
+pub enum StateReadError {
+    Json(serde_json::Error),
+    /// The `schema` value found, or `<missing>`.
+    UnsupportedSchema(String),
+}
+
+#[derive(Deserialize)]
+struct SchemaView {
+    #[serde(default)]
+    schema: Option<serde_json::Value>,
+}
+
+/// Checks that `raw` is a JSON object whose `schema` is [`STATE_SCHEMA`],
+/// without decoding the graph, so a revision with a kind this build does not
+/// know still passes.
+///
+/// # Errors
+///
+/// Returns an error when `raw` is not JSON or names another schema.
+pub fn check_schema(raw: &str) -> Result<(), StateReadError> {
+    let view = serde_json::from_str::<SchemaView>(raw).map_err(StateReadError::Json)?;
+    match view.schema.as_ref().and_then(serde_json::Value::as_str) {
+        Some(STATE_SCHEMA) => Ok(()),
+        found => Err(StateReadError::UnsupportedSchema(
+            found.unwrap_or("<missing>").to_string(),
+        )),
+    }
+}
+
+/// Decodes a State document after [`check_schema`].
+///
+/// # Errors
+///
+/// Returns an error when the schema check fails or the document does not
+/// match the State grammar.
+pub fn decode(raw: &str) -> Result<StateDocument, StateReadError> {
+    check_schema(raw)?;
+    serde_json::from_str(raw).map_err(StateReadError::Json)
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Graph {
     #[serde(default)]
@@ -400,5 +442,23 @@ mod tests {
 
         let decoded: StateDocument = serde_json::from_str(r#"{"schema":"criv.state.v1"}"#).unwrap();
         assert_eq!(decoded.asset_index, Vec::new());
+    }
+
+    #[test]
+    fn schema_check_ignores_unknown_kinds_that_decoding_rejects() {
+        let future_kind =
+            r#"{"schema":"criv.state.v1","graph":{"nodes":[{"id":"x","kind":"future"}]}}"#;
+        assert!(check_schema(future_kind).is_ok());
+        assert!(matches!(decode(future_kind), Err(StateReadError::Json(_))));
+
+        assert!(matches!(
+            decode(r#"{"schema":"criv.state.v0"}"#),
+            Err(StateReadError::UnsupportedSchema(schema)) if schema == "criv.state.v0"
+        ));
+        assert!(matches!(
+            check_schema("{}"),
+            Err(StateReadError::UnsupportedSchema(schema)) if schema == "<missing>"
+        ));
+        assert!(matches!(check_schema("{"), Err(StateReadError::Json(_))));
     }
 }

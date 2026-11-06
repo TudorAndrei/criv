@@ -18,16 +18,14 @@ pub fn take_assets(entries: Vec<AssetIndexEntry>) -> Vec<AssetIndexEntry> {
 
     let mut assets = Vec::new();
     let mut seen = BTreeSet::new();
-    let mut total_bytes = 0_u64;
+    let mut budget = asset::TotalBudget::default();
     for entry in candidates {
         if !seen.insert(entry.path.clone()) {
             continue;
         }
-        let next = total_bytes.saturating_add(entry.bytes);
-        if next > asset::MAX_TOTAL_BYTES {
+        if !budget.admit(entry.bytes) {
             break;
         }
-        total_bytes = next;
         assets.push(entry);
     }
     assets
