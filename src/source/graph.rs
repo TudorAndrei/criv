@@ -80,12 +80,13 @@ pub struct Import {
 }
 
 impl Import {
-    const fn legacy(module: String, line: usize) -> Self {
+    /// An import of a language without Elixir directive scoping.
+    const fn unscoped(module: String, line: usize, site: usize) -> Self {
         Self {
             module,
             line,
-            site: 0,
-            kind: DirectiveKind::Legacy,
+            site,
+            kind: DirectiveKind::Import,
             owner: None,
             scope: None,
             alias: None,
@@ -102,21 +103,19 @@ pub struct LexicalScope {
     end_byte: usize,
 }
 
-#[derive(Debug, Default, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum DirectiveKind {
     Alias,
     Import,
     Require,
     Use,
-    #[default]
-    Legacy,
 }
 
 impl DirectiveKind {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Alias => "alias",
-            Self::Import | Self::Legacy => "import",
+            Self::Import => "import",
             Self::Require => "require",
             Self::Use => "use",
         }

@@ -135,9 +135,6 @@ fn graph_root(graph: &Graph) -> String {
 }
 
 fn directive_node_id(path: &str, directive: &Import) -> String {
-    if directive.kind == DirectiveKind::Legacy {
-        return node_id::import(path, &directive.module);
-    }
     node_id::directive(
         path,
         directive.kind.as_str(),
@@ -157,7 +154,7 @@ impl From<DirectiveKind> for NodeKind {
     fn from(kind: DirectiveKind) -> Self {
         match kind {
             DirectiveKind::Alias => Self::Alias,
-            DirectiveKind::Import | DirectiveKind::Legacy => Self::Import,
+            DirectiveKind::Import => Self::Import,
             DirectiveKind::Require => Self::Require,
             DirectiveKind::Use => Self::Use,
         }

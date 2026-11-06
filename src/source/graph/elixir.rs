@@ -911,10 +911,7 @@ fn parse_directive(
                         .next()
                         .map(str::to_string)
                         .filter(|value| !value.starts_with(':')),
-                    DirectiveKind::Import
-                    | DirectiveKind::Require
-                    | DirectiveKind::Use
-                    | DirectiveKind::Legacy => None,
+                    DirectiveKind::Import | DirectiveKind::Require | DirectiveKind::Use => None,
                 })
             } else if kind == DirectiveKind::Alias {
                 module.rsplit('.').next().map(str::to_string)

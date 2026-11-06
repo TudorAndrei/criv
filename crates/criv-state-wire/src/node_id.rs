@@ -93,12 +93,7 @@ pub fn pattern(id: &str) -> String {
     NodeIdKind::Pattern.id(id)
 }
 
-#[must_use]
-pub fn import(path: &str, module: &str) -> String {
-    NodeIdKind::Import.id(&format!("{path}:{module}"))
-}
-
-/// The id of a directive that keeps its kind and source site.
+/// The id of an import directive, with its kind and source byte site.
 #[must_use]
 pub fn directive(path: &str, kind: &str, module: &str, site: usize) -> String {
     NodeIdKind::Import.id(&format!("{path}:{kind}:{module}:{site}"))
@@ -163,11 +158,6 @@ mod tests {
                 pattern("ADR-0001/entry"),
                 NodeIdKind::Pattern,
                 "ADR-0001/entry",
-            ),
-            (
-                import("lib/a.ex", "Logger"),
-                NodeIdKind::Import,
-                "lib/a.ex:Logger",
             ),
             (
                 directive("lib/a.ex", "alias", "My.App", 3),

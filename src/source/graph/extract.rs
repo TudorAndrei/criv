@@ -390,7 +390,8 @@ impl GenericWalk<'_> {
     ) {
         let line = node.start_position().row.saturating_add(1);
         for import in self.imports(node) {
-            file.imports.push(Import::legacy(import, line));
+            file.imports
+                .push(Import::unscoped(import, line, node.start_byte()));
         }
         let child_module_parent = if let Some(name) = self.module(node) {
             let name = module_parent

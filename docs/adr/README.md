@@ -196,6 +196,7 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0185-vscode-unit-tests-by-feature-directory|ADR-0185]] - VS Code unit tests by feature directory
 - [[0189-keep-each-source-file-with-its-fingerprint-and-parent-links|ADR-0189]] - Keep each Source file with its fingerprint and parent links
 - [[0190-judge-docs-watch-events-by-the-vault-prune-rules|ADR-0190]] - Judge docs watch events by the vault prune rules
+- [[0191-give-every-import-node-the-directive-id-form|ADR-0191]] - Give every import node the directive id form
 - [[0192-retain-explicit-source-lookup-results-after-the-editor-state-move|ADR-0192]] - Retain explicit source lookup results after the editor-state move
 - [[0193-follow-the-cli-source-wikilink-rule-in-editors|ADR-0193]] - Follow the CLI source Wikilink rule in editors
 - [[0194-check-editor-companions-through-shared-scripts-and-fixtures|ADR-0194]] - Check editor companions through shared scripts and fixtures
