@@ -1,5 +1,8 @@
-import { readFile } from "node:fs/promises";
+import { readFile, readdir, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { build } from "esbuild";
 
 const packagedEntry = fileURLToPath(new URL("./src/packaged.ts", import.meta.url));
 const wasmPath = fileURLToPath(new URL("./pkg/criv_wasm_bg.wasm", import.meta.url));
@@ -24,3 +27,33 @@ export const crivWasmBytesPlugin = {
     }));
   },
 };
+
+async function testEntries(directory, entryName) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const nested = await Promise.all(
+    entries.map((entry) => {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        return testEntries(path, entryName);
+      }
+      return entry.isFile() && entryName.test(entry.name) ? [path] : [];
+    }),
+  );
+  return nested.flat().sort();
+}
+
+/** Bundles each test file under testRoot whose name matches entryName into outdir for node:test. */
+export async function bundleTests({ testRoot, outdir, entryName, plugins = [], ...options }) {
+  await rm(outdir, { recursive: true, force: true });
+  await build({
+    entryPoints: await testEntries(testRoot, entryName),
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    plugins: [...plugins, crivWasmBytesPlugin],
+    outbase: testRoot,
+    outdir,
+    logLevel: "warning",
+    ...options,
+  });
+}

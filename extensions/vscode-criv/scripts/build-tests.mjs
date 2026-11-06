@@ -1,40 +1,15 @@
-import { readdir, rm } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import process from "node:process";
 
-import { crivWasmBytesPlugin } from "@criv/editor-state/esbuild";
-import { build } from "esbuild";
+import { bundleTests } from "@criv/editor-state/esbuild";
 
 const root = resolve(import.meta.dirname, "..");
 const suite = process.argv.includes("--integration") ? "integration" : "unit";
-const testRoot = resolve(root, "test", suite);
-const outdir = resolve(root, "dist-test", suite);
-const entryName = suite === "unit" ? /\.test\.ts$/ : /^runner\.ts$/;
 
-async function testEntries(directory) {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const nested = await Promise.all(
-    entries.map((entry) => {
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) {
-        return testEntries(path);
-      }
-      return entry.isFile() && entryName.test(entry.name) ? [path] : [];
-    }),
-  );
-  return nested.flat().sort();
-}
-
-await rm(outdir, { recursive: true, force: true });
-await build({
-  entryPoints: await testEntries(testRoot),
-  bundle: true,
-  platform: "node",
-  format: "cjs",
+await bundleTests({
+  testRoot: resolve(root, "test", suite),
+  outdir: resolve(root, "dist-test", suite),
+  entryName: suite === "unit" ? /\.test\.ts$/ : /^runner\.ts$/,
   target: "node18",
   external: ["vscode"],
-  plugins: [crivWasmBytesPlugin],
-  outbase: testRoot,
-  outdir,
-  logLevel: "warning",
 });

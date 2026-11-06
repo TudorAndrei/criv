@@ -9,7 +9,9 @@ import {
 import { CRIV_COMMANDS } from "./commands/identifiers";
 import type { WorkspaceStateStatus } from "./state/store";
 
-export class CrivStateTreeProvider implements vscode.TreeDataProvider<CrivTreeItem> {
+export class CrivStateTreeProvider
+  implements vscode.TreeDataProvider<CrivTreeItem>, vscode.Disposable
+{
   private status: WorkspaceStateStatus = { generation: 0, kind: "loading" };
   private readonly didChangeTreeData = new vscode.EventEmitter<CrivTreeItem | undefined>();
 
