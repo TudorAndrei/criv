@@ -185,3 +185,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0173-observe-discovery-through-a-feature-gated-selection-api|ADR-0173]] - Observe discovery through a feature-gated selection API
 - [[0174-guard-runtime-boundaries-with-tree-wide-policies|ADR-0174]] - Guard runtime boundaries with tree-wide policies
 - [[0175-declare-the-command-tree-and-shipped-skills-once|ADR-0175]] - Declare the command tree and shipped skills once
+- [[0176-guard-runtime-boundaries-over-the-whole-source-tree|ADR-0176]] - Guard runtime boundaries over the whole source tree
