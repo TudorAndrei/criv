@@ -178,7 +178,6 @@ pub fn validate_vault(vault: &Vault) -> Validation {
     let mut diagnostics = Vec::new();
     validate_notes(vault, &mut diagnostics);
     diagnostics.extend_from_slice(policies.definition_diagnostics());
-    validate_pattern_collisions(vault, &mut diagnostics);
     validate_links(vault, &mut diagnostics);
     validate_supersession(vault, &mut diagnostics);
     diagnostic::sort(&mut diagnostics);
@@ -459,36 +458,6 @@ fn publication_blocking_diagnostics(vault: &Vault) -> Vec<Diagnostic> {
         .collect::<Vec<_>>();
     diagnostic::sort(&mut diagnostics);
     diagnostics
-}
-
-/// A full pattern id that policies in more than one note declare.
-fn validate_pattern_collisions(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
-    let mut notes_by_id: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for declaration in vault.policy_declarations() {
-        if let Some(id) = declaration.id {
-            let notes = notes_by_id.entry(id).or_default();
-            if !notes.contains(&declaration.note.rel_path()) {
-                notes.push(declaration.note.rel_path());
-            }
-        }
-    }
-
-    for (pattern, notes) in notes_by_id {
-        if notes.len() <= 1 {
-            continue;
-        }
-        for note in &notes {
-            diagnostics.push(Diagnostic::error(
-                DiagnosticCode::DuplicatePatternId,
-                note,
-                None,
-                format!(
-                    "pattern id `{pattern}` is declared in multiple notes: {}",
-                    notes.join(", ")
-                ),
-            ));
-        }
-    }
 }
 
 fn validate_links(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {

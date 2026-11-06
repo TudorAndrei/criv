@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::Result;
 use crate::diagnostic::{Diagnostic, DiagnosticCode};
@@ -36,7 +36,7 @@ pub struct PolicyFailure {
 
 impl PolicyScanPlan {
     pub(crate) fn new(vault: &Vault) -> Self {
-        let mut diagnostics = Vec::new();
+        let mut diagnostics = duplicate_pattern_ids(vault);
         let mut owners: Vec<(&Note, &str, Vec<PlannedPolicy>)> = Vec::new();
         let mut registered_failures = Vec::new();
 
@@ -61,17 +61,6 @@ impl PolicyScanPlan {
                 ));
                 continue;
             }
-            let first_in_this_note = declaration
-                .id
-                .and_then(|id| vault.resolve_policy_pattern(id))
-                .is_some_and(|(owner, _)| owner.rel_path() == note.rel_path());
-            if !declaration.first && first_in_this_note {
-                diagnostics.push(definition_error(
-                    DiagnosticCode::DuplicatePolicyPattern,
-                    format!("policy pattern id `{local_id}` is declared more than once"),
-                ));
-            }
-
             #[cfg(test)]
             work::record(Work::PolicyDefinition);
             let registered = declaration
@@ -131,7 +120,52 @@ impl PolicyScanPlan {
     pub(crate) fn definition_diagnostics(&self) -> &[Diagnostic] {
         &self.diagnostics
     }
+}
 
+/// Every full pattern id declared more than once: each later declaration in
+/// the owning note, and every note when several notes declare it.
+fn duplicate_pattern_ids(vault: &Vault) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let mut notes_by_id: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for declaration in vault.policy_declarations() {
+        let Some(id) = declaration.id else {
+            continue;
+        };
+        let note = declaration.note.rel_path();
+        let notes = notes_by_id.entry(id).or_default();
+        if !declaration.first && notes.first() == Some(&note) {
+            let local_id = declaration.policy.id.as_deref().unwrap_or_default().trim();
+            diagnostics.push(Diagnostic::error(
+                DiagnosticCode::DuplicatePolicyPattern,
+                note,
+                Some(declaration.policy.line),
+                format!("policy pattern id `{local_id}` is declared more than once"),
+            ));
+        }
+        if !notes.contains(&note) {
+            notes.push(note);
+        }
+    }
+    for (pattern, notes) in notes_by_id {
+        if notes.len() <= 1 {
+            continue;
+        }
+        for note in &notes {
+            diagnostics.push(Diagnostic::error(
+                DiagnosticCode::DuplicatePatternId,
+                note,
+                None,
+                format!(
+                    "pattern id `{pattern}` is declared in multiple notes: {}",
+                    notes.join(", ")
+                ),
+            ));
+        }
+    }
+    diagnostics
+}
+
+impl PolicyScanPlan {
     pub(crate) fn owners(&self) -> &[PlannedOwner] {
         &self.owners
     }
