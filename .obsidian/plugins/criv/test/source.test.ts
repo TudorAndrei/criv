@@ -45,18 +45,12 @@ async function loadedFixture(): Promise<{
   };
 }
 
-/** Targets the criv CLI resolves but the Wasm lookup does not yet. */
-const WASM_LOOKUP_GAPS = new Set(["source:lib.rs#run", "helper.rs#help"]);
-
 test("resolves the shared link fixture like the criv CLI", async (t) => {
   const { projections, resolver } = await loadedFixture();
 
   // Obsidian resolves note links itself; criv adds source and pattern links.
   for (const testCase of fixture.cases.filter((candidate) => candidate.note === null)) {
-    const todo = WASM_LOOKUP_GAPS.has(testCase.target)
-      ? "Wasm lookup does not resolve a basename with a symbol fragment"
-      : undefined;
-    await t.test(testCase.target, { todo }, () => {
+    await t.test(testCase.target, () => {
       const result = resolveSourceResult(resolver, testCase.target);
       if (testCase.ambiguous) {
         assert.equal(result.kind, "ambiguous");
