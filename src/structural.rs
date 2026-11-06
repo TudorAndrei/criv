@@ -2,9 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
-#[cfg(test)]
-use std::{cell::Cell, thread_local};
-
 use ast_grep_config::{DeserializeEnv, SerializableRuleCore};
 #[cfg(test)]
 use ast_grep_core::Matcher;
@@ -15,6 +12,8 @@ use ast_grep_language::{Language, LanguageExt, SupportLang};
 use crate::diagnostic::{DiagnosticCode, SourceLocation};
 use crate::source::read_source_to_string_from;
 use crate::vault::{PolicyPattern, Vault};
+#[cfg(test)]
+use crate::work::{self, Work};
 use crate::{CrivError, Result};
 
 /// The `language` of a policy pattern, parsed when the ADR is read.
@@ -109,50 +108,6 @@ pub struct PolicyScanRequest<'a> {
     pub(crate) paths: &'a BTreeSet<String>,
 }
 
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
-pub(crate) struct WorkCounts {
-    pub(crate) policy_compilations: usize,
-    pub(crate) ast_parses: usize,
-}
-
-#[cfg(test)]
-thread_local! {
-    static WORK_COUNTS: Cell<WorkCounts> = const { Cell::new(WorkCounts {
-        policy_compilations: 0,
-        ast_parses: 0,
-    }) };
-}
-
-#[cfg(test)]
-fn record_work(update: impl FnOnce(&mut WorkCounts)) {
-    WORK_COUNTS.with(|counts| {
-        let mut next = counts.get();
-        update(&mut next);
-        counts.set(next);
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn reset_work_counts() {
-    WORK_COUNTS.with(|counts| counts.set(WorkCounts::default()));
-}
-
-#[cfg(test)]
-pub(crate) fn work_counts() -> WorkCounts {
-    WORK_COUNTS.with(Cell::get)
-}
-
-#[cfg(test)]
-pub(crate) fn reset_batch_parse_count() {
-    reset_work_counts();
-}
-
-#[cfg(test)]
-pub(crate) fn batch_parse_count() -> usize {
-    work_counts().ast_parses
-}
-
 pub fn compile_policy(
     policy: &PolicyPattern,
 ) -> std::result::Result<CompiledPolicy, PolicyCompileError> {
@@ -168,9 +123,7 @@ pub fn compile_policy(
         }
     };
     #[cfg(test)]
-    record_work(|counts| {
-        counts.policy_compilations = counts.policy_compilations.saturating_add(1);
-    });
+    work::record(Work::PolicyCompilation);
     let matcher = compile(source, language).map_err(|error| match source {
         PatternSource::Pattern(_) => PolicyCompileError::InvalidPattern(error.to_string()),
         PatternSource::Rule(_) => PolicyCompileError::InvalidRule(error.to_string()),
@@ -206,7 +159,7 @@ pub fn find_policies_batch(
             source_file,
         )?);
         #[cfg(test)]
-        record_work(|counts| counts.ast_parses = counts.ast_parses.saturating_add(1));
+        work::record(Work::AstParse);
         let ast = language.ast_grep(contents.as_ref());
         let root = ast.root();
         for request in requests {
@@ -484,7 +437,7 @@ all:
         let function_policy = policy("rust", "fn $NAME() { $$$ }");
         let left_paths = BTreeSet::from(["src/left.rs".to_string()]);
         let right_paths = BTreeSet::from(["src/right.rs".to_string()]);
-        reset_work_counts();
+        work::reset();
         let function_compiled = compile_policy(&function_policy).unwrap();
         let requests = vec![
             PolicyScanRequest {
@@ -520,11 +473,8 @@ all:
             vec!["src/right.rs"]
         );
         assert_eq!(
-            work_counts(),
-            WorkCounts {
-                policy_compilations: 1,
-                ast_parses: 2,
-            },
+            work::counts([Work::PolicyCompilation, Work::AstParse]),
+            [1, 2],
             "the policy is compiled once and each affected source is parsed once"
         );
     }
@@ -644,7 +594,7 @@ end
             "lib/sample.ex".to_string(),
             "test/sample_test.exs".to_string(),
         ]);
-        reset_work_counts();
+        work::reset();
         let rows = find_policies_batch(
             &vault,
             &[PolicyScanRequest {
@@ -662,7 +612,7 @@ end
                 .collect::<Vec<_>>(),
             vec!["lib/sample.ex", "test/sample_test.exs"]
         );
-        assert_eq!(work_counts().ast_parses, 2);
+        assert_eq!(work::count(Work::AstParse), 2);
     }
 
     fn policy(language: &str, pattern: &str) -> PolicyPattern {

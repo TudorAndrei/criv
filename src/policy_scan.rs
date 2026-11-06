@@ -1,13 +1,12 @@
 use std::collections::BTreeSet;
 
-#[cfg(test)]
-use std::{cell::Cell, thread_local};
-
 use crate::Result;
 use crate::diagnostic::{Diagnostic, DiagnosticCode};
 use crate::identity::pattern_id;
 use crate::structural::{self, CompiledPolicy, PolicyScanRequest};
 use crate::vault::{NoteKind, Vault};
+#[cfg(test)]
+use crate::work::{self, Work};
 
 pub struct PolicyScanPlan {
     diagnostics: Vec<Diagnostic>,
@@ -52,40 +51,6 @@ impl ScanPaths<'_> {
             Self::Filtered(paths) => paths,
         }
     }
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
-pub(crate) struct WorkCounts {
-    pub(crate) definition_compilations: usize,
-    pub(crate) adr_scope_resolutions: usize,
-}
-
-#[cfg(test)]
-thread_local! {
-    static WORK_COUNTS: Cell<WorkCounts> = const { Cell::new(WorkCounts {
-        definition_compilations: 0,
-        adr_scope_resolutions: 0,
-    }) };
-}
-
-#[cfg(test)]
-fn record_work(record: impl FnOnce(&mut WorkCounts)) {
-    WORK_COUNTS.with(|counts| {
-        let mut next = counts.get();
-        record(&mut next);
-        counts.set(next);
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn reset_work_counts() {
-    WORK_COUNTS.with(|counts| counts.set(WorkCounts::default()));
-}
-
-#[cfg(test)]
-pub(crate) fn work_counts() -> WorkCounts {
-    WORK_COUNTS.with(Cell::get)
 }
 
 impl PolicyScanPlan {
@@ -143,10 +108,7 @@ impl PolicyScanPlan {
                 }
 
                 #[cfg(test)]
-                record_work(|counts| {
-                    counts.definition_compilations =
-                        counts.definition_compilations.saturating_add(1);
-                });
+                work::record(Work::PolicyDefinition);
                 let full_id = active_adr_id.map(|adr_id| pattern_id(adr_id, local_id));
                 let state_pattern_id = full_id.clone().filter(|full_id| {
                     vault.patterns().contains(full_id)
@@ -188,9 +150,7 @@ impl PolicyScanPlan {
             }
 
             #[cfg(test)]
-            record_work(|counts| {
-                counts.adr_scope_resolutions = counts.adr_scope_resolutions.saturating_add(1);
-            });
+            work::record(Work::PolicyScopeResolution);
             let scopes = Vault::effective_governs(note);
             let paths = vault
                 .source_files_matching_globs(&scopes)
@@ -346,33 +306,30 @@ mod tests {
     #[test]
     fn policy_free_accepted_adrs_resolve_no_policy_scopes() {
         let (_temp, vault) = policy_fixture("policy-free");
-        reset_work_counts();
-        structural::reset_work_counts();
+        work::reset();
 
         let plan = PolicyScanPlan::new(&vault);
 
         assert!(plan.owners.is_empty());
         assert!(plan.diagnostics.is_empty());
-        assert_eq!(work_counts(), WorkCounts::default());
-        assert_eq!(structural::work_counts().policy_compilations, 0);
+        assert_eq!(work::total(), 0);
     }
 
     #[test]
     fn owner_scope_and_compiled_policies_are_reused_by_the_batch() {
         let (_temp, vault) = policy_fixture("two-policies");
-        reset_work_counts();
-        structural::reset_work_counts();
+        work::reset();
 
         let plan = PolicyScanPlan::new(&vault);
 
         assert_eq!(
-            work_counts(),
-            WorkCounts {
-                definition_compilations: 2,
-                adr_scope_resolutions: 1,
-            }
+            work::counts([
+                Work::PolicyDefinition,
+                Work::PolicyScopeResolution,
+                Work::PolicyCompilation,
+            ]),
+            [2, 1, 2]
         );
-        assert_eq!(structural::work_counts().policy_compilations, 2);
         assert_eq!(plan.owners.len(), 1);
         assert_eq!(plan.owners[0].adr_id, "ADR-0001");
         assert_eq!(
@@ -388,17 +345,12 @@ mod tests {
             BTreeSet::from(["src/left.rs".to_string(), "src/right.rs".to_string()])
         );
 
-        let _diagnostics = crate::check::validate_vault(&vault, &plan);
-        assert_eq!(
-            structural::work_counts().policy_compilations,
-            2,
-            "the check diagnostic adapter must reuse compiled plan outcomes"
-        );
-
         let violations = plan.scan(&vault, None).unwrap();
 
-        assert_eq!(structural::work_counts().policy_compilations, 2);
-        assert_eq!(structural::work_counts().ast_parses, 2);
+        assert_eq!(
+            work::counts([Work::PolicyCompilation, Work::AstParse]),
+            [2, 2]
+        );
         let exact = violations[0].location().unwrap().lsp_range().unwrap();
         assert_eq!((exact.start.line, exact.start.character), (0, 0));
         assert_eq!((exact.end.line, exact.end.character), (0, 12));
@@ -439,24 +391,24 @@ mod tests {
         )
         .unwrap();
         let vault = Vault::load(temp.path()).unwrap();
-        reset_work_counts();
-        structural::reset_work_counts();
+        work::reset();
 
         let plan = PolicyScanPlan::new(&vault);
 
         assert!(plan.owners.is_empty());
         assert!(plan.diagnostics.is_empty());
-        assert_eq!(work_counts().definition_compilations, 2);
-        assert_eq!(work_counts().adr_scope_resolutions, 0);
+        assert_eq!(
+            work::counts([Work::PolicyDefinition, Work::PolicyScopeResolution]),
+            [2, 0]
+        );
         assert!(plan.scan(&vault, None).unwrap().is_empty());
-        assert_eq!(structural::work_counts().ast_parses, 0);
+        assert_eq!(work::count(Work::AstParse), 0);
     }
 
     #[test]
     fn invalid_policy_reports_once_without_resolving_its_scope() {
         let (_temp, vault) = policy_fixture("invalid-policy");
-        reset_work_counts();
-        structural::reset_work_counts();
+        work::reset();
 
         let plan = PolicyScanPlan::new(&vault);
 
@@ -468,13 +420,13 @@ mod tests {
         );
         assert!(plan.state_definition_error().is_some());
         assert_eq!(
-            work_counts(),
-            WorkCounts {
-                definition_compilations: 1,
-                adr_scope_resolutions: 0,
-            }
+            work::counts([
+                Work::PolicyDefinition,
+                Work::PolicyScopeResolution,
+                Work::PolicyCompilation,
+            ]),
+            [1, 0, 1]
         );
-        assert_eq!(structural::work_counts().policy_compilations, 1);
     }
 
     #[test]

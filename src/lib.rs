@@ -32,6 +32,8 @@ mod state;
 mod structural;
 mod vault;
 mod watch;
+#[cfg(test)]
+mod work;
 
 #[cfg(test)]
 #[path = "../scripts/performance/discovery_probe.rs"]

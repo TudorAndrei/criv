@@ -4,9 +4,6 @@ mod catalog;
 mod graph;
 mod paths;
 
-#[cfg(test)]
-use std::cell::Cell;
-
 use crate::Result;
 use crate::config::Config;
 use crate::discovery::{SourceScope, discover_source_candidates};
@@ -15,11 +12,6 @@ use crate::repository::RepositoryFiles;
 pub use graph::{
     DirectiveKind, EdgeOrigin, Import, Language, ModuleRelationshipRole, Relationship,
     RelationshipKind, RelationshipTarget, SourceFile, SourceGraph, Symbol, SymbolId, SymbolKind,
-};
-#[cfg(test)]
-pub(crate) use graph::{
-    WorkCounts as GraphWorkCounts, reset_work_counts as reset_graph_work_counts,
-    work_counts as graph_work_counts,
 };
 pub use paths::read_source_to_string_from;
 
@@ -42,7 +34,7 @@ impl SourceState {
         }
 
         #[cfg(test)]
-        record_scan();
+        crate::work::record(crate::work::Work::DiscoveryScan);
         let candidates = discover_source_candidates(files, &scope)?;
         let cached = match previous {
             Some(_) => None,
@@ -87,38 +79,6 @@ impl SourceState {
 }
 
 #[cfg(test)]
-#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
-pub(crate) struct IndexWorkCounts {
-    pub(crate) discovery_scans: usize,
-}
-
-#[cfg(test)]
-thread_local! {
-    static WORK_COUNTS: Cell<IndexWorkCounts> = const { Cell::new(IndexWorkCounts {
-        discovery_scans: 0,
-    }) };
-}
-
-#[cfg(test)]
-pub(crate) fn reset_index_work_counts() {
-    WORK_COUNTS.with(|counts| counts.set(IndexWorkCounts::default()));
-}
-
-#[cfg(test)]
-pub(crate) fn index_work_counts() -> IndexWorkCounts {
-    WORK_COUNTS.with(Cell::get)
-}
-
-#[cfg(test)]
-fn record_scan() {
-    WORK_COUNTS.with(|counts| {
-        let mut next = counts.get();
-        next.discovery_scans = next.discovery_scans.saturating_add(1);
-        counts.set(next);
-    });
-}
-
-#[cfg(test)]
 mod tests {
     use std::fs;
     use std::path::Path;
@@ -126,6 +86,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::work::{self, Work};
 
     fn fixture() -> (TempDir, Config) {
         let temp = TempDir::new().unwrap();
@@ -168,11 +129,11 @@ mod tests {
     fn state_reads_each_candidate_once_and_owns_one_selected_set() {
         let (temp, config) = fixture();
         fs::write(temp.path().join("src/binary.rs"), b"\0binary").unwrap();
-        graph::reset_work_counts();
+        work::reset();
 
         let state = refresh(temp.path(), &config, None).unwrap();
 
-        assert_eq!(graph::work_counts().source_reads, 3);
+        assert_eq!(work::count(Work::SourceRead), 3);
         assert_eq!(
             state.paths(),
             &["src/lib.rs".to_string(), "src/nested/lib.rs".to_string()]
@@ -225,29 +186,25 @@ mod tests {
         let (temp, config) = fixture();
         let state = refresh(temp.path(), &config, None).unwrap();
         assert!(!state.changed_files().is_empty());
-        reset_index_work_counts();
-        graph::reset_work_counts();
+        work::reset();
 
         let reused = state.reuse_for_docs();
 
         assert_eq!(reused.paths(), state.paths());
         assert!(reused.changed_files().is_empty());
-        assert_eq!(index_work_counts(), IndexWorkCounts::default());
-        assert_eq!(graph::work_counts(), graph::WorkCounts::default());
+        assert_eq!(work::total(), 0);
     }
 
     #[test]
     fn disabled_state_does_no_source_work() {
         let (temp, mut config) = fixture();
         config.source_index = false;
-        reset_index_work_counts();
-        graph::reset_work_counts();
+        work::reset();
 
         let state = refresh(temp.path(), &config, None).unwrap();
 
         assert!(state.paths().is_empty());
         assert!(state.graph().files().next().is_none());
-        assert_eq!(index_work_counts(), IndexWorkCounts::default());
-        assert_eq!(graph::work_counts(), graph::WorkCounts::default());
+        assert_eq!(work::total(), 0);
     }
 }

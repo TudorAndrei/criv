@@ -1,12 +1,13 @@
 use super::{
     Arc, BTreeMap, BTreeSet, Graph, GraphBuilder, PartitionDependencies, PartitionKey,
-    PartitionKind, PartitionMeta, PatternMatch, PendingPolicyScan, PolicyPartition, PolicyScanPlan,
-    Result, SourceIndexEntry, SourceIndexPartition, State, StatePartitions, Vault,
-    changed_paths_in_scopes, graph_root, note_catalog_fingerprint, note_input_fingerprint,
-    observe_partition_meta, partition_meta, pattern_match_from_structural,
-    record_partition_rebuilt, reusable_matches, sort_and_dedup_pattern_matches,
-    source_index_input_fingerprint, source_mime, structural,
+    PartitionMeta, PatternMatch, PendingPolicyScan, PolicyPartition, PolicyScanPlan, Result,
+    SourceIndexEntry, SourceIndexPartition, State, StatePartitions, Vault, changed_paths_in_scopes,
+    graph_root, note_catalog_fingerprint, note_input_fingerprint, observe_partition_meta,
+    partition_meta, pattern_match_from_structural, reusable_matches,
+    sort_and_dedup_pattern_matches, source_index_input_fingerprint, source_mime, structural,
 };
+#[cfg(test)]
+use crate::work::{self, Work};
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct ReverseDependencies {
@@ -178,7 +179,8 @@ pub(super) fn build(
             })
             .cloned()
             .unwrap_or_else(|| {
-                record_partition_rebuilt(PartitionKind::Source);
+                #[cfg(test)]
+                work::record(Work::SourcePartitionBuild);
                 Arc::new(super::projection::build_source_partition(vault, file))
             });
         partitions.sources.insert(file.path.clone(), partition);
@@ -194,7 +196,8 @@ pub(super) fn build(
             })
             .cloned()
             .unwrap_or_else(|| {
-                record_partition_rebuilt(PartitionKind::Note);
+                #[cfg(test)]
+                work::record(Work::NotePartitionBuild);
                 Arc::new(super::projection::build_note_partition(vault, note))
             });
         partitions.notes.insert(note.rel_path.clone(), partition);
@@ -211,7 +214,8 @@ pub(super) fn build(
             .filter(|partition| partition.meta.input_fingerprint == fingerprint)
             .cloned()
             .unwrap_or_else(|| {
-                record_partition_rebuilt(PartitionKind::SourceIndex);
+                #[cfg(test)]
+                work::record(Work::SourceIndexPartitionBuild);
                 Arc::new(SourceIndexPartition {
                     meta: PartitionMeta {
                         key: PartitionKey::SourceIndex(path.clone()),
@@ -351,7 +355,8 @@ fn build_policy_partitions(
                 .map(pattern_match_from_structural),
         );
         sort_and_dedup_pattern_matches(&mut matches);
-        record_partition_rebuilt(PartitionKind::Policy);
+        #[cfg(test)]
+        work::record(Work::PolicyPartitionBuild);
         let pattern_id = scan.pattern_id;
         partitions.insert(
             pattern_id.clone(),

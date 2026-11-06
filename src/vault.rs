@@ -2,9 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-#[cfg(test)]
-use std::{cell::Cell, thread_local};
-
 use serde::Deserialize;
 
 use crate::Result;
@@ -20,48 +17,9 @@ use crate::markdown::{
 use crate::repository::RepositoryFiles;
 use crate::source::{SourceGraph, SourceState};
 use crate::structural::PolicyLanguage;
+#[cfg(test)]
+use crate::work::{self, Work};
 use criv_state_wire::{asset, content_hash};
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
-pub(crate) struct WorkCounts {
-    source_target_resolutions: usize,
-    link_source_resolutions: usize,
-}
-
-#[cfg(test)]
-thread_local! {
-    static WORK_COUNTS: Cell<WorkCounts> = const { Cell::new(WorkCounts {
-        source_target_resolutions: 0,
-        link_source_resolutions: 0,
-    }) };
-}
-
-#[cfg(test)]
-fn record_work(update: impl FnOnce(&mut WorkCounts)) {
-    WORK_COUNTS.with(|counts| {
-        let mut next = counts.get();
-        update(&mut next);
-        counts.set(next);
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn reset_work_counts() {
-    WORK_COUNTS.with(|counts| counts.set(WorkCounts::default()));
-}
-
-#[cfg(test)]
-pub(crate) fn work_counts() -> WorkCounts {
-    WORK_COUNTS.with(Cell::get)
-}
-
-#[cfg(test)]
-impl WorkCounts {
-    pub(crate) fn source_target_resolutions(self) -> usize {
-        self.source_target_resolutions
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoteKind {
@@ -364,9 +322,7 @@ impl Vault {
 
     fn resolve_source_link(&self, target: &str) -> ResolvedLink {
         #[cfg(test)]
-        record_work(|counts| {
-            counts.link_source_resolutions = counts.link_source_resolutions.saturating_add(1);
-        });
+        work::record(Work::LinkSourceResolution);
 
         match self.resolve_source_target(target) {
             SourceTargetResolution::Resolved { path, ambiguous } => {
@@ -402,9 +358,7 @@ impl Vault {
 
     pub(crate) fn resolve_source_target(&self, target: &str) -> SourceTargetResolution {
         #[cfg(test)]
-        record_work(|counts| {
-            counts.source_target_resolutions = counts.source_target_resolutions.saturating_add(1);
-        });
+        work::record(Work::SourceTargetResolution);
 
         let link = LinkTarget::parse(target);
         let Some((path, ambiguous)) = self.resolve_source_path(link.path()) else {
@@ -1391,14 +1345,14 @@ See [[lib.rs]], [[match:ADR-0001/no-block-on]], [[helper.rs#help]],
         )
         .unwrap();
 
-        reset_work_counts();
+        work::reset();
         let vault = Vault::load(&root).unwrap();
-        assert_eq!(work_counts().link_source_resolutions, 2);
+        assert_eq!(work::count(Work::LinkSourceResolution), 2);
 
         let _ =
             crate::check::validate_vault(&vault, &crate::policy_scan::PolicyScanPlan::new(&vault));
         let state = crate::state::State::build(&vault).unwrap();
-        assert_eq!(work_counts().link_source_resolutions, 2);
+        assert_eq!(work::count(Work::LinkSourceResolution), 2);
         let state = serde_json::to_value(state).unwrap();
         let edges = state["graph"]["edges"].as_array().unwrap();
         for (kind, target) in [
@@ -1411,7 +1365,7 @@ See [[lib.rs]], [[match:ADR-0001/no-block-on]], [[helper.rs#help]],
             }));
         }
 
-        reset_work_counts();
+        work::reset();
         assert!(matches!(
             vault.resolve_link("collision-note"),
             ResolvedLink::Note { .. }
@@ -1420,7 +1374,7 @@ See [[lib.rs]], [[match:ADR-0001/no-block-on]], [[helper.rs#help]],
             vault.resolve_link("ADR-0001#match:ADR-0001/no-block-on"),
             ResolvedLink::Pattern { .. }
         ));
-        assert_eq!(work_counts().link_source_resolutions, 0);
+        assert_eq!(work::count(Work::LinkSourceResolution), 0);
 
         for case in fixture.cases {
             match (
@@ -1508,7 +1462,7 @@ roots = ["src"]
 
         assert_eq!(vault.source_files(), expected);
         assert!(vault.source_graph().file("src/lib.rs").is_some());
-        reset_work_counts();
+        work::reset();
         assert_eq!(
             vault.resolve_source_target("src/lib.rs#run"),
             SourceTargetResolution::Resolved {
@@ -1516,7 +1470,7 @@ roots = ["src"]
                 ambiguous: false,
             }
         );
-        assert_eq!(work_counts().source_target_resolutions, 1);
+        assert_eq!(work::count(Work::SourceTargetResolution), 1);
 
         let _ = std::fs::remove_dir_all(root);
     }

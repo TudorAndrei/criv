@@ -765,6 +765,7 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use crate::work::{self, Work};
     use tempfile::TempDir;
 
     #[test]
@@ -895,21 +896,23 @@ mod tests {
             query_nodes_command(Some(NodeKind::Decision), false),
         ];
 
-        crate::source::reset_index_work_counts();
-        crate::source::reset_graph_work_counts();
+        work::reset();
         for command in &commands {
             let vault = load_query_vault(temp.path(), command).unwrap();
             assert!(vault.source_files().is_empty());
             assert!(vault.source_graph().files().next().is_none());
         }
 
-        let source_index = crate::source::index_work_counts();
-        assert_eq!(source_index.discovery_scans, 0);
-        let source_graph = crate::source::graph_work_counts();
-        assert_eq!(source_graph.cache_loads, 0);
-        assert_eq!(source_graph.parsed_files, 0);
-        assert_eq!(source_graph.reused_files, 0);
-        assert_eq!(source_graph.cache_publications, 0);
+        assert_eq!(
+            work::counts([
+                Work::DiscoveryScan,
+                Work::GraphCacheLoad,
+                Work::SourceParse,
+                Work::SourceReuse,
+                Work::GraphCachePublication,
+            ]),
+            [0; 5]
+        );
         assert!(!temp.path().join(".criv/source-graph.json").exists());
     }
 
@@ -919,16 +922,19 @@ mod tests {
         write_query_fixture(temp.path());
         let command = QueryCommand::AttackSurface(query_output_options());
 
-        crate::source::reset_index_work_counts();
-        crate::source::reset_graph_work_counts();
+        work::reset();
         let vault = load_query_vault(temp.path(), &command).unwrap();
 
         assert_eq!(vault.source_files().len(), 2);
-        assert_eq!(crate::source::index_work_counts().discovery_scans, 1);
-        let source_graph = crate::source::graph_work_counts();
-        assert_eq!(source_graph.cache_loads, 1);
-        assert_eq!(source_graph.parsed_files, 2);
-        assert_eq!(source_graph.cache_publications, 1);
+        assert_eq!(
+            work::counts([
+                Work::DiscoveryScan,
+                Work::GraphCacheLoad,
+                Work::SourceParse,
+                Work::GraphCachePublication,
+            ]),
+            [1, 1, 2, 1]
+        );
         assert!(temp.path().join(".criv/source-graph.json").exists());
     }
 
@@ -938,7 +944,7 @@ mod tests {
         write_reverse_query_fixture(temp.path());
         let vault = Vault::load(temp.path()).unwrap();
 
-        crate::vault::reset_work_counts();
+        work::reset();
         let reverse_index = QueryReverseIndex::build(&vault, ReverseIndexScope::Sources);
         assert_eq!(
             nodes(&vault, Some(&reverse_index), Some(NodeKind::Code), true).unwrap(),
@@ -954,10 +960,7 @@ mod tests {
             .values()
             .map(Vec::len)
             .sum::<usize>();
-        assert_eq!(
-            crate::vault::work_counts().source_target_resolutions(),
-            input_targets
-        );
+        assert_eq!(work::count(Work::SourceTargetResolution), input_targets);
         assert!(stored_rows <= input_targets * 2);
         assert!(reverse_index.citing_notes.is_empty());
         assert!(reverse_index.notes_with_outgoing_citations.is_empty());

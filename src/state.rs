@@ -2,9 +2,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 #[cfg(test)]
-use std::{cell::Cell, thread_local};
-
-#[cfg(test)]
 use criv_state_wire::STATE_SCHEMA;
 use criv_state_wire::{
     AssetIndexEntry, Edge, EdgeKind, Graph, Node, NodeKind, PatternMatch, SourceIndexEntry,
@@ -20,6 +17,8 @@ use crate::source::{
 use crate::stable_hash::StableHasher;
 use crate::structural;
 use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
+#[cfg(test)]
+use crate::work::{self, Work};
 use crate::{CrivError, Result};
 
 mod partitions;
@@ -40,67 +39,6 @@ struct SerializedState {
     published: String,
     hash: String,
 }
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
-pub(crate) struct WorkCounts {
-    pub(crate) partitions_rebuilt: usize,
-    pub(crate) source_partitions_rebuilt: usize,
-    pub(crate) note_partitions_rebuilt: usize,
-    pub(crate) policy_partitions_rebuilt: usize,
-    pub(crate) source_index_partitions_rebuilt: usize,
-    pub(crate) serializations: usize,
-    published_bytes: usize,
-}
-
-#[cfg(test)]
-thread_local! {
-    static WORK_COUNTS: Cell<WorkCounts> = const { Cell::new(WorkCounts {
-        partitions_rebuilt: 0,
-        source_partitions_rebuilt: 0,
-        note_partitions_rebuilt: 0,
-        policy_partitions_rebuilt: 0,
-        source_index_partitions_rebuilt: 0,
-        serializations: 0,
-        published_bytes: 0,
-    }) };
-}
-
-#[cfg(test)]
-fn record_work(update: impl FnOnce(&mut WorkCounts)) {
-    WORK_COUNTS.with(|counts| {
-        let mut next = counts.get();
-        update(&mut next);
-        counts.set(next);
-    });
-}
-
-#[cfg(test)]
-fn record_partition_rebuilt(kind: PartitionKind) {
-    record_work(|counts| {
-        counts.partitions_rebuilt = counts.partitions_rebuilt.saturating_add(1);
-        match kind {
-            PartitionKind::Source => {
-                counts.source_partitions_rebuilt =
-                    counts.source_partitions_rebuilt.saturating_add(1);
-            }
-            PartitionKind::Note => {
-                counts.note_partitions_rebuilt = counts.note_partitions_rebuilt.saturating_add(1);
-            }
-            PartitionKind::Policy => {
-                counts.policy_partitions_rebuilt =
-                    counts.policy_partitions_rebuilt.saturating_add(1);
-            }
-            PartitionKind::SourceIndex => {
-                counts.source_index_partitions_rebuilt =
-                    counts.source_index_partitions_rebuilt.saturating_add(1);
-            }
-        }
-    });
-}
-
-#[cfg(not(test))]
-const fn record_partition_rebuilt(_: PartitionKind) {}
 
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 enum PartitionKey {
@@ -166,14 +104,6 @@ struct SourceIndexPartition {
 struct GraphRows {
     nodes: Vec<Node>,
     edges: Vec<Edge>,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum PartitionKind {
-    Source,
-    Note,
-    Policy,
-    SourceIndex,
 }
 
 impl State {
@@ -242,9 +172,8 @@ impl State {
     }
 
     fn serialize(&self) -> Result<SerializedState> {
-        let _ = &self.partitions;
         #[cfg(test)]
-        record_work(|counts| counts.serializations = counts.serializations.saturating_add(1));
+        work::record(Work::StateSerialization);
 
         let json = serde_json::to_string_pretty(&self.wire)
             .map_err(|err| CrivError::new(format!("failed to serialize state: {err}")))?;
@@ -268,15 +197,15 @@ impl State {
             precommit_check,
         )?;
         #[cfg(test)]
-        record_work(|counts| {
-            let written = serialized
+        work::add(
+            Work::StateBytes,
+            serialized
                 .published
                 .len()
                 .saturating_mul(2)
                 .saturating_add(serialized.hash.len())
-                .saturating_add(1);
-            counts.published_bytes = counts.published_bytes.saturating_add(written);
-        });
+                .saturating_add(1),
+        );
         Ok(serialized.hash.clone())
     }
 }
@@ -424,16 +353,6 @@ pub fn write_state_incremental_with_policy_plan_and_check(
         precommit_check,
     )?;
     Ok((snapshot, state))
-}
-
-#[cfg(test)]
-pub(crate) fn reset_work_counts() {
-    WORK_COUNTS.with(|counts| counts.set(WorkCounts::default()));
-}
-
-#[cfg(test)]
-pub(crate) fn work_counts() -> WorkCounts {
-    WORK_COUNTS.with(Cell::get)
 }
 
 struct PendingPolicyScan<'a> {
@@ -814,11 +733,11 @@ end
         .unwrap();
         let changed_vault = Vault::load(&root).unwrap();
 
-        reset_work_counts();
+        work::reset();
         let changed =
             State::build_incremental(&changed_vault, Some(&first), &["lib/sample.ex".into()])
                 .unwrap();
-        assert_eq!(work_counts().source_partitions_rebuilt, 1);
+        assert_eq!(work::count(Work::SourcePartitionBuild), 1);
         assert!(changed.wire.graph.edges.iter().any(|edge| {
             edge.from == run
                 && edge.to == "symbol:lib/sample.ex#module:Demo.Target/fn:other/1"
@@ -843,7 +762,7 @@ roots = ["src"]
         std::fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
 
         let vault = Vault::load(&root).unwrap();
-        reset_work_counts();
+        work::reset();
         let (snapshot, _) = write_state(&vault).unwrap();
 
         let state_path = root.join(".criv/state.json");
@@ -864,16 +783,14 @@ roots = ["src"]
         let snapshot_state: serde_json::Value = serde_json::from_str(&snapshot_contents).unwrap();
         assert_eq!(snapshot_state["schema"], STATE_SCHEMA);
         assert_eq!(
-            work_counts(),
-            WorkCounts {
-                partitions_rebuilt: 2,
-                source_partitions_rebuilt: 1,
-                note_partitions_rebuilt: 0,
-                policy_partitions_rebuilt: 0,
-                source_index_partitions_rebuilt: 1,
-                serializations: 1,
-                published_bytes: state_contents.len() * 2 + latest.len(),
-            }
+            work::counts([
+                Work::SourcePartitionBuild,
+                Work::NotePartitionBuild,
+                Work::PolicyPartitionBuild,
+                Work::StateSerialization,
+                Work::StateBytes,
+            ]),
+            [1, 0, 0, 1, state_contents.len() * 2 + latest.len()]
         );
 
         let _ = std::fs::remove_dir_all(root);
@@ -968,7 +885,7 @@ policy:
         .unwrap();
 
         let vault = Vault::load(&root).unwrap();
-        reset_work_counts();
+        work::reset();
         let actual: serde_json::Value =
             serde_json::from_str(&State::build(&vault).unwrap().to_json().unwrap()).unwrap();
         let expected: serde_json::Value =
@@ -985,16 +902,14 @@ policy:
                 .is_none()
         );
         assert_eq!(
-            work_counts(),
-            WorkCounts {
-                partitions_rebuilt: 5,
-                source_partitions_rebuilt: 1,
-                note_partitions_rebuilt: 2,
-                policy_partitions_rebuilt: 1,
-                source_index_partitions_rebuilt: 1,
-                serializations: 1,
-                published_bytes: 0,
-            }
+            work::counts([
+                Work::SourcePartitionBuild,
+                Work::NotePartitionBuild,
+                Work::PolicyPartitionBuild,
+                Work::StateSerialization,
+                Work::StateBytes,
+            ]),
+            [1, 2, 1, 1, 0]
         );
         assert_eq!(
             State::build(&vault).unwrap().hash().unwrap(),
@@ -1154,10 +1069,18 @@ Consequences.
         let vault = Vault::load(&root).unwrap();
         let first = State::build(&vault).unwrap();
 
-        reset_work_counts();
+        work::reset();
         let second = State::build_incremental(&vault, Some(&first), &[]).unwrap();
 
-        assert_eq!(work_counts().partitions_rebuilt, 0);
+        assert_eq!(
+            work::counts([
+                Work::SourcePartitionBuild,
+                Work::NotePartitionBuild,
+                Work::PolicyPartitionBuild,
+                Work::SourceIndexPartitionBuild,
+            ]),
+            [0, 0, 0, 0]
+        );
         for (path, partition) in &first.partitions.sources {
             assert!(Arc::ptr_eq(
                 partition,
@@ -1196,11 +1119,11 @@ Consequences.
         )
         .unwrap();
         let vault = Vault::load(&root).unwrap();
-        structural::reset_batch_parse_count();
+        work::reset();
         let state = State::build(&vault).unwrap();
 
         assert_eq!(
-            structural::batch_parse_count(),
+            work::count(Work::AstParse),
             2,
             "each eligible source file is parsed once for both overlapping ADR policies"
         );

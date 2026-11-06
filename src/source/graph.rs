@@ -2,15 +2,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::thread;
 
-#[cfg(test)]
-use std::{cell::Cell, thread_local};
-
 use serde::{Deserialize, Serialize};
 
 use criv_state_wire::layout;
 use criv_state_wire::source_identity::{self, SourceIdentity, SourceSelector};
 
 use crate::repository::RepositoryFiles;
+#[cfg(test)]
+use crate::work::{self, Work};
 use crate::{CrivError, Result};
 
 mod elixir;
@@ -21,50 +20,6 @@ mod syntax;
 const GRAPH_CACHE_SCHEMA: &str = "criv.source-graph/4";
 const MAX_SOURCE_WORKERS: usize = 16;
 const MIN_FILES_PER_SOURCE_WORKER: usize = 1_024;
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
-pub(crate) struct WorkCounts {
-    pub(crate) cache_loads: usize,
-    pub(crate) source_reads: usize,
-    pub(crate) parsed_files: usize,
-    pub(crate) reused_files: usize,
-    cache_serializations: usize,
-    pub(crate) cache_publications: usize,
-    published_bytes: usize,
-}
-
-#[cfg(test)]
-thread_local! {
-    static WORK_COUNTS: Cell<WorkCounts> = const { Cell::new(WorkCounts {
-        cache_loads: 0,
-        source_reads: 0,
-        parsed_files: 0,
-        reused_files: 0,
-        cache_serializations: 0,
-        cache_publications: 0,
-        published_bytes: 0,
-    }) };
-}
-
-#[cfg(test)]
-fn record_work(update: impl FnOnce(&mut WorkCounts)) {
-    WORK_COUNTS.with(|counts| {
-        let mut next = counts.get();
-        update(&mut next);
-        counts.set(next);
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn reset_work_counts() {
-    WORK_COUNTS.with(|counts| counts.set(WorkCounts::default()));
-}
-
-#[cfg(test)]
-pub(crate) fn work_counts() -> WorkCounts {
-    WORK_COUNTS.with(Cell::get)
-}
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceGraph {
@@ -507,7 +462,7 @@ impl SourceGraphBuild {
 /// cache, or from another schema.
 pub(super) fn load_cached(files: &RepositoryFiles) -> Result<Option<SourceGraphBuild>> {
     #[cfg(test)]
-    record_work(|counts| counts.cache_loads = counts.cache_loads.saturating_add(1));
+    work::record(Work::GraphCacheLoad);
 
     let Some((contents, _)) =
         files.read_optional_with_permissions(Path::new(layout::SOURCE_GRAPH))?
@@ -534,9 +489,7 @@ fn store_cached(files: &RepositoryFiles, graph: &SourceGraph) -> Result<()> {
         graph,
     };
     #[cfg(test)]
-    record_work(|counts| {
-        counts.cache_serializations = counts.cache_serializations.saturating_add(1);
-    });
+    work::record(Work::GraphCacheSerialization);
     let contents = serde_json::to_string_pretty(&cache)
         .map_err(|err| CrivError::new(format!("failed to serialize source graph cache: {err}")))?;
     let contents = format!("{contents}\n");
@@ -544,10 +497,10 @@ fn store_cached(files: &RepositoryFiles, graph: &SourceGraph) -> Result<()> {
         .write_scope(Path::new(layout::DIR))?
         .write_atomic(Path::new(layout::SOURCE_GRAPH), &contents)?;
     #[cfg(test)]
-    record_work(|counts| {
-        counts.cache_publications = counts.cache_publications.saturating_add(1);
-        counts.published_bytes = counts.published_bytes.saturating_add(contents.len());
-    });
+    {
+        work::record(Work::GraphCachePublication);
+        work::add(Work::GraphCacheBytes, contents.len());
+    }
     Ok(())
 }
 
@@ -561,16 +514,16 @@ impl SourceGraph {
         let mut graph = Self::default();
         for processed in process_source_files(files, source_files, previous, workers)? {
             #[cfg(test)]
-            record_work(|counts| counts.source_reads = counts.source_reads.saturating_add(1));
+            work::record(Work::SourceRead);
             let Some(processed) = processed else {
                 continue;
             };
             if processed.reused {
                 #[cfg(test)]
-                record_work(|counts| counts.reused_files = counts.reused_files.saturating_add(1));
+                work::record(Work::SourceReuse);
             } else {
                 #[cfg(test)]
-                record_work(|counts| counts.parsed_files = counts.parsed_files.saturating_add(1));
+                work::record(Work::SourceParse);
                 graph.changed_files.push(processed.parsed.path.clone());
             }
             graph.insert(processed.parsed, processed.fingerprint);
@@ -1185,7 +1138,7 @@ mod tests {
             .unwrap()
             .set_times(fs::FileTimes::new().set_modified(modified))
             .unwrap();
-        reset_work_counts();
+        work::reset();
         build(root, &["src/lib.rs".into()], Some(&first))
             .unwrap()
             .publish_at(root)
@@ -1193,8 +1146,10 @@ mod tests {
 
         assert_eq!(fs::read_to_string(&path).unwrap(), before);
         assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
-        assert_eq!(work_counts().cache_serializations, 0);
-        assert_eq!(work_counts().cache_publications, 0);
+        assert_eq!(
+            work::counts([Work::GraphCacheSerialization, Work::GraphCachePublication]),
+            [0, 0]
+        );
     }
 
     #[test]
@@ -1203,7 +1158,7 @@ mod tests {
         let root = temp.path();
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
-        reset_work_counts();
+        work::reset();
 
         let first = build(root, &["src/lib.rs".into()], None)
             .unwrap()
@@ -1214,13 +1169,17 @@ mod tests {
             .publish_at(root)
             .unwrap();
 
-        let counts = work_counts();
-        assert_eq!(counts.source_reads, 2);
-        assert_eq!(counts.parsed_files, 1);
-        assert_eq!(counts.reused_files, 1);
-        assert_eq!(counts.cache_serializations, 1);
-        assert_eq!(counts.cache_publications, 1);
-        assert!(counts.published_bytes > 0);
+        assert_eq!(
+            work::counts([
+                Work::SourceRead,
+                Work::SourceParse,
+                Work::SourceReuse,
+                Work::GraphCacheSerialization,
+                Work::GraphCachePublication,
+            ]),
+            [2, 1, 1, 1, 1]
+        );
+        assert!(work::count(Work::GraphCacheBytes) > 0);
     }
 
     #[test]
@@ -1241,10 +1200,9 @@ mod tests {
         .unwrap();
         let paths = vec!["lib/sample.ex".into(), "test/sample_test.exs".into()];
 
-        reset_work_counts();
+        work::reset();
         let first = build(root, &paths, None).unwrap();
-        assert_eq!(work_counts().source_reads, 2);
-        assert_eq!(work_counts().parsed_files, 2);
+        assert_eq!(work::counts([Work::SourceRead, Work::SourceParse]), [2, 2]);
         assert_eq!(
             first.graph().files["lib/sample.ex"].language,
             Language::Elixir
@@ -1272,22 +1230,24 @@ mod tests {
                 .is_some()
         );
 
-        reset_work_counts();
+        work::reset();
         let second = build(root, &paths, Some(&first)).unwrap();
-        assert_eq!(work_counts().source_reads, 2);
-        assert_eq!(work_counts().reused_files, 2);
-        assert_eq!(work_counts().parsed_files, 0);
+        assert_eq!(
+            work::counts([Work::SourceRead, Work::SourceReuse, Work::SourceParse]),
+            [2, 2, 0]
+        );
 
         fs::write(
             root.join("test/sample_test.exs"),
             "defmodule SampleTest do\n  def changed(), do: :ok\nend\n",
         )
         .unwrap();
-        reset_work_counts();
+        work::reset();
         let third = build(root, &paths, Some(&second)).unwrap();
-        assert_eq!(work_counts().source_reads, 2);
-        assert_eq!(work_counts().reused_files, 1);
-        assert_eq!(work_counts().parsed_files, 1);
+        assert_eq!(
+            work::counts([Work::SourceRead, Work::SourceReuse, Work::SourceParse]),
+            [2, 1, 1]
+        );
         assert!(
             third
                 .graph()
@@ -1314,14 +1274,15 @@ mod tests {
             source_files: &[String],
             previous: Option<&SourceGraphBuild>,
         ) -> SourceGraphBuild {
-            reset_work_counts();
+            work::reset();
             let build = build(root, source_files, previous)
                 .unwrap()
                 .publish_at(root)
                 .unwrap();
-            let counts = work_counts();
-            assert_eq!(counts.cache_serializations, 1);
-            assert_eq!(counts.cache_publications, 1);
+            assert_eq!(
+                work::counts([Work::GraphCacheSerialization, Work::GraphCachePublication]),
+                [1, 1]
+            );
             build
         }
 

@@ -1286,6 +1286,35 @@ governs:
     }
 
     #[test]
+    fn check_compiles_each_policy_once_for_definitions_and_violations() {
+        let temp = tempfile::TempDir::new().unwrap();
+        crate::identity::copy_fixture_tree(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/policy-scan/two-policies"),
+            temp.path(),
+        )
+        .unwrap();
+        let files = RepositoryFiles::open(temp.path()).unwrap();
+        crate::work::reset();
+
+        let diagnostics = validate_all_from(&files).unwrap();
+
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|diag| diag.code() == DiagnosticCode::PolicyViolation)
+                .count(),
+            4
+        );
+        assert_eq!(
+            crate::work::counts([
+                crate::work::Work::PolicyCompilation,
+                crate::work::Work::AstParse
+            ]),
+            [2, 2]
+        );
+    }
+
+    #[test]
     fn broken_link_diagnostics_report_the_real_file_line() {
         let root = unique_temp_dir("criv-broken-link-line");
         fs::create_dir_all(root.join("docs")).unwrap();
