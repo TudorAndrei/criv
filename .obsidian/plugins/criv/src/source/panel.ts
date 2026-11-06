@@ -1,4 +1,4 @@
-import { ItemView, Notice, TFile } from "obsidian";
+import { FileSystemAdapter, ItemView, Notice, TFile } from "obsidian";
 import type { App, WorkspaceLeaf } from "obsidian";
 import {
   errorMessage,
@@ -18,7 +18,7 @@ export class ObsidianSourcePanelOwner {
   constructor(
     private readonly app: App,
     private readonly state: StatePort,
-    private readonly externalEditorUrl: () => string,
+    private readonly externalEditorUrl: (absolutePath: string) => string,
   ) {}
 
   createView(leaf: WorkspaceLeaf): ItemView {
@@ -91,9 +91,14 @@ export class ObsidianSourcePanelOwner {
     await this.app.workspace.getLeaf(true).openFile(file);
   }
 
+  /** Open a vault file in the external editor, which needs its absolute path. */
   openExternal(path: string): void {
-    const url = this.externalEditorUrl().replace("{path}", encodeURI(path));
-    window.open(url);
+    const { adapter } = this.app.vault;
+    if (!(adapter instanceof FileSystemAdapter)) {
+      new Notice("Opening a source in an external editor needs the desktop app.");
+      return;
+    }
+    window.open(this.externalEditorUrl(adapter.getFullPath(path)));
   }
 
   private leaf(): WorkspaceLeaf | null {

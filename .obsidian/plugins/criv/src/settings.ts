@@ -41,6 +41,15 @@ export class ObsidianSettingsOwner {
     await this.plugin.saveData(this.settings);
   }
 
+  /**
+   * The external editor URL for a file. `{path}` is its absolute path with `/`
+   * separators and no leading slash, as `vscode://file/{path}` expects.
+   */
+  externalEditorUrl(absolutePath: string): string {
+    const path = absolutePath.replace(/\\/g, "/").replace(/^\/+/, "");
+    return this.settings.externalEditorUrl.replace("{path}", encodeURI(path));
+  }
+
   createTab(): PluginSettingTab {
     return new CrivSettingTab(this.app, this.plugin, this);
   }
@@ -72,7 +81,7 @@ class CrivSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("External editor URL")
       .setDesc(
-        "URL template for opening source files. Use {path} for the repo-relative source path.",
+        "URL template for opening source files. Use {path} for the absolute file path without its leading slash.",
       )
       .addText((text) =>
         text
