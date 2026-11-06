@@ -27,9 +27,12 @@ pub(super) fn transition_matches(
     new: &str,
     replacements: &BTreeMap<String, String>,
 ) -> bool {
-    if top_level_scalar(old, "status").as_deref() != Some("accepted")
-        || top_level_scalar(new, "status").as_deref() != Some("accepted")
-    {
+    let accepted = |contents: &str| {
+        markdown::split_frontmatter(contents)
+            .and_then(|frontmatter| frontmatter.scalar("status"))
+            .is_some_and(|status| status == "accepted")
+    };
+    if !accepted(old) || !accepted(new) {
         return false;
     }
     rewrite(old, replacements).is_ok_and(|rewritten| rewritten == new && rewritten != old)
@@ -165,11 +168,6 @@ fn render_scalar(value: &str, style: ScalarStyle) -> String {
             format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
         }
     }
-}
-
-fn top_level_scalar(contents: &str, key: &str) -> Option<String> {
-    let raw = markdown::split_frontmatter(contents)?.raw_scalar(key)?;
-    serde_norway::from_str::<String>(raw).ok()
 }
 
 #[cfg(test)]

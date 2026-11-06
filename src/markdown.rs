@@ -181,14 +181,16 @@ pub struct Frontmatter<'a> {
     pub(crate) body_start: usize,
 }
 
-impl<'a> Frontmatter<'a> {
-    /// The unparsed value of a top-level `key:` line.
-    pub(crate) fn raw_scalar(self, key: &str) -> Option<&'a str> {
-        self.yaml
+impl Frontmatter<'_> {
+    /// The YAML string value of a top-level `key:` line, quotes decoded.
+    pub(crate) fn scalar(self, key: &str) -> Option<String> {
+        let raw = self
+            .yaml
             .lines()
             .filter(|line| !line.starts_with(char::is_whitespace))
-            .find_map(|line| line.strip_prefix(key)?.strip_prefix(':'))
-            .map(str::trim)
+            .find_map(|line| line.strip_prefix(key)?.strip_prefix(':'))?
+            .trim();
+        serde_norway::from_str(raw).ok()
     }
 }
 
@@ -307,7 +309,7 @@ mod tests {
         ] {
             let frontmatter = split_frontmatter(contents).unwrap();
             assert!(frontmatter.yaml.contains("id: doc"));
-            assert_eq!(frontmatter.raw_scalar("id"), Some("doc"));
+            assert_eq!(frontmatter.scalar("id").as_deref(), Some("doc"));
             assert!(
                 contents
                     .get(frontmatter.body_start..)
@@ -319,6 +321,19 @@ mod tests {
                 "both delimiters and the field line"
             );
         }
+    }
+
+    #[test]
+    fn frontmatter_scalars_decode_yaml_quoting() {
+        let frontmatter = split_frontmatter(
+            "---\nid: \"ADR-0001\"\ntitle: 'It''s here'\nstatus: accepted\n---\n",
+        )
+        .unwrap();
+
+        assert_eq!(frontmatter.scalar("id").as_deref(), Some("ADR-0001"));
+        assert_eq!(frontmatter.scalar("title").as_deref(), Some("It's here"));
+        assert_eq!(frontmatter.scalar("status").as_deref(), Some("accepted"));
+        assert_eq!(frontmatter.scalar("governs"), None);
     }
 
     #[test]

@@ -491,9 +491,7 @@ struct AdrSemanticContent {
 
 fn adr_semantic_content(contents: &str) -> AdrSemanticContent {
     let frontmatter = markdown::split_frontmatter(contents);
-    let title = frontmatter
-        .and_then(|frontmatter| frontmatter.raw_scalar("title"))
-        .map(|title| title.trim_matches(['\'', '"']).to_owned());
+    let title = frontmatter.and_then(|frontmatter| frontmatter.scalar("title"));
     let body_start = frontmatter.map_or(0, |frontmatter| frontmatter.body_start);
     let mut in_code_fence = false;
     let mut body = BTreeSet::new();
@@ -611,7 +609,8 @@ fn parse_adr(path: &str, contents: String) -> Result<AdrFile> {
         CrivError::new(format!("branch-local ADR `{path}` has no YAML frontmatter"))
     })?;
     if frontmatter
-        .raw_scalar("id")
+        .scalar("id")
+        .as_deref()
         .and_then(identity::parse_adr_id)
         != Some(id)
     {
@@ -1090,6 +1089,17 @@ mod tests {
             "---\nid: ADR-0002\nkind: decision\ntitle: Local Viewer\nstatus: accepted\n---\n\n# Local Viewer\n\n## Decision\n\n```sh\ncriv install-editor --editor code\n```\n",
             "---\nid: ADR-0001\nkind: decision\ntitle: Offline Check\nstatus: accepted\n---\n\n# Offline Check\n\n## Decision\n\n```sh\ncriv install-editor --editor code\n```\n",
         ));
+    }
+
+    #[test]
+    fn a_quoted_frontmatter_id_agrees_with_its_filename() {
+        let adr = parse_adr(
+            "docs/adr/0004-quoted.md",
+            "---\nid: \"ADR-0004\"\nkind: decision\ntitle: Quoted\nstatus: draft\n---\n".into(),
+        )
+        .unwrap();
+
+        assert_eq!(adr.id, 4);
     }
 
     #[test]
