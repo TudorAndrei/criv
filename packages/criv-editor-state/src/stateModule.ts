@@ -1,8 +1,5 @@
 import {
-  CRIV_STATE_JSON_INVALID,
-  CRIV_STATE_SCHEMA_UNSUPPORTED,
   CrivLoadedStateDisposedError,
-  CrivStateContractError,
   CrivWasmLoadError,
   type CrivInitialProjections,
   type CrivSelectorSuggestion,
@@ -32,20 +29,16 @@ interface WasmModule {
   LoadedState: new (raw: string) => WasmLoadedState;
 }
 
-const stateContractErrorCodes: ReadonlySet<unknown> = new Set([
-  CRIV_STATE_JSON_INVALID,
-  CRIV_STATE_SCHEMA_UNSUPPORTED,
-]);
+const WASM_UNAVAILABLE_MESSAGE =
+  "Could not load the packaged criv Wasm runtime. Rebuild the companion and reload the editor.";
 
 /**
  * Loads the generated Wasm module once and returns State revisions from it.
  * A failed module load is cached and rejects every later load with the same
- * `CrivWasmLoadError`, whose message is `unavailableMessage`.
+ * `CrivWasmLoadError`. A rejected State document keeps the Wasm `Error`, whose
+ * `code` is `CRIV_STATE_JSON_INVALID` or `CRIV_STATE_SCHEMA_UNSUPPORTED`.
  */
-export function createCrivStateModule(
-  loadModule: () => Promise<unknown>,
-  unavailableMessage: string,
-): CrivStateModule {
+export function createCrivStateModule(loadModule: () => Promise<unknown>): CrivStateModule {
   let moduleLoad: Promise<WasmModule> | undefined;
 
   const loadWasm = (): Promise<WasmModule> => {
@@ -53,7 +46,7 @@ export function createCrivStateModule(
       .then(loadModule)
       .then(requireWasmModule)
       .catch((error: unknown) => {
-        throw new CrivWasmLoadError(unavailableMessage, { cause: error });
+        throw new CrivWasmLoadError(WASM_UNAVAILABLE_MESSAGE, { cause: error });
       });
     return moduleLoad;
   };
@@ -61,12 +54,7 @@ export function createCrivStateModule(
   return {
     async loadState(raw) {
       const wasm = await loadWasm();
-      let loaded: WasmLoadedState;
-      try {
-        loaded = new wasm.LoadedState(raw);
-      } catch (error) {
-        throw stateContractError(error) ?? error;
-      }
+      const loaded = new wasm.LoadedState(raw);
       try {
         return new LoadedState(loaded, loaded.initialProjections());
       } catch (error) {
@@ -75,13 +63,6 @@ export function createCrivStateModule(
       }
     },
   };
-}
-
-function stateContractError(error: unknown): CrivStateContractError | undefined {
-  if (!(error instanceof Error) || !isRecord(error) || !stateContractErrorCodes.has(error.code)) {
-    return undefined;
-  }
-  return new CrivStateContractError(error.code as CrivStateContractError["code"], error.message);
 }
 
 function requireWasmModule(value: unknown): WasmModule {

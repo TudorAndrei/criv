@@ -118,3 +118,12 @@ export class Notice {
 export class TFile {
   path = "";
 }
+
+/** The desktop vault adapter, rooted at `basePath`. */
+export class FileSystemAdapter {
+  constructor(private readonly basePath: string) {}
+
+  getFullPath(normalizedPath: string): string {
+    return `${this.basePath}/${normalizedPath}`;
+  }
+}

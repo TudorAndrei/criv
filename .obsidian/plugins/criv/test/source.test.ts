@@ -33,9 +33,7 @@ async function loadedFixture(): Promise<{
   projections: CrivInitialProjections;
   resolver: SourceResolver;
 }> {
-  const revision = await createPackagedCrivStateModule("unavailable").loadState(
-    JSON.stringify(fixture.state),
-  );
+  const revision = await createPackagedCrivStateModule().loadState(JSON.stringify(fixture.state));
   const projections = revision.initialProjections();
   const sources = new Map(projections.sources.map((source) => [source.path, source]));
   return {
@@ -138,6 +136,29 @@ test("editor warnings follow a State reload without a document change", async ()
     plugin.decorations.map((range) => (range as { from: number; to: number }).from),
     [15],
   );
+});
+
+test("completing a source after [[ writes the bare selector in place of the Wikilink", async () => {
+  const suggest = new ObsidianSourceReferencesOwner({} as App, {} as StatePort).createSuggest();
+  let line = "See [[src/li]] here";
+  const cursor = { line: 0, ch: "See [[src/li".length };
+  const editor = {
+    getLine: () => line,
+    getRange: (from: { ch: number }, to: { ch: number }) => line.slice(from.ch, to.ch),
+    replaceRange: (text: string, from: { ch: number }, to: { ch: number }) => {
+      line = line.slice(0, from.ch) + text + line.slice(to.ch);
+    },
+  };
+
+  const trigger = suggest.onTrigger(cursor, editor as never, null);
+  assert.equal(trigger?.query, "src/li");
+  Object.assign(suggest, { context: { ...trigger, editor } });
+  suggest.selectSuggestion(
+    { target: "src/lib.rs#fn:run", label: "run", kind: "function", path: "src/lib.rs", detail: "" },
+    {} as never,
+  );
+
+  assert.equal(line, "See src/lib.rs#fn:run here");
 });
 
 test("names frontmatter pattern targets by their owning note", () => {

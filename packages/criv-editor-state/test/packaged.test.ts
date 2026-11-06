@@ -12,7 +12,6 @@ import { crivWasmBytesPlugin } from "../esbuild.mjs";
 import {
   CRIV_STATE_JSON_INVALID,
   CRIV_STATE_SCHEMA_UNSUPPORTED,
-  type CrivStateContractError,
   type CrivSourceTargetLookupResult,
 } from "../src/contract.ts";
 import type { CrivStateModule } from "../src/stateModule.ts";
@@ -62,8 +61,7 @@ test("reports each rejected State with its contract code", async () => {
   for (const [code, raw] of cases) {
     await assert.rejects(stateModule.loadState(raw), (error: unknown) => {
       assert.ok(error instanceof Error);
-      assert.equal(error.name, "CrivStateContractError");
-      assert.equal((error as CrivStateContractError).code, code);
+      assert.equal((error as Error & { code?: unknown }).code, code);
       assert.doesNotMatch(error.message, /^criv-/);
       return true;
     });
@@ -93,7 +91,7 @@ async function bundledStateModule(): Promise<CrivStateModule> {
   const outfile = join(outdir, "state.cjs");
   await build({
     stdin: {
-      contents: `module.exports = require("./src/packaged.ts").createPackagedCrivStateModule("unavailable");`,
+      contents: `module.exports = require("./src/packaged.ts").createPackagedCrivStateModule();`,
       resolveDir: fileURLToPath(new URL("..", import.meta.url)),
       loader: "js",
     },

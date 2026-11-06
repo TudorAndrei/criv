@@ -17,10 +17,8 @@ export default class CrivPlugin extends Plugin {
     super(app, manifest);
     this.settingsOwner = new ObsidianSettingsOwner(app, this, () => this.state.refresh());
     this.state = new ObsidianStateOwner(app, () => this.settingsOwner.current.statePath);
-    this.sourcePanel = new ObsidianSourcePanelOwner(
-      app,
-      this.state,
-      () => this.settingsOwner.current.externalEditorUrl,
+    this.sourcePanel = new ObsidianSourcePanelOwner(app, this.state, (absolutePath) =>
+      this.settingsOwner.externalEditorUrl(absolutePath),
     );
     this.sourceReferences = new ObsidianSourceReferencesOwner(app, this.state);
   }

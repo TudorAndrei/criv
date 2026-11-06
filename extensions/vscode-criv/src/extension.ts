@@ -84,7 +84,7 @@ async function queryUndocumentedCode(state: WorkspaceState): Promise<void> {
     return;
   }
   const document = await vscode.workspace.openTextDocument({
-    content: result.stdout.trim() ? result.stdout : "[]\n",
+    content: result.stdout,
     language: "json",
   });
   await vscode.window.showTextDocument(document, { preview: false });

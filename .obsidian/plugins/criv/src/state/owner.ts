@@ -31,12 +31,7 @@ export class ObsidianStateOwner implements StatePort {
 
   constructor(app: App, statePath: () => string) {
     this.host = new ObsidianStateHost(app, statePath);
-    this.stream = new CrivStateStream(
-      this.host,
-      createPackagedCrivStateModule(
-        "Could not load the packaged criv Wasm runtime. Rebuild the companion and reload Obsidian.",
-      ),
-    );
+    this.stream = new CrivStateStream(this.host, createPackagedCrivStateModule());
     this.stream.onDidChange((status) => this.observe(status));
   }
 

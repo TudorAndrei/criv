@@ -21,9 +21,7 @@ export type WorkspaceStateStatus = CrivStateStatus<WorkspaceStateSource>;
 export function createWorkspaceState(): WorkspaceState {
   const state: WorkspaceState = new CrivStateStream(
     new WorkspaceStateHost(() => void state.refresh()),
-    createPackagedCrivStateModule(
-      "Could not load the packaged criv Wasm runtime. Rebuild the companion and reload the editor.",
-    ),
+    createPackagedCrivStateModule(),
   );
   return state;
 }

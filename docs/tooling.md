@@ -309,16 +309,18 @@ is required. Large-workload measurement remains deferred.
 
 Obsidian and VS Code validation are hosted-CI suites rather than automatic hk
 steps. Contributors changing a companion should run its package scripts
-directly. Run `npm ci` from the repository root first. The Obsidian companion
-commands are:
+directly. Run `npm ci` from the repository root first. Hosted CI and the
+release quality job run the same root scripts:
 
 ```sh
-npm audit --workspace criv-obsidian-plugin --audit-level=high
-npm --prefix .obsidian/plugins/criv run format:check
-npm --prefix .obsidian/plugins/criv run lint
-npm --prefix .obsidian/plugins/criv test
-npm --prefix .obsidian/plugins/criv run build
+npm run check:editor-contracts
+npm run check:obsidian
+npm run check:vscode
 ```
+
+`check:obsidian` runs the Obsidian companion audit, format check, lint, tests,
+and build. `check:vscode` runs the VS Code companion audit, format check, lint,
+unit tests, and extension-host integration tests; hosted CI runs it under Xvfb.
 
 Both companions use the same script names: `build:wasm`, `build`,
 `check-types`, `dev`, `test`, `lint`, `format`, and `format:check`.

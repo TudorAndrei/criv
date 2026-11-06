@@ -1,11 +1,6 @@
-.vscode-test/**
-dist-test/**
-src/**
-test/**
-scripts/**
-*.vsix
-esbuild.config.mjs
-tsconfig.json
-node_modules/.cache/**
-node_modules/**/*.map
-node_modules/**
+**
+!package.json
+!README.md
+!LICENSE
+!assets/criv.svg
+!dist/extension.js

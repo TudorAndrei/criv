@@ -194,3 +194,6 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0183-derive-source-graph-indexes-from-its-files|ADR-0183]] - Derive Source graph indexes from its files
 - [[0184-give-each-query-reverse-index-scope-its-own-type|ADR-0184]] - Give each query reverse index scope its own type
 - [[0185-vscode-unit-tests-by-feature-directory|ADR-0185]] - VS Code unit tests by feature directory
+- [[0192-retain-explicit-source-lookup-results-after-the-editor-state-move|ADR-0192]] - Retain explicit source lookup results after the editor-state move
+- [[0193-follow-the-cli-source-wikilink-rule-in-editors|ADR-0193]] - Follow the CLI source Wikilink rule in editors
+- [[0194-check-editor-companions-through-shared-scripts-and-fixtures|ADR-0194]] - Check editor companions through shared scripts and fixtures

@@ -741,6 +741,34 @@ mod tests {
         assert!(json["fix"].as_str().is_some_and(|fix| !fix.is_empty()));
     }
 
+    #[test]
+    fn json_diagnostics_match_the_editor_fixture() {
+        let source: Arc<str> = "# A\n\nSee [[missing]].\n".into();
+        let start = source.find("[[").unwrap();
+        let located = Diagnostic::error(
+            DiagnosticCode::BrokenLink,
+            "docs/a.md",
+            None,
+            "wiki-link `[[missing]]` does not resolve",
+        )
+        .at(SourceLocation::new(
+            Arc::clone(&source),
+            start..start + "[[missing]]".len(),
+        ));
+        let unlocated = Diagnostic::warning(
+            DiagnosticCode::SourceWikilink,
+            "docs/b.md",
+            None,
+            "wiki-link `[[src/lib.rs]]` targets source `src/lib.rs`; Wikilinks are reserved for document references",
+        );
+
+        let output = serde_json::to_value([&located, &unlocated].map(JsonDiagnostic::new)).unwrap();
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/editor/check-diagnostics.v1.json"))
+                .unwrap();
+        assert_eq!(output, fixture);
+    }
+
     fn changed_set_fixture(entries: Vec<ChangedEntry>) -> ChangedSet {
         ChangedSet {
             entries,
