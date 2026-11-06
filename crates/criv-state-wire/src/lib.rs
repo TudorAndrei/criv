@@ -96,6 +96,18 @@ pub fn decode(raw: &str) -> Result<StateDocument, StateReadError> {
     serde_json::from_str(raw).map_err(StateReadError::Json)
 }
 
+/// The published text of `document`: pretty-printed JSON and one final
+/// newline, which [`content_hash::of_document`] leaves out of the hash.
+///
+/// # Errors
+///
+/// Returns an error when `document` cannot be serialized.
+pub fn encode(document: &StateDocument) -> Result<String, serde_json::Error> {
+    let mut published = serde_json::to_string_pretty(document)?;
+    published.push('\n');
+    Ok(published)
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct Graph {
     #[serde(default)]
@@ -432,6 +444,19 @@ mod tests {
 
         let decoded: StateDocument = serde_json::from_str(r#"{"schema":"criv.state.v1"}"#).unwrap();
         assert_eq!(decoded.asset_index, Vec::new());
+    }
+
+    #[test]
+    fn encoded_document_decodes_and_hashes_without_its_final_newline() {
+        let published = encode(&StateDocument::default()).unwrap();
+        let json = published.strip_suffix('\n').unwrap();
+
+        assert!(!json.ends_with('\n'));
+        assert_eq!(decode(&published).unwrap().schema, STATE_SCHEMA);
+        assert_eq!(
+            content_hash::of_document(&published),
+            content_hash::of_bytes(json.as_bytes())
+        );
     }
 
     #[test]

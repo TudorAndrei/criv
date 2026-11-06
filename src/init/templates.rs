@@ -6,10 +6,8 @@ use crate::{CrivError, Result};
 pub const DEFAULT_CONFIG: &str = include_str!("fixtures/criv.toml");
 
 pub fn default_state() -> Result<String> {
-    let mut json = serde_json::to_string_pretty(&StateDocument::default())
-        .map_err(|err| CrivError::new(format!("failed to serialize {}: {err}", layout::STATE)))?;
-    json.push('\n');
-    Ok(json)
+    criv_state_wire::encode(&StateDocument::default())
+        .map_err(|err| CrivError::new(format!("failed to serialize {}: {err}", layout::STATE)))
 }
 
 pub fn adr_readme() -> Result<String> {

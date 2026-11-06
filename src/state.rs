@@ -1,5 +1,4 @@
 use criv_state_wire::{SourceIndexEntry, StateDocument, content_hash};
-use serde::{Serialize, Serializer};
 
 use crate::policy_scan::{PolicyFailure, PolicyScanPlan};
 use crate::source::Language;
@@ -67,11 +66,11 @@ impl State {
         #[cfg(test)]
         work::record(Work::StateSerialization);
 
-        let json = serde_json::to_string_pretty(&self.wire)
+        let published = criv_state_wire::encode(&self.wire)
             .map_err(|err| CrivError::new(format!("failed to serialize state: {err}")))?;
         Ok(SerializedState {
-            hash: content_hash::of_document(&json),
-            published: format!("{json}\n"),
+            hash: content_hash::of_document(&published),
+            published,
         })
     }
 }
@@ -96,15 +95,6 @@ pub fn write_state(
         precommit_check,
     )?;
     Ok((serialized.hash, state))
-}
-
-impl Serialize for State {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        self.wire.serialize(serializer)
-    }
 }
 
 fn source_mime(path: &str) -> Option<String> {
@@ -183,7 +173,7 @@ See [[lib.rs]], [[match:ADR-0001/no-block-on]], and [[helper.rs#help]].
         let vault = load(root).unwrap();
 
         work::reset();
-        let state = serde_json::to_value(build(&vault).unwrap()).unwrap();
+        let state = serde_json::to_value(build(&vault).unwrap().wire).unwrap();
 
         assert_eq!(work::count(Work::LinkSourceResolution), 0);
         let edges = state["graph"]["edges"].as_array().unwrap();
@@ -240,7 +230,7 @@ source = false
 
         let vault = load(&root).unwrap();
         let state = build(&vault).unwrap();
-        let json = serde_json::to_value(&state).unwrap();
+        let json = serde_json::to_value(&state.wire).unwrap();
 
         assert_eq!(json["source-index"].as_array().unwrap().len(), 0);
         assert!(
@@ -261,7 +251,7 @@ source = false
 
         let vault = load(&root).unwrap();
         let state = build(&vault).unwrap();
-        let json = serde_json::to_value(&state).unwrap();
+        let json = serde_json::to_value(&state.wire).unwrap();
 
         assert_eq!(json["asset-index"][0]["path"], "docs/diagram.png");
         assert_eq!(json["asset-index"][0]["mime"], "image/png");
@@ -326,7 +316,7 @@ end
         let vault = load(&root).unwrap();
         let first = build(&vault).unwrap();
         let decoded: StateDocument =
-            serde_json::from_value(serde_json::to_value(&first).unwrap()).unwrap();
+            serde_json::from_value(serde_json::to_value(&first.wire).unwrap()).unwrap();
         assert_eq!(decoded.schema, STATE_SCHEMA);
 
         for kind in [
@@ -585,7 +575,7 @@ policy:
         .unwrap();
 
         let vault = load(&root).unwrap();
-        let actual = serde_json::to_value(build(&vault).unwrap()).unwrap();
+        let actual = serde_json::to_value(build(&vault).unwrap().wire).unwrap();
         let expected: serde_json::Value =
             serde_json::from_str(include_str!("../fixtures/state/criv.state.v1.json")).unwrap();
 
@@ -786,8 +776,8 @@ Consequences.
             [0, 0, 0]
         );
         assert_eq!(
-            serde_json::to_value(&first).unwrap(),
-            serde_json::to_value(&second).unwrap()
+            serde_json::to_value(&first.wire).unwrap(),
+            serde_json::to_value(&second.wire).unwrap()
         );
     }
 
