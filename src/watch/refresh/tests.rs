@@ -261,15 +261,9 @@ fn failed_source_refresh_forces_the_next_docs_refresh_to_rescan_source() {
     let incremental = incremental_fixture("failed-refresh-incremental");
     let full = incremental_fixture("failed-refresh-full");
     let mut session = open_session(incremental.path());
-    session.refresh(RefreshCause::Initial, || Ok(())).unwrap();
-    let before_hash = session.previous.as_ref().unwrap().snapshot.clone();
-    let before_source = session
-        .previous
-        .as_ref()
-        .unwrap()
-        .vault
-        .source_graph()
-        .clone();
+    let before = session.refresh(RefreshCause::Initial, || Ok(())).unwrap();
+    let before_hash = before.snapshot.clone();
+    let before_source = before.vault.source_graph().clone();
     let corrupt_snapshot = incremental
         .path()
         .join(".criv/snapshots")
@@ -349,7 +343,11 @@ policy:
     )
     .unwrap();
     let mut session = open_session(root);
-    session.refresh(RefreshCause::Initial, || Ok(())).unwrap();
+    let previous_hash = session
+        .refresh(RefreshCause::Initial, || Ok(()))
+        .unwrap()
+        .snapshot
+        .clone();
     let state_before = fs::read_to_string(root.join(".criv/state.json")).unwrap();
     let latest_before = fs::read_to_string(root.join(".criv/latest")).unwrap();
     let mut snapshots_before = fs::read_dir(root.join(".criv/snapshots"))
@@ -357,7 +355,6 @@ policy:
         .map(|entry| entry.unwrap().file_name())
         .collect::<Vec<_>>();
     snapshots_before.sort();
-    let previous_hash = session.previous.as_ref().unwrap().snapshot.clone();
 
     fs::remove_file(root.join("src/retired.rs")).unwrap();
     let error = session

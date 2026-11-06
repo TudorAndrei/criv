@@ -20,7 +20,7 @@ use crate::source::{SourceGraph, SourceState, read_selected_text};
 use crate::structural::PolicyDefinition;
 #[cfg(test)]
 use crate::work::{self, Work};
-use criv_state_wire::{asset, content_hash};
+use criv_state_wire::{AssetIndexEntry, asset, content_hash};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NoteKind {
@@ -288,7 +288,7 @@ pub struct Vault {
     files: RepositoryFiles,
     config: Config,
     notes: Vec<Note>,
-    assets: Vec<DocumentationAsset>,
+    assets: Vec<AssetIndexEntry>,
     note_ids: BTreeMap<String, usize>,
     filenames: BTreeMap<String, usize>,
     titles: BTreeMap<String, usize>,
@@ -298,14 +298,6 @@ pub struct Vault {
     policy_declarations: Vec<DeclarationIndex>,
     policy_ids: BTreeMap<String, usize>,
     link_resolutions: BTreeMap<String, ResolvedLink>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DocumentationAsset {
-    pub(crate) path: String,
-    pub(crate) mime: String,
-    pub(crate) bytes: u64,
-    pub(crate) hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -628,7 +620,7 @@ impl Vault {
         &self.source
     }
 
-    pub(crate) fn documentation_assets(&self) -> &[DocumentationAsset] {
+    pub(crate) fn documentation_assets(&self) -> &[AssetIndexEntry] {
         &self.assets
     }
 
@@ -682,7 +674,7 @@ impl Vault {
 fn load_documentation_assets(
     files: &RepositoryFiles,
     mut paths: Vec<String>,
-) -> Result<Vec<DocumentationAsset>> {
+) -> Result<Vec<AssetIndexEntry>> {
     paths.sort();
     let mut budget = asset::TotalBudget::default();
     let mut assets = Vec::new();
@@ -702,7 +694,7 @@ fn load_documentation_assets(
         if !budget.admit(bytes) {
             break;
         }
-        assets.push(DocumentationAsset {
+        assets.push(AssetIndexEntry {
             path,
             mime: expected_mime.to_string(),
             bytes,

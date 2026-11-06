@@ -29,7 +29,7 @@ pub(super) struct RefreshSession {
     files: RepositoryFiles,
     config: Config,
     source_refresh_pending: bool,
-    pub(super) previous: Option<RefreshResult>,
+    previous: Option<RefreshResult>,
 }
 
 impl RefreshSession {

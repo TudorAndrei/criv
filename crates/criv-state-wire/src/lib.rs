@@ -180,14 +180,7 @@ pub struct Edge {
     pub hash: String,
 }
 
-impl Edge {
-    /// The `{from}:{kind}:{to}` text of this edge.
-    #[must_use]
-    pub fn row(&self) -> String {
-        edge_row(&self.from, self.kind.as_str(), &self.to)
-    }
-}
-
+/// The `{from}:{kind}:{to}` text of an edge.
 fn edge_row(from: &str, kind: &str, to: &str) -> String {
     format!("{from}:{kind}:{to}")
 }
@@ -397,13 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn rows_view_reads_unknown_kinds_with_the_typed_row_text() {
-        let edge = Edge {
-            from: "note:ADR-0001".into(),
-            to: "code:src/lib.rs".into(),
-            kind: EdgeKind::References,
-            hash: String::new(),
-        };
+    fn rows_view_reads_unknown_kinds_as_row_text() {
         let view: GraphRowsView = serde_json::from_value(serde_json::json!({
             "graph": {
                 "nodes": [{"id": "note:ADR-0001", "kind": "retired-kind"}],
@@ -418,7 +405,10 @@ mod tests {
         assert_eq!(view.node_ids(), BTreeSet::from(["note:ADR-0001"]));
         assert_eq!(
             view.edge_rows(),
-            BTreeSet::from([edge.row(), "a:retired-kind:b".to_string()])
+            BTreeSet::from([
+                "note:ADR-0001:references:code:src/lib.rs".to_string(),
+                "a:retired-kind:b".to_string()
+            ])
         );
     }
 

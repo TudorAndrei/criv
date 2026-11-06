@@ -164,6 +164,10 @@ mod tests {
         fs::set_permissions(&selected, fs::Permissions::from_mode(0o600)).unwrap();
         fs::set_permissions(&pruned, fs::Permissions::from_mode(0o700)).unwrap();
         if can_read_without_permission {
+            eprintln!(
+                "skipped selected_read_errors_fail_and_pruned_read_errors_have_no_effect: \
+                 this user reads files without permission bits (root)"
+            );
             return;
         }
 

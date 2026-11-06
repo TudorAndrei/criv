@@ -1,4 +1,4 @@
-use criv_state_wire::{AssetIndexEntry, SourceIndexEntry, StateDocument, content_hash};
+use criv_state_wire::{SourceIndexEntry, StateDocument, content_hash};
 use serde::{Serialize, Serializer};
 
 use crate::policy_scan::{PolicyFailure, PolicyScanPlan};
@@ -59,16 +59,7 @@ impl State {
             patterns,
             source_index,
         );
-        wire.asset_index = vault
-            .documentation_assets()
-            .iter()
-            .map(|asset| AssetIndexEntry {
-                path: asset.path.clone(),
-                mime: asset.mime.clone(),
-                bytes: asset.bytes,
-                hash: asset.hash.clone(),
-            })
-            .collect();
+        wire.asset_index = vault.documentation_assets().to_vec();
         Ok(Self { wire, partitions })
     }
 

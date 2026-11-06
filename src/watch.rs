@@ -1021,13 +1021,11 @@ mod tests {
             .collect()
     }
 
-    fn previous_snapshot(session: &LiveWatchSession) -> Option<String> {
-        session
-            .active
-            .refresh
-            .previous
-            .as_ref()
-            .map(|result| result.snapshot.clone())
+    fn published_snapshot(root: &Path) -> String {
+        fs::read_to_string(root.join(layout::LATEST))
+            .unwrap()
+            .trim()
+            .to_string()
     }
 
     fn one_shot_refresh(files: &RepositoryFiles) {
@@ -1047,7 +1045,7 @@ mod tests {
     /// Keep the returned summary valid after the generation advances.
     fn ordinary_refresh_publishes_an_owned_summary() {
         let (_temp, files, mut session) = refresh_fixture();
-        let before = previous_snapshot(&session).unwrap();
+        let before = published_snapshot(files.root());
         fs::write(
             files.root().join("docs/note.md"),
             "---\nid: note\nkind: doc\ntitle: Changed\n---\n",
@@ -1057,22 +1055,16 @@ mod tests {
         let GenerationRefresh::Summary(summary) = outcome else {
             panic!("{outcome:?}")
         };
-        let after = previous_snapshot(&session).unwrap();
+        let after = published_snapshot(files.root());
         assert_ne!(before, after);
         assert!(summary.contains(&after));
-        assert_eq!(
-            fs::read_to_string(files.root().join(".criv/latest"))
-                .unwrap()
-                .trim(),
-            after
-        );
     }
 
     #[test]
     fn changed_configuration_rejects_publication_and_preserves_source_retry() {
         let (_temp, files, mut session) = refresh_fixture();
         let before = published_artifacts(files.root());
-        let previous = previous_snapshot(&session);
+        let previous = published_snapshot(files.root());
         fs::write(
             files.root().join("src/lib.rs"),
             "pub fn recovered_source() {}\n",
@@ -1084,7 +1076,7 @@ mod tests {
             GenerationRefresh::Reconfigure
         ));
         assert_eq!(published_artifacts(files.root()), before);
-        assert_eq!(previous_snapshot(&session), previous);
+        assert_eq!(published_snapshot(files.root()), previous);
         fs::write(files.root().join("criv.toml"), config).unwrap();
         assert!(matches!(
             session.active.refresh(&files, RefreshCause::DocsChanged),
@@ -1104,7 +1096,7 @@ mod tests {
     fn unreadable_configuration_requests_reconfiguration_and_rolls_back() {
         let (_temp, files, mut session) = refresh_fixture();
         let before = published_artifacts(files.root());
-        let previous = previous_snapshot(&session);
+        let previous = published_snapshot(files.root());
         fs::remove_file(files.root().join("criv.toml")).unwrap();
         fs::create_dir(files.root().join("criv.toml")).unwrap();
         assert!(matches!(
@@ -1112,7 +1104,7 @@ mod tests {
             GenerationRefresh::Reconfigure
         ));
         assert_eq!(published_artifacts(files.root()), before);
-        assert_eq!(previous_snapshot(&session), previous);
+        assert_eq!(published_snapshot(files.root()), previous);
     }
 
     fn corrupt_a_snapshot(files: &RepositoryFiles) {
@@ -1129,7 +1121,7 @@ mod tests {
     #[test]
     fn unchanged_configuration_reports_refresh_failure() {
         let (_temp, files, mut session) = refresh_fixture();
-        let previous = previous_snapshot(&session);
+        let previous = published_snapshot(files.root());
         corrupt_a_snapshot(&files);
         let before = published_artifacts(files.root());
         assert!(matches!(
@@ -1137,7 +1129,7 @@ mod tests {
             GenerationRefresh::Failed(_)
         ));
         assert_eq!(published_artifacts(files.root()), before);
-        assert_eq!(previous_snapshot(&session), previous);
+        assert_eq!(published_snapshot(files.root()), previous);
     }
 
     #[test]
@@ -1163,7 +1155,7 @@ mod tests {
         ]));
         let mut session = LiveWatchSession::start(&files, factory).unwrap();
         let before = published_artifacts(files.root());
-        let previous = previous_snapshot(&session);
+        let previous = published_snapshot(files.root());
         fs::write(
             files.root().join("docs/note.md"),
             "---\nid: note\nkind: doc\ntitle: Recovered\n---\n",
@@ -1180,7 +1172,7 @@ mod tests {
                 .contains("failed to parse criv.toml")
         );
         assert_eq!(published_artifacts(files.root()), before);
-        assert_eq!(previous_snapshot(&session), previous);
+        assert_eq!(published_snapshot(files.root()), previous);
         fs::write(
             files.root().join("criv.toml"),
             initial.active.config_source.unwrap(),
@@ -1190,7 +1182,7 @@ mod tests {
         session.step(Duration::ZERO).unwrap();
         assert!(!session.suspended);
         assert!(session.failure.is_none());
-        assert_ne!(previous_snapshot(&session), previous);
+        assert_ne!(published_snapshot(files.root()), previous);
         let live = fs::read_to_string(files.root().join(".criv/state.json")).unwrap();
         one_shot_refresh(&files);
         assert_eq!(

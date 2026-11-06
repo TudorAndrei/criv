@@ -410,7 +410,7 @@ fn targets(vault: &Vault, id: &str) -> Result<Vec<String>> {
     for link in note.wiki_links() {
         match vault.resolve_link(link.target()) {
             ResolvedLink::Source { path, .. } => rows.push(path),
-            ResolvedLink::Pattern { id } => rows.push(format!("match:{id}")),
+            ResolvedLink::Pattern { id } => rows.push(LinkTarget::pattern(&id)),
             _ => {}
         }
     }
@@ -428,7 +428,7 @@ fn cites(vault: &Vault, id: &str) -> Result<Vec<String>> {
         match vault.resolve_link(link.target()) {
             ResolvedLink::Note { id, .. } => rows.push(id),
             ResolvedLink::Source { path, .. } => rows.push(path),
-            ResolvedLink::Pattern { id } => rows.push(format!("match:{id}")),
+            ResolvedLink::Pattern { id } => rows.push(LinkTarget::pattern(&id)),
             ResolvedLink::Broken => {}
         }
     }

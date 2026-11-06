@@ -139,18 +139,27 @@ impl<'a> LinkTarget<'a> {
 
     /// The path part is a `match:` pattern reference, not a file.
     pub fn path_is_pattern(self) -> bool {
-        self.path().starts_with("match:")
+        self.path().starts_with(PATTERN_PREFIX)
     }
 
     /// The policy pattern id of a `match:` target.
     pub fn pattern_id(self) -> Option<&'a str> {
-        self.target.strip_prefix("match:").or_else(|| {
-            self.target
-                .split_once("#match:")
-                .map(|(_, pattern_id)| pattern_id)
+        self.target.strip_prefix(PATTERN_PREFIX).or_else(|| {
+            self.target.match_indices('#').find_map(|(index, _)| {
+                self.target
+                    .get(index.saturating_add(1)..)?
+                    .strip_prefix(PATTERN_PREFIX)
+            })
         })
     }
+
+    /// The `match:` target text of a policy pattern id.
+    pub fn pattern(pattern_id: &str) -> String {
+        format!("{PATTERN_PREFIX}{pattern_id}")
+    }
 }
+
+const PATTERN_PREFIX: &str = "match:";
 
 fn is_line_fragment(fragment: &str) -> bool {
     let parse_line = |value: &str| {

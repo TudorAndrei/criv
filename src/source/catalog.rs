@@ -36,7 +36,6 @@ impl SourceCatalog {
             .filter(|path| {
                 path.strip_suffix(query)
                     .is_some_and(|prefix| prefix.is_empty() || prefix.ends_with('/'))
-                    || path.rsplit('/').next() == Some(query)
             })
             .cloned()
             .collect::<Vec<_>>();
