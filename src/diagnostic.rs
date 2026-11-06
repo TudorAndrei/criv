@@ -100,9 +100,8 @@ impl DiagnosticCode {
         }
     }
 
-    pub const fn fix(self) -> Option<&'static str> {
-        let fix = match self {
-            Self::CheckFailed | Self::EnforcementFailed => return None,
+    pub const fn fix(self) -> &'static str {
+        match self {
             Self::AdrDirNonDecision => {
                 "Set `kind: decision` in the frontmatter, or move the file out of the ADR directory."
             }
@@ -120,6 +119,7 @@ impl DiagnosticCode {
                 "Name the file in the link, as in `[[src/lib.rs#fn:run]]`, so one source resolves."
             }
             Self::BrokenLink => "Correct the link target, or add the note it names.",
+            Self::CheckFailed => "Repair the diagnostics above, then run `criv check`.",
             Self::DecisionLocation => "Move the decision into the ADR directory.",
             Self::DuplicatePatternId => "Give each pattern a unique `id`.",
             Self::DuplicateId => "Give the note an `id` no other note uses.",
@@ -128,6 +128,7 @@ impl DiagnosticCode {
             Self::EmptyTargetScope => {
                 "Correct the target scope glob so it matches a source file, or remove it."
             }
+            Self::EnforcementFailed => "Run `criv check` for the diagnostics, then repair them.",
             Self::ImportPolicyViolation => {
                 "Remove the import, or widen the import policy in criv.toml."
             }
@@ -176,8 +177,7 @@ impl DiagnosticCode {
             Self::VaultOutsideGitRoot => {
                 "Run criv from the worktree root, or make the vault its own repository."
             }
-        };
-        Some(fix)
+        }
     }
 }
 

@@ -43,8 +43,7 @@ struct JsonDiagnostic<'a> {
     message: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     range: Option<LspRange>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    fix: Option<&'static str>,
+    fix: &'static str,
 }
 
 impl<'a> JsonDiagnostic<'a> {
@@ -640,9 +639,7 @@ fn print_text(diagnostics: &[Diagnostic]) {
             diag.code(),
             diag.describe()
         );
-        if let Some(fix) = diag.code().fix() {
-            println!("  fix: {fix}");
-        }
+        println!("  fix: {}", diag.code().fix());
     }
 }
 

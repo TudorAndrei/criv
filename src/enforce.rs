@@ -112,7 +112,7 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
             .collect(),
         codes: failures.iter().map(|failure| failure.code).collect(),
         code: failures.first().map(|failure| failure.code),
-        fix: failures.first().and_then(|failure| failure.code.fix()),
+        fix: failures.first().map(|failure| failure.code.fix()),
     };
     report.print(options.format, options.stage)?;
     report.code.map_or(Ok(()), |code| {

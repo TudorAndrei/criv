@@ -329,6 +329,17 @@ fn stdout_is_json_report(world: &mut VaultWorld, code: String) {
     );
 }
 
+#[then(expr = "the JSON report fix is {string}")]
+fn json_report_fix(world: &mut VaultWorld, fix: String) {
+    let report: serde_json::Value =
+        serde_json::from_slice(&world.output().stdout).expect("stdout is one JSON value");
+    assert_eq!(
+        report.get("fix").and_then(serde_json::Value::as_str),
+        Some(fix.as_str()),
+        "{report}"
+    );
+}
+
 /// The single test name this harness reports to cargo-nextest.
 const SUITE_NAME: &str = "acceptance";
 
