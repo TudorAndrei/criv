@@ -38,10 +38,7 @@ async function assertNoManifestDiagnostics(relativePath: string): Promise<void> 
       preview: false,
     });
   }
-  await waitFor(
-    () => vscode.languages.getDiagnostics(control).length > 0,
-    "Expected VS Code to report the broken control manifest.",
-  );
+  await diagnosticsReported(control, "Expected VS Code to report the broken control manifest.");
 
   const problems = vscode.languages
     .getDiagnostics(manifest)
@@ -53,12 +50,22 @@ async function assertNoManifestDiagnostics(relativePath: string): Promise<void> 
   assert.deepEqual(problems, [], "Expected VS Code manifest diagnostics to be clean.");
 }
 
-async function waitFor(condition: () => boolean, message: string): Promise<void> {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    if (condition()) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+async function diagnosticsReported(uri: vscode.Uri, message: string): Promise<void> {
+  const reported = () => vscode.languages.getDiagnostics(uri).length > 0;
+  if (reported()) {
+    return;
   }
-  assert.fail(message);
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      subscription.dispose();
+      reject(new assert.AssertionError({ message }));
+    }, 30_000);
+    const subscription = vscode.languages.onDidChangeDiagnostics(() => {
+      if (reported()) {
+        clearTimeout(timeout);
+        subscription.dispose();
+        resolve();
+      }
+    });
+  });
 }

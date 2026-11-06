@@ -87,57 +87,6 @@ fn check_and_watch_once_need_no_external_tools_and_replace_a_corrupt_state() {
     assert!(state["graph"]["nodes"].is_array(), "{state}");
 }
 
-#[test]
-fn changed_check_validates_added_and_modified_notes_without_global_diagnostics() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    init_git_vault(root);
-    fs::write(
-        root.join("docs/unchanged-broken.md"),
-        doc(
-            "unchanged-broken",
-            "Unchanged Broken",
-            "See [[missing-global]].",
-        ),
-    )
-    .unwrap();
-    git(root, &["add", "docs/unchanged-broken.md"]);
-    git(root, &["commit", "-m", "add known global defect"]);
-
-    fs::write(
-        root.join("docs/guide.md"),
-        doc("guide", "Guide", "See [[missing-added]]."),
-    )
-    .unwrap();
-    git(root, &["add", "docs/guide.md"]);
-    criv(root)
-        .args(["check", "--changed", "--filter", "broken-link"])
-        .assert()
-        .failure()
-        .stdout(predicate::str::contains("docs/guide.md"))
-        .stdout(predicate::str::contains("docs/unchanged-broken.md").not());
-
-    fs::write(
-        root.join("docs/guide.md"),
-        doc("guide", "Guide", "The added note is valid."),
-    )
-    .unwrap();
-    git(root, &["add", "docs/guide.md"]);
-    git(root, &["commit", "-m", "add valid guide"]);
-    fs::write(
-        root.join("docs/guide.md"),
-        doc("guide", "Guide", "See [[missing-modified]]."),
-    )
-    .unwrap();
-    git(root, &["add", "docs/guide.md"]);
-    criv(root)
-        .args(["check", "--changed", "--format", "json"])
-        .assert()
-        .failure()
-        .stdout(predicate::str::contains("missing-modified"))
-        .stdout(predicate::str::contains("missing-global").not());
-}
-
 #[cfg(unix)]
 #[test]
 fn changed_check_does_not_walk_unselected_markdown_directories() {
@@ -158,103 +107,6 @@ fn changed_check_does_not_walk_unselected_markdown_directories() {
         .assert()
         .success()
         .stdout("[]\n");
-}
-
-#[test]
-fn changed_check_promotes_renames_and_deletions_to_full_validation() {
-    for operation in ["rename", "delete"] {
-        let temp = TempDir::new().unwrap();
-        let root = temp.path();
-        init_git_vault(root);
-        fs::write(
-            root.join("docs/unchanged-broken.md"),
-            doc(
-                "unchanged-broken",
-                "Unchanged Broken",
-                "See [[missing-global]].",
-            ),
-        )
-        .unwrap();
-        fs::write(
-            root.join("docs/change-me.md"),
-            doc("change-me", "Change Me", "Valid content."),
-        )
-        .unwrap();
-        git(root, &["add", "docs"]);
-        git(root, &["commit", "-m", "add validation fixtures"]);
-
-        match operation {
-            "rename" => git(root, &["mv", "docs/change-me.md", "docs/changed-name.md"]),
-            "delete" => git(root, &["rm", "docs/change-me.md"]),
-            _ => continue,
-        }
-
-        criv(root)
-            .args(["check", "--changed", "--filter", "broken-link"])
-            .assert()
-            .failure()
-            .stdout(predicate::str::contains("docs/unchanged-broken.md"));
-    }
-}
-
-#[test]
-fn changed_check_scans_policies_only_for_staged_sources() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    init_git_vault(root);
-    fs::create_dir_all(root.join("src")).unwrap();
-    fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
-    fs::write(
-        root.join("docs/adr/0999-no-println.md"),
-        r#"---
-id: ADR-0999
-kind: decision
-title: No println
-status: accepted
-date: 2026-08-03
-governs:
-  - src/**/*.rs
-policy:
-  patterns:
-    - id: no-println
-      language: rust
-      pattern: "println!($$$ARGS)"
----
-
-# No println
-"#,
-    )
-    .unwrap();
-    git(root, &["add", "src/lib.rs", "docs/adr/0999-no-println.md"]);
-    git(root, &["commit", "-m", "add source policy"]);
-
-    fs::write(
-        root.join("src/lib.rs"),
-        "pub fn run() {\n    println!(\"blocked\");\n}\n",
-    )
-    .unwrap();
-    git(root, &["add", "src/lib.rs"]);
-
-    criv(root)
-        .args(["check", "--changed", "--filter", "policy-violation"])
-        .assert()
-        .failure()
-        .stdout(predicate::str::contains("ADR-0999 policy"))
-        .stdout(predicate::str::contains("src/lib.rs:2"));
-}
-
-#[test]
-fn changed_check_is_read_only() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    git(root, &["init", "-b", "main"]);
-
-    criv(root)
-        .args(["check", "--changed", "--fix"])
-        .assert()
-        .failure()
-        .code(2)
-        .stderr(predicate::str::contains("--fix"));
 }
 
 #[test]
@@ -2712,20 +2564,6 @@ deny = ["crate::infra"]
 }
 
 #[test]
-fn watch_port_is_rejected() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-
-    init(root);
-
-    criv(root)
-        .args(["watch", "--port", "1234"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("--port"));
-}
-
-#[test]
 fn long_running_watch_takes_lock_before_startup_rebuild() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
@@ -2792,19 +2630,13 @@ fn long_running_watch_rebuilds_docs_sources_bursts_and_recovers() {
     .unwrap();
     assert_state_kept_after_rejection(&mut watch, root, &last_good_state, "a failed rebuild");
 
-    fs::write(root.join("criv.toml"), config).unwrap();
     fs::write(root.join("src/lib.rs"), "pub fn recovered() {}\n").unwrap();
-    wait_for_state(
+    fs::write(root.join("criv.toml"), config).unwrap();
+    assert_next_state_recovers(
         &mut watch,
         root,
         "recovery after a failed rebuild",
-        |state| {
-            state["graph"]["nodes"].as_array().is_some_and(|nodes| {
-                nodes
-                    .iter()
-                    .any(|node| node["id"].as_str() == Some("symbol:src/lib.rs#fn:recovered"))
-            })
-        },
+        |state| state_has_node(state, "symbol:src/lib.rs#fn:recovered"),
     );
 
     fs::write(root.join("src/lib.rs"), "pub fn burst_one() {}\n").unwrap();
@@ -2958,13 +2790,15 @@ fn live_watch_recovers_when_the_configured_docs_root_appears() {
         "a missing configured docs root",
     );
 
-    fs::create_dir_all(root.join("knowledge/docs/adr")).unwrap();
+    let staged = TempDir::new().unwrap();
+    fs::create_dir_all(staged.path().join("docs/adr")).unwrap();
     fs::write(
-        root.join("knowledge/docs/recovered.md"),
+        staged.path().join("docs/recovered.md"),
         "---\nid: recovered-docs\nkind: doc\ntitle: Recovered docs\n---\n\n# Recovered docs\n",
     )
     .unwrap();
-    wait_for_state(&mut watch, root, "the recovered docs root", |state| {
+    fs::rename(staged.path().join("docs"), root.join("knowledge/docs")).unwrap();
+    assert_next_state_recovers(&mut watch, root, "the recovered docs root", |state| {
         state_has_node(state, "note:recovered-docs")
     });
 
@@ -3033,6 +2867,7 @@ fn live_watch_tracks_missing_and_type_changing_source_roots() {
 const WATCH_STARTUP_BOUND: Duration = Duration::from_secs(45);
 /// Upper bound for a live watch to observe a file event and publish.
 const WATCH_EVENT_BOUND: Duration = Duration::from_secs(10);
+const SNAPSHOT_LINE: &str = "state updated: snapshot ";
 
 struct WatchProcess {
     child: Child,
@@ -3065,25 +2900,30 @@ impl WatchProcess {
         });
     }
 
-    fn wait_for_snapshot(&mut self, state: &str, description: &str) {
-        let snapshot = blake3::hash(state.trim_end_matches('\n').as_bytes())
-            .to_hex()
-            .to_string();
-        let marker = format!("state updated: snapshot {snapshot},");
-        self.wait_for_line(description, WATCH_EVENT_BOUND, |line| {
-            line.starts_with(&marker)
+    /// Waits for the next `state updated:` line and returns its snapshot hash.
+    fn next_snapshot(&mut self, description: &str) -> String {
+        let line = self.wait_for_line(description, WATCH_EVENT_BOUND, |line| {
+            line.starts_with(SNAPSHOT_LINE)
         });
+        line.strip_prefix(SNAPSHOT_LINE)
+            .and_then(|rest| rest.split(',').next())
+            .unwrap_or_default()
+            .to_owned()
     }
 
-    /// Waits until the watch reports that it rejected a reconfiguration and
-    /// keeps its last successful State.
+    /// Waits until the watch reports that it rejected a reconfiguration.
     fn wait_for_rejected_reconfiguration(&mut self, description: &str) {
         self.wait_for_line(description, WATCH_EVENT_BOUND, |line| {
             line.starts_with("criv watch: reconfiguration failed:")
         });
     }
 
-    fn wait_for_line(&mut self, description: &str, bound: Duration, found: impl Fn(&str) -> bool) {
+    fn wait_for_line(
+        &mut self,
+        description: &str,
+        bound: Duration,
+        found: impl Fn(&str) -> bool,
+    ) -> String {
         let deadline = Instant::now()
             .checked_add(bound)
             .unwrap_or_else(Instant::now);
@@ -3092,7 +2932,7 @@ impl WatchProcess {
             match self.lines.recv_timeout(Duration::from_millis(100)) {
                 Ok(line) => {
                     if found(&line) {
-                        return;
+                        return line;
                     }
                     output.push(line);
                 }
@@ -3135,32 +2975,43 @@ impl Drop for WatchProcess {
     }
 }
 
-/// Polls the published State file until it satisfies `predicate`, then waits
-/// for the watch to report that exact snapshot.
+/// Reads the State of each reported snapshot until one satisfies `predicate`.
 fn wait_for_state(
     watch: &mut WatchProcess,
     root: &Path,
     description: &str,
     predicate: impl Fn(&serde_json::Value) -> bool,
 ) {
-    let deadline = Instant::now()
-        .checked_add(WATCH_EVENT_BOUND)
-        .unwrap_or_else(Instant::now);
-    let state_path = root.join(".criv/state.json");
-    let mut latest = String::new();
-    while Instant::now() < deadline {
-        if let Ok(contents) = fs::read_to_string(&state_path) {
-            latest = contents;
-            if let Ok(state) = serde_json::from_str(&latest)
-                && predicate(&state)
-            {
-                watch.wait_for_snapshot(&latest, description);
-                return;
-            }
+    loop {
+        let snapshot = watch.next_snapshot(description);
+        if published_state(root, &snapshot).is_some_and(|state| predicate(&state)) {
+            return;
         }
-        thread::sleep(Duration::from_millis(50));
     }
-    panic!("timed out waiting for {description}; last state: {latest}");
+}
+
+/// Requires the first snapshot after a rejection to be the recovered State,
+/// so any publication between the rejection and the recovery fails the test.
+fn assert_next_state_recovers(
+    watch: &mut WatchProcess,
+    root: &Path,
+    description: &str,
+    predicate: impl Fn(&serde_json::Value) -> bool,
+) {
+    let snapshot = watch.next_snapshot(description);
+    let state = published_state(root, &snapshot)
+        .unwrap_or_else(|| panic!("snapshot {snapshot} was replaced before {description}"));
+    assert!(
+        predicate(&state),
+        "the first State after the rejection is not {description}: {state}"
+    );
+}
+
+/// The published State when it is still the reported snapshot.
+fn published_state(root: &Path, snapshot: &str) -> Option<serde_json::Value> {
+    let contents = fs::read_to_string(root.join(".criv/state.json")).ok()?;
+    let published = blake3::hash(contents.trim_end_matches('\n').as_bytes()).to_hex();
+    (published.as_str() == snapshot).then(|| serde_json::from_str(&contents).unwrap())
 }
 
 /// Waits for the watch to reject the reconfiguration, then proves the

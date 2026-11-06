@@ -18,20 +18,49 @@ export interface SourceTargetParts {
   lines?: SourceLines;
 }
 
+export type ResolvedSourceTarget = {
+  kind: "resolved";
+  canonical_target: string;
+  node: CrivGraphNode;
+  lines?: SourceLines;
+};
+
 export type SourceTargetResolution =
-  | { kind: "resolved"; canonical_target: string; node: CrivGraphNode; lines?: SourceLines }
+  | ResolvedSourceTarget
   | Exclude<CrivSourceTargetLookupResult, { kind: "resolved" }>;
+
+/** The file and lines a resolved source target opens. */
+export interface SourceLocation {
+  path: string;
+  lines?: SourceLines;
+}
+
+/** A `[[target|alias]]` link: `target` excludes the alias; offsets span the brackets. */
+export interface Wikilink {
+  target: string;
+  start: number;
+  end: number;
+}
 
 const SOURCE_PREFIX = "source:";
 const PATTERN_PREFIX = "match:";
 const LINE_FRAGMENT = /^L([1-9]\d*)(?:-L([1-9]\d*))?$/;
+const WIKILINK = /\[\[([^\]]+)\]\]/g;
+const FILE_EXTENSION = /\.[A-Za-z0-9]+$/;
 
+/**
+ * The normalized repository-relative form of `value`, or undefined when it is
+ * empty, absolute, drive-qualified, contains NUL, or escapes the root. Follows
+ * `safe_relative_path` in `crates/criv-wasm/src/path.rs`; both read
+ * `fixtures/editor/safe-vault-path.v1.json`.
+ */
 export function safeVaultPath(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
   const path = value.trim().replace(/\\/g, "/");
-  if (!path || path.startsWith("/") || /^[A-Za-z]:/.test(path) || path.includes("\0")) {
+  const driveQualified = path[1] === ":" && path.charCodeAt(0) < 0x80;
+  if (!path || path.startsWith("/") || driveQualified || path.includes("\0")) {
     return undefined;
   }
   const segments: string[] = [];
@@ -95,6 +124,57 @@ export function resolveSourceTarget(
   }
   const result = lookup(parts.lines ? parts.path : parts.body);
   return result.kind === "resolved" && parts.lines ? { ...result, lines: parts.lines } : result;
+}
+
+/** The node's file and the requested lines, or the node's own lines without a line fragment. */
+export function resolvedSourceLocation(resolved: ResolvedSourceTarget): SourceLocation | undefined {
+  const path = safeVaultPath(
+    sourceTargetParts(resolved.node.path ?? resolved.canonical_target).path,
+  );
+  if (!path) {
+    return undefined;
+  }
+  return { path, lines: resolved.lines ?? parseLineFragment(resolved.node.line_range) };
+}
+
+export function wikilinks(text: string): Wikilink[] {
+  return Array.from(text.matchAll(WIKILINK), (match) => ({
+    target: (match[1]?.split("|", 1)[0] ?? "").trim(),
+    start: match.index,
+    end: match.index + match[0].length,
+  }));
+}
+
+/** Whether an untyped link names a file: its path, before any fragment, has an extension. */
+export function looksLikeSourceTarget(target: string): boolean {
+  return FILE_EXTENSION.test(sourceTargetParts(target).path);
+}
+
+/** The editor warning for a target that does not resolve, or undefined when it resolves. */
+export function sourceTargetProblem(
+  target: string,
+  resolution: Exclude<SourceTargetResolution, { kind: "resolved" }>,
+): string;
+export function sourceTargetProblem(
+  target: string,
+  resolution: SourceTargetResolution,
+): string | undefined;
+export function sourceTargetProblem(
+  target: string,
+  resolution: SourceTargetResolution,
+): string | undefined {
+  switch (resolution.kind) {
+    case "resolved":
+      return undefined;
+    case "unresolved":
+      return `Unresolved criv target: ${target}.`;
+    case "ambiguous":
+      return ambiguousSourceTargetMessage(
+        target,
+        resolution.candidates,
+        resolution.total_candidate_count,
+      );
+  }
 }
 
 export function ambiguousSourceTargetMessage(

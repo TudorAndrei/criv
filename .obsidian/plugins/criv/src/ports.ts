@@ -12,7 +12,7 @@ export interface SourceResolver {
 
 /** The State queries that source features receive from the composition module. */
 export interface StatePort {
-  /** The loaded projections, loading State first when nothing has loaded yet. */
+  /** The settled projections: waits for the first or current load and never reloads. */
   load(): Promise<CrivInitialProjections | null>;
   current(): CrivInitialProjections | null;
   statusMessage(): string;

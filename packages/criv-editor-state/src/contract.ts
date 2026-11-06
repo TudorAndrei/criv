@@ -1,3 +1,34 @@
+/** The State file path relative to the repository root. */
+export const CRIV_STATE_PATH = ".criv/state.json";
+
+/** The wire form of `criv_state_wire::NodeKind`. */
+export type CrivNodeKind =
+  | "alias"
+  | "behaviour"
+  | "callback"
+  | "class"
+  | "code"
+  | "decision"
+  | "doc"
+  | "doc-heading"
+  | "dynamic-call"
+  | "exception"
+  | "external-call"
+  | "external-module"
+  | "function"
+  | "guard"
+  | "implementation"
+  | "import"
+  | "macro"
+  | "macro-callback"
+  | "method"
+  | "module"
+  | "pattern"
+  | "protocol"
+  | "require"
+  | "struct"
+  | "use";
+
 export interface CrivStateSummary {
   schema: string;
   node_count: number;
@@ -5,10 +36,6 @@ export interface CrivStateSummary {
   source_count: number;
   asset_count: number;
   pattern_count: number;
-  first_node_id?: string;
-  first_edge?: string;
-  first_source_path?: string;
-  first_asset_path?: string;
 }
 
 export interface CrivSourceEntry {
@@ -25,7 +52,7 @@ export interface CrivAssetEntry {
 
 export interface CrivGraphNode {
   id: string;
-  kind: string;
+  kind: CrivNodeKind;
   label: string;
   path?: string;
   source_target?: string;
@@ -50,7 +77,7 @@ export interface CrivInitialProjections {
 export interface CrivSourceTargetCandidate {
   canonical_target: string;
   node_id: string;
-  kind: string;
+  kind: CrivNodeKind;
   label: string;
 }
 
@@ -66,7 +93,7 @@ export type CrivSourceTargetLookupResult =
 export interface CrivSelectorSuggestion {
   target: string;
   label: string;
-  kind: string;
+  kind: CrivNodeKind | "file";
   path: string;
   detail: string;
 }

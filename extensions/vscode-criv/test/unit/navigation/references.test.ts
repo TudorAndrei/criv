@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { CrivGraphNode } from "@criv/editor-state";
+import type { CrivGraphNode, CrivSourceTargetCandidate } from "@criv/editor-state";
 
 import {
   analyzeSourceReferences,
@@ -9,6 +9,7 @@ import {
   planSourceTargetOpen,
   sourceReferenceDiagnosticCode,
   sourceReferenceDiagnostic,
+  type SourceReference,
 } from "../../../src/navigation/references";
 
 const sourceNode: CrivGraphNode = {
@@ -45,6 +46,12 @@ const lookup = (target: string) => {
   };
 };
 
+function canonical(reference: SourceReference | undefined): string | undefined {
+  return reference?.resolution.kind === "resolved"
+    ? reference.resolution.canonical_target
+    : undefined;
+}
+
 test("links exact AST-aware selectors and criv source directives", () => {
   const references = analyzeSourceReferences(
     "See src/main.rs#fn:run\n%% criv:source src/main.rs",
@@ -52,7 +59,7 @@ test("links exact AST-aware selectors and criv source directives", () => {
   );
 
   assert.deepEqual(
-    references.map((reference) => [reference.kind, reference.canonicalTarget]),
+    references.map((reference) => [reference.kind, canonical(reference)]),
     [
       ["selector", "src/main.rs#fn:run"],
       ["criv-source", "src/main.rs"],
@@ -64,7 +71,7 @@ test("warns for legacy source wikilinks and uses the canonical Wasm result", () 
   const [reference] = analyzeSourceReferences("[[source:src/main.rs#run]]", lookup);
 
   assert.equal(reference?.kind, "typed-source-wikilink");
-  assert.equal(reference?.canonicalTarget, "src/main.rs#fn:run");
+  assert.equal(canonical(reference), "src/main.rs#fn:run");
   assert.equal(
     sourceReferenceDiagnostic(reference),
     "Legacy source target; use AST-aware source selector src/main.rs#fn:run.",
@@ -75,11 +82,8 @@ test("reports unresolved criv source directives", () => {
   const [reference] = analyzeSourceReferences("%% criv:source src/missing.rs", lookup);
 
   assert.equal(reference?.kind, "criv-source");
-  assert.equal(reference?.canonicalTarget, undefined);
-  assert.equal(
-    sourceReferenceDiagnostic(reference),
-    "Unresolved criv source target: src/missing.rs.",
-  );
+  assert.equal(canonical(reference), undefined);
+  assert.equal(sourceReferenceDiagnostic(reference!), "Unresolved criv target: src/missing.rs.");
   assert.equal(sourceReferenceDiagnosticCode(reference), "unresolved-source-target");
 });
 
@@ -142,7 +146,7 @@ test("renders hover labels as text instead of trusted markdown", () => {
 });
 
 test("reports ambiguous targets with untrusted stable candidates", () => {
-  const candidates = [
+  const candidates: CrivSourceTargetCandidate[] = [
     {
       canonical_target: "src/a.rs#fn:run",
       node_id: "symbol:src/a.rs#fn:run",
@@ -161,7 +165,7 @@ test("reports ambiguous targets with untrusted stable candidates", () => {
     candidates,
     total_candidate_count: 3,
   }));
-  assert.equal(reference?.resolutionKind, "ambiguous");
+  assert.equal(reference?.resolution.kind, "ambiguous");
   assert.equal(sourceReferenceDiagnosticCode(reference!), "ambiguous-source-target");
 
   const calls: Array<[string, string]> = [];
@@ -239,13 +243,13 @@ test("navigates exact Elixir selectors and reports legacy arity ambiguity", () =
     "Exact lib/sample.ex#module:My.App/fn:run/1\nLegacy [[source:lib/sample.ex#run/1]]\nAmbiguous [[source:lib/sample.ex#run]]",
     elixirLookup,
   );
-  assert.equal(references[0]?.canonicalTarget, runOne.source_target);
-  assert.equal(references[1]?.canonicalTarget, runOne.source_target);
+  assert.equal(canonical(references[0]), runOne.source_target);
+  assert.equal(canonical(references[1]), runOne.source_target);
   assert.equal(
     sourceReferenceDiagnostic(references[1]!),
     `Legacy source target; use AST-aware source selector ${runOne.source_target}.`,
   );
-  assert.equal(references[2]?.resolutionKind, "ambiguous");
+  assert.equal(references[2]?.resolution.kind, "ambiguous");
   assert.equal(sourceReferenceDiagnosticCode(references[2]!), "ambiguous-source-target");
 
   assert.deepEqual(planSourceTargetOpen(elixirLookup, "lib/sample.ex#My.App.run/1"), {

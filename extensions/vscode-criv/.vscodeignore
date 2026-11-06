@@ -9,4 +9,3 @@ tsconfig.json
 node_modules/.cache/**
 node_modules/**/*.map
 node_modules/**
-pkg/**

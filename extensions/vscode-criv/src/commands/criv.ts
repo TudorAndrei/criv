@@ -1,9 +1,9 @@
 import * as vscode from "vscode";
-import { errorMessage } from "@criv/editor-state";
+import { crivStatusMessage, errorMessage } from "@criv/editor-state";
 
 import { crivConfiguration } from "../config/reader";
 import { executablePathError } from "../config/model";
-import { loadedStatus, statusMessage, type WorkspaceState } from "../state/store";
+import type { WorkspaceState } from "../state/store";
 import { runProcess, type CommandResult } from "./runner";
 
 export type ReadyRoot = { kind: "ready"; root: vscode.Uri } | { kind: "blocked"; message: string };
@@ -18,10 +18,10 @@ export async function trustedReadyRoot(state: WorkspaceState): Promise<ReadyRoot
   if (!vscode.workspace.isTrusted) {
     return { kind: "blocked", message: "Trust this workspace before running local criv commands." };
   }
-  const status = await loadedStatus(state);
+  const status = await state.loaded();
   return status.kind === "ready"
     ? { kind: "ready", root: status.source.root }
-    : { kind: "blocked", message: statusMessage(status) };
+    : { kind: "blocked", message: crivStatusMessage(status) };
 }
 
 /** Run the configured criv executable in `root` under a cancellable progress notification. */

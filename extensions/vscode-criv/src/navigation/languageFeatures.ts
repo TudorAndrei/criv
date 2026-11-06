@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import type { CrivSelectorSuggestion } from "@criv/editor-state";
 
 import { CRIV_COMMANDS } from "../commands/identifiers";
 import {
@@ -40,18 +41,18 @@ class SourceDocumentLinkProvider implements vscode.DocumentLinkProvider {
   constructor(private readonly store: WorkspaceState) {}
 
   provideDocumentLinks(document: vscode.TextDocument): vscode.DocumentLink[] {
-    const references = documentReferences(this.store, document);
-    return references
-      .filter((reference) => reference.canonicalTarget)
-      .map((reference) => {
-        const target = reference.canonicalTarget ?? reference.target;
-        return new vscode.DocumentLink(
-          rangeFromOffsets(document, reference.start, reference.end),
-          vscode.Uri.parse(
-            `command:${CRIV_COMMANDS.openSourceTarget}?${encodeURIComponent(JSON.stringify([target]))}`,
-          ),
-        );
-      });
+    return documentReferences(this.store, document).flatMap(({ resolution, start, end }) =>
+      resolution.kind === "resolved"
+        ? [
+            new vscode.DocumentLink(
+              rangeFromOffsets(document, start, end),
+              vscode.Uri.parse(
+                `command:${CRIV_COMMANDS.openSourceTarget}?${encodeURIComponent(JSON.stringify([resolution.canonical_target]))}`,
+              ),
+            ),
+          ]
+        : [],
+    );
   }
 }
 
@@ -164,17 +165,28 @@ function rangeFromOffsets(document: vscode.TextDocument, start: number, end: num
   return new vscode.Range(document.positionAt(start), document.positionAt(end));
 }
 
-function completionKind(kind: string): vscode.CompletionItemKind {
+function completionKind(kind: CrivSelectorSuggestion["kind"]): vscode.CompletionItemKind {
   switch (kind) {
     case "file":
     case "code":
       return vscode.CompletionItemKind.File;
     case "function":
-    case "fn":
+    case "callback":
+    case "macro":
+    case "macro-callback":
       return vscode.CompletionItemKind.Function;
+    case "method":
+      return vscode.CompletionItemKind.Method;
     case "class":
-    case "type":
       return vscode.CompletionItemKind.Class;
+    case "struct":
+      return vscode.CompletionItemKind.Struct;
+    case "module":
+    case "external-module":
+      return vscode.CompletionItemKind.Module;
+    case "behaviour":
+    case "protocol":
+      return vscode.CompletionItemKind.Interface;
     default:
       return vscode.CompletionItemKind.Reference;
   }

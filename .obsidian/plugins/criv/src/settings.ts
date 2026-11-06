@@ -1,6 +1,6 @@
 import { PluginSettingTab, Setting } from "obsidian";
 import type { App, Plugin } from "obsidian";
-import { safeVaultPath } from "@criv/editor-state";
+import { CRIV_STATE_PATH, safeVaultPath } from "@criv/editor-state";
 
 export interface CrivSettings {
   statePath: string;
@@ -8,7 +8,7 @@ export interface CrivSettings {
 }
 
 const DEFAULT_SETTINGS: CrivSettings = {
-  statePath: ".criv/state.json",
+  statePath: CRIV_STATE_PATH,
   externalEditorUrl: "vscode://file/{path}",
 };
 
@@ -64,7 +64,7 @@ class CrivSettingTab extends PluginSettingTab {
       .setDesc("Path to the criv watcher state file, relative to the vault root.")
       .addText((text) =>
         text
-          .setPlaceholder(".criv/state.json")
+          .setPlaceholder(CRIV_STATE_PATH)
           .setValue(this.owner.current.statePath)
           .onChange(async (value) => this.owner.setStatePath(value)),
       );

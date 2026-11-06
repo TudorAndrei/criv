@@ -77,27 +77,192 @@ export function positionHoverPreview(preview: HTMLElement, event: MouseEvent): v
   preview.style.top = `${Math.min(event.clientY + margin, window.innerHeight - 260)}px`;
 }
 
+interface LanguageSyntax {
+  extensions: readonly string[];
+  tokens: RegExp;
+  comment: string;
+  stringPrefixes: readonly string[];
+  atoms: boolean;
+  keywords: ReadonlySet<string>;
+  literals: ReadonlySet<string>;
+}
+
+const C_LIKE_TOKENS =
+  /\/\/.*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b/g;
+const QUOTES = ['"', "'", "`"];
+const C_LIKE_LITERALS = new Set(["false", "null", "true", "undefined"]);
+const TYPESCRIPT_KEYWORDS = new Set([
+  "async",
+  "await",
+  "class",
+  "const",
+  "else",
+  "export",
+  "for",
+  "from",
+  "function",
+  "if",
+  "import",
+  "interface",
+  "let",
+  "new",
+  "private",
+  "return",
+  "type",
+]);
+
+function cLike(extensions: readonly string[], keywords: ReadonlySet<string>): LanguageSyntax {
+  return {
+    extensions,
+    tokens: C_LIKE_TOKENS,
+    comment: "//",
+    stringPrefixes: QUOTES,
+    atoms: false,
+    keywords,
+    literals: C_LIKE_LITERALS,
+  };
+}
+
+const PLAIN = cLike([], new Set());
+
+const LANGUAGES: Readonly<Record<string, LanguageSyntax>> = {
+  rust: cLike(
+    ["rs"],
+    new Set([
+      "as",
+      "async",
+      "await",
+      "const",
+      "crate",
+      "enum",
+      "fn",
+      "for",
+      "if",
+      "impl",
+      "let",
+      "match",
+      "mod",
+      "mut",
+      "pub",
+      "return",
+      "self",
+      "static",
+      "struct",
+      "trait",
+      "type",
+      "use",
+      "where",
+      "while",
+    ]),
+  ),
+  typescript: cLike(["ts", "tsx"], TYPESCRIPT_KEYWORDS),
+  javascript: cLike(["js", "jsx"], TYPESCRIPT_KEYWORDS),
+  go: cLike(
+    ["go"],
+    new Set([
+      "const",
+      "defer",
+      "else",
+      "for",
+      "func",
+      "go",
+      "if",
+      "import",
+      "interface",
+      "package",
+      "range",
+      "return",
+      "struct",
+      "type",
+      "var",
+    ]),
+  ),
+  python: {
+    extensions: ["py"],
+    tokens:
+      /#.*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b/g,
+    comment: "#",
+    stringPrefixes: QUOTES,
+    atoms: false,
+    keywords: new Set([
+      "as",
+      "async",
+      "await",
+      "class",
+      "def",
+      "elif",
+      "else",
+      "for",
+      "from",
+      "if",
+      "import",
+      "in",
+      "lambda",
+      "return",
+      "self",
+      "while",
+    ]),
+    literals: new Set(["False", "None", "True"]),
+  },
+  elixir: {
+    extensions: ["ex", "exs"],
+    tokens:
+      /#.*|~[A-Za-z](?:\/(?:\\.|[^/\\])*\/[A-Za-z]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|:[A-Za-z_][A-Za-z0-9_!?@]*|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_!?]*\b/g,
+    comment: "#",
+    stringPrefixes: [...QUOTES, "~"],
+    atoms: true,
+    keywords: new Set([
+      "after",
+      "alias",
+      "and",
+      "case",
+      "catch",
+      "cond",
+      "def",
+      "defcallback",
+      "defdelegate",
+      "defexception",
+      "defguard",
+      "defguardp",
+      "defimpl",
+      "defmacro",
+      "defmacrop",
+      "defmodule",
+      "defoverridable",
+      "defp",
+      "defprotocol",
+      "defstruct",
+      "do",
+      "else",
+      "end",
+      "fn",
+      "for",
+      "if",
+      "import",
+      "in",
+      "not",
+      "or",
+      "quote",
+      "receive",
+      "require",
+      "rescue",
+      "try",
+      "unless",
+      "unquote",
+      "use",
+      "when",
+      "with",
+    ]),
+    literals: new Set(["false", "nil", "true"]),
+  },
+};
+
 export function languageForPath(path: string): string {
   const extension = path.split(".").pop()?.toLowerCase();
-  switch (extension) {
-    case "rs":
-      return "rust";
-    case "ts":
-    case "tsx":
-      return "typescript";
-    case "js":
-    case "jsx":
-      return "javascript";
-    case "py":
-      return "python";
-    case "go":
-      return "go";
-    case "ex":
-    case "exs":
-      return "elixir";
-    default:
-      return extension ?? "text";
-  }
+  const language = Object.entries(LANGUAGES).find(([, syntax]) =>
+    syntax.extensions.includes(extension ?? ""),
+  );
+  return language?.[0] ?? extension ?? "text";
 }
 
 interface HighlightToken {
@@ -135,16 +300,16 @@ function renderHighlightedCode(container: HTMLElement, preview: SourcePreview): 
 }
 
 export function highlightSourceLine(line: string, language: string): HighlightToken[] {
+  const syntax = LANGUAGES[language] ?? PLAIN;
   const tokens: HighlightToken[] = [];
-  const tokenPattern = tokenPatternFor(language);
   let cursor = 0;
-  for (const match of line.matchAll(tokenPattern)) {
+  for (const match of line.matchAll(syntax.tokens)) {
     const index = match.index ?? cursor;
     if (index > cursor) {
       tokens.push({ text: line.slice(cursor, index) });
     }
     const text = match[0];
-    tokens.push({ text, className: highlightClass(text, language) });
+    tokens.push({ text, className: highlightClass(text, syntax) });
     cursor = index + text.length;
   }
   if (cursor < line.length) {
@@ -153,192 +318,29 @@ export function highlightSourceLine(line: string, language: string): HighlightTo
   return tokens;
 }
 
-function tokenPatternFor(language: string): RegExp {
-  if (language === "elixir") {
-    return /#.*|~[A-Za-z](?:\/(?:\\.|[^/\\])*\/[A-Za-z]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|:[A-Za-z_][A-Za-z0-9_!?@]*|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_!?]*\b/g;
-  }
-  if (language === "python") {
-    return /#.*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b/g;
-  }
-  return /\/\/.*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|\b\d+(?:\.\d+)?\b|\b[A-Za-z_][A-Za-z0-9_]*\b/g;
-}
-
-function highlightClass(token: string, language: string): string | undefined {
-  if (
-    token.startsWith("//") ||
-    ((language === "python" || language === "elixir") && token.startsWith("#"))
-  ) {
+function highlightClass(token: string, syntax: LanguageSyntax): string | undefined {
+  if (token.startsWith(syntax.comment)) {
     return "criv-token-comment";
   }
-  if (
-    token.startsWith('"') ||
-    token.startsWith("'") ||
-    token.startsWith("`") ||
-    (language === "elixir" && token.startsWith("~"))
-  ) {
+  if (syntax.stringPrefixes.some((prefix) => token.startsWith(prefix))) {
     return "criv-token-string";
   }
-  if (language === "elixir" && token.startsWith(":")) {
+  if (syntax.atoms && token.startsWith(":")) {
     return "criv-token-literal";
   }
   if (/^\d/.test(token)) {
     return "criv-token-number";
   }
-  if (keywordSet(language).has(token)) {
+  if (syntax.keywords.has(token)) {
     return "criv-token-keyword";
   }
-  if (literalSet(language).has(token)) {
+  if (syntax.literals.has(token)) {
     return "criv-token-literal";
   }
   if (/^[A-Z][A-Za-z0-9_]*$/.test(token)) {
     return "criv-token-type";
   }
   return undefined;
-}
-
-function keywordSet(language: string): Set<string> {
-  switch (language) {
-    case "rust":
-      return new Set([
-        "as",
-        "async",
-        "await",
-        "const",
-        "crate",
-        "enum",
-        "fn",
-        "for",
-        "if",
-        "impl",
-        "let",
-        "match",
-        "mod",
-        "mut",
-        "pub",
-        "return",
-        "self",
-        "static",
-        "struct",
-        "trait",
-        "type",
-        "use",
-        "where",
-        "while",
-      ]);
-    case "typescript":
-    case "javascript":
-      return new Set([
-        "async",
-        "await",
-        "class",
-        "const",
-        "else",
-        "export",
-        "for",
-        "from",
-        "function",
-        "if",
-        "import",
-        "interface",
-        "let",
-        "new",
-        "private",
-        "return",
-        "type",
-      ]);
-    case "python":
-      return new Set([
-        "as",
-        "async",
-        "await",
-        "class",
-        "def",
-        "elif",
-        "else",
-        "for",
-        "from",
-        "if",
-        "import",
-        "in",
-        "lambda",
-        "return",
-        "self",
-        "while",
-      ]);
-    case "go":
-      return new Set([
-        "const",
-        "defer",
-        "else",
-        "for",
-        "func",
-        "go",
-        "if",
-        "import",
-        "interface",
-        "package",
-        "range",
-        "return",
-        "struct",
-        "type",
-        "var",
-      ]);
-    case "elixir":
-      return new Set([
-        "after",
-        "alias",
-        "and",
-        "case",
-        "catch",
-        "cond",
-        "def",
-        "defcallback",
-        "defdelegate",
-        "defexception",
-        "defguard",
-        "defguardp",
-        "defimpl",
-        "defmacro",
-        "defmacrop",
-        "defmodule",
-        "defoverridable",
-        "defp",
-        "defprotocol",
-        "defstruct",
-        "do",
-        "else",
-        "end",
-        "fn",
-        "for",
-        "if",
-        "import",
-        "in",
-        "not",
-        "or",
-        "quote",
-        "receive",
-        "require",
-        "rescue",
-        "try",
-        "unless",
-        "unquote",
-        "use",
-        "when",
-        "with",
-      ]);
-    default:
-      return new Set();
-  }
-}
-
-function literalSet(language: string): Set<string> {
-  if (language === "elixir") {
-    return new Set(["false", "nil", "true"]);
-  }
-  if (language === "python") {
-    return new Set(["False", "None", "True"]);
-  }
-  return new Set(["false", "null", "true", "undefined"]);
 }
 
 function safeCssSegment(value: string): string {

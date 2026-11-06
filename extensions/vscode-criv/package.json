@@ -109,11 +109,6 @@
           "default": "criv",
           "description": "Path to the criv executable used for workspace commands."
         },
-        "criv.automaticRefresh": {
-          "type": "boolean",
-          "default": true,
-          "description": "Refresh the loaded criv state after extension-triggered watch commands."
-        },
         "criv.checkOnSave": {
           "type": "boolean",
           "scope": "machine",

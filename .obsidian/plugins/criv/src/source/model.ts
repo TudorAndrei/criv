@@ -1,35 +1,43 @@
 import {
   isRecord,
-  parseLineFragment,
+  looksLikeSourceTarget,
   patternTargetId,
+  resolvedSourceLocation,
   resolveSourceTarget,
-  sourceTargetParts,
+  sourceTargetProblem,
+  wikilinks,
   type CrivGraphNode,
   type CrivInitialProjections,
   type CrivPatternMatch,
   type CrivSourceEntry,
-  type CrivSourceTargetCandidate,
   type SourceLines,
+  type SourceTargetResolution,
 } from "@criv/editor-state";
 
 import type { SourceResolver } from "../ports";
 
 export interface LinkedSource {
-  target: string;
-  canonicalTarget: string;
-  lines?: SourceLines;
   entry: CrivSourceEntry;
   node: CrivGraphNode;
+  lines?: SourceLines;
 }
 
 export type SourceResolution =
   | { kind: "resolved"; source: LinkedSource }
-  | { kind: "unresolved" }
-  | {
-      kind: "ambiguous";
-      candidates: CrivSourceTargetCandidate[];
-      totalCandidateCount: number;
-    };
+  | Exclude<SourceTargetResolution, { kind: "resolved" }>;
+
+/** What a link target means: an indexed source, a registered pattern, or a warning. */
+export type CrivLinkStatus =
+  | { kind: "source"; source: LinkedSource }
+  | { kind: "pattern"; id: string }
+  | { kind: "problem"; message: string };
+
+export interface CrivLinkRange {
+  from: number;
+  to: number;
+  target: string;
+  status: CrivLinkStatus;
+}
 
 export interface FrontmatterPatternTarget {
   id: string;
@@ -38,25 +46,13 @@ export interface FrontmatterPatternTarget {
   matches: CrivPatternMatch[];
 }
 
-export interface CrivLinkRange {
-  from: number;
-  to: number;
-  target: string;
-  kind: "source" | "pattern" | "unknown";
-  status: "resolved" | "unresolved" | "ambiguous";
-  candidates?: CrivSourceTargetCandidate[];
-  totalCandidateCount?: number;
-}
-
-const WIKILINK = /\[\[([^\]]+)\]\]/g;
-
 export function linkedSourcesFromMarkdown(
   markdown: string,
   resolver: SourceResolver,
 ): LinkedSource[] {
   const sources = new Map<string, LinkedSource>();
-  for (const match of markdown.matchAll(WIKILINK)) {
-    const source = resolveSource(resolver, match[1] ?? "");
+  for (const link of wikilinks(markdown)) {
+    const source = resolveSource(resolver, link.target);
     if (source && !sources.has(source.entry.path)) {
       sources.set(source.entry.path, source);
     }
@@ -72,35 +68,61 @@ export function resolveSource(resolver: SourceResolver, target: string): LinkedS
 /** Resolve a link to a source file that the loaded State indexes. */
 export function resolveSourceResult(resolver: SourceResolver, target: string): SourceResolution {
   const result = resolveSourceTarget((lookup) => resolver.lookupSourceTarget(lookup), target);
-  if (result.kind === "ambiguous") {
-    return {
-      kind: "ambiguous",
-      candidates: result.candidates,
-      totalCandidateCount: result.total_candidate_count,
-    };
+  if (result.kind !== "resolved") {
+    return result;
   }
-  const entry =
-    result.kind === "resolved"
-      ? resolver.sourceEntry(sourceTargetParts(result.canonical_target).path)
-      : undefined;
-  if (result.kind !== "resolved" || !entry) {
-    return { kind: "unresolved" };
-  }
-  return {
-    kind: "resolved",
-    source: {
-      target,
-      canonicalTarget: result.canonical_target,
-      lines: result.lines ?? parseLineFragment(result.node.line_range),
-      entry,
-      node: result.node,
-    },
-  };
+  const location = resolvedSourceLocation(result);
+  const entry = location && resolver.sourceEntry(location.path);
+  return location && entry
+    ? { kind: "resolved", source: { entry, node: result.node, lines: location.lines } }
+    : { kind: "unresolved" };
 }
 
 export function resolvePattern(state: CrivInitialProjections, target: string): string | null {
   const id = patternTargetId(target);
   return id !== undefined && state.registeredPatterns.includes(id) ? id : null;
+}
+
+/**
+ * The status of a link from its candidate targets: the first source match,
+ * then the first registered pattern, then a warning when the first target
+ * names a file or pattern. Null for a link criv does not own, such as a note.
+ */
+export function crivLinkStatus(
+  state: CrivInitialProjections,
+  resolver: SourceResolver,
+  targets: readonly string[],
+): CrivLinkStatus | null {
+  for (const target of targets) {
+    const result = resolveSourceResult(resolver, target);
+    if (result.kind === "resolved") {
+      return { kind: "source", source: result.source };
+    }
+    if (result.kind === "ambiguous") {
+      return { kind: "problem", message: sourceTargetProblem(target, result) };
+    }
+  }
+  for (const target of targets) {
+    const id = resolvePattern(state, target);
+    if (id) {
+      return { kind: "pattern", id };
+    }
+  }
+  const [first] = targets;
+  return first && (looksLikeSourceTarget(first) || patternTargetId(first) !== undefined)
+    ? { kind: "problem", message: sourceTargetProblem(first, { kind: "unresolved" }) }
+    : null;
+}
+
+export function crivLinkRanges(
+  text: string,
+  state: CrivInitialProjections,
+  resolver: SourceResolver,
+): CrivLinkRange[] {
+  return wikilinks(text).flatMap((link) => {
+    const status = crivLinkStatus(state, resolver, [link.target]);
+    return status ? [{ from: link.start, to: link.end, target: link.target, status }] : [];
+  });
 }
 
 export function sourceTooltip(source: LinkedSource): string {
@@ -126,45 +148,6 @@ export function frontmatterPatternTargets(
     ...fromSection(frontmatter?.targets, "targets"),
     ...fromSection(frontmatter?.policy, "policy"),
   ];
-}
-
-export function crivLinkRanges(
-  text: string,
-  state: CrivInitialProjections,
-  resolver: SourceResolver,
-): CrivLinkRange[] {
-  const ranges: CrivLinkRange[] = [];
-  for (const match of text.matchAll(WIKILINK)) {
-    const target = match[1] ?? "";
-    const from = match.index;
-    const to = from + match[0].length;
-    const source = resolveSourceResult(resolver, target);
-    if (source.kind === "resolved") {
-      ranges.push({ from, to, target, kind: "source", status: "resolved" });
-    } else if (source.kind === "ambiguous") {
-      ranges.push({
-        from,
-        to,
-        target,
-        kind: "source",
-        status: "ambiguous",
-        candidates: source.candidates,
-        totalCandidateCount: source.totalCandidateCount,
-      });
-    } else if (resolvePattern(state, target)) {
-      ranges.push({ from, to, target, kind: "pattern", status: "resolved" });
-    } else if (looksLikeSourceOrPattern(target)) {
-      ranges.push({ from, to, target, kind: "unknown", status: "unresolved" });
-    }
-  }
-  return ranges;
-}
-
-export function looksLikeSourceOrPattern(target: string): boolean {
-  return (
-    patternTargetId(target) !== undefined ||
-    /\.[a-z0-9]+(#.*)?$/i.test((target.split("|", 1)[0] ?? "").trim())
-  );
 }
 
 function frontmatterPatternTarget(
