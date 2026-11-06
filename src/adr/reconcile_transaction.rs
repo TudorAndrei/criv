@@ -3,12 +3,11 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
 use std::path::Path;
 
 use crate::check;
 use crate::diagnostic::Diagnostic;
-use crate::git::{ChangedSet, Comparison, GitRepository};
+use crate::git::{ChangedSet, Comparison, GitRepository, IndexSnapshot};
 use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
@@ -276,21 +275,11 @@ struct CapturedPath {
     contents: Option<(Vec<u8>, fs::Permissions)>,
 }
 
-/// The raw index file, restored under Git's own `index.lock` so a concurrent
-/// Git process is never overwritten.
-struct IndexSnapshot {
-    git_files: RepositoryFiles,
-    contents: Option<(Vec<u8>, fs::Permissions)>,
-}
-
-const INDEX: &str = "index";
-const INDEX_LOCK: &str = "index.lock";
-
 impl Snapshot {
     fn capture(files: &RepositoryFiles, git: &GitRepository, paths: &[&str]) -> Result<Self> {
         Ok(Self {
             files: files.clone(),
-            index: IndexSnapshot::capture(git)?,
+            index: git.snapshot_index()?,
             paths: paths
                 .iter()
                 .map(|path| {
@@ -332,54 +321,6 @@ impl CapturedPath {
     }
 }
 
-impl IndexSnapshot {
-    fn capture(git: &GitRepository) -> Result<Self> {
-        let git_files = RepositoryFiles::open(git.git_dir())?;
-        let contents = git_files
-            .read_optional_with_permissions(Path::new(INDEX))
-            .map_err(|error| {
-                CrivError::new(format!("Git index could not be snapshotted: {error}"))
-            })?;
-        Ok(Self {
-            git_files,
-            contents,
-        })
-    }
-
-    fn restore(self) -> Result<()> {
-        let scope = self.git_files.write_scope(Path::new("."))?;
-        let lock = Path::new(INDEX_LOCK);
-        let mut lock_file = scope
-            .create_new(lock)
-            .map_err(|error| CrivError::new(format!("Git index could not be restored: {error}")))?;
-        let restored = (|| -> Result<()> {
-            if let Some((contents, permissions)) = self.contents {
-                lock_file.write_all(&contents)?;
-                lock_file.set_permissions(permissions)?;
-                lock_file.sync_all()?;
-                drop(lock_file);
-                return scope.rename_file(lock, Path::new(INDEX));
-            }
-            drop(lock_file);
-            if self.git_files.file_exists(Path::new(INDEX))? {
-                scope.remove_file(Path::new(INDEX))?;
-            }
-            scope.remove_file(lock)
-        })();
-        restored.map_err(|error| {
-            let error = format!("Git index could not be restored: {error}");
-            let cleanup = match self.git_files.file_exists(lock) {
-                Ok(false) => Ok(()),
-                _ => scope.remove_file(lock),
-            };
-            CrivError::new(match cleanup {
-                Ok(()) => error,
-                Err(cleanup) => format!("{error}; removing {INDEX_LOCK} also failed: {cleanup}"),
-            })
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -389,7 +330,7 @@ mod tests {
 
     use super::Snapshot;
     use crate::git::GitRepository;
-    use crate::git::fixture::{git, git_with_input};
+    use crate::git::fixture::git;
     use crate::repository::RepositoryFiles;
 
     fn capture(root: &Path, paths: &[&str]) -> Snapshot {
@@ -450,89 +391,6 @@ mod tests {
             fs::read_to_string(root.join(later)).unwrap(),
             "later before\n"
         );
-    }
-
-    #[test]
-    fn rollback_restores_index_only_flags_with_a_clean_worktree() {
-        let temp = repository();
-        let root = temp.path();
-        fs::write(root.join("assume.txt"), "assume unchanged\n").unwrap();
-        fs::write(root.join("skip.txt"), "skip worktree\n").unwrap();
-        git(root, &["add", "assume.txt", "skip.txt"]);
-        git(root, &["commit", "-qm", "test: add flagged files"]);
-        git(root, &["update-index", "--assume-unchanged", "assume.txt"]);
-        git(root, &["update-index", "--skip-worktree", "skip.txt"]);
-        assert!(git(root, &["status", "--porcelain=v1"]).is_empty());
-        let flags = |root| git(root, &["ls-files", "-v", "--", "assume.txt", "skip.txt"]);
-        let flags_before = flags(root);
-        assert!(flags_before.lines().any(|line| line == "h assume.txt"));
-        assert!(flags_before.lines().any(|line| line == "S skip.txt"));
-        let index_before = fs::read(root.join(".git/index")).unwrap();
-
-        let snapshot = capture(root, &[]);
-        git(
-            root,
-            &["update-index", "--no-assume-unchanged", "assume.txt"],
-        );
-        git(root, &["update-index", "--no-skip-worktree", "skip.txt"]);
-        assert_ne!(flags(root), flags_before);
-
-        assert!(snapshot.rollback().is_empty());
-        assert_eq!(flags(root), flags_before);
-        assert_eq!(fs::read(root.join(".git/index")).unwrap(), index_before);
-        assert!(git(root, &["status", "--porcelain=v1"]).is_empty());
-    }
-
-    #[test]
-    fn rollback_refuses_to_replace_an_index_with_an_active_git_lock() {
-        let temp = repository();
-        let root = temp.path();
-        let snapshot = capture(root, &[]);
-        fs::write(root.join("new.txt"), "new\n").unwrap();
-        git(root, &["add", "new.txt"]);
-        let changed_index = fs::read(root.join(".git/index")).unwrap();
-        fs::write(
-            root.join(".git/index.lock"),
-            "held by another Git process\n",
-        )
-        .unwrap();
-
-        let errors = snapshot.rollback();
-
-        assert!(
-            errors.iter().any(|error| error.contains("index.lock")),
-            "rollback must report the active Git lock: {errors:?}"
-        );
-        assert_eq!(fs::read(root.join(".git/index")).unwrap(), changed_index);
-        assert!(root.join(".git/index.lock").exists());
-    }
-
-    #[test]
-    fn rollback_restores_conflict_stages() {
-        let temp = repository();
-        let root = temp.path();
-        let object = |contents| git_with_input(root, &["hash-object", "-w", "--stdin"], contents);
-        let entries = format!(
-            "100644 {} 1\tconflict.txt\n100644 {} 2\tconflict.txt\n100644 {} 3\tconflict.txt\n",
-            object("base\n"),
-            object("ours\n"),
-            object("theirs\n")
-        );
-        git_with_input(root, &["update-index", "--index-info"], &entries);
-        let stages = || git(root, &["ls-files", "--stage", "--", "conflict.txt"]);
-        let stages_before = stages();
-        for stage in [" 1\t", " 2\t", " 3\t"] {
-            assert!(stages_before.contains(&format!("{stage}conflict.txt")));
-        }
-        let index_before = fs::read(root.join(".git/index")).unwrap();
-
-        let snapshot = capture(root, &[]);
-        git(root, &["reset", "--mixed", "HEAD"]);
-        assert!(stages().is_empty());
-
-        assert!(snapshot.rollback().is_empty());
-        assert_eq!(stages(), stages_before);
-        assert_eq!(fs::read(root.join(".git/index")).unwrap(), index_before);
     }
 
     fn repository() -> TempDir {

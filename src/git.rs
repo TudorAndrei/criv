@@ -5,10 +5,13 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::fs;
+use std::io::Write;
 use std::ops::Range;
 use std::path::Path;
 
 use crate::diagnostic::DiagnosticCode;
+use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
 /// One side of a Git comparison.
@@ -167,8 +170,15 @@ impl GitRepository {
         })
     }
 
-    pub(crate) fn git_dir(&self) -> &Path {
-        self.repository.path()
+    /// Captures the raw index file before a transaction stages anything.
+    pub(crate) fn snapshot_index(&self) -> Result<IndexSnapshot> {
+        let git_dir = RepositoryFiles::open(self.repository.path())?;
+        let contents = git_dir
+            .read_optional_with_permissions(Path::new(INDEX))
+            .map_err(|error| {
+                CrivError::new(format!("Git index could not be snapshotted: {error}"))
+            })?;
+        Ok(IndexSnapshot { git_dir, contents })
     }
 
     /// Lists changed entries, restricted to `paths` when any are given.
@@ -640,6 +650,51 @@ impl GitRepository {
     }
 }
 
+/// The raw index file, restored under Git's own `index.lock` so a concurrent
+/// Git process is never overwritten.
+pub struct IndexSnapshot {
+    git_dir: RepositoryFiles,
+    contents: Option<(Vec<u8>, fs::Permissions)>,
+}
+
+const INDEX: &str = "index";
+const INDEX_LOCK: &str = "index.lock";
+
+impl IndexSnapshot {
+    pub(crate) fn restore(self) -> Result<()> {
+        let scope = self.git_dir.write_scope(Path::new("."))?;
+        let lock = Path::new(INDEX_LOCK);
+        let mut lock_file = scope
+            .create_new(lock)
+            .map_err(|error| CrivError::new(format!("Git index could not be restored: {error}")))?;
+        let restored = (|| -> Result<()> {
+            if let Some((contents, permissions)) = self.contents {
+                lock_file.write_all(&contents)?;
+                lock_file.set_permissions(permissions)?;
+                lock_file.sync_all()?;
+                drop(lock_file);
+                return scope.rename_file(lock, Path::new(INDEX));
+            }
+            drop(lock_file);
+            if self.git_dir.file_exists(Path::new(INDEX))? {
+                scope.remove_file(Path::new(INDEX))?;
+            }
+            scope.remove_file(lock)
+        })();
+        restored.map_err(|error| {
+            let error = format!("Git index could not be restored: {error}");
+            let cleanup = match self.git_dir.file_exists(lock) {
+                Ok(false) => Ok(()),
+                _ => scope.remove_file(lock),
+            };
+            CrivError::new(match cleanup {
+                Ok(()) => error,
+                Err(cleanup) => format!("{error}; removing {INDEX_LOCK} also failed: {cleanup}"),
+            })
+        })
+    }
+}
+
 fn changed_entries(
     mut diff: git2::Diff<'_>,
     old_ref: Option<&str>,
@@ -717,7 +772,7 @@ fn coalesce_ranges(ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
 /// Git CLI fixture builders shared by unit tests.
 #[cfg(test)]
 pub(crate) mod fixture {
-    pub(crate) use super::tests::{git, git_with_input};
+    pub(crate) use super::tests::git;
 }
 
 #[cfg(test)]
@@ -733,7 +788,7 @@ mod tests {
         git_with_input(root, args, "")
     }
 
-    pub(crate) fn git_with_input(root: &Path, args: &[&str], input: &str) -> String {
+    fn git_with_input(root: &Path, args: &[&str], input: &str) -> String {
         let mut command = Command::new("git");
         command.current_dir(root);
         for variable in [
@@ -829,5 +884,109 @@ mod tests {
             git(root, &["diff", "--cached", "--name-status"]),
             "D\tgone.txt"
         );
+    }
+
+    fn committed_repository() -> tempfile::TempDir {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path();
+        std::fs::write(root.join("committed.txt"), "committed\n").unwrap();
+        git(root, &["init", "-q"]);
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "test: initialize index"]);
+        temp
+    }
+
+    fn snapshot_index(root: &Path) -> super::IndexSnapshot {
+        super::GitRepository::open(root)
+            .unwrap()
+            .snapshot_index()
+            .unwrap()
+    }
+
+    fn index_bytes(root: &Path) -> Vec<u8> {
+        std::fs::read(root.join(".git/index")).unwrap()
+    }
+
+    #[test]
+    fn index_restore_keeps_index_only_flags_with_a_clean_worktree() {
+        let temp = committed_repository();
+        let root = temp.path();
+        std::fs::write(root.join("assume.txt"), "assume unchanged\n").unwrap();
+        std::fs::write(root.join("skip.txt"), "skip worktree\n").unwrap();
+        git(root, &["add", "assume.txt", "skip.txt"]);
+        git(root, &["commit", "-qm", "test: add flagged files"]);
+        git(root, &["update-index", "--assume-unchanged", "assume.txt"]);
+        git(root, &["update-index", "--skip-worktree", "skip.txt"]);
+        assert!(git(root, &["status", "--porcelain=v1"]).is_empty());
+        let flags = |root| git(root, &["ls-files", "-v", "--", "assume.txt", "skip.txt"]);
+        let flags_before = flags(root);
+        assert!(flags_before.lines().any(|line| line == "h assume.txt"));
+        assert!(flags_before.lines().any(|line| line == "S skip.txt"));
+        let index_before = index_bytes(root);
+
+        let snapshot = snapshot_index(root);
+        git(
+            root,
+            &["update-index", "--no-assume-unchanged", "assume.txt"],
+        );
+        git(root, &["update-index", "--no-skip-worktree", "skip.txt"]);
+        assert_ne!(flags(root), flags_before);
+
+        snapshot.restore().unwrap();
+        assert_eq!(flags(root), flags_before);
+        assert_eq!(index_bytes(root), index_before);
+        assert!(git(root, &["status", "--porcelain=v1"]).is_empty());
+    }
+
+    #[test]
+    fn index_restore_refuses_to_replace_an_index_with_an_active_git_lock() {
+        let temp = committed_repository();
+        let root = temp.path();
+        let snapshot = snapshot_index(root);
+        std::fs::write(root.join("new.txt"), "new\n").unwrap();
+        git(root, &["add", "new.txt"]);
+        let changed_index = index_bytes(root);
+        std::fs::write(
+            root.join(".git/index.lock"),
+            "held by another Git process\n",
+        )
+        .unwrap();
+
+        let error = snapshot.restore().unwrap_err().to_string();
+
+        assert!(
+            error.contains("index.lock"),
+            "restore must report the active Git lock: {error}"
+        );
+        assert_eq!(index_bytes(root), changed_index);
+        assert!(root.join(".git/index.lock").exists());
+    }
+
+    #[test]
+    fn index_restore_keeps_conflict_stages() {
+        let temp = committed_repository();
+        let root = temp.path();
+        let object = |contents| git_with_input(root, &["hash-object", "-w", "--stdin"], contents);
+        let entries = format!(
+            "100644 {} 1\tconflict.txt\n100644 {} 2\tconflict.txt\n100644 {} 3\tconflict.txt\n",
+            object("base\n"),
+            object("ours\n"),
+            object("theirs\n")
+        );
+        git_with_input(root, &["update-index", "--index-info"], &entries);
+        let stages = || git(root, &["ls-files", "--stage", "--", "conflict.txt"]);
+        let stages_before = stages();
+        for stage in [" 1\t", " 2\t", " 3\t"] {
+            assert!(stages_before.contains(&format!("{stage}conflict.txt")));
+        }
+        let index_before = index_bytes(root);
+
+        let snapshot = snapshot_index(root);
+        git(root, &["reset", "--mixed", "HEAD"]);
+        assert!(stages().is_empty());
+
+        snapshot.restore().unwrap();
+        assert_eq!(stages(), stages_before);
+        assert_eq!(index_bytes(root), index_before);
     }
 }
