@@ -1844,126 +1844,79 @@ fn typescript_and_rust_rule_policies_accept_compliant_code_and_reject_each_viola
     write_criv_config(root, vec!["src"], vec![], true);
 
     let policy = r#"  patterns:
-    - id: no-editor-node-or-empty-lookup-api
+    - id: no-call
       language: typescript
-      pattern: $OBJECT.lookupNode($$$ARGS)
-    - id: no-vscode-raw-target-open-fallback
-      language: typescript
-      pattern: parseSourceTarget($NODE?.source_target ?? $NODE?.path ?? $TARGET)
-    - id: no-direct-obsidian-href-decode
+      pattern: $OBJECT.forbidden($$$ARGS)
+    - id: no-call-inside
       language: typescript
       rule: |
         all:
           - pattern: decodeURIComponent($TARGET)
           - inside:
-              pattern: 'function linkTargets($$$ARGS): $RETURN { $$$BODY }'
+              pattern: 'function read($$$ARGS): $RETURN { $$$BODY }'
               stopBy: end
-    - id: vscode-lookup-adapter-needs-result-states
+    - id: requires-each-branch
       language: typescript
       rule: |
         all:
-          - pattern: 'export function resolveSourceTarget($$$ARGS): $RETURN { $$$BODY }'
+          - pattern: 'export function resolve($$$ARGS): $RETURN { $$$BODY }'
           - any:
               - not:
                   has:
-                    pattern: $RESULT.kind === "resolved"
+                    pattern: $RESULT.kind === "first"
                     stopBy: end
               - not:
                   has:
-                    pattern: $RESULT.kind === "unresolved"
+                    pattern: $RESULT.kind === "second"
                     stopBy: end
-              - not:
-                  has:
-                    pattern: $RESULT.kind === "ambiguous"
-                    stopBy: end
-    - id: obsidian-lookup-adapter-needs-result-states
-      language: typescript
-      rule: |
-        all:
-          - pattern: 'export function resolveSourceResult($$$ARGS): $RETURN { $$$BODY }'
-          - any:
-              - not:
-                  has:
-                    pattern: $RESULT.kind === "resolved"
-                    stopBy: end
-              - not:
-                  has:
-                    pattern: $RESULT.kind === "unresolved"
-                    stopBy: end
-              - not:
-                  has:
-                    pattern: $RESULT.kind === "ambiguous"
-                    stopBy: end
-    - id: vscode-open-needs-result-states
-      language: typescript
-      rule: |
-        all:
-          - pattern: 'async function openSourceTarget($$$ARGS): $RETURN { $$$BODY }'
-          - any:
-              - not:
-                  has:
-                    pattern: $RESULT.kind === "malformed"
-                    stopBy: end
-    - id: no-wasm-source-suffix-resolution
+    - id: no-method-inside
       language: rust
       rule: |
         all:
           - pattern: $VALUE.ends_with($QUERY)
           - inside:
-              pattern: fn lookup_source_target(&self, $$$ARGS) -> $RETURN { $$$BODY }
+              pattern: fn lookup(&self, $$$ARGS) -> $RETURN { $$$BODY }
               stopBy: end
-    - id: wasm-lookup-needs-distinct-indexes
+    - id: requires-each-call
       language: rust
       rule: |
         all:
-          - pattern: fn lookup_source_target(&self, $$$ARGS) -> $RETURN { $$$BODY }
+          - pattern: fn lookup(&self, $$$ARGS) -> $RETURN { $$$BODY }
           - any:
               - not:
                   has:
-                    pattern: self.exact_source_lookup.get($KEY)
+                    pattern: self.first.get($KEY)
                     stopBy: end
               - not:
                   has:
-                    pattern: self.legacy_source_lookup.get($KEY)
+                    pattern: self.second.get($KEY)
                     stopBy: end"#;
     fs::write(
-        root.join("docs/adr/0097-source-lookup-policy.md"),
+        root.join("docs/adr/0900-rule-policy-fixture.md"),
         format!(
-            "---\nid: ADR-0097\nkind: decision\ntitle: Source lookup policy fixture\nstatus: accepted\ndate: 2026-08-12\ngoverns:\n  - src/editor.ts\n  - src/lookup.rs\npolicy:\n{policy}\n---\n\n# Source lookup policy fixture\n"
+            "---\nid: ADR-0900\nkind: decision\ntitle: Rule policy fixture\nstatus: accepted\ndate: 2026-08-12\ngoverns:\n  - src/editor.ts\n  - src/lookup.rs\npolicy:\n{policy}\n---\n\n# Rule policy fixture\n"
         ),
     )
     .unwrap();
 
     let valid_typescript = r#"
-export function resolveSourceTarget(result: any): any {
-  if (result.kind === "resolved") return result;
-  if (result.kind === "unresolved") return result;
-  if (result.kind === "ambiguous") return result;
+export function resolve(result: any): any {
+  if (result.kind === "first") return result;
+  if (result.kind === "second") return result;
 }
-export function resolveSourceResult(result: any): any {
-  if (result.kind === "resolved") return result;
-  if (result.kind === "unresolved") return result;
-  if (result.kind === "ambiguous") return result;
-}
-async function openSourceTarget(result: any): Promise<any> {
-  if (result.kind === "resolved") return result;
-  if (result.kind === "unresolved") return result;
-  if (result.kind === "ambiguous") return result;
-  if (result.kind === "malformed") return result;
-}
-function linkTargets(target: string): string {
+function read(target: string): string {
   return safeDecode(target);
 }
 "#;
     let valid_rust = r"
-struct PreparedState {
-    exact_source_lookup: std::collections::HashMap<u64, Vec<usize>>,
-    legacy_source_lookup: std::collections::HashMap<u64, Vec<usize>>,
+struct Lookup {
+    first: std::collections::HashMap<u64, usize>,
+    second: std::collections::HashMap<u64, usize>,
 }
-impl PreparedState {
-    fn lookup_source_target(&self, key: &u64) -> () {
-        let _ = self.exact_source_lookup.get(key);
-        let _ = self.legacy_source_lookup.get(key);
+impl Lookup {
+    fn lookup(&self, key: &u64) -> () {
+        let _ = self.first.get(key);
+        let _ = self.second.get(key);
     }
 }
 ";
@@ -1971,74 +1924,53 @@ impl PreparedState {
     fs::write(root.join("src/lookup.rs"), valid_rust).unwrap();
 
     criv(root)
-        .args(["check", "--filter", "ADR-0097"])
+        .args(["check", "--filter", "ADR-0900"])
         .assert()
         .success();
 
-    let reject_typescript = |id: &str, source: &str| {
-        fs::write(root.join("src/editor.ts"), source).unwrap();
+    let reject = |file: &str, valid: &str, id: &str, source: String| {
+        fs::write(root.join(file), source).unwrap();
         criv(root)
-            .args(["check", "--filter", &format!("ADR-0097/{id}")])
+            .args(["check", "--filter", &format!("ADR-0900/{id}")])
             .assert()
             .failure()
-            .stdout(predicate::str::contains(format!("ADR-0097/{id}")));
-        fs::write(root.join("src/editor.ts"), valid_typescript).unwrap();
+            .stdout(predicate::str::contains(format!("ADR-0900/{id}")));
+        fs::write(root.join(file), valid).unwrap();
     };
-    reject_typescript(
-        "no-editor-node-or-empty-lookup-api",
-        &format!("{valid_typescript}\nowner.lookupNode(target);\n"),
+    let ts = "src/editor.ts";
+    let rs = "src/lookup.rs";
+    reject(
+        ts,
+        valid_typescript,
+        "no-call",
+        format!("{valid_typescript}\nowner.forbidden(target);\n"),
     );
-    reject_typescript(
-        "no-vscode-raw-target-open-fallback",
-        &format!(
-            "{valid_typescript}\nparseSourceTarget(node?.source_target ?? node?.path ?? target);\n"
+    reject(
+        ts,
+        valid_typescript,
+        "no-call-inside",
+        valid_typescript.replace("safeDecode(target)", "decodeURIComponent(target)"),
+    );
+    reject(
+        ts,
+        valid_typescript,
+        "requires-each-branch",
+        valid_typescript.replace("  if (result.kind === \"second\") return result;\n", ""),
+    );
+    reject(
+        rs,
+        valid_rust,
+        "no-method-inside",
+        valid_rust.replace(
+            "let _ = self.second.get(key);",
+            "let _ = self.second.get(key);\n        let _ = \"path\".ends_with(\"query\");",
         ),
     );
-    reject_typescript(
-        "no-direct-obsidian-href-decode",
-        &valid_typescript.replace(
-            "return safeDecode(target);",
-            "return decodeURIComponent(target);",
-        ),
-    );
-    reject_typescript(
-        "vscode-lookup-adapter-needs-result-states",
-        &valid_typescript.replace(
-            "  if (result.kind === \"ambiguous\") return result;\n}\nexport function resolveSourceResult",
-            "}\nexport function resolveSourceResult",
-        ),
-    );
-    reject_typescript(
-        "obsidian-lookup-adapter-needs-result-states",
-        &valid_typescript.replace(
-            "export function resolveSourceResult(result: any): any {\n  if (result.kind === \"resolved\") return result;\n  if (result.kind === \"unresolved\") return result;\n  if (result.kind === \"ambiguous\") return result;\n}",
-            "export function resolveSourceResult(result: any): any {\n  if (result.kind === \"resolved\") return result;\n  if (result.kind === \"unresolved\") return result;\n}",
-        ),
-    );
-    reject_typescript(
-        "vscode-open-needs-result-states",
-        &valid_typescript.replace("  if (result.kind === \"malformed\") return result;", ""),
-    );
-
-    let reject_rust = |id: &str, source: &str| {
-        fs::write(root.join("src/lookup.rs"), source).unwrap();
-        criv(root)
-            .args(["check", "--filter", &format!("ADR-0097/{id}")])
-            .assert()
-            .failure()
-            .stdout(predicate::str::contains(format!("ADR-0097/{id}")));
-        fs::write(root.join("src/lookup.rs"), valid_rust).unwrap();
-    };
-    reject_rust(
-        "no-wasm-source-suffix-resolution",
-        &valid_rust.replace(
-            "let _ = self.legacy_source_lookup.get(key);",
-            "let _ = self.legacy_source_lookup.get(key);\n        let _ = \"path\".ends_with(\"query\");",
-        ),
-    );
-    reject_rust(
-        "wasm-lookup-needs-distinct-indexes",
-        &valid_rust.replace("let _ = self.legacy_source_lookup.get(key);", ""),
+    reject(
+        rs,
+        valid_rust,
+        "requires-each-call",
+        valid_rust.replace("let _ = self.second.get(key);", ""),
     );
 }
 
