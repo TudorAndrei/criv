@@ -150,6 +150,18 @@ export function looksLikeSourceTarget(target: string): boolean {
   return FILE_EXTENSION.test(sourceTargetParts(target).path);
 }
 
+/** The diagnostic code `criv check` gives a Wikilink that resolves to source. */
+export const SOURCE_WIKILINK = "source-wikilink";
+
+/**
+ * The warning for a Wikilink that resolves to source. Follows the
+ * `source-wikilink` rule of `validate_note_links` in `src/check.rs`: Wikilinks
+ * are reserved for document references, and code takes an AST-aware selector.
+ */
+export function sourceWikilinkWarning(resolved: ResolvedSourceTarget): string {
+  return `Wikilinks are reserved for document references; use AST-aware source selector ${resolved.canonical_target}.`;
+}
+
 /** The editor warning for a target that does not resolve, or undefined when it resolves. */
 export function sourceTargetProblem(
   target: string,

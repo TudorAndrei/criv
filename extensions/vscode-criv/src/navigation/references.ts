@@ -2,28 +2,25 @@ import {
   looksLikeSourceTarget,
   resolvedSourceLocation,
   resolveSourceTarget,
-  sourceTargetParts,
+  SOURCE_WIKILINK,
   sourceTargetProblem,
+  sourceWikilinkWarning,
   wikilinks,
   type CrivSourceTargetLookupResult,
   type SourceLocation,
   type SourceTargetResolution,
 } from "@criv/editor-state";
 
-export type SourceReferenceKind =
-  | "selector"
-  | "criv-source"
-  | "legacy-wikilink"
-  | "typed-source-wikilink";
-
+/**
+ * A source target in Markdown: a bare AST-aware selector, which is linked only
+ * when it resolves, or a Wikilink that names a file or a `source:` target.
+ */
 export interface SourceReference {
-  kind: SourceReferenceKind;
+  kind: "selector" | "wikilink";
   target: string;
   resolution: SourceTargetResolution;
   start: number;
   end: number;
-  legacy: boolean;
-  shouldDiagnoseUnresolved: boolean;
 }
 
 export type SourceTargetLookup = (target: string) => CrivSourceTargetLookupResult;
@@ -37,7 +34,6 @@ export interface MarkdownSink {
   appendText(value: string): void;
 }
 
-const CRIV_SOURCE_DIRECTIVE = /\bcriv:source\s+([^\s"',)]+)/g;
 const SELECTOR_CANDIDATE =
   /(^|[^\w./:#-])([A-Za-z0-9_.-][A-Za-z0-9_./-]*\.[A-Za-z0-9_-]+(?:#[A-Za-z0-9_:/.-]+)?)/g;
 const SOURCE_PREFIX = "source:";
@@ -48,28 +44,15 @@ export function analyzeSourceReferences(
 ): SourceReference[] {
   const references: SourceReference[] = [];
 
-  for (const match of text.matchAll(CRIV_SOURCE_DIRECTIVE)) {
-    const target = match[1];
-    if (target) {
-      references.push(
-        referenceFor(lookup, "criv-source", target, match.index + match[0].indexOf(target), true),
-      );
-    }
-  }
-
   for (const link of wikilinks(text)) {
-    const typed = link.target.startsWith(SOURCE_PREFIX);
-    if (!link.target || (!typed && !looksLikeSourceTarget(link.target))) {
+    if (
+      !link.target ||
+      (!link.target.startsWith(SOURCE_PREFIX) && !looksLikeSourceTarget(link.target))
+    ) {
       continue;
     }
     references.push(
-      referenceFor(
-        lookup,
-        typed ? "typed-source-wikilink" : "legacy-wikilink",
-        link.target,
-        text.indexOf(link.target, link.start),
-        true,
-      ),
+      referenceFor(lookup, "wikilink", link.target, text.indexOf(link.target, link.start)),
     );
   }
 
@@ -82,7 +65,7 @@ export function analyzeSourceReferences(
     if (overlaps(references, start, start + candidate.length)) {
       continue;
     }
-    const reference = referenceFor(lookup, "selector", candidate, start, false);
+    const reference = referenceFor(lookup, "selector", candidate, start);
     if (reference.resolution.kind !== "unresolved") {
       references.push(reference);
     }
@@ -112,18 +95,10 @@ export function planSourceTargetOpen(
 
 export function sourceReferenceDiagnostic(reference: SourceReference): string | undefined {
   const { resolution } = reference;
-  if (resolution.kind === "unresolved" && !reference.shouldDiagnoseUnresolved) {
-    return undefined;
+  if (resolution.kind === "resolved") {
+    return reference.kind === "wikilink" ? sourceWikilinkWarning(resolution) : undefined;
   }
-  if (resolution.kind !== "resolved") {
-    return sourceTargetProblem(reference.target, resolution);
-  }
-  if (!reference.legacy) {
-    return undefined;
-  }
-  return resolution.canonical_target === sourceTargetParts(reference.target).body
-    ? "Legacy source Wikilink; use an AST-aware source selector outside Wikilinks."
-    : `Legacy source target; use AST-aware source selector ${resolution.canonical_target}.`;
+  return sourceTargetProblem(reference.target, resolution);
 }
 
 export function sourceReferenceDiagnosticCode(reference: SourceReference): string {
@@ -133,7 +108,7 @@ export function sourceReferenceDiagnosticCode(reference: SourceReference): strin
     case "unresolved":
       return "unresolved-source-target";
     case "resolved":
-      return "legacy-source-target";
+      return SOURCE_WIKILINK;
   }
 }
 
@@ -163,8 +138,9 @@ export function appendSourceHoverContents(
     contents.appendText(node.line_range);
     contents.appendMarkdown("`");
   }
-  if (reference.legacy) {
-    contents.appendText("\n\nLegacy source link; prefer the AST-aware selector above.");
+  if (reference.kind === "wikilink") {
+    contents.appendMarkdown("\n\n");
+    contents.appendText(sourceWikilinkWarning(resolution));
   }
 }
 
@@ -176,10 +152,9 @@ export function completionToken(text: string, offset: number): { query: string; 
 
 function referenceFor(
   lookup: SourceTargetLookup,
-  kind: SourceReferenceKind,
+  kind: SourceReference["kind"],
   target: string,
   start: number,
-  shouldDiagnoseUnresolved: boolean,
 ): SourceReference {
   return {
     kind,
@@ -187,8 +162,6 @@ function referenceFor(
     resolution: resolveSourceTarget(lookup, target),
     start,
     end: start + target.length,
-    legacy: kind === "legacy-wikilink" || kind === "typed-source-wikilink",
-    shouldDiagnoseUnresolved,
   };
 }
 

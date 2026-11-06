@@ -17,7 +17,6 @@ import {
 } from "@codemirror/view";
 import {
   patternTargetId,
-  safeVaultPath,
   wikilinks,
   type CrivInitialProjections,
   type CrivSelectorSuggestion,
@@ -48,13 +47,6 @@ const LINK_TARGET_SELECTOR = [
   ".cm-underline",
 ].join(",");
 
-interface SourceSuggestionItem {
-  insertText: string;
-  label: string;
-  path: string;
-  detail?: string;
-}
-
 export class ObsidianSourceReferencesOwner {
   private hoverEl: HTMLElement | null = null;
   private hoverSourceKey: string | null = null;
@@ -65,7 +57,7 @@ export class ObsidianSourceReferencesOwner {
     private readonly state: StatePort,
   ) {}
 
-  createSuggest(): EditorSuggest<SourceSuggestionItem> {
+  createSuggest(): EditorSuggest<CrivSelectorSuggestion> {
     return new CrivSourceSuggest(this.app, this.state);
   }
 
@@ -185,7 +177,12 @@ export class ObsidianSourceReferencesOwner {
   }
 }
 
-class CrivSourceSuggest extends EditorSuggest<SourceSuggestionItem> {
+/**
+ * Completes a source selector typed after `[[`. Selecting one replaces the
+ * whole Wikilink with the bare selector, because `criv check` reserves
+ * Wikilinks for document references (`sourceWikilinkWarning`).
+ */
+class CrivSourceSuggest extends EditorSuggest<CrivSelectorSuggestion> {
   constructor(
     app: App,
     private readonly state: StatePort,
@@ -204,30 +201,35 @@ class CrivSourceSuggest extends EditorSuggest<SourceSuggestionItem> {
       return null;
     }
     return {
-      start: { line: cursor.line, ch: open + 2 },
+      start: { line: cursor.line, ch: open },
       end: cursor,
       query,
     };
   }
 
-  async getSuggestions(context: EditorSuggestContext): Promise<SourceSuggestionItem[]> {
+  async getSuggestions(context: EditorSuggestContext): Promise<CrivSelectorSuggestion[]> {
     if (!(await this.state.load())) {
       return [];
     }
-    return sourceSuggestionItems(this.state.suggestSelectors(context.query, 20));
+    return this.state.suggestSelectors(context.query, 20);
   }
 
-  renderSuggestion(value: SourceSuggestionItem, el: HTMLElement): void {
-    el.createDiv({ text: value.label });
-    if (value.detail) {
-      el.createDiv({ cls: "criv-source-suggestion-detail", text: value.detail });
-    }
+  renderSuggestion(value: CrivSelectorSuggestion, el: HTMLElement): void {
+    el.createDiv({ text: value.label || value.target });
+    el.createDiv({ cls: "criv-source-suggestion-detail", text: value.detail || value.kind });
   }
 
-  selectSuggestion(value: SourceSuggestionItem): void {
-    if (this.context) {
-      this.context.editor.replaceRange(value.insertText, this.context.start, this.context.end);
+  selectSuggestion(value: CrivSelectorSuggestion): void {
+    if (!this.context) {
+      return;
     }
+    const { editor, start, end } = this.context;
+    const closing = { line: end.line, ch: end.ch + 2 };
+    editor.replaceRange(
+      value.target,
+      start,
+      editor.getRange(end, closing) === "]]" ? closing : end,
+    );
   }
 }
 
@@ -281,23 +283,6 @@ class CrivEditorDriftPlugin implements PluginValue {
     }
     return builder.finish();
   }
-}
-
-function sourceSuggestionItems(items: CrivSelectorSuggestion[]): SourceSuggestionItem[] {
-  const suggestions: SourceSuggestionItem[] = [];
-  for (const item of items) {
-    const path = safeVaultPath(item.path);
-    if (!path) {
-      continue;
-    }
-    suggestions.push({
-      insertText: item.target,
-      label: item.label || item.target,
-      path,
-      detail: item.detail || item.kind,
-    });
-  }
-  return suggestions;
 }
 
 /** Candidate link targets for a rendered link, from its attributes and its own text. */

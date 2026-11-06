@@ -135,9 +135,10 @@ class SourceDiagnostics implements vscode.Disposable {
       if (!message) {
         return [];
       }
-      const severity = reference.legacy
-        ? vscode.DiagnosticSeverity.Warning
-        : vscode.DiagnosticSeverity.Information;
+      const severity =
+        reference.kind === "wikilink"
+          ? vscode.DiagnosticSeverity.Warning
+          : vscode.DiagnosticSeverity.Information;
       const diagnostic = new vscode.Diagnostic(
         rangeFromOffsets(document, reference.start, reference.end),
         message,

@@ -2,6 +2,7 @@ import { readdir, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import process from "node:process";
 
+import { crivWasmBytesPlugin } from "@criv/editor-state/esbuild";
 import { build } from "esbuild";
 
 const root = resolve(import.meta.dirname, "..");
@@ -32,6 +33,7 @@ await build({
   format: "cjs",
   target: "node18",
   external: ["vscode"],
+  plugins: [crivWasmBytesPlugin],
   outbase: testRoot,
   outdir,
   logLevel: "warning",
