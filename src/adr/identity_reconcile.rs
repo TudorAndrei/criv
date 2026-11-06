@@ -235,7 +235,7 @@ impl Reconciliation for IdentityReconciliation {
             .iter()
             .map(|mapping| (mapping.old_path.as_str(), mapping.new_path.as_str()))
             .collect::<BTreeMap<_, _>>();
-        let renames = receipt::composed_renames(&history.entries).unwrap_or_default();
+        let renames = receipt::composed_renames(&history.entries)?;
         let changes = git.changed_set(
             &Comparison::Trees {
                 old_ref: merge_base,
@@ -268,7 +268,7 @@ impl Reconciliation for IdentityReconciliation {
         .entries
         .iter()
         .filter(|entry| config.is_adr_path(&entry.path))
-        .filter(|entry| !receipt::source_history_allows(files, git, &renames, entry))
+        .filter(|entry| !receipt::source_history_allows(git, &renames, entry))
         .map(|entry| match entry.status {
             ChangeStatus::Added => {
                 let current_path = current_paths

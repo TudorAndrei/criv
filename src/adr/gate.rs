@@ -22,7 +22,6 @@ pub fn change_violations(
     let identity = IdentityReceipt::read(files);
     let source = SourceReceipt::read(files);
     let gate = Gate {
-        files,
         git,
         changes,
         stage,
@@ -48,7 +47,6 @@ pub fn change_violations(
 }
 
 struct Gate<'a> {
-    files: &'a RepositoryFiles,
     git: &'a GitRepository,
     changes: Option<&'a ChangedSet>,
     stage: Stage,
@@ -134,7 +132,7 @@ impl Gate<'_> {
 
     /// Accept receipt-proven changes or an exact portable-link migration.
     fn allows(&self, entry: &ChangedEntry) -> bool {
-        if receipt::source_history_allows(self.files, self.git, &self.renames, entry) {
+        if receipt::source_history_allows(self.git, &self.renames, entry) {
             return true;
         }
         if let Some(proof) = &self.identity {
@@ -162,7 +160,7 @@ impl Gate<'_> {
         let old = self
             .git
             .text(&Revision::Commit(old_ref.clone()), &entry.path);
-        let new = receipt::read_text(self.files, self.git, &entry.new, &entry.path);
+        let new = self.git.text(&entry.new, &entry.path);
         matches!((old, new), (Ok(old), Ok(new)) if is_portable_link_migration(&old, &new))
     }
 
@@ -567,6 +565,25 @@ mod tests {
             std::os::unix::fs::symlink(external.path(), root.path().join(path)).unwrap();
             assert!(!permitted());
         }
+    }
+
+    #[test]
+    fn working_tree_migration_is_compared_as_git_would_stage_it() {
+        let root = tempfile::TempDir::new().unwrap();
+        git(root.path(), &["init"]);
+        git(root.path(), &["config", "core.autocrlf", "true"]);
+        let path = "docs/adr/0001-test.md";
+        fs::create_dir_all(root.path().join("docs/adr")).unwrap();
+        fs::write(root.path().join(path), "See [[ADR-0010]].\n").unwrap();
+        git(root.path(), &["add", "."]);
+        git(root.path(), &["commit", "-m", "add adr"]);
+        fs::write(root.path().join(path), "See [[0010-example|ADR-0010]].\r\n").unwrap();
+        let files = RepositoryFiles::open(root.path()).unwrap();
+        let changes = changes(vec![entry(ChangeStatus::Modified, path, None)]);
+
+        assert!(
+            gate_violations(&files, &Config::default(), Some(&changes), Stage::Commit).is_empty()
+        );
     }
 
     #[test]

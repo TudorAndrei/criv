@@ -100,20 +100,6 @@ fn holds(
     }
 }
 
-/// Text at `path` in `revision`, reading the worktree through the repository
-/// handle.
-pub(super) fn read_text(
-    files: &RepositoryFiles,
-    git: &GitRepository,
-    revision: &Revision,
-    path: &str,
-) -> Result<String> {
-    match revision {
-        Revision::Worktree => files.read_string(Path::new(path)),
-        revision => git.text(revision, path),
-    }
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub(super) struct IdentityMapping {
     pub(super) old_id: u32,
@@ -430,7 +416,6 @@ impl Receipt for SourceReceipt {
 /// A modified decision whose only change follows `renames`, the Git renames
 /// composed across the compared history.
 pub(super) fn source_history_allows(
-    files: &RepositoryFiles,
     git: &GitRepository,
     renames: &BTreeMap<String, String>,
     entry: &ChangedEntry,
@@ -443,7 +428,7 @@ pub(super) fn source_history_allows(
         return false;
     };
     let old = git.text(&Revision::Commit(old_ref.to_owned()), &entry.path);
-    let new = read_text(files, git, &entry.new, &entry.path);
+    let new = git.text(&entry.new, &entry.path);
     matches!((old, new), (Ok(old), Ok(new)) if governs::transition_matches(&old, &new, renames))
 }
 
