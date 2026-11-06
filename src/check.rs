@@ -16,7 +16,7 @@ use crate::diagnostic::{self, Diagnostic, DiagnosticCode, LspRange, Severity, So
 #[cfg(test)]
 use crate::git::ChangedEntry;
 use crate::git::{ChangeStatus, ChangedSet};
-use crate::identity::{adr_filename, is_adr_id, parse_adr_id, parse_adr_stem, pattern_id, slug};
+use crate::identity::{adr_filename, is_adr_id, parse_adr_id, parse_adr_stem, slug};
 use crate::markdown::LinkTarget;
 use crate::policy_scan::PolicyScanPlan;
 use crate::repository::RepositoryFiles;
@@ -380,18 +380,6 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
         }
     }
 
-    let mut doc_local_patterns = BTreeSet::new();
-    for pattern in note.target_pattern_ids() {
-        if !doc_local_patterns.insert(pattern) {
-            diagnostics.push(Diagnostic::error(
-                DiagnosticCode::DuplicateDocPattern,
-                note.rel_path(),
-                None,
-                format!("doc-local pattern id `{pattern}` is declared more than once"),
-            ));
-        }
-    }
-
     if !vault.is_historical_decision(note) {
         for (scope, selection) in note
             .targets_scope()
@@ -470,39 +458,30 @@ fn publication_blocking_diagnostics(vault: &Vault) -> Vec<Diagnostic> {
     diagnostics
 }
 
+/// A full pattern id that policies in more than one note declare.
 fn validate_pattern_collisions(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
-    let mut declarations: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for note in vault.notes() {
-        for pattern in note.target_pattern_ids() {
-            declarations
-                .entry(pattern.clone())
-                .or_default()
-                .push(note.rel_path().to_string());
-        }
-        if let Some(id) = note.id() {
-            for pattern in note.policy_patterns() {
-                if let Some(local_id) = pattern.id.as_deref() {
-                    declarations
-                        .entry(pattern_id(id, local_id))
-                        .or_default()
-                        .push(note.rel_path().to_string());
-                }
+    let mut notes_by_id: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for declaration in vault.policy_declarations() {
+        if let Some(id) = declaration.id {
+            let notes = notes_by_id.entry(id).or_default();
+            if !notes.contains(&declaration.note.rel_path()) {
+                notes.push(declaration.note.rel_path());
             }
         }
     }
 
-    for (pattern, locations) in declarations {
-        if locations.len() <= 1 {
+    for (pattern, notes) in notes_by_id {
+        if notes.len() <= 1 {
             continue;
         }
-        for location in &locations {
+        for note in &notes {
             diagnostics.push(Diagnostic::error(
                 DiagnosticCode::DuplicatePatternId,
-                location,
+                note,
                 None,
                 format!(
-                    "pattern id `{pattern}` is declared in multiple places: {}",
-                    locations.join(", ")
+                    "pattern id `{pattern}` is declared in multiple notes: {}",
+                    notes.join(", ")
                 ),
             ));
         }
@@ -1200,6 +1179,37 @@ governs:
     }
 
     #[test]
+    fn pattern_id_collisions_are_reported_across_notes_only() {
+        let policy = "policy:\n  patterns:\n    - id: same\n      language: rust\n      pattern: \"fn $NAME() {}\"\n    - id: same\n      language: rust\n      pattern: \"fn $NAME() {}\"";
+        let (_root, vault) = decisions_vault(&[
+            ("0001-a.md", &decision("ADR-0001", policy, "")),
+            ("0001-b.md", &decision("ADR-0001", policy, "")),
+        ]);
+
+        let collisions = validate(&vault)
+            .into_iter()
+            .filter(|diag| diag.code() == DiagnosticCode::DuplicatePatternId)
+            .map(|diag| (diag.path().to_string(), diag.message().to_string()))
+            .collect::<Vec<_>>();
+
+        let message = "pattern id `ADR-0001/same` is declared in multiple notes: docs/adr/0001-a.md, docs/adr/0001-b.md";
+        assert_eq!(
+            collisions,
+            [
+                ("docs/adr/0001-a.md".to_string(), message.to_string()),
+                ("docs/adr/0001-b.md".to_string(), message.to_string()),
+            ]
+        );
+
+        let (_root, vault) = decisions_vault(&[("0001-a.md", &decision("ADR-0001", policy, ""))]);
+        assert!(
+            validate(&vault)
+                .iter()
+                .all(|diag| diag.code() != DiagnosticCode::DuplicatePatternId)
+        );
+    }
+
+    #[test]
     fn an_invalid_governs_glob_is_reported_as_invalid_not_unmatched() {
         let temp = tempfile::TempDir::new().unwrap();
         let root = temp.path();
@@ -1343,11 +1353,10 @@ governs:
     #[test]
     fn check_compiles_each_policy_once_for_definitions_and_violations() {
         let temp = tempfile::TempDir::new().unwrap();
-        crate::identity::copy_fixture_tree(
+        crate::test_support::copy_fixture_tree(
             &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/policy-scan/two-policies"),
             temp.path(),
-        )
-        .unwrap();
+        );
         let files = RepositoryFiles::open(temp.path()).unwrap();
         crate::work::reset();
 

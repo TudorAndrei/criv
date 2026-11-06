@@ -8,12 +8,12 @@ use criv_state_wire::{Graph, PatternMatch};
 
 use super::projection::{self, GraphBuilder, NoteRows, PartitionDependencies, SourceRows};
 use super::stable_hash::StableHasher;
-use crate::policy_scan::PolicyScanPlan;
-use crate::structural::{self, CompiledPolicy, PolicyPattern, StructuralMatch};
-use crate::vault::{DecisionStatus, Note, Vault};
+use crate::Result;
+use crate::policy_scan::{PlannedOwner, PlannedPolicy, PolicyScanPlan};
+use crate::structural::{self, CompiledPolicy, StructuralMatch};
+use crate::vault::{DecisionStatus, Note, PolicyPattern, Vault};
 #[cfg(test)]
 use crate::work::{self, Work};
-use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct StatePartitions {
@@ -191,21 +191,19 @@ impl StatePartitions {
         changed_files: &[String],
         policies: &PolicyScanPlan,
     ) -> Result<Self> {
-        let policy_fingerprints = policies
+        let registered = policies
             .owners()
             .iter()
             .flat_map(|owner| {
-                owner
-                    .policies()
-                    .iter()
-                    .filter(|policy| policy.is_registered())
-                    .map(|policy| {
-                        (
-                            policy.pattern_id(),
-                            policy_fingerprint(policy.definition(), owner.scopes()),
-                        )
-                    })
+                owner.policies().iter().map(move |policy| {
+                    let fingerprint = policy_fingerprint(policy.definition(), owner.scopes());
+                    (owner, policy, fingerprint)
+                })
             })
+            .collect::<Vec<_>>();
+        let policy_fingerprints = registered
+            .iter()
+            .map(|(_, policy, fingerprint)| (policy.pattern_id(), fingerprint.clone()))
             .collect::<BTreeMap<_, _>>();
         let note_catalog_fingerprint = note_catalog_fingerprint(vault);
         let invalidation = InvalidationFacts::collect(
@@ -263,13 +261,7 @@ impl StatePartitions {
                 .insert(note.rel_path().to_string(), partition);
         }
 
-        partitions.policies = build_policy_partitions(
-            vault,
-            previous,
-            changed_files,
-            policies,
-            policy_fingerprints,
-        )?;
+        partitions.policies = build_policy_partitions(vault, previous, changed_files, registered)?;
         partitions.reverse_dependencies = ReverseDependencies::index(&partitions);
         partitions.note_catalog_fingerprint = note_catalog_fingerprint;
         Ok(partitions)
@@ -305,88 +297,69 @@ struct PendingPolicyScan<'a> {
     reused: Vec<PatternMatch>,
 }
 
+/// A registered policy, its owner, and its fingerprint.
+type RegisteredPolicy<'a> = (&'a PlannedOwner, &'a PlannedPolicy, String);
+
 fn build_policy_partitions(
     vault: &Vault,
     previous: Option<&StatePartitions>,
     changed_files: &[String],
-    policies: &PolicyScanPlan,
-    mut fingerprints: BTreeMap<&str, String>,
+    registered: Vec<RegisteredPolicy<'_>>,
 ) -> Result<BTreeMap<String, Arc<PolicyPartition>>> {
     let mut partitions = BTreeMap::new();
     let mut pending = Vec::new();
-    for owner in policies.owners() {
+    for (owner, policy, fingerprint) in registered {
         let changed_paths = changed_files
             .iter()
             .filter(|path| owner.paths().contains(*path))
             .cloned()
             .collect::<BTreeSet<_>>();
-        for policy in owner
-            .policies()
-            .iter()
-            .filter(|policy| policy.is_registered())
+        let pattern_id = policy.pattern_id();
+        let unchanged = previous
+            .and_then(|previous| previous.policies.get(pattern_id))
+            .filter(|partition| partition.fingerprint == fingerprint);
+        let still_valid = |matched: &PatternMatch| {
+            owner.paths().contains(&matched.file) && !changed_paths.contains(&matched.file)
+        };
+        if let Some(partition) = unchanged
+            && changed_paths.is_empty()
+            && partition.matches.iter().all(still_valid)
         {
-            let pattern_id = policy.pattern_id();
-            let fingerprint = fingerprints.remove(pattern_id).ok_or_else(|| {
-                CrivError::new(format!(
-                    "registered policy `{pattern_id}` is declared twice"
-                ))
-            })?;
-            let previous_partition =
-                previous.and_then(|previous| previous.policies.get(pattern_id));
-            let unchanged =
-                previous_partition.filter(|partition| partition.fingerprint == fingerprint);
-            let still_valid = |matched: &PatternMatch| {
-                owner.paths().contains(&matched.file) && !changed_paths.contains(&matched.file)
-            };
-            if let Some(partition) = unchanged
-                && changed_paths.is_empty()
-                && partition.matches.iter().all(still_valid)
-            {
-                partitions.insert(pattern_id.to_string(), partition.clone());
-                continue;
-            }
-            let (paths, reused) = unchanged.map_or_else(
-                || (owner.paths().clone(), Vec::new()),
-                |partition| {
-                    let reused = partition
-                        .matches
-                        .iter()
-                        .filter(|matched| still_valid(matched))
-                        .cloned()
-                        .collect();
-                    (changed_paths.clone(), reused)
-                },
-            );
-            pending.push(PendingPolicyScan {
-                pattern_id,
-                fingerprint,
-                policy: policy.compiled(),
-                paths,
-                reused,
-            });
+            partitions.insert(pattern_id.to_string(), partition.clone());
+            continue;
         }
+        let (paths, reused) = unchanged.map_or_else(
+            || (owner.paths().clone(), Vec::new()),
+            |partition| {
+                let reused = partition
+                    .matches
+                    .iter()
+                    .filter(|matched| still_valid(matched))
+                    .cloned()
+                    .collect();
+                (changed_paths.clone(), reused)
+            },
+        );
+        pending.push(PendingPolicyScan {
+            pattern_id,
+            fingerprint,
+            policy: policy.compiled(),
+            paths,
+            reused,
+        });
     }
 
     let requests = pending
         .iter()
-        .enumerate()
-        .map(|(key, scan)| structural::PolicyScanRequest {
-            key,
+        .map(|scan| structural::PolicyScanRequest {
             policy: scan.policy,
             paths: &scan.paths,
         })
         .collect::<Vec<_>>();
-    let rescanned =
-        structural::find_policies_batch(vault.repository_files(), vault.source_files(), &requests)?;
-    for (key, scan) in pending.into_iter().enumerate() {
+    let rescanned = structural::find_policies_batch(vault.repository_files(), &requests)?;
+    for (scan, rows) in pending.into_iter().zip(rescanned) {
         let mut matches = scan.reused;
-        matches.extend(
-            rescanned
-                .get(&key)
-                .ok_or_else(|| CrivError::new("policy scan returned no result"))?
-                .iter()
-                .map(pattern_match),
-        );
+        matches.extend(rows.iter().map(pattern_match));
         matches.sort_by(|left, right| {
             (&left.file, &left.range, &left.captures).cmp(&(
                 &right.file,
@@ -394,7 +367,6 @@ fn build_policy_partitions(
                 &right.captures,
             ))
         });
-        matches.dedup();
         #[cfg(test)]
         work::record(Work::PolicyPartitionBuild);
         partitions.insert(
@@ -424,9 +396,8 @@ fn policy_fingerprint(definition: &PolicyPattern, scopes: &[String]) -> String {
 }
 
 fn hash_policy(hasher: &mut StableHasher, policy: &PolicyPattern) {
-    let language = policy.language.as_ref().map(ToString::to_string);
     hasher
-        .option_str(language.as_deref())
+        .option_str(policy.language.as_deref())
         .option_str(policy.pattern.as_deref())
         .option_str(policy.rule.as_deref());
 }
@@ -446,9 +417,7 @@ fn note_fingerprint(note: &Note) -> String {
     for pattern in note.target_pattern_refs() {
         hasher.str(&pattern.id).usize(pattern.line);
     }
-    hasher
-        .strs(note.target_pattern_ids())
-        .usize(note.policy_patterns().len());
+    hasher.usize(note.policy_patterns().len());
     for policy in note.policy_patterns() {
         hasher
             .option_str(policy.id.as_deref())

@@ -1,15 +1,13 @@
-use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 use crate::Result;
 use crate::diagnostic::{Diagnostic, DiagnosticCode};
-use crate::identity::pattern_id;
-use crate::structural::{self, CompiledPolicy, PolicyPattern, PolicyScanRequest};
-use crate::vault::{NoteKind, Vault};
+use crate::structural::{self, CompiledPolicy, PolicyScanRequest, StructuralMatch};
+use crate::vault::{Note, PolicyPattern, Vault};
 #[cfg(test)]
 use crate::work::{self, Work};
 
-/// The compiled inline policies of the effective decisions, with the
+/// The compiled registered policies of the effective decisions, with the
 /// diagnostics about every decision's policy definitions.
 pub struct PolicyScanPlan {
     diagnostics: Vec<Diagnostic>,
@@ -26,7 +24,6 @@ pub struct PlannedOwner {
 
 pub struct PlannedPolicy {
     pattern_id: String,
-    registered: bool,
     definition: PolicyPattern,
     compiled: CompiledPolicy,
 }
@@ -40,100 +37,89 @@ pub struct PolicyFailure {
 impl PolicyScanPlan {
     pub(crate) fn new(vault: &Vault) -> Self {
         let mut diagnostics = Vec::new();
-        let mut owners = Vec::new();
+        let mut owners: Vec<(&Note, &str, Vec<PlannedPolicy>)> = Vec::new();
         let mut registered_failures = Vec::new();
 
-        for note in vault
-            .notes()
-            .iter()
-            .filter(|note| note.kind() == NoteKind::Decision)
-        {
-            let active_adr_id = vault
-                .is_effective_decision(note)
-                .then(|| note.id())
-                .flatten();
-            let mut ids = BTreeSet::new();
-            let mut policies = Vec::new();
-            for policy in note.policy_patterns() {
-                let definition_error = |code, message: String| {
-                    Diagnostic::error(code, note.rel_path(), Some(policy.line), message)
-                };
-                let Some(local_id) = policy.id.as_deref() else {
-                    diagnostics.push(definition_error(
-                        DiagnosticCode::MissingPolicyPatternId,
-                        "policy pattern must declare an id".into(),
-                    ));
-                    continue;
-                };
-
-                let local_id = local_id.trim();
-                if local_id.is_empty() {
-                    diagnostics.push(definition_error(
-                        DiagnosticCode::EmptyPolicyPattern,
-                        "policy pattern id may not be empty".into(),
-                    ));
-                    continue;
-                }
-
-                let first_declaration = ids.insert(local_id.to_string());
-                if !first_declaration {
-                    diagnostics.push(definition_error(
-                        DiagnosticCode::DuplicatePolicyPattern,
-                        format!("policy pattern id `{local_id}` is declared more than once"),
-                    ));
-                }
-
-                #[cfg(test)]
-                work::record(Work::PolicyDefinition);
-                let full_id = active_adr_id.map(|adr_id| pattern_id(adr_id, local_id));
-                let registered = first_declaration
-                    && full_id.as_ref().is_some_and(|full_id| {
-                        vault.patterns().contains(full_id)
-                            && vault
-                                .resolve_policy_pattern(full_id)
-                                .is_some_and(|(owner, _)| owner.rel_path() == note.rel_path())
-                    });
-                match structural::compile_policy(policy) {
-                    Ok(compiled) => {
-                        if let Some(pattern_id) = full_id {
-                            policies.push(PlannedPolicy {
-                                pattern_id,
-                                registered,
-                                definition: policy.clone(),
-                                compiled,
-                            });
-                        }
-                    }
-                    Err(error) => {
-                        let message = format!("policy pattern `{local_id}` {error}");
-                        diagnostics.push(definition_error(error.code(), message.clone()));
-                        if let (true, Some(pattern_id)) = (registered, full_id) {
-                            registered_failures.push(PolicyFailure {
-                                pattern_id,
-                                message,
-                            });
-                        }
-                    }
-                }
-            }
-
-            let Some(adr_id) = active_adr_id else {
+        for declaration in vault.policy_declarations() {
+            let note = declaration.note;
+            let policy = declaration.policy;
+            let definition_error = |code, message: String| {
+                Diagnostic::error(code, note.rel_path(), Some(policy.line), message)
+            };
+            let Some(local_id) = policy.id.as_deref() else {
+                diagnostics.push(definition_error(
+                    DiagnosticCode::MissingPolicyPatternId,
+                    "policy pattern must declare an id".into(),
+                ));
                 continue;
             };
-            if policies.is_empty() {
+            let local_id = local_id.trim();
+            if local_id.is_empty() {
+                diagnostics.push(definition_error(
+                    DiagnosticCode::EmptyPolicyPattern,
+                    "policy pattern id may not be empty".into(),
+                ));
                 continue;
+            }
+            let first_in_this_note = declaration
+                .id
+                .and_then(|id| vault.resolve_policy_pattern(id))
+                .is_some_and(|(owner, _)| owner.rel_path() == note.rel_path());
+            if !declaration.first && first_in_this_note {
+                diagnostics.push(definition_error(
+                    DiagnosticCode::DuplicatePolicyPattern,
+                    format!("policy pattern id `{local_id}` is declared more than once"),
+                ));
             }
 
             #[cfg(test)]
-            work::record(Work::PolicyScopeResolution);
-            owners.push(PlannedOwner {
-                adr_id: adr_id.to_string(),
-                scopes: note.effective_governs().into_owned(),
-                paths: vault.governed_files(note).into_iter().collect(),
-                policies,
-            });
+            work::record(Work::PolicyDefinition);
+            let registered = declaration
+                .id
+                .zip(note.id())
+                .filter(|_| declaration.registered);
+            match structural::compile_policy(policy.definition()) {
+                Ok(compiled) => {
+                    if let Some((pattern_id, adr_id)) = registered {
+                        let planned = PlannedPolicy {
+                            pattern_id: pattern_id.to_string(),
+                            definition: policy.clone(),
+                            compiled,
+                        };
+                        match owners.last_mut() {
+                            Some((owner, _, policies)) if owner.rel_path() == note.rel_path() => {
+                                policies.push(planned);
+                            }
+                            _ => owners.push((note, adr_id, vec![planned])),
+                        }
+                    }
+                }
+                Err(error) => {
+                    let message = format!("policy pattern `{local_id}` {error}");
+                    diagnostics.push(definition_error(error.code(), message.clone()));
+                    if let Some((pattern_id, _)) = registered {
+                        registered_failures.push(PolicyFailure {
+                            pattern_id: pattern_id.to_string(),
+                            message,
+                        });
+                    }
+                }
+            }
         }
 
+        let owners = owners
+            .into_iter()
+            .map(|(note, adr_id, policies)| {
+                #[cfg(test)]
+                work::record(Work::PolicyScopeResolution);
+                PlannedOwner {
+                    adr_id: adr_id.to_string(),
+                    scopes: note.effective_governs().into_owned(),
+                    paths: vault.governed_files(note).into_iter().collect(),
+                    policies,
+                }
+            })
+            .collect();
         registered_failures.sort_by(|left, right| left.pattern_id.cmp(&right.pattern_id));
         Self {
             diagnostics,
@@ -163,48 +149,45 @@ impl PolicyScanPlan {
             .owners
             .iter()
             .map(|owner| {
-                changed_files.map_or(Cow::Borrowed(&owner.paths), |changed| {
-                    Cow::Owned(owner.paths.intersection(changed).cloned().collect())
-                })
+                changed_files.map_or_else(
+                    || owner.paths.clone(),
+                    |changed| owner.paths.intersection(changed).cloned().collect(),
+                )
             })
             .collect::<Vec<_>>();
 
-        let mut records = Vec::new();
+        let mut scanned = Vec::new();
         let mut requests = Vec::new();
         for (owner, paths) in self.owners.iter().zip(&scan_paths) {
             for policy in &owner.policies {
-                let key = records.len();
-                records.push((owner, policy));
+                scanned.push((owner, policy));
                 requests.push(PolicyScanRequest {
-                    key,
                     policy: &policy.compiled,
                     paths,
                 });
             }
         }
 
-        let rows_by_key = structural::find_policies_batch(
-            vault.repository_files(),
-            vault.source_files(),
-            &requests,
-        )?;
-        let mut violations = Vec::new();
-        for (key, (owner, policy)) in records.into_iter().enumerate() {
-            if let Some(rows) = rows_by_key.get(&key) {
-                violations.extend(rows.iter().map(|row| {
-                    Diagnostic::policy_violation(
-                        &row.path,
-                        row.line,
-                        row.location.clone(),
-                        &owner.adr_id,
-                        &policy.pattern_id,
-                        &row.text,
-                    )
-                }));
-            }
-        }
-        Ok(violations)
+        let rows = structural::find_policies_batch(vault.repository_files(), &requests)?;
+        Ok(scanned
+            .into_iter()
+            .zip(rows)
+            .flat_map(|((owner, policy), rows)| {
+                rows.into_iter()
+                    .map(|row| policy_violation(&owner.adr_id, &policy.pattern_id, row))
+            })
+            .collect())
     }
+}
+
+fn policy_violation(adr_id: &str, pattern_id: &str, row: StructuralMatch) -> Diagnostic {
+    Diagnostic::error(
+        DiagnosticCode::PolicyViolation,
+        &row.path,
+        Some(row.line),
+        format!("{adr_id} policy `{pattern_id}` matched `{}`", row.text),
+    )
+    .at(row.location)
 }
 
 impl PlannedOwner {
@@ -224,10 +207,6 @@ impl PlannedOwner {
 impl PlannedPolicy {
     pub(crate) fn pattern_id(&self) -> &str {
         &self.pattern_id
-    }
-
-    pub(crate) const fn is_registered(&self) -> bool {
-        self.registered
     }
 
     pub(crate) const fn definition(&self) -> &PolicyPattern {
@@ -253,8 +232,8 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::identity::copy_fixture_tree;
     use crate::repository::RepositoryFiles;
+    use crate::test_support::copy_fixture_tree;
     use crate::vault::LoadOptions;
 
     #[test]
@@ -309,12 +288,24 @@ mod tests {
         assert_eq!((exact.start.line, exact.start.character), (0, 0));
         assert_eq!((exact.end.line, exact.end.character), (0, 12));
         assert_eq!(
-            pattern_ids_and_paths(&violations),
-            vec![
-                ("ADR-0001/functions", "src/left.rs"),
-                ("ADR-0001/functions", "src/right.rs"),
-                ("ADR-0001/structs", "src/left.rs"),
-                ("ADR-0001/structs", "src/right.rs"),
+            paths_and_messages(&violations),
+            [
+                (
+                    "src/left.rs",
+                    "ADR-0001 policy `ADR-0001/functions` matched `fn left() {}`"
+                ),
+                (
+                    "src/right.rs",
+                    "ADR-0001 policy `ADR-0001/functions` matched `fn right() {}`"
+                ),
+                (
+                    "src/left.rs",
+                    "ADR-0001 policy `ADR-0001/structs` matched `struct Left;`"
+                ),
+                (
+                    "src/right.rs",
+                    "ADR-0001 policy `ADR-0001/structs` matched `struct Right;`"
+                ),
             ]
         );
     }
@@ -328,10 +319,16 @@ mod tests {
         let violations = plan.scan(&vault, Some(&changed)).unwrap();
 
         assert_eq!(
-            pattern_ids_and_paths(&violations),
-            vec![
-                ("ADR-0001/functions", "src/right.rs"),
-                ("ADR-0001/structs", "src/right.rs"),
+            paths_and_messages(&violations),
+            [
+                (
+                    "src/right.rs",
+                    "ADR-0001 policy `ADR-0001/functions` matched `fn right() {}`"
+                ),
+                (
+                    "src/right.rs",
+                    "ADR-0001 policy `ADR-0001/structs` matched `struct Right;`"
+                ),
             ]
         );
     }
@@ -406,7 +403,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_ids_register_only_the_first_declaration() {
+    fn duplicate_ids_register_and_scan_only_the_first_declaration() {
         let (_temp, vault) = policy_fixture("duplicate-policies");
 
         let plan = PolicyScanPlan::new(&vault);
@@ -415,23 +412,30 @@ mod tests {
         assert_eq!(
             plan.diagnostics
                 .iter()
-                .filter(|diagnostic| diagnostic.code() == DiagnosticCode::DuplicatePolicyPattern)
-                .count(),
-            1
+                .map(Diagnostic::code)
+                .collect::<Vec<_>>(),
+            [DiagnosticCode::DuplicatePolicyPattern]
         );
         assert_eq!(
             plan.owners[0]
                 .policies
                 .iter()
-                .map(|policy| (policy.pattern_id(), policy.is_registered()))
+                .map(PlannedPolicy::pattern_id)
                 .collect::<Vec<_>>(),
-            [("ADR-0001/duplicate", true), ("ADR-0001/duplicate", false)]
+            ["ADR-0001/duplicate"]
         );
-        assert_eq!(violations.len(), 4);
-        assert!(
-            pattern_ids_and_paths(&violations)
-                .iter()
-                .all(|(pattern_id, _)| *pattern_id == "ADR-0001/duplicate")
+        assert_eq!(
+            paths_and_messages(&violations),
+            [
+                (
+                    "src/left.rs",
+                    "ADR-0001 policy `ADR-0001/duplicate` matched `fn left() {}`"
+                ),
+                (
+                    "src/right.rs",
+                    "ADR-0001 policy `ADR-0001/duplicate` matched `fn right() {}`"
+                ),
+            ]
         );
     }
 
@@ -448,30 +452,21 @@ mod tests {
         let plan = PolicyScanPlan::new(&vault);
         let violations = plan.scan(&vault, None).unwrap();
 
-        let first = &plan.owners[0].policies[0];
         assert_eq!(
-            (first.pattern_id(), first.is_registered()),
-            ("ADR-0001/functions", true)
-        );
-        assert_eq!(
-            pattern_ids_and_paths(&violations)[0].0,
+            plan.owners[0].policies[0].pattern_id(),
             "ADR-0001/functions"
         );
         assert_eq!(
-            vault.resolve_link("match:ADR-0001/functions"),
-            crate::vault::ResolvedLink::Pattern {
-                id: "ADR-0001/functions".into()
-            }
+            violations[0].message(),
+            "ADR-0001 policy `ADR-0001/functions` matched `fn left() {}`"
         );
+        assert!(vault.resolve_policy_pattern("ADR-0001/functions").is_some());
     }
 
-    fn pattern_ids_and_paths(violations: &[Diagnostic]) -> Vec<(&str, &str)> {
+    fn paths_and_messages(violations: &[Diagnostic]) -> Vec<(&str, &str)> {
         violations
             .iter()
-            .map(|violation| {
-                let pattern_id = violation.message().split('`').nth(1).unwrap_or_default();
-                (pattern_id, violation.path())
-            })
+            .map(|violation| (violation.path(), violation.message()))
             .collect()
     }
 
@@ -489,7 +484,7 @@ mod tests {
 
     fn policy_fixture(name: &str) -> (TempDir, Vault) {
         let temp = TempDir::new().unwrap();
-        copy_fixture_tree(&policy_fixture_root().join(name), temp.path()).unwrap();
+        copy_fixture_tree(&policy_fixture_root().join(name), temp.path());
         let vault = load(temp.path());
         (temp, vault)
     }

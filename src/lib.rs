@@ -30,6 +30,8 @@ pub mod selection;
 mod source;
 mod state;
 mod structural;
+#[cfg(test)]
+mod test_support;
 mod usage_json;
 mod vault;
 mod watch;

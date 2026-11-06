@@ -6,8 +6,8 @@ use serde_json::Value;
 use tempfile::TempDir;
 
 use super::*;
-use crate::identity::copy_fixture_tree;
 use crate::source;
+use crate::test_support::copy_fixture_tree;
 use crate::work::{self, Work};
 
 static LIVE_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -479,8 +479,7 @@ fn incremental_fixture(prefix: &str) -> TempDir {
     copy_fixture_tree(
         &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/incremental-refresh"),
         temp.path(),
-    )
-    .unwrap();
+    );
     temp
 }
 

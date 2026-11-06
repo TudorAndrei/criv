@@ -17,7 +17,7 @@ use crate::markdown::{
 };
 use crate::repository::RepositoryFiles;
 use crate::source::{SourceGraph, SourceState};
-use crate::structural::{PolicyLanguage, PolicyPattern};
+use crate::structural::PolicyDefinition;
 #[cfg(test)]
 use crate::work::{self, Work};
 use criv_state_wire::{asset, content_hash};
@@ -87,6 +87,47 @@ pub struct PatternRef {
     pub(crate) line: usize,
 }
 
+/// One inline policy pattern as an ADR declares it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PolicyPattern {
+    pub(crate) id: Option<String>,
+    pub(crate) line: usize,
+    pub(crate) language: Option<String>,
+    pub(crate) pattern: Option<String>,
+    pub(crate) rule: Option<String>,
+    pub(crate) message: Option<String>,
+}
+
+impl PolicyPattern {
+    pub(crate) fn definition(&self) -> PolicyDefinition<'_> {
+        PolicyDefinition {
+            language: self.language.as_deref(),
+            pattern: self.pattern.as_deref(),
+            rule: self.rule.as_deref(),
+        }
+    }
+}
+
+/// One policy pattern of a decision note, in note and declaration order.
+pub struct PolicyDeclaration<'a> {
+    pub(crate) note: &'a Note,
+    pub(crate) policy: &'a PolicyPattern,
+    /// The full `ADR-NNNN/local-id`; none without a note id or local id.
+    pub(crate) id: Option<&'a str>,
+    /// The first declaration of `id` in the vault, which `id` resolves to.
+    pub(crate) first: bool,
+    /// The first declaration, in an effective decision.
+    pub(crate) registered: bool,
+}
+
+#[derive(Debug)]
+struct DeclarationIndex {
+    note: usize,
+    policy: usize,
+    id: Option<String>,
+    first: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct WikiLink {
     pub(crate) raw: String,
@@ -115,7 +156,6 @@ pub struct Note {
     targets_symbols: Vec<String>,
     targets_scope: Vec<String>,
     target_pattern_refs: Vec<PatternRef>,
-    target_pattern_ids: Vec<String>,
     policy_patterns: Vec<PolicyPattern>,
     governs: Vec<String>,
     supersedes: Vec<String>,
@@ -178,10 +218,6 @@ impl Note {
 
     pub(crate) fn target_pattern_refs(&self) -> &[PatternRef] {
         &self.target_pattern_refs
-    }
-
-    pub(crate) fn target_pattern_ids(&self) -> &[String] {
-        &self.target_pattern_ids
     }
 
     pub(crate) fn policy_patterns(&self) -> &[PolicyPattern] {
@@ -254,7 +290,8 @@ pub struct Vault {
     decisions: BTreeMap<String, usize>,
     source: SourceState,
     effective_decisions: BTreeSet<String>,
-    patterns: BTreeSet<String>,
+    policy_declarations: Vec<DeclarationIndex>,
+    policy_ids: BTreeMap<String, usize>,
     link_resolutions: BTreeMap<String, ResolvedLink>,
 }
 
@@ -308,7 +345,7 @@ impl Vault {
             if let Some(id) = &note.id {
                 note_ids.entry(id.to_lowercase()).or_insert(index);
                 if note.kind == NoteKind::Decision {
-                    decisions.insert(id.clone(), index);
+                    decisions.entry(id.clone()).or_insert(index);
                 }
             }
             if let Some(stem) = note.filename_stem() {
@@ -320,7 +357,7 @@ impl Vault {
         }
 
         let effective_decisions = effective_accepted_decision_ids(&notes, &decisions);
-        let patterns = registered_policy_patterns(&notes, &effective_decisions);
+        let (policy_declarations, policy_ids) = index_policy_declarations(&notes);
 
         let source = match options.source {
             SourceLoad::Refresh => SourceState::refresh(files, &config, None)?,
@@ -339,7 +376,8 @@ impl Vault {
             decisions,
             source,
             effective_decisions,
-            patterns,
+            policy_declarations,
+            policy_ids,
             link_resolutions: BTreeMap::new(),
         };
         vault.index_link_resolutions();
@@ -354,7 +392,7 @@ impl Vault {
         &self.notes
     }
 
-    /// The decision note with exactly this id; the last one when ids repeat.
+    /// The decision note with exactly this id; the first one when ids repeat.
     pub(crate) fn decision(&self, id: &str) -> Option<&Note> {
         self.decisions
             .get(id)
@@ -592,31 +630,31 @@ impl Vault {
         &self.assets
     }
 
-    pub(crate) const fn patterns(&self) -> &BTreeSet<String> {
-        &self.patterns
+    /// Every policy pattern of every decision note. Of the declarations that
+    /// share a full id, the first one owns it.
+    pub(crate) fn policy_declarations(&self) -> impl Iterator<Item = PolicyDeclaration<'_>> {
+        self.policy_declarations.iter().filter_map(|declaration| {
+            let note = self.notes.get(declaration.note)?;
+            Some(PolicyDeclaration {
+                note,
+                policy: note.policy_patterns.get(declaration.policy)?,
+                id: declaration.id.as_deref(),
+                first: declaration.first,
+                registered: declaration.first && self.is_effective_decision(note),
+            })
+        })
     }
 
-    /// Resolves the canonical full ID of an inline ADR policy pattern.
-    ///
-    /// Pattern IDs deliberately do not use general note resolution: a named
-    /// pattern is owned by an ADR and must be addressed as `ADR-NNNN/local-id`.
-    pub(crate) fn resolve_policy_pattern(
-        &self,
-        pattern_id: &str,
-    ) -> Option<(&Note, &PolicyPattern)> {
-        let (adr_id, local_id) = split_pattern_id(pattern_id)?;
-        let note = self
-            .note_ids
-            .get(&adr_id.to_lowercase())
-            .and_then(|index| self.notes.get(*index))?;
-        if note.kind != NoteKind::Decision {
-            return None;
-        }
-        let policy = note
-            .policy_patterns
-            .iter()
-            .find(|policy| policy.id.as_deref().map(str::trim) == Some(local_id))?;
-        Some((note, policy))
+    /// The first declaration of an inline ADR policy pattern, by its full
+    /// `ADR-NNNN/local-id`, in any decision status.
+    pub(crate) fn resolve_policy_pattern(&self, full_id: &str) -> Option<(&Note, &PolicyPattern)> {
+        let (adr_id, local_id) = split_pattern_id(full_id)?;
+        let declaration = self
+            .policy_ids
+            .get(&pattern_id(adr_id, local_id))
+            .and_then(|index| self.policy_declarations.get(*index))?;
+        let note = self.notes.get(declaration.note)?;
+        Some((note, note.policy_patterns.get(declaration.policy)?))
     }
 
     /// An accepted decision that no accepted successor supersedes, directly
@@ -675,25 +713,38 @@ fn load_documentation_assets(
     Ok(assets)
 }
 
-fn registered_policy_patterns(
-    notes: &[Note],
-    effective_decisions: &BTreeSet<String>,
-) -> BTreeSet<String> {
-    notes
-        .iter()
-        .filter(|note| note.kind == NoteKind::Decision)
-        .filter_map(|note| note.id.as_deref().map(|id| (id, note)))
-        .filter(|(id, _)| effective_decisions.contains(*id))
-        .flat_map(|(id, note)| {
-            note.policy_patterns.iter().filter_map(move |pattern| {
-                pattern
-                    .id
-                    .as_deref()
-                    .filter(|local_id| !local_id.trim().is_empty())
-                    .map(|local_id| pattern_id(id, local_id))
-            })
-        })
-        .collect()
+/// The policy patterns of the decision notes, and the declaration that owns
+/// each full id: the first one in note and declaration order.
+fn index_policy_declarations(notes: &[Note]) -> (Vec<DeclarationIndex>, BTreeMap<String, usize>) {
+    let mut declarations = Vec::new();
+    let mut owners = BTreeMap::new();
+    for (note_index, note) in notes.iter().enumerate() {
+        if note.kind != NoteKind::Decision {
+            continue;
+        }
+        for (policy_index, policy) in note.policy_patterns.iter().enumerate() {
+            let id = note
+                .id
+                .as_deref()
+                .zip(policy.id.as_deref())
+                .filter(|(_, local_id)| !local_id.trim().is_empty())
+                .map(|(adr_id, local_id)| pattern_id(adr_id, local_id));
+            let first = match &id {
+                Some(id) if !owners.contains_key(id) => {
+                    owners.insert(id.clone(), declarations.len());
+                    true
+                }
+                _ => false,
+            };
+            declarations.push(DeclarationIndex {
+                note: note_index,
+                policy: policy_index,
+                id,
+                first,
+            });
+        }
+    }
+    (declarations, owners)
 }
 
 fn effective_accepted_decision_ids(
@@ -795,65 +846,41 @@ fn parse_frontmatter(frontmatter: &str) -> std::result::Result<Note, Frontmatter
         })?
     };
 
-    let mut targets_symbols = Vec::new();
-    let mut targets_scope = Vec::new();
-    let mut target_pattern_refs = Vec::new();
-    let mut target_pattern_ids = Vec::new();
-    if let Some(targets) = raw.targets {
-        match targets {
-            RawTargets::Symbols(symbols) => targets_symbols = symbols,
-            RawTargets::Object(targets) => {
-                targets_symbols = targets.symbols;
-                targets_scope = targets.scope;
-                for pattern in targets.patterns {
-                    if let Some(id) = pattern.reference {
-                        target_pattern_refs.push(PatternRef {
-                            line: frontmatter_line(frontmatter, &id),
-                            id,
-                        });
-                    }
-                    if let Some(id) = pattern.id {
-                        target_pattern_ids.push(id);
-                    }
-                }
-            }
-        }
-    }
-
-    let policy_patterns: Vec<PolicyPattern> = raw
-        .policy
-        .map(|policy| {
-            policy
-                .patterns
-                .into_iter()
-                .map(|pattern| {
-                    let line = raw_pattern_line(frontmatter, &pattern);
-                    PolicyPattern {
-                        id: pattern.id,
-                        line,
-                        language: pattern
-                            .language
-                            .as_deref()
-                            .map(str::trim)
-                            .filter(|language| !language.is_empty())
-                            .map(PolicyLanguage::from),
-                        pattern: pattern.pattern,
-                        rule: pattern.rule,
-                        message: pattern.message,
-                    }
-                })
-                .collect()
+    let targets = raw.targets.unwrap_or_default();
+    let target_pattern_refs = targets
+        .patterns
+        .into_iter()
+        .map(|pattern| PatternRef {
+            line: frontmatter_line(frontmatter, &pattern.reference),
+            id: pattern.reference,
         })
-        .unwrap_or_default();
+        .collect();
+
+    let policy_patterns = raw
+        .policy
+        .unwrap_or_default()
+        .patterns
+        .into_iter()
+        .map(|pattern| PolicyPattern {
+            line: raw_pattern_line(frontmatter, &pattern),
+            id: pattern.id,
+            language: pattern
+                .language
+                .map(|language| language.trim().to_string())
+                .filter(|language| !language.is_empty()),
+            pattern: pattern.pattern,
+            rule: pattern.rule,
+            message: pattern.message,
+        })
+        .collect();
     Ok(Note {
         id: raw.id,
         kind: NoteKind::parse(raw.kind.as_deref()),
         title: raw.title,
         status: raw.status.as_deref().map(DecisionStatus::parse),
-        targets_symbols,
-        targets_scope,
+        targets_symbols: targets.symbols,
+        targets_scope: targets.scope,
         target_pattern_refs,
-        target_pattern_ids,
         policy_patterns,
         governs: raw.governs,
         supersedes: raw.supersedes,
@@ -883,11 +910,10 @@ fn frontmatter_line(frontmatter: &str, needle: &str) -> usize {
     })
 }
 
-fn raw_pattern_line(frontmatter: &str, pattern: &RawPatternRef) -> usize {
+fn raw_pattern_line(frontmatter: &str, pattern: &RawPolicyPattern) -> usize {
     pattern
         .id
         .as_deref()
-        .or(pattern.reference.as_deref())
         .or(pattern.pattern.as_deref())
         .or(pattern.rule.as_deref())
         .or(pattern.language.as_deref())
@@ -912,37 +938,34 @@ struct RawFrontmatter {
     policy: Option<RawPolicy>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum RawTargets {
-    Symbols(Vec<String>),
-    Object(RawTargetsObject),
-}
-
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
-struct RawTargetsObject {
+struct RawTargets {
     scope: Vec<String>,
     symbols: Vec<String>,
-    patterns: Vec<RawPatternRef>,
+    patterns: Vec<RawTargetPattern>,
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct RawPatternRef {
-    id: Option<String>,
+#[derive(Debug, Deserialize)]
+struct RawTargetPattern {
     #[serde(rename = "ref")]
-    reference: Option<String>,
-    language: Option<String>,
-    pattern: Option<String>,
-    rule: Option<String>,
-    message: Option<String>,
+    reference: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct RawPolicy {
-    patterns: Vec<RawPatternRef>,
+    patterns: Vec<RawPolicyPattern>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct RawPolicyPattern {
+    id: Option<String>,
+    language: Option<String>,
+    pattern: Option<String>,
+    rule: Option<String>,
+    message: Option<String>,
 }
 
 #[cfg(test)]
@@ -1171,12 +1194,7 @@ policy:
 
         assert_eq!(note.policy_patterns.len(), 2);
         assert_eq!(note.policy_patterns[0].id.as_deref(), Some("no-println"));
-        assert_eq!(
-            note.policy_patterns[0].language,
-            Some(PolicyLanguage::Supported(
-                ast_grep_language::SupportLang::Rust
-            ))
-        );
+        assert_eq!(note.policy_patterns[0].language.as_deref(), Some("rust"));
         assert_eq!(
             note.policy_patterns[0].pattern.as_deref(),
             Some("println!($$$ARGS)")
@@ -1243,8 +1261,8 @@ policy:
         let (_root, vault) = notes_vault(&[accepted, draft, missing_status, non_decision]);
 
         assert_eq!(
-            vault.patterns(),
-            &BTreeSet::from(["ADR-0001/accepted".to_string()])
+            registered_ids(&vault),
+            BTreeSet::from(["ADR-0001/accepted".to_string()])
         );
         assert!(vault.resolve_policy_pattern("ADR-0002/draft").is_some());
         assert_eq!(
@@ -1294,7 +1312,7 @@ supersedes:
         let (_root, vault) = notes_vault(&[old, middle, newest]);
 
         assert!(vault.is_historical_decision(&vault.notes()[0]));
-        assert!(vault.patterns().is_empty());
+        assert!(registered_ids(&vault).is_empty());
         assert!(vault.resolve_policy_pattern("ADR-0001/old").is_some());
 
         let draft_successor = r#"---
@@ -1311,8 +1329,8 @@ supersedes:
         let (_root, vault) = notes_vault(&[old, draft_successor]);
         assert!(vault.is_effective_decision(&vault.notes()[0]));
         assert_eq!(
-            vault.patterns(),
-            &BTreeSet::from(["ADR-0001/old".to_string()])
+            registered_ids(&vault),
+            BTreeSet::from(["ADR-0001/old".to_string()])
         );
     }
 
@@ -1536,6 +1554,14 @@ roots = ["src"]
             LoadOptions::default(),
         )
         .unwrap()
+    }
+
+    fn registered_ids(vault: &Vault) -> BTreeSet<String> {
+        vault
+            .policy_declarations()
+            .filter(|declaration| declaration.registered)
+            .filter_map(|declaration| declaration.id.map(str::to_string))
+            .collect()
     }
 
     fn docs_only(root: &Path) -> Vault {

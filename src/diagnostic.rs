@@ -19,7 +19,6 @@ pub enum DiagnosticCode {
     BrokenLink,
     CheckFailed,
     DecisionLocation,
-    DuplicateDocPattern,
     DuplicateId,
     DuplicatePatternId,
     DuplicatePolicyPattern,
@@ -65,7 +64,6 @@ impl DiagnosticCode {
             Self::BrokenLink => "broken-link",
             Self::CheckFailed => "check-failed",
             Self::DecisionLocation => "decision-location",
-            Self::DuplicateDocPattern => "duplicate-doc-pattern",
             Self::DuplicateId => "duplicate-id",
             Self::DuplicatePatternId => "duplicate-pattern-id",
             Self::DuplicatePolicyPattern => "duplicate-policy-pattern",
@@ -118,9 +116,7 @@ impl DiagnosticCode {
             }
             Self::BrokenLink => "Correct the link target, or add the note it names.",
             Self::DecisionLocation => "Move the decision into the ADR directory.",
-            Self::DuplicateDocPattern | Self::DuplicatePatternId => {
-                "Give each pattern a unique `id`."
-            }
+            Self::DuplicatePatternId => "Give each pattern a unique `id`.",
             Self::DuplicateId => "Give the note an `id` no other note uses.",
             Self::DuplicatePolicyPattern => "Give each policy pattern in the ADR a unique `id`.",
             Self::EmptyPolicyPattern => "Give the policy pattern a non-empty `id`.",
@@ -275,23 +271,6 @@ impl Diagnostic {
         }
         self.location = location;
         self
-    }
-
-    pub(crate) fn policy_violation(
-        path: &str,
-        line: usize,
-        location: Option<SourceLocation>,
-        adr_id: &str,
-        pattern_id: &str,
-        text: &str,
-    ) -> Self {
-        Self::error(
-            DiagnosticCode::PolicyViolation,
-            path,
-            Some(line),
-            format!("{adr_id} policy `{pattern_id}` matched `{text}`"),
-        )
-        .at(location)
     }
 
     pub(crate) const fn severity(&self) -> Severity {
