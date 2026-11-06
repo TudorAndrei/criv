@@ -2,19 +2,12 @@ mod document;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-#[cfg(test)]
-use std::sync::Arc;
-
-#[cfg(test)]
-use std::fs;
 
 use serde::Serialize;
 use usage_rs::{Args as UsageArgs, ValueEnum};
 
 use crate::config::{CONFIG_FILE, Config};
 use crate::diagnostic::{self, Diagnostic, DiagnosticCode, LspRange, Severity, SourceLocation};
-#[cfg(test)]
-use crate::git::ChangedEntry;
 use crate::git::{ChangeStatus, ChangedSet};
 use crate::identity::{adr_filename, is_adr_id, parse_adr_id, parse_adr_stem, slug};
 use crate::markdown::LinkTarget;
@@ -713,7 +706,11 @@ fn escape_github_property(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::sync::Arc;
+
     use super::*;
+    use crate::git::ChangedEntry;
 
     #[test]
     fn next_command_names_the_repair_criv_can_run() {
