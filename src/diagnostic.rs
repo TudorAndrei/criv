@@ -376,7 +376,7 @@ impl SourceLocation {
         Some(Self { source, span })
     }
 
-    pub(crate) fn line(&self) -> Option<usize> {
+    fn line(&self) -> Option<usize> {
         self.lsp_range()?.start.line.checked_add(1)
     }
 

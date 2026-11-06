@@ -71,12 +71,12 @@ pub struct Import {
     pub(crate) line: usize,
     pub(crate) site: usize,
     pub(crate) kind: DirectiveKind,
-    pub(crate) owner: Option<ElixirOwner>,
-    pub(crate) scope: Option<LexicalScope>,
-    pub(crate) alias: Option<String>,
-    pub(crate) only: Option<DirectiveFilter>,
-    pub(crate) except: Vec<CallableFilter>,
-    pub(crate) absolute: bool,
+    owner: Option<ElixirOwner>,
+    scope: Option<LexicalScope>,
+    alias: Option<String>,
+    only: Option<DirectiveFilter>,
+    except: Vec<CallableFilter>,
+    absolute: bool,
 }
 
 impl Import {
@@ -147,17 +147,17 @@ pub struct Symbol {
     pub(crate) id: SymbolId,
     pub(crate) name: String,
     pub(crate) kind: SymbolKind,
-    pub(crate) parent: Option<String>,
+    parent: Option<String>,
     /// The symbol in the same file that `parent` names.
     pub(crate) parent_id: Option<SymbolId>,
-    pub(crate) owner: Option<ElixirOwner>,
+    owner: Option<ElixirOwner>,
     pub(crate) arity: Option<usize>,
     exported: bool,
     interface_signature: Option<InterfaceSignature>,
     pub(crate) range: SymbolRange,
     clause_ranges: Vec<SymbolRange>,
-    pub(crate) calls: Vec<Call>,
-    pub(crate) relationships: Vec<Relationship>,
+    calls: Vec<Call>,
+    relationships: Vec<Relationship>,
 }
 
 impl Symbol {
@@ -239,7 +239,7 @@ pub struct Relationship {
     pub(crate) kind: RelationshipKind,
     pub(crate) target: RelationshipTarget,
     pub(crate) line: usize,
-    pub(crate) site: usize,
+    site: usize,
 }
 
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]

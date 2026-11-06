@@ -26,8 +26,8 @@ pub(super) struct PartitionDependencies {
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct GraphRows {
-    pub(super) nodes: Vec<Node>,
-    pub(super) edges: Vec<Edge>,
+    nodes: Vec<Node>,
+    edges: Vec<Edge>,
 }
 
 #[derive(Debug, Clone)]

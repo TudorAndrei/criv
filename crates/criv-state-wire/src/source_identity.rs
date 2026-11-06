@@ -10,7 +10,7 @@ pub struct SourceIdentity {
 }
 
 impl SourceIdentity {
-    pub fn file(path: impl Into<String>) -> Self {
+    pub(crate) fn file(path: impl Into<String>) -> Self {
         Self {
             path: path.into(),
             selector: None,
@@ -182,11 +182,11 @@ pub enum ElixirOwner {
 }
 
 impl ElixirOwner {
-    pub fn module(name: impl Into<String>) -> Self {
+    fn module(name: impl Into<String>) -> Self {
         Self::Module { name: name.into() }
     }
 
-    pub fn implementation(protocol: impl Into<String>, for_type: impl Into<String>) -> Self {
+    fn implementation(protocol: impl Into<String>, for_type: impl Into<String>) -> Self {
         Self::Implementation {
             protocol: protocol.into(),
             for_type: for_type.into(),

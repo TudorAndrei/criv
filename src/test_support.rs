@@ -3,7 +3,7 @@
 use std::path::Path;
 
 /// Copy the fixture tree at `source` into `destination`.
-pub fn copy_fixture_tree(source: &Path, destination: &Path) {
+pub(crate) fn copy_fixture_tree(source: &Path, destination: &Path) {
     std::fs::create_dir_all(destination).unwrap();
     for entry in std::fs::read_dir(source).unwrap() {
         let entry = entry.unwrap();

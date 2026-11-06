@@ -172,7 +172,7 @@ impl IdentityFile {
 
 impl IdentityReceipt {
     /// Every path the transaction writes or deletes.
-    pub(super) fn paths(&self) -> BTreeSet<&str> {
+    fn paths(&self) -> BTreeSet<&str> {
         self.files
             .iter()
             .map(|file| file.path.as_str())

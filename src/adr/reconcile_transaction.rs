@@ -24,7 +24,7 @@ pub enum Mode {
 pub(super) struct Context<'a> {
     pub(super) files: &'a RepositoryFiles,
     pub(super) git: &'a GitRepository,
-    pub(super) base_ref: &'a str,
+    base_ref: &'a str,
     pub(super) target_sha: String,
     pub(super) head_sha: String,
     pub(super) merge_base: String,
