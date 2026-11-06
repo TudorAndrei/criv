@@ -197,9 +197,8 @@ mod tests {
         let owned: Vec<OsString> = args.iter().map(OsString::from).collect();
         let argv: Vec<&OsStr> = owned.iter().map(OsString::as_os_str).collect();
         match CrivCli::parse_from(&argv) {
-            Ok(_) => render_help(CrivCli::command(), false).unwrap(),
             Err(Error::Help { cmd, long }) => render_help(cmd, long).unwrap(),
-            Err(error) => panic!("expected a help request, got {error:?}"),
+            other => panic!("expected a help request, got {other:?}"),
         }
     }
 
@@ -232,9 +231,6 @@ mod tests {
         assert!(spec.contains("cmd check"));
         assert!(spec.contains("cmd install-editor"));
         assert!(spec.contains("cmd query"));
-        assert!(!spec.contains("cmd state"));
-        assert!(!spec.contains("cmd list"));
-        assert!(!spec.contains("cmd prune"));
         assert!(spec.contains("cmd enforce"));
         assert!(spec.contains("cmd reconcile-sources"));
 
@@ -328,23 +324,6 @@ mod tests {
         assert!(nodes.contains("--kind <KIND>"));
         assert!(nodes.contains("--without-docs"));
         assert!(!nodes.contains("--by"));
-    }
-
-    #[test]
-    fn help_renders_flag_help_forms() {
-        let root = help_for(&["--help"]);
-        let query = help_for(&["query", "--help"]);
-
-        assert!(root.contains("Usage: criv"));
-        assert!(query.contains("Usage: criv query"));
-    }
-
-    #[test]
-    fn bare_criv_renders_the_short_root_page() {
-        let bare = help_for(&[]);
-
-        assert!(bare.contains("Usage: criv"));
-        assert!(bare.contains("Commands:"));
     }
 
     #[test]

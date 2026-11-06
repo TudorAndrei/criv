@@ -761,6 +761,27 @@ mod tests {
     }
 
     #[test]
+    fn affected_paths_include_both_sides_of_a_rename() {
+        let changes = super::ChangedSet {
+            entries: vec![super::ChangedEntry {
+                status: super::ChangeStatus::Renamed,
+                path: "docs/new.md".into(),
+                previous_path: Some("docs/old.md".into()),
+                old_ref: Some("HEAD".into()),
+                new: super::Revision::Index,
+            }],
+            old_ref: Some("HEAD".into()),
+            new: Some(super::Revision::Index),
+            basis: "test".into(),
+        };
+
+        assert_eq!(
+            changes.affected_paths(),
+            vec!["docs/new.md".to_string(), "docs/old.md".to_string()]
+        );
+    }
+
+    #[test]
     fn revisions_report_absent_files_and_staging_records_deletions() {
         let temp = tempfile::TempDir::new().unwrap();
         let root = temp.path();

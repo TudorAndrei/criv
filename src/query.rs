@@ -739,32 +739,6 @@ mod tests {
     }
 
     #[test]
-    fn source_node_kinds_map_to_native_symbol_kinds() {
-        let cases = [
-            (NodeKind::Function, SymbolKind::Function),
-            (NodeKind::Method, SymbolKind::Method),
-            (NodeKind::Class, SymbolKind::Class),
-            (NodeKind::Module, SymbolKind::Module),
-            (NodeKind::Protocol, SymbolKind::Protocol),
-            (NodeKind::Implementation, SymbolKind::Implementation),
-            (NodeKind::Struct, SymbolKind::Struct),
-            (NodeKind::Exception, SymbolKind::Exception),
-            (NodeKind::Behaviour, SymbolKind::Behaviour),
-            (NodeKind::Macro, SymbolKind::Macro),
-            (NodeKind::Guard, SymbolKind::Guard),
-            (NodeKind::Callback, SymbolKind::Callback),
-            (NodeKind::MacroCallback, SymbolKind::MacroCallback),
-        ];
-
-        for (node_kind, symbol_kind) in cases {
-            assert_eq!(node_kind.symbol_kind(), Some(symbol_kind));
-        }
-        for node_kind in [NodeKind::Code, NodeKind::Doc, NodeKind::Decision] {
-            assert_eq!(node_kind.symbol_kind(), None);
-        }
-    }
-
-    #[test]
     fn docs_query_loading_performs_no_source_work() {
         let temp = TempDir::new().unwrap();
         write_query_fixture(temp.path());

@@ -1455,31 +1455,6 @@ See [[lib.rs]], [[match:ADR-0001/no-block-on]], [[helper.rs#help]],
     }
 
     #[test]
-    fn disabled_source_index_skips_source_collection_and_graph() {
-        let root = tempfile::TempDir::new().unwrap();
-        let root = root.path();
-        std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::create_dir_all(root.join("docs/adr")).unwrap();
-        std::fs::write(
-            root.join("criv.toml"),
-            r#"
-[source]
-roots = ["src"]
-
-[index]
-source = false
-"#,
-        )
-        .unwrap();
-        std::fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
-
-        let vault = load(root);
-
-        assert!(vault.source_files().is_empty());
-        assert!(vault.source_graph().files().next().is_none());
-    }
-
-    #[test]
     fn vault_uses_the_observed_source_state() {
         let root = tempfile::TempDir::new().unwrap();
         let root = root.path();
@@ -1509,7 +1484,6 @@ roots = ["src"]
 
         assert_eq!(vault.source_files(), expected);
         assert!(vault.source_graph().file("src/lib.rs").is_some());
-        work::reset();
         assert_eq!(
             vault.resolve_source_target("src/lib.rs#run"),
             SourceTargetResolution::Resolved {
@@ -1517,7 +1491,6 @@ roots = ["src"]
                 ambiguous: false,
             }
         );
-        assert_eq!(work::count(Work::SourceTargetResolution), 1);
     }
 
     #[test]

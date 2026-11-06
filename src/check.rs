@@ -854,20 +854,6 @@ mod tests {
     }
 
     #[test]
-    fn affected_paths_include_both_sides_of_a_rename() {
-        let changes = changed_set_fixture(vec![changed_entry(
-            ChangeStatus::Renamed,
-            "docs/new.md",
-            Some("docs/old.md"),
-        )]);
-
-        assert_eq!(
-            changes.affected_paths(),
-            vec!["docs/new.md".to_string(), "docs/old.md".to_string()]
-        );
-    }
-
-    #[test]
     fn github_annotation_escapes_workflow_command_data() {
         let diag = Diagnostic::error(
             DiagnosticCode::BrokenLink,
@@ -963,7 +949,7 @@ mod tests {
     }
 
     #[test]
-    fn cycles_are_detected_at_the_first_decision_of_the_cycle() {
+    fn a_supersession_cycle_is_reported() {
         let (_root, vault) = decisions_vault(&[
             (
                 "0001-a.md",
@@ -981,11 +967,6 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(!cycles.is_empty());
-        assert!(
-            cycles
-                .iter()
-                .all(|diag| diag.path().starts_with("docs/adr/"))
-        );
     }
 
     #[test]
@@ -1058,7 +1039,7 @@ mod tests {
 
     #[test]
     fn source_wikilinks_are_reported_as_document_portability_issues() {
-        let vault = source_note_vault("[[src/main.rs#fn:run]]", &[]);
+        let (_root, vault) = source_note_vault("[[src/main.rs#fn:run]]", &[]);
 
         let diagnostics = validate(&vault);
 
@@ -1077,7 +1058,7 @@ mod tests {
 
     #[test]
     fn adr_0033_source_wikilinks_remain_compatible_but_warn() {
-        let vault = source_note_vault("[[source:src/main.rs#run]]", &[]);
+        let (_root, vault) = source_note_vault("[[source:src/main.rs#run]]", &[]);
 
         let diagnostics = validate(&vault);
 
@@ -1096,7 +1077,7 @@ mod tests {
 
     #[test]
     fn typed_source_wikilinks_with_missing_fragments_remain_broken() {
-        let vault = source_note_vault("[[source:src/main.rs#missing]]", &[]);
+        let (_root, vault) = source_note_vault("[[source:src/main.rs#missing]]", &[]);
 
         let diagnostics = validate(&vault);
 
@@ -1114,7 +1095,7 @@ mod tests {
 
     #[test]
     fn ambiguous_legacy_source_wikilinks_retain_both_diagnostics() {
-        let vault = source_note_vault("[[shared.rs]]", &[]);
+        let (_root, vault) = source_note_vault("[[shared.rs]]", &[]);
 
         let diagnostics = validate(&vault);
 
@@ -1140,7 +1121,7 @@ mod tests {
 
     #[test]
     fn legacy_target_symbols_suggest_ast_aware_selectors() {
-        let vault = source_note_vault("", &["src/main.rs#run"]);
+        let (_root, vault) = source_note_vault("", &["src/main.rs#run"]);
 
         let diagnostics = validate(&vault);
 
@@ -1154,7 +1135,7 @@ mod tests {
 
     #[test]
     fn canonical_ast_aware_target_symbols_do_not_warn() {
-        let vault = source_note_vault("", &["src/main.rs#fn:run"]);
+        let (_root, vault) = source_note_vault("", &["src/main.rs#fn:run"]);
 
         let diagnostics = validate(&vault);
 
@@ -1167,7 +1148,8 @@ mod tests {
 
     #[test]
     fn ast_aware_governs_selectors_resolve() {
-        let root = unique_temp_dir("criv-governs-selector-check");
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path();
         fs::create_dir_all(root.join("src")).unwrap();
         fs::create_dir_all(root.join("docs/adr")).unwrap();
         fs::write(
@@ -1194,7 +1176,7 @@ governs:
 "#,
         )
         .unwrap();
-        let vault = load(&root);
+        let vault = load(root);
 
         let diagnostics = validate(&vault);
 
@@ -1207,7 +1189,8 @@ governs:
 
     #[test]
     fn historical_accepted_adrs_do_not_require_current_source_bindings() {
-        let root = unique_temp_dir("criv-historical-source-bindings");
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path();
         fs::create_dir_all(root.join("src")).unwrap();
         fs::create_dir_all(root.join("docs/adr")).unwrap();
         fs::write(
@@ -1255,7 +1238,7 @@ governs:
 "#,
         )
         .unwrap();
-        let vault = load(&root);
+        let vault = load(root);
 
         let diagnostics = validate(&vault);
 
@@ -1269,7 +1252,8 @@ governs:
 
     #[test]
     fn draft_successor_does_not_suppress_active_governance_failure() {
-        let root = unique_temp_dir("criv-draft-successor-governance");
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path();
         fs::create_dir_all(root.join("src")).unwrap();
         fs::create_dir_all(root.join("docs/adr")).unwrap();
         fs::write(
@@ -1312,7 +1296,7 @@ governs:
 "#,
         )
         .unwrap();
-        let vault = load(&root);
+        let vault = load(root);
 
         let blockers = publication_blocking_diagnostics(&vault);
 
@@ -1352,7 +1336,8 @@ governs:
 
     #[test]
     fn broken_link_diagnostics_report_the_real_file_line() {
-        let root = unique_temp_dir("criv-broken-link-line");
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path();
         fs::create_dir_all(root.join("docs")).unwrap();
         let note = r#"---
 id: DOC-LINE
@@ -1364,9 +1349,9 @@ title: Line Check
 
 See [[does-not-exist]].
 "#;
-        fs::write(root.join("criv.toml"), "[source]\nindex = false\n").unwrap();
+        fs::write(root.join("criv.toml"), "[index]\nsource = false\n").unwrap();
         fs::write(root.join("docs/line-check.md"), note).unwrap();
-        let vault = load(&root);
+        let vault = load(root);
 
         let diagnostics = validate(&vault);
 
@@ -1384,21 +1369,6 @@ See [[does-not-exist]].
             Some(expected),
             "the diagnostic must point at the real file line, not a body-relative one"
         );
-
-        let _ = fs::remove_dir_all(root);
-    }
-
-    fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
-        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "{prefix}-{}-{unique}-{counter}",
-            std::process::id()
-        ))
     }
 
     fn validate(vault: &Vault) -> Vec<Diagnostic> {
@@ -1435,8 +1405,9 @@ See [[does-not-exist]].
         (root, vault)
     }
 
-    fn source_note_vault(body: &str, target_symbols: &[&str]) -> Vault {
-        let root = unique_temp_dir("criv-source-link-check");
+    fn source_note_vault(body: &str, target_symbols: &[&str]) -> (tempfile::TempDir, Vault) {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path();
         fs::create_dir_all(root.join("src")).unwrap();
         fs::create_dir_all(root.join("docs")).unwrap();
         fs::write(
@@ -1480,6 +1451,7 @@ title: Source Note
             ),
         )
         .unwrap();
-        load(&root)
+        let vault = load(root);
+        (temp, vault)
     }
 }

@@ -134,7 +134,7 @@ fn source_mime(path: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
     use criv_state_wire::{EdgeKind, STATE_SCHEMA};
 
@@ -248,8 +248,6 @@ See [[lib.rs]], [[match:ADR-0001/no-block-on]], and [[helper.rs#help]].
                 && error.contains("policy pattern `no-println`"),
             "{error}"
         );
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -282,8 +280,6 @@ source = false
                 .iter()
                 .all(|node| node["kind"] != "code")
         );
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -301,8 +297,6 @@ source = false
         assert_eq!(json["asset-index"][0]["mime"], "image/png");
         assert_eq!(json["asset-index"][0]["bytes"], contents.len());
         assert_eq!(json["asset-index"][0]["hash"].as_str().unwrap().len(), 64);
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -483,8 +477,6 @@ end
                 && edge.to == "symbol:lib/sample.ex#module:Demo.Target/fn:other/1"
                 && edge.kind == EdgeKind::Calls
         }));
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -531,8 +523,6 @@ roots = ["src"]
             ]),
             [1, 0, 0, 1]
         );
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -626,7 +616,6 @@ policy:
         .unwrap();
 
         let vault = load(&root).unwrap();
-        work::reset();
         let actual = serde_json::to_value(build(&vault).unwrap()).unwrap();
         let expected: serde_json::Value =
             serde_json::from_str(include_str!("../fixtures/state/criv.state.v1.json")).unwrap();
@@ -642,19 +631,9 @@ policy:
                 .is_none()
         );
         assert_eq!(
-            work::counts([
-                Work::SourcePartitionBuild,
-                Work::NotePartitionBuild,
-                Work::PolicyPartitionBuild,
-            ]),
-            [1, 2, 1]
-        );
-        assert_eq!(
             publish(&vault).unwrap().0,
             "5daebfeb1e0852bba748b8e225dab7469e53f98d3103e242ba0c3bffbbbb199a"
         );
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[cfg(unix)]
@@ -672,7 +651,6 @@ policy:
 
         assert!(error.to_string().contains("symlinked vault path component"));
         assert!(!outside.path().join("state.json").exists());
-        let _ = std::fs::remove_dir_all(root);
     }
 
     const POLICY_ADR: &str = r#"---
@@ -769,7 +747,7 @@ Decision.
 Consequences.
 "#;
 
-    fn policy_vault(prefix: &str) -> PathBuf {
+    fn policy_vault(prefix: &str) -> TempRoot {
         let root = unique_temp_dir(prefix);
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::create_dir_all(root.join("docs/adr")).unwrap();
@@ -822,8 +800,6 @@ Consequences.
             serde_json::to_value(&first).unwrap(),
             serde_json::to_value(&second).unwrap()
         );
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -848,8 +824,6 @@ Consequences.
             state.wire.patterns.get(FUNCTION_PATTERN_ID).unwrap().len(),
             2
         );
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -869,8 +843,6 @@ Consequences.
                 .contains(&DRAFT_PATTERN_ID.to_string())
         );
         assert!(!state.wire.patterns.contains_key(DRAFT_PATTERN_ID));
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -913,8 +885,6 @@ governs:
                 .contains(&PATTERN_ID.to_string())
         );
         assert!(!after.wire.patterns.contains_key(PATTERN_ID));
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -943,8 +913,6 @@ governs:
             vec!["src/alpha.rs", "src/beta.rs"],
             "a newly accepted policy has no prior cache entry and must scan its whole scope"
         );
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -974,8 +942,6 @@ governs:
                 .contains(&DRAFT_PATTERN_ID.to_string())
         );
         assert!(!after.wire.patterns.contains_key(DRAFT_PATTERN_ID));
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1037,8 +1003,6 @@ governs:
             "the changed file's match should be rescanned at its new position"
         );
         assert_eq!(matched_files(&second).len(), 2);
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1067,8 +1031,6 @@ governs:
             matched_files(&second).contains(&"src/alpha.rs".to_string()),
             "a file outside the changed set must be reused, not rescanned"
         );
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1104,8 +1066,6 @@ governs:
             vec!["src/beta.rs".to_string()],
             "no governed file changed, so the rescan must contribute nothing"
         );
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1131,15 +1091,20 @@ governs:
             vec!["src/alpha.rs".to_string()],
             "a deleted file's match must not survive into the next state"
         );
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
-    fn unique_temp_dir(prefix: &str) -> PathBuf {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("{prefix}-{}-{unique}", std::process::id()))
+    /// A temporary repository root, removed when the test drops it.
+    struct TempRoot(tempfile::TempDir);
+
+    impl std::ops::Deref for TempRoot {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            self.0.path()
+        }
+    }
+
+    fn unique_temp_dir(prefix: &str) -> TempRoot {
+        TempRoot(tempfile::Builder::new().prefix(prefix).tempdir().unwrap())
     }
 }

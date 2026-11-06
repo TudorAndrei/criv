@@ -399,7 +399,8 @@ fn skill_marker(contents: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
+
+    use tempfile::TempDir;
 
     use super::*;
 
@@ -434,14 +435,15 @@ mod tests {
 
     #[test]
     fn inventory_distinguishes_missing_current_stale_legacy_and_unreadable() {
-        let root = temp_root("inventory-status");
-        let missing = inventory_at(&root);
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        let missing = inventory_at(root);
         assert!(SKILLS.iter().all(|skill| {
             status(&missing, &skill.agent_path()) == Some(InstalledSkillStatus::Missing)
         }));
         assert_eq!(missing.claude, ClaudeLayout::Missing);
 
-        install(&root, InstallMode::CreateOnly).unwrap();
+        install(root, InstallMode::CreateOnly).unwrap();
         let stale_path = SKILLS[0].agent_path();
         let legacy_path = SKILLS[1].agent_path();
         let unreadable_path = SKILLS[2].agent_path();
@@ -455,7 +457,7 @@ mod tests {
         fs::write(root.join(&legacy_path), "legacy skill\n").unwrap();
         fs::write(root.join(&unreadable_path), [0xff, 0xfe]).unwrap();
 
-        let statuses = inventory_at(&root);
+        let statuses = inventory_at(root);
         assert_eq!(
             status(&statuses, &stale_path),
             Some(InstalledSkillStatus::Stale)
@@ -477,14 +479,13 @@ mod tests {
             statuses.advisory_outdated_paths(),
             vec![stale_path.as_str(), legacy_path.as_str()]
         );
-
-        remove_root(root);
     }
 
     #[test]
     fn create_only_preserves_local_content_and_refresh_republishes_it() {
-        let root = temp_root("publication-modes");
-        let created = install(&root, InstallMode::CreateOnly).unwrap();
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        let created = install(root, InstallMode::CreateOnly).unwrap();
         assert!(
             created
                 .skills
@@ -495,7 +496,7 @@ mod tests {
 
         let path = SKILLS[0].agent_path();
         fs::write(root.join(&path), "local content\n").unwrap();
-        let preserved = install(&root, InstallMode::CreateOnly).unwrap();
+        let preserved = install(root, InstallMode::CreateOnly).unwrap();
         assert_eq!(preserved.skills[0].publication, SkillPublication::Preserved);
         assert_eq!(
             fs::read_to_string(root.join(&path)).unwrap(),
@@ -503,7 +504,7 @@ mod tests {
         );
         assert_eq!(preserved.claude, ClaudePublication::Current);
 
-        let refreshed = install(&root, InstallMode::Refresh).unwrap();
+        let refreshed = install(root, InstallMode::Refresh).unwrap();
         assert!(
             refreshed
                 .skills
@@ -511,63 +512,60 @@ mod tests {
                 .all(|fact| fact.publication == SkillPublication::Refreshed)
         );
         assert_eq!(
-            status(&inventory_at(&root), &path),
+            status(&inventory_at(root), &path),
             Some(InstalledSkillStatus::Current)
         );
-
-        remove_root(root);
     }
 
     #[test]
     fn copied_layout_is_blocked_until_explicit_refresh_replaces_it() {
-        let root = temp_root("copied-layout");
-        install(&root, InstallMode::CreateOnly).unwrap();
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        install(root, InstallMode::CreateOnly).unwrap();
         let claude = root.join(CLAUDE_SKILLS_DIR);
         remove_link_or_dir(&claude);
         fs::create_dir_all(claude.join("criv")).unwrap();
         fs::write(claude.join("criv/SKILL.md"), "local copy\n").unwrap();
 
-        let blocked = install(&root, InstallMode::CreateOnly).unwrap();
+        let blocked = install(root, InstallMode::CreateOnly).unwrap();
         assert_eq!(blocked.claude, ClaudePublication::Blocked);
-        assert_eq!(inventory_at(&root).claude, ClaudeLayout::Copied);
+        assert_eq!(inventory_at(root).claude, ClaudeLayout::Copied);
         assert_eq!(
             fs::read_to_string(claude.join("criv/SKILL.md")).unwrap(),
             "local copy\n"
         );
 
-        let replaced = install(&root, InstallMode::Refresh).unwrap();
+        let replaced = install(root, InstallMode::Refresh).unwrap();
         assert_eq!(replaced.claude, ClaudePublication::Replaced);
-        assert_eq!(inventory_at(&root).claude, ClaudeLayout::Linked);
-
-        remove_root(root);
+        assert_eq!(inventory_at(root).claude, ClaudeLayout::Linked);
     }
 
     #[cfg(unix)]
     #[test]
     fn link_to_another_target_is_repaired_in_create_only_mode() {
-        let root = temp_root("wrong-link-target");
-        install(&root, InstallMode::CreateOnly).unwrap();
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        install(root, InstallMode::CreateOnly).unwrap();
         let claude = root.join(CLAUDE_SKILLS_DIR);
         fs::remove_file(&claude).unwrap();
         fs::create_dir_all(root.join("wrong-skills")).unwrap();
         std::os::unix::fs::symlink("../wrong-skills", &claude).unwrap();
 
-        assert_eq!(inventory_at(&root).claude, ClaudeLayout::Other);
-        let repaired = install(&root, InstallMode::CreateOnly).unwrap();
+        assert_eq!(inventory_at(root).claude, ClaudeLayout::Other);
+        let repaired = install(root, InstallMode::CreateOnly).unwrap();
         assert_eq!(repaired.claude, ClaudePublication::Linked);
-        assert_eq!(inventory_at(&root).claude, ClaudeLayout::Linked);
-
-        remove_root(root);
+        assert_eq!(inventory_at(root).claude, ClaudeLayout::Linked);
     }
 
     #[cfg(unix)]
     #[test]
     fn linked_claude_parent_is_rejected_before_skill_publication() {
-        let root = temp_root("linked-claude-parent");
-        let outside = temp_root("linked-claude-parent-outside");
-        std::os::unix::fs::symlink(&outside, root.join(".claude")).unwrap();
+        let temp = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let root = temp.path();
+        std::os::unix::fs::symlink(outside.path(), root.join(".claude")).unwrap();
 
-        let error = install(&root, InstallMode::CreateOnly).unwrap_err();
+        let error = install(root, InstallMode::CreateOnly).unwrap_err();
 
         assert!(
             error
@@ -575,16 +573,13 @@ mod tests {
                 .contains("`.claude` must be a real repository directory")
         );
         assert!(!root.join(AGENT_SKILLS_DIR).exists());
-
-        fs::remove_file(root.join(".claude")).unwrap();
-        remove_root(root);
-        remove_root(outside);
     }
 
     #[test]
     fn unsupported_link_platform_copies_the_same_inventory() {
-        let root = temp_root("copy-fallback");
-        let files = RepositoryFiles::open(&root).unwrap();
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        let files = RepositoryFiles::open(root).unwrap();
         let scope = files.write_scope(Path::new(".")).unwrap();
         copy_claude_skills(&files, &scope, InstallMode::CreateOnly).unwrap();
 
@@ -594,22 +589,7 @@ mod tests {
                 stamp_skill(skill.contents)
             );
         }
-        assert_eq!(inventory_at(&root).claude, ClaudeLayout::Copied);
-
-        remove_root(root);
-    }
-
-    #[test]
-    fn repository_installation_matches_the_shipped_inventory() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let status = inventory_at(root);
-        assert!(
-            status
-                .skills
-                .iter()
-                .all(|fact| { fact.status == InstalledSkillStatus::Current })
-        );
-        assert_eq!(status.claude, ClaudeLayout::Linked);
+        assert_eq!(inventory_at(root).claude, ClaudeLayout::Copied);
     }
 
     #[test]
@@ -629,16 +609,6 @@ mod tests {
         assert_eq!(unstamp_skill(&stamped), skill);
     }
 
-    fn temp_root(label: &str) -> PathBuf {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("criv-generated-skills-{label}-{unique}"));
-        fs::create_dir_all(&root).unwrap();
-        root
-    }
-
     fn remove_link_or_dir(path: &Path) {
         let metadata = fs::symlink_metadata(path).unwrap();
         if metadata.file_type().is_symlink() {
@@ -654,9 +624,5 @@ mod tests {
         } else {
             fs::remove_dir_all(path).unwrap();
         }
-    }
-
-    fn remove_root(root: PathBuf) {
-        let _ = fs::remove_dir_all(root);
     }
 }

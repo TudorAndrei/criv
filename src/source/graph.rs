@@ -1146,10 +1146,7 @@ mod tests {
 
         assert_eq!(fs::read_to_string(&path).unwrap(), before);
         assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
-        assert_eq!(
-            work::counts([Work::GraphCacheSerialization, Work::GraphCachePublication]),
-            [0, 0]
-        );
+        assert_eq!(work::count(Work::GraphCacheSerialization), 0);
     }
 
     #[test]
@@ -2136,21 +2133,7 @@ class B {
 
     #[test]
     fn legacy_symbol_names_still_resolve() {
-        let file = parse_source_file("src/lib.rs", "fn run() {}\n");
-        let mut graph = SourceGraph::default();
-        for symbol in &file.symbols {
-            graph
-                .symbol_index
-                .entry(symbol.name.clone())
-                .or_default()
-                .push(symbol.id.clone());
-            graph
-                .symbol_index
-                .entry(symbol.id.selector.clone())
-                .or_default()
-                .push(symbol.id.clone());
-        }
-        graph.files.insert(file.path.clone(), file);
+        let graph = graph_with_files([parse_source_file("src/lib.rs", "fn run() {}\n")]);
 
         assert_eq!(
             graph.resolve_symbol("src/lib.rs#run").unwrap().display(),

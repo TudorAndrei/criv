@@ -789,12 +789,15 @@ mod tests {
         }
     }
 
+    /// Upper bound for the operating system to deliver one file event.
+    const NOTIFY_EVENT_BOUND: Duration = Duration::from_secs(3);
+
     fn watcher_reports_path(mut watcher: NotifyWatcherAdapter, expected: &Path) -> bool {
         let deadline = Instant::now()
-            .checked_add(Duration::from_secs(3))
+            .checked_add(NOTIFY_EVENT_BOUND)
             .unwrap_or_else(Instant::now);
         while Instant::now() < deadline {
-            if let WatcherPoll::Paths(paths) = watcher.poll(Duration::from_millis(250))
+            if let WatcherPoll::Paths(paths) = watcher.poll(POLL_INTERVAL)
                 && paths.iter().any(|path| path == expected)
             {
                 return true;
