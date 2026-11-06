@@ -477,6 +477,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_norway",
+ "strum",
  "tempfile",
  "thiserror",
  "toml",
@@ -496,6 +497,7 @@ name = "criv-perf-harness"
 version = "0.14.0"
 dependencies = [
  "blake3",
+ "criv",
  "criv-state-wire",
  "libc",
  "serde",
@@ -510,6 +512,7 @@ dependencies = [
 name = "criv-state-wire"
 version = "0.14.0"
 dependencies = [
+ "blake3",
  "proptest",
  "serde",
  "serde_json",

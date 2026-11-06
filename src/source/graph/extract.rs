@@ -1,564 +1,637 @@
+//! Per-language Source extraction: one table row per language and the
+//! generic Tree-sitter extractor that reads the rows.
+
+use std::path::Path;
+
 use tree_sitter::{Node, Parser};
 
+use super::syntax::{
+    Depth, descendants, field_text, first_named_child, matching_close, node_range, node_text,
+    split_top_level,
+};
 use super::{
-    Call, Import, InterfaceSignature, Language, ModuleDecl, SourceFile, Symbol, SymbolId,
-    SymbolKind, SymbolRange, aggregate_signature, clean_js_module, descendant_of_kind, elixir,
-    fallback_module_decl, field_text, first_named_child, function_signature, has_descendant_kind,
-    is_call_keyword, is_comment, is_exported_symbol, node_text, parse_calls, parse_import,
-    parse_imports, parse_rust_impl_target, parse_rust_imports, parse_symbol, symbol_selector,
-    visibility_text,
+    Call, FieldSignature, Import, InterfaceSignature, Language, ModuleDecl, SourceFile, Symbol,
+    SymbolId, SymbolKind, VariantSignature, elixir,
+};
+use crate::{CrivError, Result};
+
+/// Everything criv knows about one language.
+struct LanguageSpec {
+    language: Language,
+    name: &'static str,
+    extensions: &'static [&'static str],
+    /// Overrides the extension-based media type of the file.
+    mime: Option<&'static str>,
+    grammar: Option<Grammar>,
+    /// The symbol name that, with every uncalled top-level symbol, counts as
+    /// an entry point. Without it only exported symbols do.
+    entry_point: Option<&'static str>,
+}
+
+struct Grammar {
+    load: fn() -> tree_sitter::Language,
+    rules: Rules,
+}
+
+enum Rules {
+    Generic(GenericRules),
+    /// Elixir meaning lives in the Elixir module (ADR-0129).
+    Elixir,
+}
+
+/// The node kinds and text forms the generic extractor reads.
+struct GenericRules {
+    symbols: &'static [(&'static str, SymbolShape)],
+    modules: &'static [(&'static str, NameSource)],
+    imports: &'static [(&'static str, ImportForm)],
+    /// The node kinds of a call.
+    calls: &'static [&'static str],
+    container: Option<Container>,
+    /// Call targets that are keywords or built-ins, beyond the common ones.
+    call_keywords: &'static [&'static str],
+    exported: ExportRule,
+    visibility: VisibilityRule,
+    signature: SignatureStyle,
+}
+
+/// A node whose text names the parent of the symbols inside it.
+#[derive(Clone, Copy)]
+struct Container {
+    node: &'static str,
+    parent: fn(&str) -> Option<String>,
+}
+
+#[derive(Clone, Copy)]
+enum SymbolShape {
+    /// A method inside a parent, a function otherwise.
+    Callable,
+    Function,
+    Method,
+    Class,
+    /// A variable whose value contains a node of one of these kinds.
+    FunctionValue(&'static [&'static str]),
+}
+
+#[derive(Clone, Copy)]
+enum NameSource {
+    Field(&'static str),
+    Descendant(&'static str),
+}
+
+#[derive(Clone, Copy)]
+enum ImportForm {
+    RustUse,
+    PythonStatement,
+    /// The first quoted literal of these kinds names the module.
+    Quoted(&'static [&'static str]),
+}
+
+#[derive(Clone, Copy)]
+enum ExportRule {
+    VisibilityModifier,
+    ExportStatement,
+    UppercaseName,
+    NoLeadingUnderscore,
+}
+
+#[derive(Clone, Copy)]
+enum VisibilityRule {
+    RustPub,
+    Fixed(&'static str),
+}
+
+#[derive(Clone, Copy)]
+enum SignatureStyle {
+    Rust,
+    TypeScript,
+    Plain,
+}
+
+const COMMON_CALL_KEYWORDS: &[&str] = &[
+    "if", "for", "while", "match", "switch", "return", "sizeof", "Some", "Ok", "Err", "vec",
+    "println", "format",
+];
+
+const TYPESCRIPT_RULES: GenericRules = GenericRules {
+    symbols: &[
+        ("class_declaration", SymbolShape::Class),
+        ("function_declaration", SymbolShape::Function),
+        ("generator_function_declaration", SymbolShape::Function),
+        ("method_definition", SymbolShape::Method),
+        ("method_signature", SymbolShape::Method),
+        (
+            "variable_declarator",
+            SymbolShape::FunctionValue(&["arrow_function", "function_expression"]),
+        ),
+    ],
+    modules: &[("internal_module", NameSource::Field("name"))],
+    imports: &[("import_statement", ImportForm::Quoted(&["string"]))],
+    calls: &["call_expression"],
+    container: None,
+    call_keywords: &[],
+    exported: ExportRule::ExportStatement,
+    visibility: VisibilityRule::Fixed("export"),
+    signature: SignatureStyle::TypeScript,
 };
 
-const MAX_AST_DEPTH: usize = 512;
+static UNKNOWN: LanguageSpec = LanguageSpec {
+    language: Language::Unknown,
+    name: "unknown",
+    extensions: &[],
+    mime: None,
+    grammar: None,
+    entry_point: None,
+};
 
-pub(super) fn parse_source_file(path: &str, contents: &str) -> SourceFile {
+static LANGUAGES: [LanguageSpec; 6] = [
+    LanguageSpec {
+        language: Language::Rust,
+        name: "rust",
+        extensions: &["rs"],
+        mime: None,
+        grammar: Some(Grammar {
+            load: || tree_sitter_rust::LANGUAGE.into(),
+            rules: Rules::Generic(GenericRules {
+                symbols: &[
+                    ("function_item", SymbolShape::Callable),
+                    ("struct_item", SymbolShape::Class),
+                    ("enum_item", SymbolShape::Class),
+                ],
+                modules: &[("mod_item", NameSource::Field("name"))],
+                imports: &[("use_declaration", ImportForm::RustUse)],
+                calls: &["call_expression"],
+                container: Some(Container {
+                    node: "impl_item",
+                    parent: rust_impl_target,
+                }),
+                call_keywords: &[],
+                exported: ExportRule::VisibilityModifier,
+                visibility: VisibilityRule::RustPub,
+                signature: SignatureStyle::Rust,
+            }),
+        }),
+        entry_point: Some("main"),
+    },
+    LanguageSpec {
+        language: Language::TypeScript,
+        name: "typescript",
+        extensions: &["ts", "tsx"],
+        mime: None,
+        grammar: Some(Grammar {
+            load: || tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            rules: Rules::Generic(TYPESCRIPT_RULES),
+        }),
+        entry_point: Some("main"),
+    },
+    LanguageSpec {
+        language: Language::JavaScript,
+        name: "javascript",
+        extensions: &["js", "jsx", "mjs", "cjs"],
+        mime: None,
+        grammar: Some(Grammar {
+            load: || tree_sitter_javascript::LANGUAGE.into(),
+            rules: Rules::Generic(TYPESCRIPT_RULES),
+        }),
+        entry_point: Some("main"),
+    },
+    LanguageSpec {
+        language: Language::Python,
+        name: "python",
+        extensions: &["py"],
+        mime: None,
+        grammar: Some(Grammar {
+            load: || tree_sitter_python::LANGUAGE.into(),
+            rules: Rules::Generic(GenericRules {
+                symbols: &[
+                    ("function_definition", SymbolShape::Callable),
+                    ("class_definition", SymbolShape::Class),
+                ],
+                modules: &[],
+                imports: &[
+                    ("import_statement", ImportForm::PythonStatement),
+                    ("import_from_statement", ImportForm::PythonStatement),
+                ],
+                calls: &["call"],
+                container: None,
+                call_keywords: &["print", "len", "str", "int"],
+                exported: ExportRule::NoLeadingUnderscore,
+                visibility: VisibilityRule::Fixed("public"),
+                signature: SignatureStyle::Plain,
+            }),
+        }),
+        entry_point: Some("main"),
+    },
+    LanguageSpec {
+        language: Language::Go,
+        name: "go",
+        extensions: &["go"],
+        mime: None,
+        grammar: Some(Grammar {
+            load: || tree_sitter_go::LANGUAGE.into(),
+            rules: Rules::Generic(GenericRules {
+                symbols: &[
+                    ("type_spec", SymbolShape::Class),
+                    ("method_declaration", SymbolShape::Method),
+                    ("function_declaration", SymbolShape::Function),
+                ],
+                modules: &[(
+                    "package_clause",
+                    NameSource::Descendant("package_identifier"),
+                )],
+                imports: &[(
+                    "import_spec",
+                    ImportForm::Quoted(&["interpreted_string_literal", "raw_string_literal"]),
+                )],
+                calls: &["call_expression"],
+                container: None,
+                call_keywords: &[],
+                exported: ExportRule::UppercaseName,
+                visibility: VisibilityRule::Fixed("public"),
+                signature: SignatureStyle::Plain,
+            }),
+        }),
+        entry_point: Some("main"),
+    },
+    LanguageSpec {
+        language: Language::Elixir,
+        name: "elixir",
+        extensions: &["ex", "exs"],
+        mime: Some("text/x-elixir"),
+        grammar: Some(Grammar {
+            load: || tree_sitter_elixir::LANGUAGE.into(),
+            rules: Rules::Elixir,
+        }),
+        entry_point: None,
+    },
+];
+
+impl Language {
+    pub(crate) fn from_path(path: impl AsRef<Path>) -> Self {
+        let Some(extension) = path
+            .as_ref()
+            .extension()
+            .and_then(|extension| extension.to_str())
+        else {
+            return Self::Unknown;
+        };
+        LANGUAGES
+            .iter()
+            .find(|spec| spec.extensions.contains(&extension))
+            .map_or(Self::Unknown, |spec| spec.language)
+    }
+
+    fn spec(self) -> &'static LanguageSpec {
+        LANGUAGES
+            .iter()
+            .find(|spec| spec.language == self)
+            .unwrap_or(&UNKNOWN)
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        self.spec().name
+    }
+
+    pub(crate) fn mime(self) -> Option<&'static str> {
+        self.spec().mime
+    }
+
+    pub(super) fn entry_point(self) -> Option<&'static str> {
+        self.spec().entry_point
+    }
+}
+
+/// Parses one file. Tree-sitter recovers from invalid syntax, so a file
+/// with errors keeps the declarations of its valid parts.
+///
+/// # Errors
+///
+/// Returns an error when the grammar of the language cannot be loaded.
+pub(super) fn parse_source_file(path: &str, contents: &str) -> Result<SourceFile> {
     let language = Language::from_path(path);
-    parse_tree_sitter_file(path, contents, language).unwrap_or_else(|| {
-        if language == Language::Elixir {
-            SourceFile {
-                path: path.into(),
+    let Some(grammar) = &language.spec().grammar else {
+        return Ok(SourceFile::new(path, language));
+    };
+    let mut parser = Parser::new();
+    parser.set_language(&(grammar.load)()).map_err(|error| {
+        CrivError::new(format!(
+            "failed to load the {} grammar: {error}",
+            language.as_str()
+        ))
+    })?;
+    let Some(tree) = parser.parse(contents, None) else {
+        return Ok(SourceFile::new(path, language));
+    };
+    Ok(match &grammar.rules {
+        Rules::Elixir => elixir::parse_file(path, contents, tree.root_node()),
+        Rules::Generic(rules) => {
+            let mut file = SourceFile::new(path, language);
+            GenericWalk {
+                contents,
+                path,
                 language,
-                imports: Vec::new(),
-                modules: Vec::new(),
-                symbols: Vec::new(),
+                rules,
             }
-        } else {
-            parse_source_file_fallback(path, contents, language)
+            .collect(tree.root_node(), None, None, &mut file, Depth::ROOT);
+            file.resolve_container_parents();
+            file
         }
     })
 }
 
-fn parse_source_file_fallback(path: &str, contents: &str, language: Language) -> SourceFile {
-    let mut file = SourceFile {
-        path: path.into(),
-        language,
-        imports: Vec::new(),
-        modules: Vec::new(),
-        symbols: Vec::new(),
-    };
-    let mut current_symbol: Option<usize> = None;
-    let mut brace_depth = 0usize;
-    let mut rust_impl_depth = 0usize;
-    let mut rust_impl_target: Option<String> = None;
-    let mut python_indent: Option<usize> = None;
-    let mut python_class: Option<(String, usize)> = None;
-    let total_lines = contents.lines().count().max(1);
+/// The parent a walk passes to the symbols below it.
+#[derive(Clone)]
+struct Parent {
+    name: String,
+    /// The parent symbol, when the parent is a symbol the walk has seen.
+    id: Option<SymbolId>,
+}
 
-    for (index, line) in contents.lines().enumerate() {
-        let line_no = index.saturating_add(1);
-        let trimmed = line.trim();
-        if trimmed.is_empty() || is_comment(trimmed, language) {
-            continue;
-        }
-        for import in parse_imports(trimmed, language) {
-            file.imports.push(Import::legacy(import, line_no));
-        }
-        if let Some(name) = fallback_module_decl(trimmed, language) {
-            file.modules.push(ModuleDecl {
-                name,
-                line: line_no,
-            });
-        }
-
-        if language == Language::Python {
-            update_python_scope(
-                &mut file,
-                line,
-                trimmed,
-                line_no,
-                &mut current_symbol,
-                &mut python_indent,
-                &mut python_class,
-            );
-        }
-
-        let context = FallbackSymbolContext {
-            path,
-            line,
-            trimmed,
-            line_no,
-            total_lines,
-            language,
-            in_rust_impl: rust_impl_depth > 0,
-            rust_impl_target: &rust_impl_target,
-        };
-        if let Some(symbol_index) = context.append(&mut file, &mut python_indent, &mut python_class)
-        {
-            current_symbol = Some(symbol_index);
-        }
-
-        if let Some(symbol_index) = current_symbol
-            && let Some(symbol) = file.symbols.get(symbol_index)
-        {
-            let calls = parse_calls(trimmed, language)
-                .into_iter()
-                .filter(|call| call != &symbol.name)
-                .map(|target| Call {
-                    target,
-                    line: line_no,
-                })
-                .collect::<Vec<_>>();
-            if let Some(symbol) = file.symbols.get_mut(symbol_index) {
-                symbol.calls.extend(calls);
-            }
-        }
-        if language != Language::Python {
-            if language == Language::Rust && trimmed.starts_with("impl ") {
-                rust_impl_target = parse_rust_impl_target(trimmed);
-                rust_impl_depth = rust_impl_depth.saturating_add(line.matches('{').count().max(1));
-            } else if rust_impl_depth > 0 {
-                rust_impl_depth = rust_impl_depth.saturating_add(line.matches('{').count());
-                rust_impl_depth = rust_impl_depth.saturating_sub(line.matches('}').count());
-                if rust_impl_depth == 0 {
-                    rust_impl_target = None;
-                }
-            }
-            brace_depth = brace_depth.saturating_add(line.matches('{').count());
-            brace_depth = brace_depth.saturating_sub(line.matches('}').count());
-            if brace_depth == 0 {
-                if let Some(symbol_index) = current_symbol
-                    && let Some(symbol) = file.symbols.get_mut(symbol_index)
-                {
-                    symbol.range.end_line = line_no;
-                }
-                current_symbol = None;
-                brace_depth = 0;
+impl SourceFile {
+    /// Points each symbol whose parent came from a container, such as a Rust
+    /// `impl`, at the one type symbol of that name in the file.
+    fn resolve_container_parents(&mut self) {
+        let types = self
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.kind == SymbolKind::Class)
+            .map(|symbol| (symbol.name.clone(), symbol.id.clone()))
+            .collect::<Vec<_>>();
+        for symbol in &mut self.symbols {
+            let Some(parent) = symbol
+                .parent
+                .as_deref()
+                .filter(|_| symbol.parent_id.is_none())
+            else {
+                continue;
+            };
+            let mut matches = types.iter().filter(|(name, _)| name == parent);
+            if let (Some((_, id)), None) = (matches.next(), matches.next()) {
+                symbol.parent_id = Some(id.clone());
             }
         }
     }
-    if let Some(symbol_index) = current_symbol
-        && let Some(symbol) = file.symbols.get_mut(symbol_index)
-    {
-        symbol.range.end_line = total_lines;
-    }
-    file
 }
 
-struct FallbackSymbolContext<'a> {
-    path: &'a str,
-    line: &'a str,
-    trimmed: &'a str,
-    line_no: usize,
-    total_lines: usize,
-    language: Language,
-    in_rust_impl: bool,
-    rust_impl_target: &'a Option<String>,
-}
-
-fn update_python_scope(
-    file: &mut SourceFile,
-    line: &str,
-    trimmed: &str,
-    line_no: usize,
-    current_symbol: &mut Option<usize>,
-    python_indent: &mut Option<usize>,
-    python_class: &mut Option<(String, usize)>,
-) {
-    let indent = line.len().saturating_sub(line.trim_start().len());
-    if python_class
-        .as_ref()
-        .is_some_and(|(_, class_indent)| indent <= *class_indent && !trimmed.starts_with('@'))
-    {
-        *python_class = None;
-    }
-    if let Some(active_indent) = *python_indent
-        && indent <= active_indent
-        && !trimmed.starts_with('@')
-    {
-        if let Some(symbol_index) = *current_symbol
-            && let Some(symbol) = file.symbols.get_mut(symbol_index)
-        {
-            symbol.range.end_line = line_no.saturating_sub(1);
-        }
-        *current_symbol = None;
-        *python_indent = None;
-    }
-}
-
-impl FallbackSymbolContext<'_> {
-    fn append(
-        &self,
-        file: &mut SourceFile,
-        python_indent: &mut Option<usize>,
-        python_class: &mut Option<(String, usize)>,
-    ) -> Option<usize> {
-        let (name, mut kind) = parse_symbol(self.trimmed, self.language, self.in_rust_impl)?;
-        let indent = self.line.len().saturating_sub(self.line.trim_start().len());
-        let parent = if self.language == Language::Rust && kind == SymbolKind::Method {
-            self.rust_impl_target.clone()
-        } else if self.language == Language::Python && kind == SymbolKind::Function {
-            python_class
-                .as_ref()
-                .filter(|(_, class_indent)| indent > *class_indent)
-                .map(|(class_name, _)| {
-                    kind = SymbolKind::Method;
-                    class_name.clone()
-                })
-        } else {
-            None
-        };
-        let exported = is_exported_symbol(self.trimmed, self.language);
-        let range = SymbolRange {
-            start_line: self.line_no,
-            end_line: self.total_lines,
-        };
-        file.symbols.push(Symbol {
-            id: SymbolId {
-                path: self.path.into(),
-                name: name.clone(),
-                selector: symbol_selector(kind, parent.as_deref(), &name),
-            },
-            interface_signature: Some(interface_signature_from_source(
-                self.language,
-                kind,
-                &name,
-                parent.as_deref(),
-                exported,
-                self.trimmed,
-            )),
-            name,
-            kind,
-            parent,
-            owner: None,
-            arity: None,
-            exported,
-            range,
-            clause_ranges: vec![range],
-            calls: Vec::new(),
-            relationships: Vec::new(),
-        });
-        let symbol_index = file.symbols.len().checked_sub(1)?;
-        if self.language == Language::Python {
-            *python_indent = Some(indent);
-            if kind == SymbolKind::Class
-                && let Some(symbol) = file.symbols.get(symbol_index)
-            {
-                *python_class = Some((symbol.name.clone(), indent));
-            }
-        }
-        Some(symbol_index)
-    }
-}
-
-fn parse_tree_sitter_file(path: &str, contents: &str, language: Language) -> Option<SourceFile> {
-    let tree_sitter_language = tree_sitter_language(language)?;
-    let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_language).ok()?;
-    let tree = parser.parse(contents, None)?;
-    if language == Language::Elixir {
-        return Some(elixir::parse_file(path, contents, tree.root_node()));
-    }
-    if tree.root_node().has_error() {
-        return None;
-    }
-
-    let mut file = SourceFile {
-        path: path.into(),
-        language,
-        imports: Vec::new(),
-        modules: Vec::new(),
-        symbols: Vec::new(),
-    };
-    TreeSitterWalk {
-        contents,
-        path,
-        language,
-    }
-    .collect(tree.root_node(), None, None, &mut file, 0);
-    Some(file)
-}
-
-fn tree_sitter_language(language: Language) -> Option<tree_sitter::Language> {
-    match language {
-        Language::Rust => Some(tree_sitter_rust::LANGUAGE.into()),
-        Language::TypeScript => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
-        Language::JavaScript => Some(tree_sitter_javascript::LANGUAGE.into()),
-        Language::Python => Some(tree_sitter_python::LANGUAGE.into()),
-        Language::Go => Some(tree_sitter_go::LANGUAGE.into()),
-        Language::Elixir => Some(tree_sitter_elixir::LANGUAGE.into()),
-        Language::Unknown => None,
-    }
-}
-
-struct TreeSitterWalk<'a> {
+struct GenericWalk<'a> {
     contents: &'a str,
     path: &'a str,
     language: Language,
+    rules: &'a GenericRules,
 }
 
-impl TreeSitterWalk<'_> {
+impl GenericWalk<'_> {
     fn collect(
         &self,
         node: Node<'_>,
-        parent: Option<String>,
+        parent: Option<Parent>,
         module_parent: Option<String>,
         file: &mut SourceFile,
-        depth: usize,
+        depth: Depth,
     ) {
-        if depth >= MAX_AST_DEPTH {
-            return;
+        let line = node.start_position().row.saturating_add(1);
+        for import in self.imports(node) {
+            file.imports
+                .push(Import::unscoped(import, line, node.start_byte()));
         }
-        for import in tree_sitter_imports(node, self.contents, self.language) {
-            file.imports.push(Import::legacy(
-                import,
-                node.start_position().row.saturating_add(1),
-            ));
-        }
-        let child_module_parent =
-            if let Some(name) = tree_sitter_module(node, self.contents, self.language) {
-                let name = module_parent
-                    .as_deref()
-                    .map_or_else(|| name.clone(), |parent| format!("{parent}::{name}"));
-                file.modules.push(ModuleDecl {
-                    name: name.clone(),
-                    line: node.start_position().row.saturating_add(1),
-                });
-                Some(name)
-            } else {
-                module_parent
-            };
+        let child_module_parent = if let Some(name) = self.module(node) {
+            let name = module_parent
+                .as_deref()
+                .map_or_else(|| name.clone(), |parent| format!("{parent}::{name}"));
+            file.modules.push(ModuleDecl {
+                name: name.clone(),
+                line,
+            });
+            Some(name)
+        } else {
+            module_parent
+        };
 
-        if let Some(symbol) = tree_sitter_symbol(
-            node,
-            self.contents,
-            self.path,
-            self.language,
-            parent.as_deref(),
-        ) {
+        let child_parent = if let Some(symbol) = self.symbol(node, parent.as_ref()) {
             let symbol_parent = if symbol.kind == SymbolKind::Class {
-                Some(symbol.name.clone())
+                Some(Parent {
+                    name: symbol.name.clone(),
+                    id: Some(symbol.id.clone()),
+                })
             } else {
                 parent
             };
             file.symbols.push(symbol);
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                self.collect(
-                    child,
-                    symbol_parent.clone(),
-                    child_module_parent.clone(),
-                    file,
-                    depth.saturating_add(1),
-                );
-            }
-            return;
-        }
-
-        let impl_parent = if self.language == Language::Rust && node.kind() == "impl_item" {
-            node_text(node, self.contents).and_then(|text| parse_rust_impl_target(&text))
+            symbol_parent
+        } else if let Some(container) = self.rules.container
+            && node.kind() == container.node
+        {
+            node_text(node, self.contents)
+                .and_then(|text| (container.parent)(&text))
+                .map(|name| Parent { name, id: None })
         } else {
             parent
         };
 
+        let Some(depth) = depth.child() else {
+            return;
+        };
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             self.collect(
                 child,
-                impl_parent.clone(),
+                child_parent.clone(),
                 child_module_parent.clone(),
                 file,
-                depth.saturating_add(1),
+                depth,
             );
         }
     }
-}
 
-fn tree_sitter_module(node: Node<'_>, contents: &str, language: Language) -> Option<String> {
-    match (language, node.kind()) {
-        (Language::Rust, "mod_item") => field_text(node, contents, "name"),
-        (Language::TypeScript | Language::JavaScript, "internal_module") => {
-            field_text(node, contents, "name")
+    fn module(&self, node: Node<'_>) -> Option<String> {
+        let (_, source) = self
+            .rules
+            .modules
+            .iter()
+            .find(|(kind, _)| *kind == node.kind())?;
+        match source {
+            NameSource::Field(field) => field_text(node, self.contents, field),
+            NameSource::Descendant(kind) => descendants(node)
+                .find(|child| child.kind() == *kind)
+                .and_then(|name| node_text(name, self.contents)),
         }
-        (Language::Go, "package_clause") => descendant_of_kind(node, "package_identifier")
-            .and_then(|name| node_text(name, contents)),
-        _ => None,
     }
-}
 
-fn tree_sitter_imports(node: Node<'_>, contents: &str, language: Language) -> Vec<String> {
-    match (language, node.kind()) {
-        (Language::Rust, "use_declaration") => node_text(node, contents)
-            .map(|text| parse_rust_imports(&text))
-            .unwrap_or_default(),
-        (Language::TypeScript | Language::JavaScript, "import_statement") => {
-            descendant_of_kind(node, "string")
-                .and_then(|child| node_text(child, contents))
-                .map(|text: String| clean_js_module(&text))
+    fn imports(&self, node: Node<'_>) -> Vec<String> {
+        let Some((_, form)) = self
+            .rules
+            .imports
+            .iter()
+            .find(|(kind, _)| *kind == node.kind())
+        else {
+            return Vec::new();
+        };
+        match form {
+            ImportForm::RustUse => node_text(node, self.contents)
+                .map(|text| rust_use_imports(&text))
+                .unwrap_or_default(),
+            ImportForm::PythonStatement => node_text(node, self.contents)
+                .and_then(|text| python_import(text.trim()))
                 .into_iter()
-                .collect()
-        }
-        (Language::Python, "import_statement" | "import_from_statement") => {
-            node_text(node, contents)
-                .and_then(|text| parse_import(text.trim(), language))
+                .collect(),
+            ImportForm::Quoted(kinds) => kinds
+                .iter()
+                .find_map(|kind| descendants(node).find(|child| child.kind() == *kind))
+                .and_then(|child| node_text(child, self.contents))
+                .map(|text| unquote_module(&text))
                 .into_iter()
-                .collect()
+                .collect(),
         }
-        (Language::Go, "import_spec") => descendant_of_kind(node, "interpreted_string_literal")
-            .or_else(|| descendant_of_kind(node, "raw_string_literal"))
-            .and_then(|child| node_text(child, contents))
-            .map(|text| text.trim_matches('"').trim_matches('`').to_string())
-            .into_iter()
-            .collect(),
-        _ => Vec::new(),
     }
-}
 
-fn tree_sitter_symbol(
-    node: Node<'_>,
-    contents: &str,
-    path: &str,
-    language: Language,
-    parent: Option<&str>,
-) -> Option<Symbol> {
-    let (name, kind) = match (language, node.kind()) {
-        (Language::Rust, "function_item") | (Language::Python, "function_definition") => (
-            field_text(node, contents, "name")?,
-            if parent.is_some() {
-                SymbolKind::Method
-            } else {
+    fn symbol(&self, node: Node<'_>, parent: Option<&Parent>) -> Option<Symbol> {
+        let (_, shape) = self
+            .rules
+            .symbols
+            .iter()
+            .find(|(kind, _)| *kind == node.kind())?;
+        let kind = match shape {
+            SymbolShape::Callable if parent.is_some() => SymbolKind::Method,
+            SymbolShape::Callable | SymbolShape::Function => SymbolKind::Function,
+            SymbolShape::FunctionValue(values) => {
+                if !descendants(node).any(|child| values.contains(&child.kind())) {
+                    return None;
+                }
                 SymbolKind::Function
-            },
-        ),
-        (Language::Rust, "struct_item" | "enum_item")
-        | (Language::TypeScript | Language::JavaScript, "class_declaration")
-        | (Language::Python, "class_definition")
-        | (Language::Go, "type_spec") => (field_text(node, contents, "name")?, SymbolKind::Class),
-        (
-            Language::TypeScript | Language::JavaScript,
-            "function_declaration" | "generator_function_declaration",
-        ) => (field_text(node, contents, "name")?, SymbolKind::Function),
-        (Language::TypeScript | Language::JavaScript, "method_definition" | "method_signature")
-        | (Language::Go, "method_declaration") => {
-            (field_text(node, contents, "name")?, SymbolKind::Method)
-        }
-        (Language::TypeScript | Language::JavaScript, "variable_declarator")
-            if has_descendant_kind(node, &["arrow_function", "function_expression"]) =>
-        {
-            (field_text(node, contents, "name")?, SymbolKind::Function)
-        }
-        (Language::Go, "function_declaration") => {
-            (field_text(node, contents, "name")?, SymbolKind::Function)
-        }
-        _ => return None,
-    };
+            }
+            SymbolShape::Method => SymbolKind::Method,
+            SymbolShape::Class => SymbolKind::Class,
+        };
+        let name = field_text(node, self.contents, "name")?;
+        let source = node_text(node, self.contents).unwrap_or_default();
+        let exported = self.exported(node);
+        let parent_name = parent.map(|parent| parent.name.as_str());
+        let interface_signature =
+            Some(self.interface_signature(kind, &name, parent_name, exported, &source));
+        let selector = symbol_selector(kind, parent_name, &name);
+        Some(Symbol {
+            parent: parent_name.map(str::to_string),
+            parent_id: parent.and_then(|parent| parent.id.clone()),
+            exported,
+            interface_signature,
+            calls: self.calls(node),
+            ..Symbol::new(self.path, name, kind, selector, node_range(node))
+        })
+    }
 
-    let source = node_text(node, contents).unwrap_or_default();
-    let exported = tree_sitter_exported(node, contents, language);
-    let interface_signature = Some(interface_signature_from_source(
-        language, kind, &name, parent, exported, &source,
-    ));
-    let range = SymbolRange {
-        start_line: node.start_position().row.saturating_add(1),
-        end_line: node.end_position().row.saturating_add(1),
-    };
-    Some(Symbol {
-        id: SymbolId {
-            path: path.into(),
-            name: name.clone(),
-            selector: symbol_selector(kind, parent, &name),
-        },
-        name,
-        kind,
-        parent: parent.map(str::to_string),
-        owner: None,
-        arity: None,
-        exported,
-        interface_signature,
-        range,
-        clause_ranges: vec![range],
-        calls: tree_sitter_calls(node, contents, language),
-        relationships: Vec::new(),
-    })
-}
-
-fn interface_signature_from_source(
-    language: Language,
-    symbol_kind: SymbolKind,
-    name: &str,
-    parent: Option<&str>,
-    exported: bool,
-    source: &str,
-) -> InterfaceSignature {
-    let qualified_name =
-        parent.map_or_else(|| name.to_string(), |parent| format!("{parent}.{name}"));
-    let visibility = exported.then(|| visibility_text(language, source));
-    let (inputs, output) = match symbol_kind {
-        SymbolKind::Function
-        | SymbolKind::Method
-        | SymbolKind::Macro
-        | SymbolKind::Guard
-        | SymbolKind::Callback
-        | SymbolKind::MacroCallback => function_signature(language, source),
-        SymbolKind::Class
-        | SymbolKind::Module
-        | SymbolKind::Protocol
-        | SymbolKind::Implementation
-        | SymbolKind::Struct
-        | SymbolKind::Exception
-        | SymbolKind::Behaviour => (Vec::new(), None),
-    };
-    let (fields, variants) = match symbol_kind {
-        SymbolKind::Class | SymbolKind::Struct | SymbolKind::Exception => {
-            aggregate_signature(language, source)
+    fn exported(&self, node: Node<'_>) -> bool {
+        match self.rules.exported {
+            ExportRule::VisibilityModifier => {
+                let mut cursor = node.walk();
+                node.children(&mut cursor)
+                    .any(|child| child.kind() == "visibility_modifier")
+            }
+            ExportRule::ExportStatement => {
+                node.parent()
+                    .is_some_and(|parent| parent.kind() == "export_statement")
+                    || node_text(node, self.contents)
+                        .is_some_and(|text| text.trim_start().starts_with("export "))
+            }
+            ExportRule::UppercaseName => field_text(node, self.contents, "name")
+                .is_some_and(|name| name.chars().next().is_some_and(char::is_uppercase)),
+            ExportRule::NoLeadingUnderscore => {
+                field_text(node, self.contents, "name").is_some_and(|name| !name.starts_with('_'))
+            }
         }
-        SymbolKind::Function
-        | SymbolKind::Method
-        | SymbolKind::Module
-        | SymbolKind::Protocol
-        | SymbolKind::Implementation
-        | SymbolKind::Behaviour
-        | SymbolKind::Macro
-        | SymbolKind::Guard
-        | SymbolKind::Callback
-        | SymbolKind::MacroCallback => (Vec::new(), Vec::new()),
-    };
+    }
 
-    InterfaceSignature {
-        language,
-        symbol_kind,
-        qualified_name,
-        visibility,
-        inputs,
-        output,
-        fields,
-        variants,
-        arity: None,
-        guards: Vec::new(),
-        defaults: Vec::new(),
-        specifications: Vec::new(),
+    fn calls(&self, node: Node<'_>) -> Vec<Call> {
+        let mut calls = descendants(node)
+            .filter(|node| self.rules.calls.contains(&node.kind()))
+            .filter_map(|node| {
+                let function = node
+                    .child_by_field_name("function")
+                    .or_else(|| first_named_child(node))?;
+                let target = call_target(function, self.contents)?;
+                (!self.is_call_keyword(&target)).then(|| Call {
+                    target,
+                    line: node.start_position().row.saturating_add(1),
+                })
+            })
+            .collect::<Vec<_>>();
+        calls.sort_by(|left, right| (left.line, &left.target).cmp(&(right.line, &right.target)));
+        calls.dedup_by(|left, right| left.line == right.line && left.target == right.target);
+        calls
+    }
+
+    fn is_call_keyword(&self, target: &str) -> bool {
+        COMMON_CALL_KEYWORDS.contains(&target) || self.rules.call_keywords.contains(&target)
+    }
+
+    fn interface_signature(
+        &self,
+        symbol_kind: SymbolKind,
+        name: &str,
+        parent: Option<&str>,
+        exported: bool,
+        source: &str,
+    ) -> InterfaceSignature {
+        let qualified_name =
+            parent.map_or_else(|| name.to_string(), |parent| format!("{parent}.{name}"));
+        let visibility = exported.then(|| match self.rules.visibility {
+            VisibilityRule::RustPub => rust_visibility(source),
+            VisibilityRule::Fixed(text) => text.to_string(),
+        });
+        let style = self.rules.signature;
+        let (inputs, output) = match symbol_kind {
+            SymbolKind::Function
+            | SymbolKind::Method
+            | SymbolKind::Macro
+            | SymbolKind::Guard
+            | SymbolKind::Callback
+            | SymbolKind::MacroCallback => function_signature(style, source),
+            SymbolKind::Class
+            | SymbolKind::Module
+            | SymbolKind::Protocol
+            | SymbolKind::Implementation
+            | SymbolKind::Struct
+            | SymbolKind::Exception
+            | SymbolKind::Behaviour => (Vec::new(), None),
+        };
+        let (fields, variants) = match symbol_kind {
+            SymbolKind::Class | SymbolKind::Struct | SymbolKind::Exception => {
+                aggregate_signature(style, source)
+            }
+            SymbolKind::Function
+            | SymbolKind::Method
+            | SymbolKind::Module
+            | SymbolKind::Protocol
+            | SymbolKind::Implementation
+            | SymbolKind::Behaviour
+            | SymbolKind::Macro
+            | SymbolKind::Guard
+            | SymbolKind::Callback
+            | SymbolKind::MacroCallback => (Vec::new(), Vec::new()),
+        };
+
+        InterfaceSignature {
+            language: self.language,
+            symbol_kind,
+            qualified_name,
+            visibility,
+            inputs,
+            output,
+            fields,
+            variants,
+            arity: None,
+            guards: Vec::new(),
+            defaults: Vec::new(),
+            specifications: Vec::new(),
+        }
     }
 }
 
-fn tree_sitter_calls(node: Node<'_>, contents: &str, language: Language) -> Vec<Call> {
-    let mut calls = Vec::new();
-    collect_tree_sitter_calls(node, contents, language, &mut calls);
-    calls.sort_by(|left, right| (left.line, &left.target).cmp(&(right.line, &right.target)));
-    calls.dedup_by(|left, right| left.line == right.line && left.target == right.target);
-    calls
-}
-
-fn collect_tree_sitter_calls(
-    node: Node<'_>,
-    contents: &str,
-    language: Language,
-    calls: &mut Vec<Call>,
-) {
-    if node.kind() == "call_expression" || node.kind() == "call" {
-        let function = node
-            .child_by_field_name("function")
-            .or_else(|| first_named_child(node));
-        if let Some(target) = function.and_then(|child| call_target(child, contents))
-            && !is_call_keyword(&target, language)
-        {
-            calls.push(Call {
-                target,
-                line: node.start_position().row.saturating_add(1),
-            });
-        }
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_tree_sitter_calls(child, contents, language, calls);
+fn symbol_selector(kind: SymbolKind, parent: Option<&str>, name: &str) -> String {
+    match (kind, parent) {
+        (SymbolKind::Function, _) => format!("fn:{name}"),
+        (SymbolKind::Method, Some(parent)) => format!("type:{parent}/member:{name}"),
+        (SymbolKind::Method, None) => format!("member:{name}"),
+        (SymbolKind::Class, _) => format!("type:{name}"),
+        _ => format!("{}:{name}", kind.as_str()),
     }
 }
 
@@ -586,24 +659,277 @@ fn call_target(node: Node<'_>, contents: &str) -> Option<String> {
     }
 }
 
-fn tree_sitter_exported(node: Node<'_>, contents: &str, language: Language) -> bool {
-    match language {
-        Language::Rust => {
-            let mut cursor = node.walk();
-            node.children(&mut cursor)
-                .any(|child| child.kind() == "visibility_modifier")
-        }
-        Language::TypeScript | Language::JavaScript => {
-            node.parent()
-                .is_some_and(|parent| parent.kind() == "export_statement")
-                || node_text(node, contents)
-                    .is_some_and(|text| text.trim_start().starts_with("export "))
-        }
-        Language::Go => field_text(node, contents, "name")
-            .is_some_and(|name| name.chars().next().is_some_and(char::is_uppercase)),
-        Language::Python => {
-            field_text(node, contents, "name").is_some_and(|name| !name.starts_with('_'))
-        }
-        Language::Elixir | Language::Unknown => false,
+fn unquote_module(value: &str) -> String {
+    value
+        .trim()
+        .trim_end_matches(';')
+        .trim_matches(['"', '\'', '`'])
+        .to_string()
+}
+
+fn python_import(statement: &str) -> Option<String> {
+    statement
+        .strip_prefix("import ")
+        .map(|value| value.split_whitespace().next().unwrap_or(value).to_string())
+        .or_else(|| {
+            statement
+                .strip_prefix("from ")
+                .and_then(|value| value.split_once(" import "))
+                .map(|(module, _)| module.to_string())
+        })
+}
+
+fn rust_use_imports(declaration: &str) -> Vec<String> {
+    let declaration = declaration.trim();
+    let Some(body) = declaration
+        .strip_prefix("use ")
+        .or_else(|| declaration.strip_prefix("pub use "))
+    else {
+        return Vec::new();
+    };
+    let body = body.trim().trim_end_matches(';').trim();
+    let mut rows = expand_rust_import("", body);
+    rows.sort();
+    rows.dedup();
+    rows
+}
+
+fn expand_rust_import(prefix: &str, body: &str) -> Vec<String> {
+    let body = body.trim();
+    if body.is_empty() {
+        return Vec::new();
     }
+
+    if let Some(open) = body.find('{')
+        && let Some(close) = matching_close(body, open, '{', '}')
+    {
+        let Some(head) = body.get(..open).map(str::trim) else {
+            return Vec::new();
+        };
+        let base = join_rust_import(prefix, head.trim_end_matches("::"));
+        let Some(children) = open
+            .checked_add(1)
+            .and_then(|body_start| body.get(body_start..close))
+        else {
+            return Vec::new();
+        };
+        return split_top_level(children, ',')
+            .into_iter()
+            .flat_map(|part| expand_rust_import(&base, part))
+            .collect();
+    }
+
+    let leaf = body
+        .split_once(" as ")
+        .map_or(body, |(module, _)| module)
+        .trim();
+    let module = join_rust_import(prefix, leaf);
+    if module.is_empty() {
+        Vec::new()
+    } else {
+        vec![module]
+    }
+}
+
+fn join_rust_import(prefix: &str, leaf: &str) -> String {
+    let leaf = leaf.trim().trim_matches(':');
+    if leaf.is_empty() || leaf == "self" {
+        return prefix.to_string();
+    }
+    let leaf = leaf.strip_prefix("self::").unwrap_or(leaf);
+    if prefix.is_empty() {
+        leaf.to_string()
+    } else {
+        format!("{}::{}", prefix.trim_end_matches("::"), leaf)
+    }
+}
+
+fn rust_impl_target(text: &str) -> Option<String> {
+    let rest = text.strip_prefix("impl ")?.trim();
+    let rest = rest
+        .strip_prefix('<')
+        .and_then(|value| value.split_once('>').map(|(_, after)| after.trim()))
+        .unwrap_or(rest);
+    let target = rest.split_once(" for ").map_or(rest, |(_, target)| target);
+    target
+        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
+        .find(|part| !part.is_empty())
+        .map(str::to_string)
+}
+
+fn rust_visibility(source: &str) -> String {
+    let trimmed = source.trim_start();
+    if trimmed.starts_with("pub(") {
+        trimmed
+            .split_whitespace()
+            .next()
+            .unwrap_or("pub")
+            .trim_end_matches('{')
+            .to_string()
+    } else {
+        "pub".into()
+    }
+}
+
+fn function_signature(style: SignatureStyle, source: &str) -> (Vec<String>, Option<String>) {
+    let (header, output_marker) = match style {
+        SignatureStyle::Rust => (
+            source.split_once('{').map_or(source, |(head, _)| head),
+            "->",
+        ),
+        SignatureStyle::TypeScript => (
+            source
+                .split_once("=>")
+                .map(|(head, _)| head)
+                .or_else(|| source.split_once('{').map(|(head, _)| head))
+                .unwrap_or(source),
+            ":",
+        ),
+        SignatureStyle::Plain => {
+            let header = source.split_once('{').map_or(source, |(head, _)| head);
+            return (signature_inputs(header.trim()), None);
+        }
+    };
+    let header = header.trim();
+    let output = header
+        .rsplit_once(')')
+        .map(|(_, tail)| tail.trim())
+        .and_then(|tail| tail.strip_prefix(output_marker))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(normalize_signature_text);
+    (signature_inputs(header), output)
+}
+
+fn signature_inputs(header: &str) -> Vec<String> {
+    paren_contents(header)
+        .map(|inputs| {
+            inputs
+                .split(',')
+                .map(normalize_signature_text)
+                .filter(|value| !value.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn aggregate_signature(
+    style: SignatureStyle,
+    source: &str,
+) -> (Vec<FieldSignature>, Vec<VariantSignature>) {
+    match style {
+        SignatureStyle::Rust
+            if source.trim_start().starts_with("enum ") || source.contains(" enum ") =>
+        {
+            (Vec::new(), rust_enum_variants(source))
+        }
+        SignatureStyle::Rust => (rust_fields(source), Vec::new()),
+        SignatureStyle::TypeScript => (typescript_members(source), Vec::new()),
+        SignatureStyle::Plain => (Vec::new(), Vec::new()),
+    }
+}
+
+fn rust_fields(source: &str) -> Vec<FieldSignature> {
+    brace_contents(source)
+        .map(|body| {
+            body.lines()
+                .filter_map(|line| {
+                    let line = line
+                        .trim()
+                        .trim_start_matches("pub ")
+                        .trim_end_matches(',')
+                        .trim();
+                    let (name, ty) = line.split_once(':')?;
+                    Some(FieldSignature {
+                        name: name.trim().to_string(),
+                        ty: Some(normalize_signature_text(ty)),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn rust_enum_variants(source: &str) -> Vec<VariantSignature> {
+    brace_contents(source)
+        .map(|body| {
+            body.lines()
+                .filter_map(|line| {
+                    let line = line.trim().trim_end_matches(',').trim();
+                    if line.is_empty() || line.starts_with("//") {
+                        return None;
+                    }
+                    let name = line
+                        .split(['(', '{', '='])
+                        .next()
+                        .unwrap_or(line)
+                        .trim()
+                        .to_string();
+                    (!name.is_empty()).then_some(VariantSignature {
+                        name,
+                        fields: Vec::new(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn typescript_members(source: &str) -> Vec<FieldSignature> {
+    brace_contents(source)
+        .map(|body| {
+            body.lines()
+                .filter_map(|line| {
+                    let line = line
+                        .trim()
+                        .trim_start_matches("public ")
+                        .trim_start_matches("readonly ")
+                        .trim_end_matches(';')
+                        .trim_end_matches(',')
+                        .trim();
+                    if line.is_empty() || line.starts_with("//") || line.starts_with("constructor")
+                    {
+                        return None;
+                    }
+                    if let Some((name, _)) = line.split_once('(') {
+                        let output = line
+                            .rsplit_once(')')
+                            .and_then(|(_, tail)| tail.trim().strip_prefix(':'))
+                            .map(normalize_signature_text);
+                        return Some(FieldSignature {
+                            name: name.trim().to_string(),
+                            ty: output,
+                        });
+                    }
+                    let (name, ty) = line.split_once(':')?;
+                    Some(FieldSignature {
+                        name: name.trim().trim_end_matches('?').to_string(),
+                        ty: Some(normalize_signature_text(ty)),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn paren_contents(source: &str) -> Option<&str> {
+    let start = source.find('(')?;
+    let end = source.rfind(')')?;
+    (end > start)
+        .then(|| start.checked_add(1))
+        .flatten()
+        .and_then(|body_start| source.get(body_start..end))
+}
+
+fn brace_contents(source: &str) -> Option<&str> {
+    let start = source.find('{')?;
+    let end = source.rfind('}')?;
+    (end > start)
+        .then(|| start.checked_add(1))
+        .flatten()
+        .and_then(|body_start| source.get(body_start..end))
+}
+
+fn normalize_signature_text(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }

@@ -6,10 +6,13 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::markdown::line_index;
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub enum DiagnosticCode {
     AdrDirNonDecision,
     AdrFilename,
+    AdrIdConflict,
     AdrIdExhausted,
     AdrImmutabilityViolation,
     AmbiguousPolicyPatternBody,
@@ -17,7 +20,6 @@ pub enum DiagnosticCode {
     BrokenLink,
     CheckFailed,
     DecisionLocation,
-    DuplicateDocPattern,
     DuplicateId,
     DuplicatePatternId,
     DuplicatePolicyPattern,
@@ -28,6 +30,7 @@ pub enum DiagnosticCode {
     InconsistentSupersession,
     InvalidAdrId,
     InvalidFrontmatter,
+    InvalidGlob,
     InvalidKind,
     InvalidPolicyPattern,
     LegacySourceTarget,
@@ -55,6 +58,7 @@ impl DiagnosticCode {
         match self {
             Self::AdrDirNonDecision => "adr-dir-non-decision",
             Self::AdrFilename => "adr-filename",
+            Self::AdrIdConflict => "adr-id-conflict",
             Self::AdrIdExhausted => "adr-id-exhausted",
             Self::AdrImmutabilityViolation => "adr-immutability-violation",
             Self::AmbiguousPolicyPatternBody => "ambiguous-policy-pattern-body",
@@ -62,7 +66,6 @@ impl DiagnosticCode {
             Self::BrokenLink => "broken-link",
             Self::CheckFailed => "check-failed",
             Self::DecisionLocation => "decision-location",
-            Self::DuplicateDocPattern => "duplicate-doc-pattern",
             Self::DuplicateId => "duplicate-id",
             Self::DuplicatePatternId => "duplicate-pattern-id",
             Self::DuplicatePolicyPattern => "duplicate-policy-pattern",
@@ -73,6 +76,7 @@ impl DiagnosticCode {
             Self::InconsistentSupersession => "inconsistent-supersession",
             Self::InvalidAdrId => "invalid-adr-id",
             Self::InvalidFrontmatter => "invalid-frontmatter",
+            Self::InvalidGlob => "invalid-glob",
             Self::InvalidKind => "invalid-kind",
             Self::InvalidPolicyPattern => "invalid-policy-pattern",
             Self::LegacySourceTarget => "legacy-source-target",
@@ -102,6 +106,9 @@ impl DiagnosticCode {
                 "Set `kind: decision` in the frontmatter, or move the file out of the ADR directory."
             }
             Self::AdrFilename => "Rename the file to `NNNN-kebab-title.md`.",
+            Self::AdrIdConflict => {
+                "Run `criv adr reconcile --base <ref>` to renumber the branch-local ADRs."
+            }
             Self::AdrImmutabilityViolation => {
                 "Restore the accepted ADR, and record the change in a new ADR with `supersedes:`."
             }
@@ -114,13 +121,13 @@ impl DiagnosticCode {
             Self::BrokenLink => "Correct the link target, or add the note it names.",
             Self::CheckFailed => "Repair the diagnostics above, then run `criv check`.",
             Self::DecisionLocation => "Move the decision into the ADR directory.",
-            Self::DuplicateDocPattern | Self::DuplicatePatternId => {
-                "Give each pattern a unique `id`."
-            }
+            Self::DuplicatePatternId => "Give each pattern a unique `id`.",
             Self::DuplicateId => "Give the note an `id` no other note uses.",
             Self::DuplicatePolicyPattern => "Give each policy pattern in the ADR a unique `id`.",
-            Self::EmptyPolicyPattern => "Give the policy pattern a body, or remove it.",
-            Self::EmptyTargetScope => "Name at least one path or symbol under `targets`.",
+            Self::EmptyPolicyPattern => "Give the policy pattern a non-empty `id`.",
+            Self::EmptyTargetScope => {
+                "Correct the target scope glob so it matches a source file, or remove it."
+            }
             Self::EnforcementFailed => "Run `criv check` for the diagnostics, then repair them.",
             Self::ImportPolicyViolation => {
                 "Remove the import, or widen the import policy in criv.toml."
@@ -130,6 +137,7 @@ impl DiagnosticCode {
             }
             Self::InvalidAdrId => "Take a free id from `criv query next-adr-id`.",
             Self::InvalidFrontmatter => "Correct the YAML frontmatter block.",
+            Self::InvalidGlob => "Correct the glob syntax, as in `src/**/*.rs`.",
             Self::InvalidKind => "Set `kind` to `doc` or to `decision`.",
             Self::InvalidPolicyPattern => "Correct the ast-grep pattern or rule syntax.",
             Self::LegacySourceTarget | Self::SourceWikilink => {
@@ -141,7 +149,7 @@ impl DiagnosticCode {
             Self::MissingId => "Add an `id` to the note frontmatter.",
             Self::MissingPolicyPatternBody => "Give the pattern a `pattern` or a `rule`.",
             Self::MissingPolicyPatternDefinition => {
-                "Declare the pattern in an ADR `policy.patterns` entry."
+                "Give the policy pattern a `language` and a `pattern` or a `rule`."
             }
             Self::MissingPolicyPatternId => "Give the policy pattern an `id`.",
             Self::MissingPolicyPatternLanguage => "Set `language` on the policy pattern.",
@@ -185,7 +193,6 @@ impl Serialize for DiagnosticCode {
     }
 }
 
-// Output sorts diagnostics by the code text, not by declaration order.
 impl Ord for DiagnosticCode {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.as_str().cmp(other.as_str())
@@ -196,6 +203,126 @@ impl PartialOrd for DiagnosticCode {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    Error,
+    Warning,
+}
+
+impl Severity {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warning => "warning",
+        }
+    }
+}
+
+/// One finding about a repository path, in the order `sort` gives it.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct Diagnostic {
+    severity: Severity,
+    code: DiagnosticCode,
+    path: String,
+    line: Option<usize>,
+    message: String,
+    location: Option<SourceLocation>,
+}
+
+impl Diagnostic {
+    pub(crate) fn error(
+        code: DiagnosticCode,
+        path: &str,
+        line: Option<usize>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::new(Severity::Error, code, path, line, message)
+    }
+
+    pub(crate) fn warning(
+        code: DiagnosticCode,
+        path: &str,
+        line: Option<usize>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::new(Severity::Warning, code, path, line, message)
+    }
+
+    fn new(
+        severity: Severity,
+        code: DiagnosticCode,
+        path: &str,
+        line: Option<usize>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            severity,
+            code,
+            path: path.into(),
+            line,
+            message: message.into(),
+            location: None,
+        }
+    }
+
+    /// An exact location replaces the line with the location's first line.
+    #[must_use]
+    pub(crate) fn at(mut self, location: Option<SourceLocation>) -> Self {
+        if let Some(line) = location.as_ref().and_then(SourceLocation::line) {
+            self.line = Some(line);
+        }
+        self.location = location;
+        self
+    }
+
+    pub(crate) const fn severity(&self) -> Severity {
+        self.severity
+    }
+
+    pub(crate) const fn code(&self) -> DiagnosticCode {
+        self.code
+    }
+
+    pub(crate) fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub(crate) const fn line(&self) -> Option<usize> {
+        self.line
+    }
+
+    pub(crate) fn message(&self) -> &str {
+        &self.message
+    }
+
+    pub(crate) const fn location(&self) -> Option<&SourceLocation> {
+        self.location.as_ref()
+    }
+
+    pub(crate) const fn is_error(&self) -> bool {
+        matches!(self.severity, Severity::Error)
+    }
+
+    pub(crate) const fn is_warning(&self) -> bool {
+        matches!(self.severity, Severity::Warning)
+    }
+
+    pub(crate) fn describe(&self) -> String {
+        self.line.map_or_else(
+            || format!("{}: {}", self.path, self.message),
+            |line| format!("{}:{line}: {}", self.path, self.message),
+        )
+    }
+}
+
+/// Order diagnostics by path, then line (a missing line first), then code.
+pub fn sort(diagnostics: &mut [Diagnostic]) {
+    diagnostics.sort_by(|a, b| {
+        (&a.path, a.line.unwrap_or(0), a.code).cmp(&(&b.path, b.line.unwrap_or(0), b.code))
+    });
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -249,7 +376,7 @@ impl SourceLocation {
         Some(Self { source, span })
     }
 
-    pub(crate) fn line(&self) -> Option<usize> {
+    fn line(&self) -> Option<usize> {
         self.lsp_range()?.start.line.checked_add(1)
     }
 
@@ -279,75 +406,52 @@ impl SourceLocation {
 
 fn inclusive_end_position(source: &str, end: usize) -> Option<LspPosition> {
     let (offset, character) = source.get(..end)?.char_indices().next_back()?;
+    let (line, prefix) = line_prefix(source, offset)?;
     if character == '\n'
         || character == '\r' && source.as_bytes().get(offset.checked_add(1)?) == Some(&b'\n')
     {
-        let line = source
-            .get(..offset)?
-            .bytes()
-            .filter(|byte| *byte == b'\n')
-            .count();
-        let (line_start, line_end) = line_bounds(source, line)?;
         return Some(LspPosition {
             line,
-            character: source
-                .get(line_start..line_end)?
-                .chars()
-                .count()
-                .saturating_sub(1),
+            character: prefix.chars().count().saturating_sub(1),
         });
     }
-    byte_to_character_position(source, offset)
+    Some(LspPosition {
+        line,
+        character: prefix.chars().count(),
+    })
 }
 
 fn byte_to_lsp_position(source: &str, offset: usize) -> Option<LspPosition> {
-    let position = byte_to_character_position(source, offset)?;
-    let (line_start, _) = line_bounds(source, position.line)?;
-    let mut prefix = source.get(line_start..offset)?;
-    if prefix.ends_with('\r') && source.as_bytes().get(offset) == Some(&b'\n') {
-        prefix = prefix.strip_suffix('\r')?;
-    }
+    let (line, prefix) = line_prefix(source, offset)?;
     Some(LspPosition {
-        line: position.line,
+        line,
         character: prefix.chars().map(char::len_utf16).sum(),
     })
 }
 
 fn byte_to_character_position(source: &str, offset: usize) -> Option<LspPosition> {
-    if offset > source.len() || !source.is_char_boundary(offset) {
-        return None;
-    }
-    let prefix = source.get(..offset)?;
-    let line = prefix.bytes().filter(|byte| *byte == b'\n').count();
-    let line_start = prefix
-        .rfind('\n')
-        .map_or(Some(0), |newline| newline.checked_add(1))?;
-    let mut line_prefix = source.get(line_start..offset)?;
-    if line_prefix.ends_with('\r') && source.as_bytes().get(offset) == Some(&b'\n') {
-        line_prefix = line_prefix.strip_suffix('\r')?;
-    }
+    let (line, prefix) = line_prefix(source, offset)?;
     Some(LspPosition {
         line,
-        character: line_prefix.chars().count(),
+        character: prefix.chars().count(),
     })
 }
 
-fn line_bounds(source: &str, target_line: usize) -> Option<(usize, usize)> {
-    let mut line = 0;
-    let mut start = 0;
-    while line < target_line {
-        let newline = source.get(start..)?.find('\n')?;
-        start = start.checked_add(newline)?.checked_add(1)?;
-        line = line.checked_add(1)?;
+/// The zero-based line of `offset` and the text of that line before it; a
+/// CR that ends the line with the LF at `offset` is not part of the text.
+fn line_prefix(source: &str, offset: usize) -> Option<(usize, &str)> {
+    if offset > source.len() || !source.is_char_boundary(offset) {
+        return None;
     }
-    let mut end = source
-        .get(start..)?
-        .find('\n')
-        .map_or(Some(source.len()), |newline| start.checked_add(newline))?;
-    if end > start && source.as_bytes().get(end.checked_sub(1)?) == Some(&b'\r') {
-        end = end.checked_sub(1)?;
+    let before = source.get(..offset)?;
+    let line_start = before
+        .rfind('\n')
+        .map_or(Some(0), |newline| newline.checked_add(1))?;
+    let mut prefix = source.get(line_start..offset)?;
+    if prefix.ends_with('\r') && source.as_bytes().get(offset) == Some(&b'\n') {
+        prefix = prefix.strip_suffix('\r')?;
     }
-    Some((start, end))
+    Some((line_index(source, offset), prefix))
 }
 
 #[cfg(test)]

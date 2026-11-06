@@ -1,0 +1,22 @@
+[
+  {
+    "severity": "error",
+    "code": "broken-link",
+    "path": "docs/a.md",
+    "line": 3,
+    "message": "wiki-link `[[missing]]` does not resolve",
+    "range": {
+      "start": { "line": 2, "character": 4 },
+      "end": { "line": 2, "character": 15 }
+    },
+    "fix": "Correct the link target, or add the note it names."
+  },
+  {
+    "severity": "warning",
+    "code": "source-wikilink",
+    "path": "docs/b.md",
+    "line": null,
+    "message": "wiki-link `[[src/lib.rs]]` targets source `src/lib.rs`; Wikilinks are reserved for document references",
+    "fix": "Rewrite the target as an AST-aware selector, as in `src/main.rs#fn:run`."
+  }
+]

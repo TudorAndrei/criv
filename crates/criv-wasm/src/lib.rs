@@ -10,20 +10,16 @@
     )
 )]
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
-#[cfg(target_arch = "wasm32")]
-use criv_state_wire::STATE_SCHEMA;
-#[cfg(test)]
-use criv_state_wire::{Node, SourceIndexEntry};
-use criv_state_wire::{NodeKind, PatternMatch, StateDocument};
-#[cfg(not(target_arch = "wasm32"))]
-use serde::Deserialize;
+use criv_state_wire::source_identity::SourceIdentity;
+use criv_state_wire::{AssetIndexEntry, NodeKind, PatternMatch, SourceIndexEntry, StateDocument};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
 mod asset;
 mod decode;
+mod path;
 mod projection;
 mod source;
 
@@ -31,8 +27,6 @@ const INITIAL_PROJECTIONS_TAKEN: &str = "criv initial projections were already t
 
 #[wasm_bindgen]
 pub struct LoadedState {
-    #[cfg(not(target_arch = "wasm32"))]
-    initial_envelope: Option<serde_json::Value>,
     initial_projections: Option<JsValue>,
     prepared: PreparedState,
 }
@@ -43,20 +37,18 @@ impl LoadedState {
     ///
     /// # Errors
     ///
-    /// Returns a message when the text is not valid State JSON, names an
-    /// unsupported schema, or cannot be prepared.
+    /// Returns an `Error` whose `code` is a [`decode::StateErrorCode`] when the
+    /// text is not valid State JSON or names an unsupported schema, and a
+    /// message when the State cannot be prepared.
     #[wasm_bindgen(constructor)]
     pub fn new(raw: &str) -> Result<Self, JsValue> {
-        #[cfg(target_arch = "wasm32")]
-        {
-            Self::load_wasm(raw)
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let mut loaded = Self::load(raw).map_err(|error| JsValue::from_str(&error))?;
-            loaded.prepare_initial_projections()?;
-            Ok(loaded)
-        }
+        let state = decode::decode_state(raw).map_err(decode::StateError::into_js)?;
+        let prepared = PreparedState::new(state);
+        let initial_projections = projection::InitialProjections::from(&prepared).to_js()?;
+        Ok(Self {
+            initial_projections: Some(initial_projections),
+            prepared,
+        })
     }
 
     /// Take the projections prepared during load.
@@ -102,78 +94,6 @@ impl LoadedState {
     }
 }
 
-impl LoadedState {
-    #[cfg(target_arch = "wasm32")]
-    fn load_wasm(raw: &str) -> Result<Self, JsValue> {
-        let envelope = js_sys::JSON::parse(raw).map_err(|error| {
-            JsValue::from_str(&format!(
-                "criv-state-json-invalid: invalid criv state JSON: {}",
-                decode::js_error_message(&error)
-            ))
-        })?;
-        let schema = js_sys::Reflect::get(&envelope, &JsValue::from_str("schema"))
-            .ok()
-            .and_then(|value| value.as_string())
-            .unwrap_or_else(|| "<missing>".into());
-        if schema != STATE_SCHEMA {
-            return Err(JsValue::from_str(&format!(
-                "criv-state-schema-unsupported: unsupported criv state schema: {schema}"
-            )));
-        }
-        let state = serde_wasm_bindgen::from_value::<StateDocument>(envelope)
-            .map_err(|error| JsValue::from_str(&format!("criv-state-json-invalid: {error}")))?;
-        let prepared = PreparedState::new(state);
-        let initial_projections = projection::initial_projections_from_js(&prepared)?;
-        Ok(Self {
-            #[cfg(not(target_arch = "wasm32"))]
-            initial_envelope: None,
-            initial_projections: Some(initial_projections),
-            prepared,
-        })
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn prepare_initial_projections(&mut self) -> Result<(), JsValue> {
-        let projections = self
-            .initial_envelope
-            .as_ref()
-            .ok_or_else(|| JsValue::from_str(INITIAL_PROJECTIONS_TAKEN))?;
-        let value = projections
-            .serialize(&serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true))
-            .map_err(|error| {
-                JsValue::from_str(&format!(
-                    "failed to encode criv initial projections: {error}"
-                ))
-            })?;
-        self.initial_envelope = None;
-        self.initial_projections = Some(value);
-        Ok(())
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    fn load(raw: &str) -> Result<Self, String> {
-        let envelope = decode::decode_state_value(raw)?;
-        let state = StateDocument::deserialize(&envelope)
-            .map_err(|error| format!("criv-state-json-invalid: {error}"))?;
-        let prepared = PreparedState::new(state);
-        let initial_envelope =
-            serde_json::to_value(projection::InitialProjections::from(&prepared))
-                .map_err(|error| format!("failed to encode criv initial projections: {error}"))?;
-        Ok(Self {
-            initial_envelope: Some(initial_envelope),
-            initial_projections: None,
-            prepared,
-        })
-    }
-
-    #[cfg(test)]
-    fn take_initial_projection(&mut self) -> Result<serde_json::Value, String> {
-        self.initial_envelope
-            .take()
-            .ok_or_else(|| INITIAL_PROJECTIONS_TAKEN.to_string())
-    }
-}
-
 impl PreparedState {
     fn new(state: StateDocument) -> Self {
         let StateDocument {
@@ -184,38 +104,29 @@ impl PreparedState {
             source_index,
             asset_index,
         } = state;
-        let criv_state_wire::Graph { nodes, edges, .. } = graph;
         let sources = source::take_unique_source_entries(source_index);
         let assets = asset::take_assets(asset_index);
-        let nodes = source::take_editor_graph_nodes(nodes);
+        let nodes = source::take_editor_graph_nodes(graph.nodes);
         registered_patterns.sort();
         registered_patterns.dedup();
         let summary = StateSummary {
             schema,
             node_count: nodes.len(),
-            edge_count: edges.len(),
+            edge_count: graph.edges.len(),
             source_count: sources.len(),
             asset_count: assets.len(),
             pattern_count: registered_patterns.len(),
-            first_node_id: nodes.first().map(|node| node.id.clone()),
-            first_edge: edges
-                .first()
-                .map(|edge| format!("{}:{}:{}", edge.from, edge.kind, edge.to)),
-            first_source_path: sources.first().map(|source| source.path.clone()),
-            first_asset_path: assets.first().map(|asset| asset.path.clone()),
         };
-        Self::from_parts(
+        let lookup = source::SourceLookup::new(&sources, &nodes);
+        Self {
             summary,
-            EditorInventory { sources, assets },
+            sources,
+            assets,
             nodes,
             registered_patterns,
-            patterns,
-        )
-    }
-
-    #[cfg(test)]
-    fn from_borrowed(state: &StateDocument) -> Self {
-        Self::new(state.clone())
+            pattern_matches: patterns,
+            lookup,
+        }
     }
 }
 
@@ -227,42 +138,16 @@ struct StateSummary {
     source_count: usize,
     asset_count: usize,
     pattern_count: usize,
-    first_node_id: Option<String>,
-    first_edge: Option<String>,
-    first_source_path: Option<String>,
-    first_asset_path: Option<String>,
 }
 
 struct PreparedState {
     summary: StateSummary,
-    sources: Vec<EditorSourceEntry>,
-    assets: Vec<EditorAssetEntry>,
+    sources: Vec<SourceIndexEntry>,
+    assets: Vec<AssetIndexEntry>,
     nodes: Vec<EditorGraphNode>,
     registered_patterns: Vec<String>,
     pattern_matches: BTreeMap<String, Vec<PatternMatch>>,
-    exact_source_lookup: HashMap<u64, Vec<usize>>,
-    legacy_source_lookup: HashMap<u64, Vec<usize>>,
-    selectors: Vec<PreparedSelector>,
-    empty_selector_order: Vec<usize>,
-}
-
-struct EditorInventory {
-    sources: Vec<EditorSourceEntry>,
-    assets: Vec<EditorAssetEntry>,
-}
-
-#[derive(Debug, Serialize)]
-struct EditorSourceEntry {
-    path: String,
-    mime: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-struct EditorAssetEntry {
-    path: String,
-    mime: String,
-    bytes: u64,
-    hash: String,
+    lookup: source::SourceLookup,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -273,8 +158,9 @@ struct EditorGraphNode {
     path: Option<String>,
     source_target: Option<String>,
     line_range: Option<String>,
+    /// The parsed form of the canonical Source target.
     #[serde(skip)]
-    source_identity: Option<Box<criv_state_wire::source_identity::SourceIdentity>>,
+    identity: Option<Box<SourceIdentity>>,
 }
 
 const MAX_AMBIGUOUS_SOURCE_CANDIDATES: usize = 5;
@@ -331,50 +217,66 @@ impl Serialize for SuggestionKind {
     }
 }
 
-struct PreparedSelector {
-    entry: SelectorEntry,
-}
-
-#[derive(Clone, Copy)]
-enum SelectorEntry {
-    Source(usize),
-    Node(usize),
-}
-
 #[cfg(test)]
 mod tests {
-    use super::decode::decode_state_value;
-    use super::source::{
-        editor_graph_nodes, find_editor_graph_node, source_selector_suggestions,
-        unique_source_entries, unique_source_paths,
-    };
+    use super::source::{take_editor_graph_nodes, take_unique_source_entries};
     use super::*;
+    use criv_state_wire::Node;
+
+    fn source_selector_suggestions(
+        state: StateDocument,
+        query: &str,
+        limit: usize,
+    ) -> Vec<SourceSelectorSuggestion> {
+        PreparedState::new(state).suggest_selectors(query, limit)
+    }
+
+    fn find_editor_graph_node(state: &StateDocument, target: &str) -> Option<EditorGraphNode> {
+        match PreparedState::new(state.clone()).lookup_source_target(target) {
+            SourceTargetLookupResult::Resolved { node, .. } => Some(node),
+            SourceTargetLookupResult::Unresolved | SourceTargetLookupResult::Ambiguous { .. } => {
+                None
+            }
+        }
+    }
+
+    fn load(raw: &str) -> Result<PreparedState, decode::StateError> {
+        decode::decode_state(raw).map(PreparedState::new)
+    }
+
+    fn initial_projections(prepared: &PreparedState) -> serde_json::Value {
+        serde_json::to_value(projection::InitialProjections::from(prepared)).unwrap()
+    }
+
+    fn source_paths(source_index: Vec<SourceIndexEntry>) -> Vec<String> {
+        take_unique_source_entries(source_index)
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect()
+    }
 
     #[test]
     fn loaded_state_prepares_one_revision_for_all_operations() {
-        let mut loaded =
-            LoadedState::load(include_str!("../../../fixtures/state/criv.state.v1.json")).unwrap();
+        let prepared = load(include_str!("../../../fixtures/state/criv.state.v1.json")).unwrap();
 
-        assert_eq!(loaded.prepared.summary.node_count, 6);
-        assert_eq!(loaded.prepared.sources.len(), 1);
-        assert_eq!(loaded.prepared.nodes.len(), 6);
+        assert_eq!(prepared.summary.node_count, 6);
+        assert_eq!(prepared.sources.len(), 1);
+        assert_eq!(prepared.nodes.len(), 6);
         let SourceTargetLookupResult::Resolved { node, .. } =
-            loaded.prepared.lookup_source_target("src/lib.rs#fn:run")
+            prepared.lookup_source_target("src/lib.rs#fn:run")
         else {
             panic!("expected an exact source target to resolve");
         };
         assert_eq!(node.kind, NodeKind::Function);
         assert_eq!(
-            loaded.prepared.suggest_selectors("run", 10)[0].target,
+            prepared.suggest_selectors("run", 10)[0].target,
             "src/lib.rs#fn:run"
         );
 
-        let projections = loaded.take_initial_projection().unwrap();
-        assert!(projections.get("state").is_none());
+        let projections = initial_projections(&prepared);
         assert_eq!(projections["summary"]["schema"], "criv.state.v1");
         assert_eq!(projections["registeredPatterns"][0], "ADR-0001/entrypoint");
         assert!(projections["patternMatches"]["ADR-0001/entrypoint"].is_array());
-        assert!(loaded.take_initial_projection().is_err());
     }
 
     #[test]
@@ -386,9 +288,7 @@ mod tests {
             bytes: 128,
             hash: "a".repeat(64),
         });
-        let prepared = PreparedState::from_borrowed(&state);
-        let projection =
-            serde_json::to_value(projection::InitialProjections::from(&prepared)).unwrap();
+        let projection = initial_projections(&PreparedState::new(state));
 
         assert_eq!(projection["summary"]["asset_count"], 1);
         assert_eq!(projection["assets"][0]["path"], "docs/diagram.png");
@@ -396,33 +296,37 @@ mod tests {
     }
 
     #[test]
-    fn parses_shared_state_contract_fixture() {
-        let state = serde_json::from_str::<StateDocument>(include_str!(
-            "../../../fixtures/state/criv.state.v1.json"
-        ))
-        .unwrap();
-        assert_eq!(state.schema, "criv.state.v1");
-        assert_eq!(state.graph.nodes.len(), 6);
-        assert_eq!(state.graph.edges.len(), 5);
-        assert_eq!(state.registered_patterns, ["ADR-0001/entrypoint"]);
-        assert_eq!(state.registered_patterns.len(), 1);
-        assert_eq!(state.source_index.len(), 1);
-    }
-
-    #[test]
     fn rejects_a_wrong_state_schema() {
         let raw = include_str!("../../../fixtures/state/criv.state.v1.json")
             .replace("criv.state.v1", "criv.state.v2");
 
-        assert!(LoadedState::load(&raw).is_err());
-        assert!(decode_state_value(&raw).is_err());
+        let Err(error) = load(&raw) else {
+            panic!("expected a State contract error");
+        };
+        assert_eq!(error.code, decode::StateErrorCode::SchemaUnsupported);
+        assert_eq!(
+            error.message,
+            "unsupported criv state schema: criv.state.v2"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_state_json_with_a_stable_code() {
+        let cases = ["{", r#"{"schema":"criv.state.v1","graph":{"nodes":true}}"#];
+        for raw in cases {
+            let Err(error) = load(raw) else {
+                panic!("expected a State contract error for {raw}");
+            };
+            assert_eq!(error.code, decode::StateErrorCode::JsonInvalid, "{raw}");
+            assert!(error.message.starts_with("invalid criv state JSON: "));
+        }
     }
 
     #[test]
     fn initial_projection_does_not_publish_the_raw_state() {
-        let mut loaded =
-            LoadedState::load(include_str!("../../../fixtures/state/criv.state.v1.json")).unwrap();
-        let projections = loaded.take_initial_projection().unwrap();
+        let projections = initial_projections(
+            &load(include_str!("../../../fixtures/state/criv.state.v1.json")).unwrap(),
+        );
 
         assert!(projections.get("state").is_none());
         assert!(projections.get("graph").is_none());
@@ -446,14 +350,14 @@ mod tests {
             },
         ];
 
-        let paths = unique_source_paths(&source_index);
+        let paths = source_paths(source_index);
         assert_eq!(paths.len(), 2);
         assert_eq!(paths, vec!["src/lib.rs", "src/main.rs"]);
     }
 
     #[test]
     fn source_entries_reject_escaping_paths_and_normalize_separators() {
-        let entries = unique_source_entries(&[
+        let paths = source_paths(vec![
             SourceIndexEntry {
                 path: "src/lib.rs".into(),
                 mime: None,
@@ -476,20 +380,14 @@ mod tests {
             },
         ]);
 
-        assert_eq!(
-            entries
-                .into_iter()
-                .map(|entry| entry.path)
-                .collect::<Vec<_>>(),
-            ["src/lib.rs", "src/windows/path.rs"]
-        );
+        assert_eq!(paths, ["src/lib.rs", "src/windows/path.rs"]);
     }
 
     #[test]
     fn graph_nodes_include_source_targets_and_line_ranges() {
         let state = editor_state();
 
-        let nodes = editor_graph_nodes(&state);
+        let nodes = take_editor_graph_nodes(state.graph.nodes);
         let symbol = nodes
             .iter()
             .find(|node| node.id == "symbol:src/lib.rs#fn:run")
@@ -505,7 +403,7 @@ mod tests {
     fn selector_suggestions_include_files_and_symbols() {
         let state = editor_state();
 
-        let suggestions = source_selector_suggestions(&state, "run", 10);
+        let suggestions = source_selector_suggestions(state, "run", 10);
 
         assert_eq!(suggestions.len(), 2);
         assert_eq!(suggestions[0].target, "src/lib.rs#fn:run");
@@ -521,7 +419,7 @@ mod tests {
     fn selector_suggestions_rank_with_weighted_source_scoring() {
         let state = selector_state();
 
-        let suggestions = source_selector_suggestions(&state, "lib.rs", 10);
+        let suggestions = source_selector_suggestions(state, "lib.rs", 10);
         let targets = suggestion_targets(&suggestions);
 
         assert_eq!(
@@ -540,7 +438,7 @@ mod tests {
     fn selector_suggestions_use_lexical_order_as_tiebreaker() {
         let state = selector_state();
 
-        let suggestions = source_selector_suggestions(&state, "src/tie", 10);
+        let suggestions = source_selector_suggestions(state, "src/tie", 10);
         let targets = suggestion_targets(&suggestions);
 
         assert_eq!(targets, vec!["src/tie-a.rs", "src/tie-b.rs"]);
@@ -550,7 +448,7 @@ mod tests {
     fn selector_suggestions_drop_non_matches_and_keep_fuzzy_matches() {
         let state = selector_state();
 
-        let suggestions = source_selector_suggestions(&state, "slr", 10);
+        let suggestions = source_selector_suggestions(state, "slr", 10);
         let targets = suggestion_targets(&suggestions);
 
         assert!(targets.contains(&"src/lib.rs"));
@@ -562,7 +460,7 @@ mod tests {
     fn selector_suggestions_empty_query_uses_lexical_order() {
         let state = selector_state();
 
-        let suggestions = source_selector_suggestions(&state, "", 4);
+        let suggestions = source_selector_suggestions(state, "", 4);
         let targets = suggestion_targets(&suggestions);
 
         assert_eq!(
@@ -580,7 +478,7 @@ mod tests {
     fn selector_suggestions_respect_limit() {
         let state = selector_state();
 
-        let suggestions = source_selector_suggestions(&state, "", 2);
+        let suggestions = source_selector_suggestions(state, "", 2);
 
         assert_eq!(suggestions.len(), 2);
     }
@@ -597,6 +495,20 @@ mod tests {
         assert_eq!(by_id.id, by_target.id);
         assert_eq!(by_id.id, by_legacy_symbol.id);
         assert_eq!(by_basename.id, "code:src/lib.rs");
+    }
+
+    #[test]
+    fn lookup_resolves_a_basename_with_a_symbol_fragment_like_the_cli() {
+        let state = editor_state();
+
+        for target in ["lib.rs#run", "lib.rs#fn:run"] {
+            assert_eq!(
+                find_editor_graph_node(&state, target).unwrap().id,
+                "symbol:src/lib.rs#fn:run",
+                "{target}"
+            );
+        }
+        assert!(find_editor_graph_node(&state, "lib.rs#missing").is_none());
     }
 
     #[test]
@@ -654,7 +566,7 @@ mod tests {
             source_index,
             ..Default::default()
         };
-        let prepared = PreparedState::from_borrowed(&state);
+        let prepared = PreparedState::new(state);
 
         let canonical = |target: &str| match prepared.lookup_source_target(target) {
             SourceTargetLookupResult::Resolved {
@@ -692,7 +604,7 @@ mod tests {
         ))
         .unwrap();
         let state = serde_json::from_value::<StateDocument>(fixture["state"].clone()).unwrap();
-        let prepared = PreparedState::from_borrowed(&state);
+        let prepared = PreparedState::new(state);
 
         for case in fixture["cases"].as_array().unwrap() {
             let target = case["target"].as_str().unwrap();
@@ -721,7 +633,7 @@ mod tests {
         let mut reversed =
             serde_json::from_value::<StateDocument>(fixture["state"].clone()).unwrap();
         reversed.graph.nodes.reverse();
-        let reversed = PreparedState::from_borrowed(&reversed);
+        let reversed = PreparedState::new(reversed);
         for target in ["src/lib.rs#run", "src/dup.rs#fn:work", "common.rs"] {
             assert_eq!(
                 serde_json::to_value(prepared.lookup_source_target(target)).unwrap(),

@@ -116,19 +116,6 @@ jobs:
           path: ~/.npm
           key: ${{ steps.npm-cache.outputs.cache-primary-key }}
 
-  wasm:
-    name: Wasm build
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - name: Set up build tools
-        uses: $/.github/actions/setup-build-tools
-      - name: Build Wasm helper
-        run: npm --prefix .obsidian/plugins/criv run build:wasm
-
   editor-contracts:
     name: Shared editor contracts
     runs-on: ubuntu-24.04
@@ -170,16 +157,8 @@ jobs:
         uses: $/.github/actions/setup-build-tools
       - name: Install dependencies
         run: npm ci
-      - name: Audit dependencies
-        run: npm audit --workspace criv-obsidian-plugin --audit-level=high
-      - name: Check formatting
-        run: npm --prefix .obsidian/plugins/criv run format:check
-      - name: Lint
-        run: npm --prefix .obsidian/plugins/criv run lint
-      - name: Test
-        run: npm --prefix .obsidian/plugins/criv test
-      - name: Build plugin
-        run: npm --prefix .obsidian/plugins/criv run build:plugin
+      - name: Check Obsidian companion
+        run: npm run check:obsidian
 
   vscode:
     name: VS Code companion
@@ -200,16 +179,8 @@ jobs:
         uses: $/.github/actions/setup-build-tools
       - name: Install dependencies
         run: npm ci
-      - name: Audit dependencies
-        run: npm audit --workspace vscode-criv --audit-level=high
-      - name: Check formatting
-        run: npm --prefix extensions/vscode-criv run format:check
-      - name: Lint
-        run: npm --prefix extensions/vscode-criv run lint
-      - name: Test
-        run: npm --prefix extensions/vscode-criv test
-      - name: Run extension-host integration tests
-        run: xvfb-run -a npm --prefix extensions/vscode-criv run test:integration
+      - name: Check VS Code companion
+        run: xvfb-run -a npm run check:vscode
 
   site:
     name: Site build
@@ -305,7 +276,6 @@ jobs:
       - core
       - discovery-contracts
       - editor-contracts
-      - wasm
       - obsidian
       - performance-smoke
       - site
@@ -322,7 +292,6 @@ jobs:
           CORE_RESULT: ${{ needs.core.result }}
           DISCOVERY_CONTRACTS_RESULT: ${{ needs.discovery-contracts.result }}
           EDITOR_CONTRACTS_RESULT: ${{ needs.editor-contracts.result }}
-          WASM_RESULT: ${{ needs.wasm.result }}
           OBSIDIAN_RESULT: ${{ needs.obsidian.result }}
           PERFORMANCE_SMOKE_RESULT: ${{ needs.performance-smoke.result }}
           SITE_RESULT: ${{ needs.site.result }}
@@ -336,7 +305,6 @@ jobs:
           test "$CORE_RESULT" = success
           test "$DISCOVERY_CONTRACTS_RESULT" = success
           test "$EDITOR_CONTRACTS_RESULT" = success
-          test "$WASM_RESULT" = success
           test "$OBSIDIAN_RESULT" = success
           test "$PERFORMANCE_SMOKE_RESULT" = success
           test "$SITE_RESULT" = success

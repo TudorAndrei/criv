@@ -1,10 +1,7 @@
 amends "package://github.com/jdx/hk/releases/download/v2.10.0/hk@2.10.0#/Config.pkl"
 import "package://github.com/jdx/hk/releases/download/v2.10.0/hk@2.10.0#/Builtins.pkl"
 
-local large_files = (Builtins.check_added_large_files) {
-  // The launch video and its soundtrack are committed on purpose.
-  exclude = List("brag-output/**")
-}
+local large_files = Builtins.check_added_large_files
 
 local gitleaks_history = new Step {
   check = "gitleaks git --redact --no-banner"
@@ -35,6 +32,18 @@ local markdown_format = new Step {
   exclude = List("docs/adr/[0-9]*.md", ".agents/**", ".claude/**")
   check = "npm exec --offline -- oxfmt --check {{files}}"
   fix = "npm exec --offline -- oxfmt --write {{files}}"
+}
+
+local fallow = new Step {
+  glob = List(
+    "packages/criv-editor-state/**",
+    "extensions/vscode-criv/**",
+    ".obsidian/plugins/criv/**",
+    "package.json",
+    "package-lock.json",
+    ".fallowrc.json",
+  )
+  check = "npm run --silent check:fallow"
 }
 
 local vale = new Step {
@@ -157,6 +166,7 @@ hooks {
       ["cargo-clippy"] = cargo_clippy
       ["cargo-test"] = cargo_test
       ["hawk"] = hawk
+      ["fallow"] = fallow
       ["criv-enforce"] = enforce_push
     }
   }

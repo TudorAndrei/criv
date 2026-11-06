@@ -1,15 +1,11 @@
 import assert from "node:assert/strict";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import * as vscode from "vscode";
 
-const EXPECTED_COMMANDS = [
-  "criv.refreshStateView",
-  "criv.openStateJson",
-  "criv.openSourceTarget",
-  "criv.runWatchOnce",
-  "criv.runCheck",
-  "criv.queryUndocumentedCode",
-];
+import { CRIV_COMMANDS } from "../../src/commands/identifiers";
 
 export async function run(): Promise<void> {
   const extension = vscode.extensions.getExtension("criv.vscode-criv");
@@ -17,52 +13,59 @@ export async function run(): Promise<void> {
   await extension.activate();
 
   const commands = await vscode.commands.getCommands(true);
-  for (const command of EXPECTED_COMMANDS) {
+  for (const command of Object.values(CRIV_COMMANDS)) {
     assert.ok(commands.includes(command), `Expected command ${command} to be registered.`);
   }
 
-  await assertNoJsonDiagnostics(["extensions/vscode-criv/package.json"]);
+  await assertNoManifestDiagnostics("extensions/vscode-criv/package.json");
 }
 
-async function assertNoJsonDiagnostics(relativePaths: readonly string[]): Promise<void> {
+/**
+ * Report VS Code's own manifest diagnostics. A deliberately broken manifest
+ * opened after the real one proves the JSON service has validated both.
+ */
+async function assertNoManifestDiagnostics(relativePath: string): Promise<void> {
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   assert.ok(workspaceFolder, "Expected the repository root to be opened as the test workspace.");
+  const manifest = vscode.Uri.joinPath(workspaceFolder.uri, ...relativePath.split("/"));
+  const control = vscode.Uri.file(
+    join(await mkdtemp(join(tmpdir(), "criv-manifest-")), "package.json"),
+  );
+  await writeFile(control.fsPath, JSON.stringify({ contributes: { commands: 1 } }));
 
-  const diagnosticsByFile: string[] = [];
-  for (const relativePath of relativePaths) {
-    const uri = vscode.Uri.joinPath(workspaceFolder.uri, ...relativePath.split("/"));
-    const document = await vscode.workspace.openTextDocument(uri);
-    await vscode.window.showTextDocument(document, { preview: false });
-    const diagnostics = await waitForDiagnostics(uri);
-    const relevantDiagnostics = diagnostics.filter(
+  for (const uri of [manifest, control]) {
+    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri), {
+      preview: false,
+    });
+  }
+  await diagnosticsReported(control, "Expected VS Code to report the broken control manifest.");
+
+  const problems = vscode.languages
+    .getDiagnostics(manifest)
+    .filter((diagnostic) => diagnostic.severity <= vscode.DiagnosticSeverity.Warning)
+    .map(
       (diagnostic) =>
-        diagnostic.severity === vscode.DiagnosticSeverity.Error ||
-        diagnostic.severity === vscode.DiagnosticSeverity.Warning,
+        `${relativePath}:${diagnostic.range.start.line + 1}:${diagnostic.range.start.character + 1} ${diagnostic.message}`,
     );
-
-    for (const diagnostic of relevantDiagnostics) {
-      diagnosticsByFile.push(
-        `${relativePath}:${diagnostic.range.start.line + 1}:${
-          diagnostic.range.start.character + 1
-        } ${diagnostic.message}`,
-      );
-    }
-  }
-
-  assert.deepEqual(diagnosticsByFile, [], "Expected VS Code JSON diagnostics to be clean.");
+  assert.deepEqual(problems, [], "Expected VS Code manifest diagnostics to be clean.");
 }
 
-async function waitForDiagnostics(uri: vscode.Uri): Promise<readonly vscode.Diagnostic[]> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    await delay(250);
-    const diagnostics = vscode.languages.getDiagnostics(uri);
-    if (diagnostics.length > 0) {
-      return diagnostics;
-    }
+async function diagnosticsReported(uri: vscode.Uri, message: string): Promise<void> {
+  const reported = () => vscode.languages.getDiagnostics(uri).length > 0;
+  if (reported()) {
+    return;
   }
-  return vscode.languages.getDiagnostics(uri);
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      subscription.dispose();
+      reject(new assert.AssertionError({ message }));
+    }, 30_000);
+    const subscription = vscode.languages.onDidChangeDiagnostics(() => {
+      if (reported()) {
+        clearTimeout(timeout);
+        subscription.dispose();
+        resolve();
+      }
+    });
+  });
 }

@@ -7,18 +7,12 @@ use serde::Serialize;
 use usage_rs::{Args as UsageArgs, ValueEnum};
 
 use crate::check;
-use crate::diagnostic::DiagnosticCode;
-use crate::git::{ChangedSet, ChangedSetComparison, GitRepository};
-use crate::policy_scan::PolicyScanPlan;
-use crate::vault::Vault;
+use crate::config::{CONFIG_FILE, ImportPolicyConfig, Stage};
+use crate::diagnostic::{Diagnostic, DiagnosticCode};
+use crate::git::{ChangedSet, Comparison, GitRepository, is_object_id, is_zero_oid};
+use crate::glob::GlobMatcher;
+use crate::vault::{LoadOptions, Vault};
 use crate::{CrivError, Result};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum Stage {
-    Commit,
-    Push,
-    Ci,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 enum Format {
@@ -36,142 +30,195 @@ pub struct EnforceOptions {
     /// Consume Git's pre-push ref-update records from standard input.
     #[usage(long, hide)]
     pre_push: bool,
-    #[usage(long, hide, requires = "pre_push")]
+    #[usage(long, hide, requires = "--pre-push", required_if = "--pre-push")]
     remote_name: Option<String>,
-    #[usage(long, hide, requires = "pre_push")]
-    remote_url: Option<String>,
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "enforcement assembles one stage report from related vault and policy checks"
-)]
 /// Validate the selected Git transaction and report stage-specific failures.
 pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
     if options.pre_push && options.stage != Stage::Push {
         return Err(CrivError::usage(
-            "--pre-push is only valid with --stage push",
+            "error: --pre-push is only valid with --stage push",
         ));
     }
-    let files = crate::repository::RepositoryFiles::open_vault(root)?;
-    let vault = Vault::load_from(&files)?;
-    let policy_plan = PolicyScanPlan::new(&vault);
-    if !vault
-        .config
-        .enforce_stages
-        .iter()
-        .any(|stage| stage == options.stage.as_str())
-    {
+    let files = crate::config::open_vault(root)?;
+    let vault = Vault::load(&files, LoadOptions::default())?;
+    if !vault.config().enforce_stages().contains(&options.stage) {
         return Err(CrivError::new(format!(
-            "stage `{}` is not enabled in criv.toml",
+            "stage `{}` is not enabled in {CONFIG_FILE}",
             options.stage.as_str()
         )));
     }
-    if options.stage == Stage::Ci
-        && let Some(base_ref) = env_string("CRIV_BASE_REF")
-    {
-        crate::adr::check_base(root, &base_ref)?;
-    }
+    let repository = GitRepository::discover(root)?;
+    let Selection {
+        changes,
+        ci_base_ref,
+    } = changed_entries(repository.as_ref(), options)?;
+    let identity_conflicts = match (&repository, ci_base_ref) {
+        (Some(repository), Some(base_ref)) => {
+            crate::adr::identity_conflict(&files, repository, &base_ref)?
+                .into_iter()
+                .collect()
+        }
+        _ => Vec::new(),
+    };
 
-    let diagnostics = check::validate_vault(&vault, &policy_plan);
+    let check::Validation {
+        diagnostics,
+        policies,
+    } = check::validate_vault(&vault);
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();
 
-    let changed_entries = changed_entries(root, options)?;
-    let changed_files = if options.stage == Stage::Ci {
-        None
-    } else {
-        changed_entries.as_ref().map(ChangedSet::affected_paths)
-    };
-    let changed_policy_files = changed_files
+    let changed_count = changes
         .as_ref()
-        .map(|paths| paths.iter().cloned().collect::<BTreeSet<_>>());
-    let violations = policy_plan
-        .scan(&vault, changed_policy_files.as_ref())?
-        .into_iter()
-        .map(|violation| {
-            format!(
-                "{}:{}: {} policy `{}` matched `{}`",
-                violation.path,
-                violation.line,
-                violation.adr_id,
-                violation.pattern_id,
-                violation.text
-            )
-        })
-        .collect::<Vec<_>>();
-    let import_violations = import_policy_violations(&vault, changed_files.as_ref());
+        .map_or(0, |changes| changes.affected_paths().len());
+    let scanned_files = changes
+        .as_ref()
+        .filter(|_| options.stage != Stage::Ci)
+        .and_then(|changes| check::changed_scope(changes, vault.config()));
+    let policy_violations = policies
+        .scan(&vault, scanned_files.as_ref())?
+        .iter()
+        .map(Diagnostic::describe)
+        .collect();
+    let import_violations = import_policy_violations(&vault, scanned_files.as_ref())?;
     let adr_violations = crate::adr::change_violations(
         &files,
-        &vault.config,
-        changed_entries.as_ref(),
-        match options.stage {
-            Stage::Commit => crate::adr::ChangeMode::Commit,
-            Stage::Push => crate::adr::ChangeMode::Push,
-            Stage::Ci => crate::adr::ChangeMode::Ci,
-        },
+        repository.as_ref(),
+        vault.config(),
+        changes.as_ref(),
+        options.stage,
     );
-    let changed_count = changed_files.as_ref().map_or(0, Vec::len);
-    let basis = changed_entries
-        .as_ref()
-        .map_or("no comparison", |changes| changes.basis.as_str());
-    let failure = enforce_failure(violations, import_violations, adr_violations, errors);
-
-    if options.format == Format::Json {
-        let report = EnforceReport {
-            stage: options.stage.as_str(),
-            ok: failure.is_none(),
-            errors,
-            warnings,
-            changed_files: changed_count,
-            basis,
-            violations: failure
-                .as_ref()
-                .map_or(&[][..], |failure| &failure.violations),
-            code: failure.as_ref().map(|failure| failure.code),
-            fix: failure.as_ref().map(|failure| failure.code.fix()),
-        };
-        let json = serde_json::to_string_pretty(&report).map_err(|err| {
-            CrivError::new(format!("failed to serialize enforcement report: {err}"))
-        })?;
-        println!("{json}");
-        return match failure {
-            Some(failure) => Err(CrivError::coded(failure.code, failure.message)),
-            None => Ok(()),
-        };
-    }
-
-    match options.stage {
-        Stage::Commit => {
-            println!(
-                "commit enforcement: {errors} validation errors, {warnings} warnings, {changed_count} staged files ({basis})"
-            );
-        }
-        Stage::Push => {
-            println!(
-                "push enforcement: {errors} validation errors, {warnings} warnings, {changed_count} changed files ({basis})"
-            );
-        }
-        Stage::Ci => {
-            println!("ci enforcement: {errors} validation errors, {warnings} warnings ({basis})");
-        }
-    }
-
-    if let Some(failure) = failure {
-        for violation in &failure.violations {
-            println!("{violation}");
-        }
-        return Err(CrivError::coded(failure.code, failure.message));
-    }
-
-    println!("enforcement passed");
-    Ok(())
+    let failures = Failure::in_priority_order(
+        identity_conflicts,
+        policy_violations,
+        import_violations,
+        adr_violations,
+        errors,
+    );
+    let report = EnforceReport {
+        stage: options.stage.as_str(),
+        ok: failures.is_empty(),
+        errors,
+        warnings,
+        changed_files: changed_count,
+        basis: changes
+            .as_ref()
+            .map_or("no comparison", |changes| changes.basis.as_str()),
+        violations: failures
+            .iter()
+            .flat_map(|failure| failure.violations.iter().cloned())
+            .collect(),
+        codes: failures.iter().map(|failure| failure.code).collect(),
+        code: failures.first().map(|failure| failure.code),
+        fix: failures.first().map(|failure| failure.code.fix()),
+    };
+    report.print(options.format, options.stage)?;
+    report.code.map_or(Ok(()), |code| {
+        Err(CrivError::coded(
+            code,
+            failures
+                .iter()
+                .map(|failure| failure.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; "),
+        ))
+    })
 }
 
-struct EnforceFailure {
+impl EnforceReport<'_> {
+    fn print(&self, format: Format, stage: Stage) -> Result<()> {
+        if format == Format::Json {
+            let json = serde_json::to_string_pretty(self).map_err(|err| {
+                CrivError::new(format!("failed to serialize enforcement report: {err}"))
+            })?;
+            println!("{json}");
+            return Ok(());
+        }
+        let Self {
+            errors,
+            warnings,
+            changed_files,
+            basis,
+            ..
+        } = self;
+        // CI validates the whole vault and reports no count.
+        let files = match stage {
+            Stage::Commit => format!(", {changed_files} staged files"),
+            Stage::Push => format!(", {changed_files} changed files"),
+            Stage::Ci => String::new(),
+        };
+        println!(
+            "{} enforcement: {errors} validation errors, {warnings} warnings{files} ({basis})",
+            self.stage
+        );
+        for violation in &self.violations {
+            println!("{violation}");
+        }
+        if self.ok {
+            println!("enforcement passed");
+        }
+        Ok(())
+    }
+}
+
+/// One failing category of an enforcement run.
+struct Failure {
     code: DiagnosticCode,
     message: String,
     violations: Vec<String>,
+}
+
+impl Failure {
+    /// Every failing category; the first sets the exit status.
+    fn in_priority_order(
+        identity_conflicts: Vec<String>,
+        policy_violations: Vec<String>,
+        import_violations: Vec<String>,
+        adr_violations: Vec<String>,
+        errors: usize,
+    ) -> Vec<Self> {
+        [
+            Self::new(
+                DiagnosticCode::AdrIdConflict,
+                "ADR ID conflict",
+                identity_conflicts,
+            ),
+            Self::new(
+                DiagnosticCode::PolicyViolation,
+                "policy violation",
+                policy_violations,
+            ),
+            Self::new(
+                DiagnosticCode::ImportPolicyViolation,
+                "import policy violation",
+                import_violations,
+            ),
+            Self::new(
+                DiagnosticCode::AdrImmutabilityViolation,
+                "ADR immutability violation",
+                adr_violations,
+            ),
+        ]
+        .into_iter()
+        .flatten()
+        .chain((errors > 0).then(|| Self {
+            code: DiagnosticCode::EnforcementFailed,
+            message: "enforcement failed".into(),
+            violations: Vec::new(),
+        }))
+        .collect()
+    }
+
+    /// The category of `violations`, or `None` when it has none.
+    fn new(code: DiagnosticCode, noun: &str, violations: Vec<String>) -> Option<Self> {
+        (!violations.is_empty()).then(|| Self {
+            code,
+            message: format!("{} {noun}(s) found", violations.len()),
+            violations,
+        })
+    }
 }
 
 #[derive(Serialize)]
@@ -182,81 +229,36 @@ struct EnforceReport<'a> {
     warnings: usize,
     changed_files: usize,
     basis: &'a str,
-    violations: &'a [String],
+    /// Every violation, grouped by failing category in `codes` order.
+    violations: Vec<String>,
+    /// Every failing category, highest priority first.
+    codes: Vec<DiagnosticCode>,
+    /// The highest-priority failing category, which sets the exit status.
     #[serde(skip_serializing_if = "Option::is_none")]
     code: Option<DiagnosticCode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     fix: Option<&'static str>,
 }
 
-fn enforce_failure(
-    violations: Vec<String>,
-    import_violations: Vec<String>,
-    adr_violations: Vec<String>,
-    errors: usize,
-) -> Option<EnforceFailure> {
-    let (code, message, violations) = if !violations.is_empty() {
-        (
-            DiagnosticCode::PolicyViolation,
-            format!("{} policy violation(s) found", violations.len()),
-            violations,
-        )
-    } else if !import_violations.is_empty() {
-        (
-            DiagnosticCode::ImportPolicyViolation,
-            format!(
-                "{} import policy violation(s) found",
-                import_violations.len()
-            ),
-            import_violations,
-        )
-    } else if !adr_violations.is_empty() {
-        (
-            DiagnosticCode::AdrImmutabilityViolation,
-            format!(
-                "{} ADR immutability violation(s) found",
-                adr_violations.len()
-            ),
-            adr_violations,
-        )
-    } else if errors > 0 {
-        (
-            DiagnosticCode::EnforcementFailed,
-            "enforcement failed".into(),
-            Vec::new(),
-        )
-    } else {
-        return None;
-    };
-    Some(EnforceFailure {
-        code,
-        message,
-        violations,
-    })
-}
-
-fn import_policy_violations(vault: &Vault, changed_files: Option<&Vec<String>>) -> Vec<String> {
+fn import_policy_violations(
+    vault: &Vault,
+    changed_files: Option<&BTreeSet<String>>,
+) -> Result<Vec<String>> {
     let mut violations = Vec::new();
-    for policy in &vault.config.import_policies {
-        for file in vault.source_graph().files.values() {
+    for config in vault.config().import_policies() {
+        let policy = ImportPolicy::compile(config)?;
+        for file in vault.source_graph().files() {
             if changed_files.is_some_and(|files| !files.contains(&file.path)) {
                 continue;
             }
-            if !policy.scope_matcher.is_match(&file.path) {
+            if !policy.scope.is_match(&file.path) {
                 continue;
             }
             for import in &file.imports {
-                if policy
-                    .deny
-                    .iter()
-                    .zip(&policy.deny_matchers)
-                    .any(|(pattern, matcher)| {
-                        import_matches(pattern, matcher.as_ref(), &import.module)
-                    })
-                {
+                if policy.deny.iter().any(|rule| rule.matches(&import.module)) {
                     violations.push(format!(
                         "{}:{}: import policy `{}` denies `{}`",
-                        file.path, import.line, policy.id, import.module
+                        file.path, import.line, config.id, import.module
                     ));
                 }
             }
@@ -264,101 +266,204 @@ fn import_policy_violations(vault: &Vault, changed_files: Option<&Vec<String>>) 
     }
     violations.sort();
     violations.dedup();
-    violations
+    Ok(violations)
 }
 
-fn changed_entries(root: &Path, options: &EnforceOptions) -> Result<Option<ChangedSet>> {
-    let repository = GitRepository::discover(root)?;
+/// A configured import policy with its globs compiled.
+struct ImportPolicy {
+    scope: GlobMatcher,
+    deny: Vec<DenyRule>,
+}
+
+impl ImportPolicy {
+    fn compile(config: &ImportPolicyConfig) -> Result<Self> {
+        let id = &config.id;
+        let scope = GlobMatcher::new(&config.scope).map_err(|err| {
+            CrivError::new(format!(
+                "invalid enforce.imports scope for policy `{id}`: {err}"
+            ))
+        })?;
+        let deny = config
+            .deny
+            .iter()
+            .map(|pattern| DenyRule::new(pattern, id))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self { scope, deny })
+    }
+}
+
+/// One denied import: a module path, or a glob over `/`-separated module paths.
+struct DenyRule {
+    pattern: String,
+    matcher: Option<GlobMatcher>,
+}
+
+impl DenyRule {
+    fn new(pattern: &str, policy_id: &str) -> Result<Self> {
+        let matcher = pattern
+            .contains(['*', '?', '['])
+            .then(|| {
+                GlobMatcher::new(&[pattern.replace("::", "/")]).map_err(|err| {
+                    CrivError::new(format!(
+                        "invalid enforce.imports deny glob for policy `{policy_id}`: {err}"
+                    ))
+                })
+            })
+            .transpose()?;
+        Ok(Self {
+            pattern: pattern.to_string(),
+            matcher,
+        })
+    }
+
+    /// A module path matches the exact path, any path below it, or the glob.
+    fn matches(&self, module: &str) -> bool {
+        self.matcher.as_ref().map_or_else(
+            || {
+                module
+                    .strip_prefix(self.pattern.as_str())
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
+            },
+            |matcher| matcher.is_match(&module.replace("::", "/")),
+        )
+    }
+}
+
+/// The changes a stage selects and, in CI, the base ref they compare with.
+#[derive(Debug)]
+struct Selection {
+    changes: Option<ChangedSet>,
+    ci_base_ref: Option<String>,
+}
+
+impl Selection {
+    const fn of(changes: Option<ChangedSet>) -> Self {
+        Self {
+            changes,
+            ci_base_ref: None,
+        }
+    }
+}
+
+fn changed_entries(
+    repository: Option<&GitRepository>,
+    options: &EnforceOptions,
+) -> Result<Selection> {
     match options.stage {
         Stage::Commit => repository
-            .as_ref()
-            .map(|repo| repo.changed_set(&ChangedSetComparison::Staged))
-            .transpose(),
-        Stage::Push if options.pre_push => pre_push_changed_entries(
-            required_repository(repository.as_ref())?,
-            options
-                .remote_name
-                .as_deref()
-                .ok_or_else(|| CrivError::new("pre-push enforcement requires a remote name"))?,
-            read_pre_push_updates()?,
-        )
-        .map(Some),
-        // Manual invocations retain the documented best-effort upstream/last
-        // commit fallback. Generated hooks always use the complete stdin mode.
-        Stage::Push => repository
-            .as_ref()
-            .map(|repo| {
-                repo.changed_set(&ChangedSetComparison::ThreeDot {
-                    upstream_ref: "@{upstream}",
-                    head_ref: "HEAD",
-                })
-                .or_else(|_| {
-                    repo.changed_set(&ChangedSetComparison::Trees {
-                        old_ref: "HEAD~1",
-                        new_ref: "HEAD",
-                    })
-                })
-            })
-            .transpose(),
-        Stage::Ci => ci_changed_entries(repository.as_ref()),
+            .map(|repo| repo.changed_set(&Comparison::Staged, &[]))
+            .transpose()
+            .map(Selection::of),
+        Stage::Push => match options.remote_name.as_deref() {
+            Some(remote_name) => pre_push_changed_entries(
+                required_repository(repository)?,
+                remote_name,
+                &read_pre_push_updates()?,
+            )
+            .map(|changes| Selection::of(Some(changes))),
+            None => repository
+                .map(manual_push_changed_set)
+                .transpose()
+                .map(Selection::of),
+        },
+        Stage::Ci => ci_changed_entries(
+            repository,
+            env::var("CRIV_BASE_REF").ok().as_deref(),
+            env::var("GITHUB_BASE_REF").ok(),
+            is_ci_environment(),
+        ),
     }
 }
 
-fn ci_changed_entries(repository: Option<&GitRepository>) -> Result<Option<ChangedSet>> {
-    ci_changed_entries_with_env(repository, env_string, is_ci_environment())
+/// A manual push compares with the upstream branch. Without one it falls
+/// back to the last commit and names the reason in its basis; generated
+/// hooks use the complete pre-push input instead.
+#[expect(
+    clippy::literal_string_with_formatting_args,
+    reason = "`@{upstream}` is Git revision syntax"
+)]
+fn manual_push_changed_set(repository: &GitRepository) -> Result<ChangedSet> {
+    let upstream = match repository.changed_set(
+        &Comparison::SinceMergeBase {
+            upstream_ref: "@{upstream}",
+        },
+        &[],
+    ) {
+        Ok(changes) => return Ok(changes),
+        Err(error) => error,
+    };
+    let mut changes = repository.changed_set(
+        &Comparison::Trees {
+            old_ref: "HEAD~1",
+            new_ref: "HEAD",
+        },
+        &[],
+    )?;
+    changes.basis = format!("{}; no upstream comparison: {upstream}", changes.basis);
+    Ok(changes)
 }
 
-fn ci_changed_entries_with_env(
+/// CI compares `HEAD` with `CRIV_BASE_REF`, else with the first of
+/// `origin/$GITHUB_BASE_REF` and `$GITHUB_BASE_REF` that Git can compare.
+/// Outside CI, a missing base falls back to the worktree with no base ref.
+fn ci_changed_entries(
     repository: Option<&GitRepository>,
-    env_value: impl Fn(&str) -> Option<String>,
+    criv_base_ref: Option<&str>,
+    github_base_ref: Option<String>,
     ci_environment: bool,
-) -> Result<Option<ChangedSet>> {
-    if let Some(base_ref) = env_value("CRIV_BASE_REF") {
-        return required_repository(repository)?
-            .changed_set(&ChangedSetComparison::Trees {
+) -> Result<Selection> {
+    let against = |repository: &GitRepository, base_ref: String| {
+        let changes = repository.changed_set(
+            &Comparison::Trees {
                 old_ref: &base_ref,
                 new_ref: "HEAD",
-            })
-            .map(Some);
+            },
+            &[],
+        )?;
+        Ok(Selection {
+            changes: Some(changes),
+            ci_base_ref: Some(base_ref),
+        })
+    };
+    if let Some(base_ref) = criv_base_ref {
+        return against(required_repository(repository)?, base_ref.to_owned());
     }
 
-    if let Some(base_ref) = env_value("GITHUB_BASE_REF") {
-        let origin_ref = format!("origin/{base_ref}");
-        if let Some(repository) = repository
-            && let Ok(changes) = repository.changed_set(&ChangedSetComparison::Trees {
-                old_ref: &origin_ref,
-                new_ref: "HEAD",
-            })
-        {
-            return Ok(Some(changes));
-        }
-        if let Some(repository) = repository
-            && let Ok(changes) = repository.changed_set(&ChangedSetComparison::Trees {
-                old_ref: &base_ref,
-                new_ref: "HEAD",
-            })
-        {
-            return Ok(Some(changes));
+    let mut failures = Vec::new();
+    if let Some(base_ref) = github_base_ref
+        && let Some(repository) = repository
+    {
+        for old_ref in [format!("origin/{base_ref}"), base_ref] {
+            match against(repository, old_ref) {
+                Ok(selection) => return Ok(selection),
+                Err(error) => failures.push(error.to_string()),
+            }
         }
     }
+    let causes = if failures.is_empty() {
+        String::new()
+    } else {
+        format!("; {}", failures.join("; "))
+    };
 
     if ci_environment {
-        return Err(CrivError::new(
-            "ci enforcement requires CRIV_BASE_REF or a fetchable GITHUB_BASE_REF",
-        ));
+        return Err(CrivError::new(format!(
+            "ci enforcement requires CRIV_BASE_REF or a fetchable GITHUB_BASE_REF{causes}"
+        )));
     }
 
     repository
-        .map(|repo| repo.changed_set(&ChangedSetComparison::TreeToWorktree { old_ref: "HEAD" }))
+        .map(|repo| {
+            let mut changes = repo.changed_set(&Comparison::Worktree { old_ref: "HEAD" }, &[])?;
+            changes.basis.push_str(&causes);
+            Ok(changes)
+        })
         .transpose()
+        .map(Selection::of)
 }
 
 fn required_repository(repository: Option<&GitRepository>) -> Result<&GitRepository> {
     repository.ok_or_else(|| CrivError::new("git diff failed: not inside a Git worktree"))
-}
-
-fn env_string(name: &str) -> Option<String> {
-    env::var(name).ok()
 }
 
 fn is_ci_environment() -> bool {
@@ -366,11 +471,10 @@ fn is_ci_environment() -> bool {
         || env::var("GITHUB_ACTIONS").is_ok_and(|value| value == "true")
 }
 
+/// One record of Git's pre-push input: the local and remote object IDs.
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct PrePushUpdate {
-    local_ref: String,
     local_oid: String,
-    remote_ref: String,
     remote_oid: String,
 }
 
@@ -388,22 +492,20 @@ fn parse_pre_push_updates(input: &str) -> Result<Vec<PrePushUpdate>> {
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
             let fields = line.split_whitespace().collect::<Vec<_>>();
-            let [local_ref, local_oid, remote_ref, remote_oid] = fields.as_slice() else {
+            let [_local_ref, local_oid, _remote_ref, remote_oid] = fields.as_slice() else {
                 return Err(CrivError::new(format!(
                     "invalid pre-push ref update `{line}`; expected local-ref local-oid remote-ref remote-oid"
                 )));
             };
             for oid in [*local_oid, *remote_oid] {
-                if oid.len() != 40 || !oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                if !is_object_id(oid) {
                     return Err(CrivError::new(format!(
                         "invalid pre-push object ID `{oid}`"
                     )));
                 }
             }
             Ok(PrePushUpdate {
-                local_ref: (*local_ref).to_string(),
                 local_oid: (*local_oid).to_string(),
-                remote_ref: (*remote_ref).to_string(),
                 remote_oid: (*remote_oid).to_string(),
             })
         })
@@ -413,7 +515,7 @@ fn parse_pre_push_updates(input: &str) -> Result<Vec<PrePushUpdate>> {
 fn pre_push_changed_entries(
     repository: &GitRepository,
     remote_name: &str,
-    updates: Vec<PrePushUpdate>,
+    updates: &[PrePushUpdate],
 ) -> Result<ChangedSet> {
     let mut entries = Vec::new();
     for update in updates {
@@ -429,102 +531,56 @@ fn pre_push_changed_entries(
     Ok(ChangedSet {
         entries,
         old_ref: None,
-        new_ref: None,
+        new: None,
         basis: format!("pre-push ref updates for remote {remote_name}"),
     })
-}
-
-fn is_zero_oid(oid: &str) -> bool {
-    oid.bytes().all(|byte| byte == b'0')
-}
-
-fn import_matches(pattern: &str, matcher: Option<&crate::glob::GlobMatcher>, module: &str) -> bool {
-    if let Some(matcher) = matcher {
-        let normalized = module.replace("::", "/");
-        return matcher.is_match(&normalized);
-    }
-    module == pattern || module.starts_with(&format!("{pattern}::"))
-}
-
-impl Stage {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Commit => "commit",
-            Self::Push => "push",
-            Self::Ci => "ci",
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::git::ChangeStatus;
-    use std::process::Command;
+    use crate::git::fixture::git;
 
     #[test]
-    fn working_tree_migration_requires_regular_readable_content() {
-        let root = tempfile::TempDir::new().unwrap();
-        git(root.path(), &["init"]);
-        git(root.path(), &["config", "user.email", "criv@example.com"]);
-        git(root.path(), &["config", "user.name", "criv"]);
-        let path = "docs/adr/0001-test.md";
-        std::fs::create_dir_all(root.path().join("docs/adr")).unwrap();
-        std::fs::write(root.path().join(path), "See [[ADR-0010]].\n").unwrap();
-        git(root.path(), &["add", "."]);
-        git(root.path(), &["commit", "-m", "add adr"]);
-        let entry = crate::git::ChangedEntry {
-            path: path.into(),
-            previous_path: None,
-            status: ChangeStatus::Modified,
-            old_ref: Some("HEAD".into()),
-            new_ref: None,
-        };
-        let files = crate::repository::RepositoryFiles::open(root.path()).unwrap();
-        let changes = ChangedSet {
-            entries: vec![entry],
-            old_ref: Some("HEAD".into()),
-            new_ref: None,
-            basis: "test".into(),
-        };
-        let permitted = || {
-            crate::adr::change_violations(
-                &files,
-                &crate::config::Config::default(),
-                Some(&changes),
-                crate::adr::ChangeMode::Commit,
-            )
-            .is_empty()
-        };
-        let migrated = "See [[0010-example|ADR-0010]].\n";
-        std::fs::write(root.path().join(path), migrated).unwrap();
-        assert!(permitted());
-        std::fs::remove_file(root.path().join(path)).unwrap();
-        assert!(!permitted());
-        #[cfg(unix)]
-        {
-            let external = tempfile::NamedTempFile::new().unwrap();
-            std::fs::write(external.path(), migrated).unwrap();
-            std::os::unix::fs::symlink(external.path(), root.path().join(path)).unwrap();
-            assert!(!permitted());
-        }
+    fn deny_rules_match_exact_prefix_and_glob_forms() {
+        let rule = |pattern: &str| DenyRule::new(pattern, "test").unwrap();
+        assert!(rule("crate::infra").matches("crate::infra::db"));
+        assert!(rule("crate::infra::*").matches("crate::infra::db"));
+        assert!(rule("sqlx").matches("sqlx"));
+        assert!(!rule("crate::infra").matches("crate::infrastructure"));
     }
 
     #[test]
-    fn import_patterns_match_exact_prefix_and_glob_forms() {
-        assert!(import_matches("crate::infra", None, "crate::infra::db"));
-        let glob = crate::glob::GlobMatcher::new(&["crate/infra/*".into()]).unwrap();
-        assert!(import_matches(
-            "crate::infra::*",
-            Some(&glob),
-            "crate::infra::db"
-        ));
-        assert!(import_matches("sqlx", None, "sqlx"));
-        assert!(!import_matches(
-            "crate::infra",
-            None,
-            "crate::infrastructure"
-        ));
+    fn rejects_invalid_import_policy_scope_and_deny_globs() {
+        let policy = |id: &str, scope: &str, deny: &str| ImportPolicyConfig {
+            id: id.into(),
+            scope: vec![scope.into()],
+            deny: vec![deny.into()],
+        };
+        let scope = ImportPolicy::compile(&policy("bad-scope", "src/[.rs", "crate::db"))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(scope.contains("bad-scope") && scope.contains("scope"));
+
+        let deny = ImportPolicy::compile(&policy("bad-deny", "src/**", "crate::["))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(deny.contains("bad-deny") && deny.contains("deny glob"));
+    }
+
+    fn two_commit_repository() -> tempfile::TempDir {
+        let root = tempfile::TempDir::new().unwrap();
+        git(root.path(), &["init"]);
+        std::fs::write(root.path().join("tracked.txt"), "before\n").unwrap();
+        git(root.path(), &["add", "tracked.txt"]);
+        git(root.path(), &["commit", "-m", "initial"]);
+        std::fs::write(root.path().join("tracked.txt"), "after\n").unwrap();
+        git(root.path(), &["add", "tracked.txt"]);
+        git(root.path(), &["commit", "-m", "change"]);
+        root
     }
 
     #[test]
@@ -534,16 +590,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(updates.len(), 2);
-        assert_eq!(updates[1].remote_ref, "refs/heads/topic");
+        assert_eq!(updates[1].remote_oid, "3".repeat(40));
         assert!(parse_pre_push_updates("broken\n").is_err());
+        assert!(
+            parse_pre_push_updates("refs/heads/main 1111111 refs/heads/main 2222222\n").is_err()
+        );
     }
 
     #[test]
     fn pre_push_checks_each_outgoing_commit_on_a_new_branch() {
         let root = tempfile::TempDir::new().unwrap();
         git(root.path(), &["init"]);
-        git(root.path(), &["config", "user.email", "criv@example.com"]);
-        git(root.path(), &["config", "user.name", "criv"]);
         std::fs::create_dir_all(root.path().join("docs/adr")).unwrap();
         std::fs::write(root.path().join("docs/adr/0001-test.md"), "first\n").unwrap();
         git(root.path(), &["add", "."]);
@@ -551,65 +608,65 @@ mod tests {
         std::fs::write(root.path().join("docs/adr/0001-test.md"), "changed\n").unwrap();
         git(root.path(), &["add", "."]);
         git(root.path(), &["commit", "-m", "modify adr"]);
-        let head = git_stdout(root.path(), &["rev-parse", "HEAD"]);
 
-        let repository = GitRepository::discover(root.path()).unwrap();
         let changes = pre_push_changed_entries(
-            repository.as_ref().unwrap(),
+            &GitRepository::open(root.path()).unwrap(),
             "origin",
-            vec![PrePushUpdate {
-                local_ref: "refs/heads/main".into(),
-                local_oid: head,
-                remote_ref: "refs/heads/main".into(),
-                remote_oid: "0000000000000000000000000000000000000000".into(),
+            &[PrePushUpdate {
+                local_oid: git(root.path(), &["rev-parse", "HEAD"]),
+                remote_oid: "0".repeat(40),
             }],
         )
         .unwrap();
-        let files = crate::repository::RepositoryFiles::open(root.path()).unwrap();
-        let violations = crate::adr::change_violations(
-            &files,
-            &crate::config::Config::default(),
-            Some(&changes),
-            crate::adr::ChangeMode::Push,
-        );
 
-        assert_eq!(violations.len(), 1);
-        assert!(violations[0].contains("0001-test.md"));
+        assert_eq!(
+            changes
+                .entries
+                .iter()
+                .map(|entry| (entry.status, entry.path.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                (ChangeStatus::Added, "docs/adr/0001-test.md"),
+                (ChangeStatus::Modified, "docs/adr/0001-test.md"),
+            ]
+        );
     }
 
     #[test]
     fn ci_changed_entries_fails_closed_without_base_in_ci() {
-        let error = ci_changed_entries_with_env(None, |_| None, true)
+        let error = ci_changed_entries(None, None, None, true)
             .expect_err("ci without a base ref should fail");
 
         assert!(error.to_string().contains("CRIV_BASE_REF"));
     }
 
     #[test]
+    fn ci_changed_entries_reports_why_github_base_ref_is_unusable() {
+        let root = two_commit_repository();
+        let repository = GitRepository::open(root.path()).unwrap();
+        let error = ci_changed_entries(Some(&repository), None, Some("missing".into()), true)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("origin/missing"), "{error}");
+        assert!(error.contains("git diff missing HEAD failed"), "{error}");
+    }
+
+    #[test]
     fn ci_changed_entries_uses_explicit_base_ref() {
-        let root = tempfile::TempDir::new().unwrap();
-        git(root.path(), &["init"]);
-        git(root.path(), &["config", "user.email", "criv@example.com"]);
-        git(root.path(), &["config", "user.name", "criv"]);
-        std::fs::write(root.path().join("tracked.txt"), "before\n").unwrap();
-        git(root.path(), &["add", "tracked.txt"]);
-        git(root.path(), &["commit", "-m", "initial"]);
-        let base = git_stdout(root.path(), &["rev-parse", "HEAD"]);
-        std::fs::write(root.path().join("tracked.txt"), "after\n").unwrap();
-        git(root.path(), &["add", "tracked.txt"]);
-        git(root.path(), &["commit", "-m", "change"]);
+        let root = two_commit_repository();
+        let base = git(root.path(), &["rev-parse", "HEAD~1"]);
 
-        let repository = GitRepository::discover(root.path()).unwrap();
-        let changes = ci_changed_entries_with_env(
-            repository.as_ref(),
-            |name| (name == "CRIV_BASE_REF").then(|| base.clone()),
-            true,
-        )
-        .unwrap()
-        .expect("changes from explicit base ref");
+        let repository = GitRepository::open(root.path()).unwrap();
+        let selection = ci_changed_entries(Some(&repository), Some(&base), None, true).unwrap();
+        let changes = selection.changes.expect("changes from explicit base ref");
 
+        assert_eq!(selection.ci_base_ref.as_deref(), Some(base.as_str()));
         assert_eq!(changes.old_ref.as_deref(), Some(base.as_str()));
-        assert_eq!(changes.new_ref.as_deref(), Some("HEAD"));
+        assert_eq!(
+            changes.new,
+            Some(crate::git::Revision::Commit("HEAD".into()))
+        );
         assert_eq!(changes.entries[0].status, ChangeStatus::Modified);
         assert_eq!(changes.entries[0].path, "tracked.txt");
     }
@@ -618,13 +675,9 @@ mod tests {
     fn ci_changed_entries_reports_the_failed_explicit_comparison() {
         let root = tempfile::TempDir::new().unwrap();
         git(root.path(), &["init"]);
-        let repository = GitRepository::discover(root.path()).unwrap();
-        let error = ci_changed_entries_with_env(
-            repository.as_ref(),
-            |name| (name == "CRIV_BASE_REF").then(|| "missing-base".into()),
-            true,
-        )
-        .unwrap_err();
+        let repository = GitRepository::open(root.path()).unwrap();
+        let error =
+            ci_changed_entries(Some(&repository), Some("missing-base"), None, true).unwrap_err();
 
         assert!(error.to_string().contains("missing-base"));
         assert!(error.to_string().contains("git diff"));
@@ -632,69 +685,12 @@ mod tests {
 
     #[test]
     fn manual_push_falls_back_to_the_last_commit_with_a_reported_basis() {
-        let root = tempfile::TempDir::new().unwrap();
-        git(root.path(), &["init"]);
-        git(root.path(), &["config", "user.email", "criv@example.com"]);
-        git(root.path(), &["config", "user.name", "criv"]);
-        std::fs::write(root.path().join("tracked.txt"), "before\n").unwrap();
-        git(root.path(), &["add", "tracked.txt"]);
-        git(root.path(), &["commit", "-m", "initial"]);
-        std::fs::write(root.path().join("tracked.txt"), "after\n").unwrap();
-        git(root.path(), &["add", "tracked.txt"]);
-        git(root.path(), &["commit", "-m", "change"]);
+        let root = two_commit_repository();
 
-        let options = EnforceOptions {
-            stage: Stage::Push,
-            format: Format::Text,
-            pre_push: false,
-            remote_name: None,
-            remote_url: None,
-        };
-        let changes = changed_entries(root.path(), &options).unwrap().unwrap();
+        let changes = manual_push_changed_set(&GitRepository::open(root.path()).unwrap()).unwrap();
 
         assert_eq!(changes.entries[0].path, "tracked.txt");
         assert!(changes.basis.contains("HEAD~1..HEAD"));
-    }
-
-    fn git(root: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .current_dir(root)
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
-            .env_remove("GIT_COMMON_DIR")
-            .env_remove("GIT_PREFIX")
-            .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
-            .args(args)
-            .output()
-            .expect("git command should run");
-        assert!(
-            output.status.success(),
-            "git {:?} failed: {}{}",
-            args,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    fn git_stdout(root: &Path, args: &[&str]) -> String {
-        let output = Command::new("git")
-            .current_dir(root)
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
-            .env_remove("GIT_COMMON_DIR")
-            .env_remove("GIT_PREFIX")
-            .args(args)
-            .output()
-            .expect("git command should run");
-        assert!(
-            output.status.success(),
-            "git {:?} failed: {}{}",
-            args,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout).unwrap().trim().to_string()
+        assert!(changes.basis.contains("@{upstream}"), "{}", changes.basis);
     }
 }

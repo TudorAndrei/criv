@@ -7,6 +7,8 @@
     clippy::unwrap_used
 )]
 
+mod support;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -15,6 +17,7 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
+/// criv installed at `root/install`, where it looks for its local viewer package.
 fn criv(root: &Path) -> Command {
     let install = root.join("install");
     fs::create_dir_all(&install).unwrap();
@@ -23,9 +26,7 @@ fn criv(root: &Path) -> Command {
     if fs::hard_link(&built_executable, &executable).is_err() {
         fs::copy(built_executable, &executable).unwrap();
     }
-    let mut command = Command::new(executable);
-    command.current_dir(root);
-    command
+    support::criv_at(&executable, root)
 }
 
 fn write_editor(bin: &Path, name: &str, body: &str) {

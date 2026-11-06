@@ -42,7 +42,7 @@ pub struct InstallEditorOptions {
     dry_run: bool,
 }
 
-pub fn run(options: &InstallEditorOptions) -> Result<()> {
+pub fn install_editor(options: &InstallEditorOptions) -> Result<()> {
     let vsix = bundled_vsix()?;
     let editor_cli = resolve_editor(options.editor)?;
 
@@ -137,16 +137,21 @@ fn editor_candidates(editor: Editor) -> [String; 5] {
     ]
 }
 
-#[cfg(not(windows))]
 fn run_install(editor_cli: &Path, vsix: &Path) -> std::io::Result<Output> {
-    Command::new(editor_cli)
+    editor_command(editor_cli)
         .arg("--install-extension")
         .arg(vsix)
         .output()
 }
 
+#[cfg(not(windows))]
+fn editor_command(editor_cli: &Path) -> Command {
+    Command::new(editor_cli)
+}
+
+/// A `.cmd` or `.bat` editor shim runs through `cmd.exe`.
 #[cfg(windows)]
-fn run_install(editor_cli: &Path, vsix: &Path) -> std::io::Result<Output> {
+fn editor_command(editor_cli: &Path) -> Command {
     let is_script = editor_cli
         .extension()
         .and_then(OsStr::to_str)
@@ -154,17 +159,11 @@ fn run_install(editor_cli: &Path, vsix: &Path) -> std::io::Result<Output> {
             extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
         });
     if is_script {
-        Command::new("cmd.exe")
-            .args(["/D", "/S", "/C"])
-            .arg(editor_cli)
-            .arg("--install-extension")
-            .arg(vsix)
-            .output()
+        let mut command = Command::new("cmd.exe");
+        command.args(["/D", "/S", "/C"]).arg(editor_cli);
+        command
     } else {
         Command::new(editor_cli)
-            .arg("--install-extension")
-            .arg(vsix)
-            .output()
     }
 }
 

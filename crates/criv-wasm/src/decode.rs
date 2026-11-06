@@ -1,31 +1,64 @@
 //! State envelope decoding and schema validation.
 
-#[cfg(not(target_arch = "wasm32"))]
-use criv_state_wire::STATE_SCHEMA;
-#[cfg(target_arch = "wasm32")]
+use std::fmt::Display;
+
+use criv_state_wire::{StateDocument, StateReadError};
 use wasm_bindgen::prelude::*;
 
-#[cfg(target_arch = "wasm32")]
-pub fn js_error_message(error: &JsValue) -> String {
-    js_sys::Reflect::get(error, &JsValue::from_str("message"))
-        .ok()
-        .and_then(|value| value.as_string())
-        .or_else(|| error.as_string())
-        .unwrap_or_else(|| "unknown JavaScript error".into())
+/// Stable reason a State document cannot be loaded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StateErrorCode {
+    JsonInvalid,
+    SchemaUnsupported,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub fn decode_state_value(raw: &str) -> Result<serde_json::Value, String> {
-    let state = serde_json::from_str::<serde_json::Value>(raw)
-        .map_err(|err| format!("criv-state-json-invalid: {err}"))?;
-    let schema = state
-        .get("schema")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("<missing>");
-    if schema != STATE_SCHEMA {
-        return Err(format!(
-            "criv-state-schema-unsupported: unsupported criv state schema: {schema}"
-        ));
+impl StateErrorCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::JsonInvalid => "criv-state-json-invalid",
+            Self::SchemaUnsupported => "criv-state-schema-unsupported",
+        }
     }
-    Ok(state)
+}
+
+/// A rejected State document, delivered to JavaScript as an `Error` with a `code`.
+#[derive(Debug)]
+pub struct StateError {
+    pub code: StateErrorCode,
+    pub message: String,
+}
+
+impl StateError {
+    pub fn json_invalid(detail: impl Display) -> Self {
+        Self {
+            code: StateErrorCode::JsonInvalid,
+            message: format!("invalid criv state JSON: {detail}"),
+        }
+    }
+
+    pub fn schema_unsupported(schema: &str) -> Self {
+        Self {
+            code: StateErrorCode::SchemaUnsupported,
+            message: format!("unsupported criv state schema: {schema}"),
+        }
+    }
+
+    pub fn into_js(self) -> JsValue {
+        let error = js_sys::Error::new(&self.message);
+        let code_set = js_sys::Reflect::set(
+            &error,
+            &JsValue::from_str("code"),
+            &JsValue::from_str(self.code.as_str()),
+        );
+        debug_assert!(matches!(code_set, Ok(true)));
+        error.into()
+    }
+}
+
+/// Decode one State document after checking its schema.
+pub fn decode_state(raw: &str) -> Result<StateDocument, StateError> {
+    criv_state_wire::decode(raw).map_err(|error| match error {
+        StateReadError::Json(error) => StateError::json_invalid(error),
+        StateReadError::UnsupportedSchema(schema) => StateError::schema_unsupported(&schema),
+    })
 }

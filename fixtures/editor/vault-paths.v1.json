@@ -1,0 +1,4 @@
+{
+  "config": "criv.toml",
+  "state": ".criv/state.json"
+}

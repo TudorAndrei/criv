@@ -2,42 +2,28 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::Arc;
 
-#[cfg(test)]
-use std::{cell::Cell, thread_local};
-
 use ast_grep_config::{DeserializeEnv, SerializableRuleCore};
-#[cfg(test)]
-use ast_grep_core::Matcher;
 use ast_grep_core::meta_var::MetaVariable;
 use ast_grep_core::{Doc, NodeMatch, Pattern};
 use ast_grep_language::{Language, LanguageExt, SupportLang};
 
-use crate::diagnostic::SourceLocation;
-use crate::source::read_source_to_string_from;
-use crate::vault::{PolicyPattern, Vault};
-use crate::{CrivError, Result};
+use crate::Result;
+use crate::diagnostic::{DiagnosticCode, SourceLocation};
+use crate::repository::RepositoryFiles;
+use crate::source::read_selected;
+#[cfg(test)]
+use crate::work::{self, Work};
 
-/// The `language` of a policy pattern, parsed when the ADR is read.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PolicyLanguage {
-    Supported(SupportLang),
-    Unsupported { name: String, error: String },
-}
-
-impl From<&str> for PolicyLanguage {
-    fn from(name: &str) -> Self {
-        name.parse().map_or_else(
-            |error: <SupportLang as std::str::FromStr>::Err| Self::Unsupported {
-                name: name.to_string(),
-                error: error.to_string(),
-            },
-            Self::Supported,
-        )
-    }
+/// The fields of a policy pattern that decide what it matches.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PolicyDefinition<'a> {
+    pub(crate) language: Option<&'a str>,
+    pub(crate) pattern: Option<&'a str>,
+    pub(crate) rule: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum PatternSource<'a> {
+enum PatternSource<'a> {
     Pattern(&'a str),
     Rule(&'a str),
 }
@@ -68,166 +54,102 @@ pub enum PolicyCompileError {
     MissingLanguage,
     AmbiguousBody,
     MissingBody,
-    InvalidPattern(String),
-    InvalidRule(String),
+    Invalid(String),
 }
 
+impl PolicyCompileError {
+    pub(crate) const fn code(&self) -> DiagnosticCode {
+        match self {
+            Self::MissingDefinition => DiagnosticCode::MissingPolicyPatternDefinition,
+            Self::MissingLanguage => DiagnosticCode::MissingPolicyPatternLanguage,
+            Self::AmbiguousBody => DiagnosticCode::AmbiguousPolicyPatternBody,
+            Self::MissingBody => DiagnosticCode::MissingPolicyPatternBody,
+            Self::Invalid(_) => DiagnosticCode::InvalidPolicyPattern,
+        }
+    }
+}
+
+/// The predicate that follows the pattern's name, as in "policy pattern `x` must ...".
 impl fmt::Display for PolicyCompileError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingDefinition => {
-                formatter.write_str("policy pattern must declare language and pattern or rule")
+                formatter.write_str("must declare language and pattern or rule")
             }
-            Self::MissingLanguage => {
-                formatter.write_str("inline policy pattern must declare a language")
+            Self::MissingLanguage => formatter.write_str("must declare a language"),
+            Self::AmbiguousBody => {
+                formatter.write_str("must declare either pattern or rule, not both")
             }
-            Self::AmbiguousBody => formatter
-                .write_str("inline policy pattern must declare either pattern or rule, not both"),
-            Self::MissingBody => {
-                formatter.write_str("inline policy pattern must declare pattern or rule")
-            }
-            Self::InvalidPattern(message) | Self::InvalidRule(message) => {
-                formatter.write_str(message)
-            }
+            Self::MissingBody => formatter.write_str("must declare pattern or rule"),
+            Self::Invalid(message) => write!(formatter, "does not compile: {message}"),
         }
-    }
-}
-
-impl From<PolicyCompileError> for CrivError {
-    fn from(error: PolicyCompileError) -> Self {
-        Self::new(error.to_string())
     }
 }
 
 pub struct PolicyScanRequest<'a> {
-    pub(crate) key: usize,
     pub(crate) policy: &'a CompiledPolicy,
     pub(crate) paths: &'a BTreeSet<String>,
 }
 
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
-pub(crate) struct WorkCounts {
-    pub(crate) policy_compilations: usize,
-    pub(crate) ast_parses: usize,
-}
-
-#[cfg(test)]
-thread_local! {
-    static WORK_COUNTS: Cell<WorkCounts> = const { Cell::new(WorkCounts {
-        policy_compilations: 0,
-        ast_parses: 0,
-    }) };
-}
-
-#[cfg(test)]
-fn record_work(update: impl FnOnce(&mut WorkCounts)) {
-    WORK_COUNTS.with(|counts| {
-        let mut next = counts.get();
-        update(&mut next);
-        counts.set(next);
-    });
-}
-
-#[cfg(test)]
-pub(crate) fn reset_work_counts() {
-    WORK_COUNTS.with(|counts| counts.set(WorkCounts::default()));
-}
-
-#[cfg(test)]
-pub(crate) fn work_counts() -> WorkCounts {
-    WORK_COUNTS.with(Cell::get)
-}
-
-#[cfg(test)]
-pub(crate) fn reset_batch_parse_count() {
-    reset_work_counts();
-}
-
-#[cfg(test)]
-pub(crate) fn batch_parse_count() -> usize {
-    work_counts().ast_parses
-}
-
 pub fn compile_policy(
-    policy: &PolicyPattern,
+    definition: PolicyDefinition<'_>,
 ) -> std::result::Result<CompiledPolicy, PolicyCompileError> {
-    let (source, language) = policy_source(policy)?;
-    let language = match language {
-        PolicyLanguage::Supported(language) => *language,
-        PolicyLanguage::Unsupported { name, error } => {
-            let message = format!("unsupported ast-grep language `{name}`: {error}");
-            return Err(match source {
-                PatternSource::Pattern(_) => PolicyCompileError::InvalidPattern(message),
-                PatternSource::Rule(_) => PolicyCompileError::InvalidRule(message),
-            });
-        }
-    };
-    #[cfg(test)]
-    record_work(|counts| {
-        counts.policy_compilations = counts.policy_compilations.saturating_add(1);
-    });
-    let matcher = compile(source, language).map_err(|error| match source {
-        PatternSource::Pattern(_) => PolicyCompileError::InvalidPattern(error.to_string()),
-        PatternSource::Rule(_) => PolicyCompileError::InvalidRule(error.to_string()),
+    let (source, name) = policy_source(definition)?;
+    let language = name.parse::<SupportLang>().map_err(|error| {
+        PolicyCompileError::Invalid(format!("unsupported ast-grep language `{name}`: {error}"))
     })?;
+    #[cfg(test)]
+    work::record(Work::PolicyCompilation);
+    let matcher = compile(source, language)?;
     Ok(CompiledPolicy { language, matcher })
 }
 
+/// The matches of each request, in request order. Each file is read and
+/// parsed at most once for all the requests whose language and paths
+/// include it.
 pub fn find_policies_batch(
-    vault: &Vault,
+    files: &RepositoryFiles,
     requests: &[PolicyScanRequest<'_>],
-) -> Result<BTreeMap<usize, Vec<StructuralMatch>>> {
-    let mut rows_by_key = BTreeMap::<usize, Vec<StructuralMatch>>::new();
-    for request in requests {
-        rows_by_key.entry(request.key).or_default();
-    }
-
-    for source_file in vault.source_files() {
+) -> Result<Vec<Vec<StructuralMatch>>> {
+    let mut rows = vec![Vec::new(); requests.len()];
+    let paths = requests
+        .iter()
+        .flat_map(|request| request.paths)
+        .collect::<BTreeSet<_>>();
+    for source_file in paths {
         let Some(language) = SupportLang::from_path(source_file) else {
             continue;
         };
-        let requests = requests
+        let scans = requests
             .iter()
-            .filter(|request| {
+            .zip(&mut rows)
+            .filter(|(request, _)| {
                 request.policy.language == language && request.paths.contains(source_file)
             })
             .collect::<Vec<_>>();
-        if requests.is_empty() {
+        if scans.is_empty() {
             continue;
         }
 
-        let contents: Arc<str> = Arc::from(read_source_to_string_from(
-            vault.repository_files(),
-            source_file,
-        )?);
+        let contents: Arc<str> =
+            Arc::from(String::from_utf8_lossy(&read_selected(files, source_file)?));
         #[cfg(test)]
-        record_work(|counts| counts.ast_parses = counts.ast_parses.saturating_add(1));
+        work::record(Work::AstParse);
         let ast = language.ast_grep(contents.as_ref());
         let root = ast.root();
-        for request in requests {
-            let rows = rows_by_key.entry(request.key).or_default();
+        for (request, rows) in scans {
+            let row = |matched| row_from_match(source_file, &matched, contents.clone());
             match &request.policy.matcher {
-                CompiledMatcher::Pattern(pattern) => {
-                    rows.extend(
-                        root.find_all(pattern)
-                            .map(|matched| row_from_match(source_file, &matched, contents.clone())),
-                    );
-                }
-                CompiledMatcher::Rule(rule) => {
-                    rows.extend(
-                        root.find_all(rule)
-                            .map(|matched| row_from_match(source_file, &matched, contents.clone())),
-                    );
-                }
+                CompiledMatcher::Pattern(pattern) => rows.extend(root.find_all(pattern).map(row)),
+                CompiledMatcher::Rule(rule) => rows.extend(root.find_all(rule).map(row)),
             }
         }
     }
 
-    for rows in rows_by_key.values_mut() {
+    for rows in &mut rows {
         sort_matches(rows);
     }
-    Ok(rows_by_key)
+    Ok(rows)
 }
 
 fn sort_matches(rows: &mut Vec<StructuralMatch>) {
@@ -244,17 +166,22 @@ fn sort_matches(rows: &mut Vec<StructuralMatch>) {
     });
 }
 
-fn policy_source(
-    policy: &PolicyPattern,
-) -> std::result::Result<(PatternSource<'_>, &PolicyLanguage), PolicyCompileError> {
-    if !policy.has_inline_definition() {
+const fn policy_source(
+    definition: PolicyDefinition<'_>,
+) -> std::result::Result<(PatternSource<'_>, &str), PolicyCompileError> {
+    let PolicyDefinition {
+        language,
+        pattern,
+        rule,
+    } = definition;
+    if language.is_none() && pattern.is_none() && rule.is_none() {
         return Err(PolicyCompileError::MissingDefinition);
     }
-    let Some(language) = &policy.language else {
+    let Some(language) = language else {
         return Err(PolicyCompileError::MissingLanguage);
     };
 
-    match (policy.pattern.as_deref(), policy.rule.as_deref()) {
+    match (pattern, rule) {
         (Some(_), Some(_)) => Err(PolicyCompileError::AmbiguousBody),
         (None, None) => Err(PolicyCompileError::MissingBody),
         (Some(pattern), None) => Ok((PatternSource::Pattern(pattern), language)),
@@ -262,19 +189,22 @@ fn policy_source(
     }
 }
 
-fn compile(source: PatternSource<'_>, language: SupportLang) -> Result<CompiledMatcher> {
+fn compile(
+    source: PatternSource<'_>,
+    language: SupportLang,
+) -> std::result::Result<CompiledMatcher, PolicyCompileError> {
     match source {
         PatternSource::Pattern(pattern) => Pattern::try_new(pattern, language)
             .map(CompiledMatcher::Pattern)
             .map_err(|err| {
-                CrivError::new(format!(
+                PolicyCompileError::Invalid(format!(
                     "failed to compile ast-grep pattern for {language}: {err}"
                 ))
             }),
         PatternSource::Rule(rule) => {
             let yaml = normalize_rule(rule);
             let serial: SerializableRuleCore = ast_grep_config::from_str(&yaml).map_err(|err| {
-                CrivError::new(format!(
+                PolicyCompileError::Invalid(format!(
                     "failed to parse ast-grep rule for {language}: {err}"
                 ))
             })?;
@@ -282,27 +212,12 @@ fn compile(source: PatternSource<'_>, language: SupportLang) -> Result<CompiledM
                 .get_matcher(DeserializeEnv::new(language))
                 .map(CompiledMatcher::Rule)
                 .map_err(|err| {
-                    CrivError::new(format!(
+                    PolicyCompileError::Invalid(format!(
                         "failed to compile ast-grep rule for {language}: {err}"
                     ))
                 })
         }
     }
-}
-
-#[cfg(test)]
-fn scan_source<M: Matcher>(
-    source_file: &str,
-    language: SupportLang,
-    contents: &str,
-    matcher: &M,
-) -> Vec<StructuralMatch> {
-    let contents: Arc<str> = Arc::from(contents);
-    let ast = language.ast_grep(contents.as_ref());
-    ast.root()
-        .find_all(matcher)
-        .map(|matched| row_from_match(source_file, &matched, contents.clone()))
-        .collect()
 }
 
 fn row_from_match<D: Doc>(
@@ -379,11 +294,10 @@ mod tests {
 
     #[test]
     fn ast_grep_pattern_returns_ranges_and_captures() {
-        let matches = scan_source(
+        let matches = scan(
             "src/main.rs",
-            SupportLang::Rust,
             "fn main() {\n  println!(\"hi\");\n}\nfn helper() {}\n",
-            &Pattern::try_new("fn $NAME() { $$$ }", SupportLang::Rust).unwrap(),
+            policy("rust", "fn $NAME() { $$$ }"),
         );
 
         assert_eq!(matches.len(), 2);
@@ -400,8 +314,11 @@ mod tests {
 
     #[test]
     fn ast_grep_rule_supports_composite_yaml() {
-        let rule = compile(
-            PatternSource::Rule(
+        let matches = scan(
+            "src/main.rs",
+            "fn main() {\n  println!(\"hi\");\n}\n",
+            rule_policy(
+                "rust",
                 r#"
 all:
   - pattern: println!($$$ARGS)
@@ -410,17 +327,6 @@ all:
       stopBy: end
 "#,
             ),
-            SupportLang::Rust,
-        )
-        .unwrap();
-        let CompiledMatcher::Rule(rule) = rule else {
-            panic!("expected rule matcher");
-        };
-        let matches = scan_source(
-            "src/main.rs",
-            SupportLang::Rust,
-            "fn main() {\n  println!(\"hi\");\n}\n",
-            &rule,
         );
 
         assert_eq!(matches.len(), 1);
@@ -432,126 +338,91 @@ all:
     }
 
     #[test]
-    fn batch_returns_all_expected_policy_rows() {
-        let (_temp, vault) = policy_fixture();
-        let function_policy = policy("rust", "fn $NAME() { $$$ }");
-        let struct_policy = policy("rust", "struct $NAME;");
-        let function_compiled = compile_policy(&function_policy).unwrap();
-        let struct_compiled = compile_policy(&struct_policy).unwrap();
+    fn batch_returns_rows_in_request_order() {
+        let (_temp, files) = policy_fixture();
+        let function_compiled = compile_policy(policy("rust", "fn $NAME() { $$$ }")).unwrap();
+        let struct_compiled = compile_policy(policy("rust", "struct $NAME;")).unwrap();
         let policy_paths = BTreeSet::from(["src/left.rs".to_string(), "src/right.rs".to_string()]);
-        let requests = vec![
+        let requests = [
             PolicyScanRequest {
-                key: 0,
-                policy: &function_compiled,
+                policy: &struct_compiled,
                 paths: &policy_paths,
             },
             PolicyScanRequest {
-                key: 1,
-                policy: &struct_compiled,
+                policy: &function_compiled,
                 paths: &policy_paths,
             },
         ];
 
-        let batch = find_policies_batch(&vault, &requests).unwrap();
+        let batch = find_policies_batch(&files, &requests).unwrap();
 
         assert_eq!(
-            batch
-                .get(&0)
-                .unwrap()
-                .iter()
-                .map(|row| row.path.as_str())
-                .collect::<Vec<_>>(),
-            vec!["src/left.rs", "src/right.rs"]
-        );
-        assert_eq!(
-            batch
-                .get(&1)
-                .unwrap()
-                .iter()
-                .map(|row| row.path.as_str())
-                .collect::<Vec<_>>(),
-            vec!["src/left.rs", "src/right.rs"]
+            texts(&batch),
+            [
+                vec!["struct Left;", "struct Right;"],
+                vec!["fn left() {}", "fn right() {}"]
+            ]
         );
     }
 
     #[test]
     fn batch_respects_per_pattern_scopes() {
-        let (_temp, vault) = policy_fixture();
-        let function_policy = policy("rust", "fn $NAME() { $$$ }");
+        let (_temp, files) = policy_fixture();
         let left_paths = BTreeSet::from(["src/left.rs".to_string()]);
         let right_paths = BTreeSet::from(["src/right.rs".to_string()]);
-        reset_work_counts();
-        let function_compiled = compile_policy(&function_policy).unwrap();
-        let requests = vec![
+        work::reset();
+        let function_compiled = compile_policy(policy("rust", "fn $NAME() { $$$ }")).unwrap();
+        let requests = [
             PolicyScanRequest {
-                key: 0,
                 policy: &function_compiled,
                 paths: &left_paths,
             },
             PolicyScanRequest {
-                key: 1,
                 policy: &function_compiled,
                 paths: &right_paths,
             },
         ];
 
-        let batch = find_policies_batch(&vault, &requests).unwrap();
+        let batch = find_policies_batch(&files, &requests).unwrap();
 
+        assert_eq!(texts(&batch), [vec!["fn left() {}"], vec!["fn right() {}"]]);
         assert_eq!(
-            batch
-                .get(&0)
-                .unwrap()
-                .iter()
-                .map(|row| row.path.as_str())
-                .collect::<Vec<_>>(),
-            vec!["src/left.rs"]
-        );
-        assert_eq!(
-            batch
-                .get(&1)
-                .unwrap()
-                .iter()
-                .map(|row| row.path.as_str())
-                .collect::<Vec<_>>(),
-            vec!["src/right.rs"]
-        );
-        assert_eq!(
-            work_counts(),
-            WorkCounts {
-                policy_compilations: 1,
-                ast_parses: 2,
-            },
+            work::counts([Work::PolicyCompilation, Work::AstParse]),
+            [1, 2],
             "the policy is compiled once and each affected source is parsed once"
         );
     }
 
     #[test]
     fn batch_skips_non_matching_language() {
-        let (_temp, vault) = policy_fixture();
-        let python_policy = policy("python", "def $NAME($$$): $$$");
-        let python_compiled = compile_policy(&python_policy).unwrap();
+        let (_temp, files) = policy_fixture();
+        let python_compiled = compile_policy(policy("python", "def $NAME($$$): $$$")).unwrap();
         let paths = BTreeSet::from(["src/left.rs".to_string(), "src/right.rs".to_string()]);
-        let requests = vec![PolicyScanRequest {
-            key: 0,
+        let requests = [PolicyScanRequest {
             policy: &python_compiled,
             paths: &paths,
         }];
 
-        let batch = find_policies_batch(&vault, &requests).unwrap();
+        let batch = find_policies_batch(&files, &requests).unwrap();
 
-        assert!(batch.get(&0).unwrap().is_empty());
+        assert_eq!(batch, [Vec::new()]);
+    }
+
+    #[test]
+    fn unsupported_languages_do_not_compile() {
+        assert!(matches!(
+            compile_policy(policy("cobol", "MOVE $A TO $B")),
+            Err(PolicyCompileError::Invalid(message)) if message.contains("`cobol`")
+        ));
     }
 
     #[test]
     fn elixir_language_names_extensions_patterns_and_rules_have_parity() {
         assert_eq!(
-            PolicyLanguage::from("elixir"),
-            PolicyLanguage::Supported(SupportLang::Elixir)
+            "elixir".parse::<SupportLang>().ok(),
+            Some(SupportLang::Elixir)
         );
-        assert_eq!(
-            PolicyLanguage::from("ex"),
-            PolicyLanguage::Supported(SupportLang::Elixir)
-        );
+        assert_eq!("ex".parse::<SupportLang>().ok(), Some(SupportLang::Elixir));
         assert_eq!(
             SupportLang::from_path("lib/sample.ex"),
             Some(SupportLang::Elixir)
@@ -568,48 +439,44 @@ defmodule Sample do
   end
 end
 "#;
-        let pattern = Pattern::try_new(
-            r#"
+        let matches = scan(
+            "lib/sample.ex",
+            source,
+            policy(
+                "elixir",
+                r#"
 def $FUNC($$$ARGS) when $GUARDS do
   $$$BODY
 end
 "#,
-            SupportLang::Elixir,
-        )
-        .unwrap();
-        let matches = scan_source("lib/sample.ex", SupportLang::Elixir, source, &pattern);
+            ),
+        );
         assert_eq!(matches.len(), 1);
         assert_eq!(
             matches[0].captures.get("FUNC").map(String::as_str),
             Some("run")
         );
 
-        let CompiledMatcher::Rule(rule) = compile(
-            PatternSource::Rule("pattern: IO.inspect($VALUE)"),
-            SupportLang::Elixir,
-        )
-        .unwrap() else {
-            panic!("expected an Elixir rule matcher");
-        };
-        let rule_matches = scan_source("test/sample_test.exs", SupportLang::Elixir, source, &rule);
+        let rule_matches = scan(
+            "test/sample_test.exs",
+            source,
+            rule_policy("elixir", "pattern: IO.inspect($VALUE)"),
+        );
         assert_eq!(rule_matches.len(), 1);
     }
 
     #[test]
     fn elixir_partial_files_and_invalid_patterns_return_results_without_panics() {
-        let pattern = Pattern::try_new("IO.inspect($VALUE)", SupportLang::Elixir).unwrap();
-        let matches = scan_source(
+        let matches = scan(
             "lib/partial.ex",
-            SupportLang::Elixir,
             "defmodule Partial do\n  IO.inspect(:before)\n  def broken(\n  IO.inspect(:after)\nend\n",
-            &pattern,
+            policy("elixir", "IO.inspect($VALUE)"),
         );
         assert!(!matches.is_empty());
 
-        let invalid = policy("elixir", "def (");
         assert!(matches!(
-            compile_policy(&invalid),
-            Err(PolicyCompileError::InvalidPattern(_))
+            compile_policy(policy("elixir", "def (")),
+            Err(PolicyCompileError::Invalid(_))
         ));
     }
 
@@ -619,11 +486,7 @@ end
         let root = temp.path();
         fs::create_dir_all(root.join("lib")).unwrap();
         fs::create_dir_all(root.join("test")).unwrap();
-        fs::write(
-            root.join("criv.toml"),
-            "[source]\nroots = [\"lib\", \"test\"]\n",
-        )
-        .unwrap();
+        fs::write(root.join("lib/other.ex"), "IO.inspect(:outside)\n").unwrap();
         fs::write(
             root.join("lib/sample.ex"),
             "defmodule Sample do\n  def run(value), do: IO.inspect(value)\nend\n",
@@ -634,17 +497,16 @@ end
             "defmodule SampleTest do\n  def run(value), do: IO.inspect(value)\nend\n",
         )
         .unwrap();
-        let vault = Vault::load(root).unwrap();
-        let compiled = compile_policy(&policy("ex", "IO.inspect($VALUE)")).unwrap();
+        let files = RepositoryFiles::open(root).unwrap();
+        let compiled = compile_policy(policy("ex", "IO.inspect($VALUE)")).unwrap();
         let paths = BTreeSet::from([
             "lib/sample.ex".to_string(),
             "test/sample_test.exs".to_string(),
         ]);
-        reset_work_counts();
+        work::reset();
         let rows = find_policies_batch(
-            &vault,
+            &files,
             &[PolicyScanRequest {
-                key: 0,
                 policy: &compiled,
                 paths: &paths,
             }],
@@ -652,41 +514,64 @@ end
         .unwrap();
 
         assert_eq!(
-            rows[&0]
+            rows[0]
                 .iter()
                 .map(|row| row.path.as_str())
                 .collect::<Vec<_>>(),
             vec!["lib/sample.ex", "test/sample_test.exs"]
         );
-        assert_eq!(work_counts().ast_parses, 2);
+        assert_eq!(work::count(Work::AstParse), 2);
     }
 
-    fn policy(language: &str, pattern: &str) -> PolicyPattern {
-        PolicyPattern {
-            id: Some("test".to_string()),
-            line: 1,
-            language: Some(PolicyLanguage::from(language)),
-            pattern: Some(pattern.to_string()),
+    fn policy<'a>(language: &'a str, pattern: &'a str) -> PolicyDefinition<'a> {
+        PolicyDefinition {
+            language: Some(language),
+            pattern: Some(pattern),
             rule: None,
-            message: None,
         }
     }
 
-    fn policy_fixture() -> (TempDir, Vault) {
+    fn rule_policy<'a>(language: &'a str, rule: &'a str) -> PolicyDefinition<'a> {
+        PolicyDefinition {
+            language: Some(language),
+            pattern: None,
+            rule: Some(rule),
+        }
+    }
+
+    fn texts(batch: &[Vec<StructuralMatch>]) -> Vec<Vec<&str>> {
+        batch
+            .iter()
+            .map(|rows| rows.iter().map(|row| row.text.as_str()).collect())
+            .collect()
+    }
+
+    fn scan(path: &str, contents: &str, policy: PolicyDefinition<'_>) -> Vec<StructuralMatch> {
+        let temp = TempDir::new().unwrap();
+        let file = temp.path().join(path);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(&file, contents).unwrap();
+        let files = RepositoryFiles::open(temp.path()).unwrap();
+        let compiled = compile_policy(policy).unwrap();
+        let paths = BTreeSet::from([path.to_string()]);
+        find_policies_batch(
+            &files,
+            &[PolicyScanRequest {
+                policy: &compiled,
+                paths: &paths,
+            }],
+        )
+        .unwrap()
+        .remove(0)
+    }
+
+    fn policy_fixture() -> (TempDir, RepositoryFiles) {
         let temp = TempDir::new().unwrap();
         let root = temp.path();
         fs::create_dir_all(root.join("src")).unwrap();
-        fs::write(
-            root.join("criv.toml"),
-            r#"
-[source]
-roots = ["src"]
-"#,
-        )
-        .unwrap();
         fs::write(root.join("src/left.rs"), "fn left() {}\nstruct Left;\n").unwrap();
         fs::write(root.join("src/right.rs"), "fn right() {}\nstruct Right;\n").unwrap();
-        let vault = Vault::load(root).unwrap();
-        (temp, vault)
+        let files = RepositoryFiles::open(root).unwrap();
+        (temp, files)
     }
 }

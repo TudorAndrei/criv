@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
+use criv_state_wire::layout;
 use notify_debouncer_mini::{
     DebounceEventResult, Debouncer, new_debouncer,
     notify::{RecommendedWatcher, RecursiveMode},
@@ -13,10 +14,17 @@ use serde::Serialize;
 use usage_rs::{Args as UsageArgs, ValueEnum};
 
 use crate::config::Config;
-use crate::discovery::SourceEventFilter;
-use crate::refresh::{RefreshCause, RefreshSession};
-use crate::repository::RepositoryFiles;
+use crate::discovery::{SourceEventFilter, VaultEventFilter};
+use crate::repository::{self, EntryKind, RepositoryFiles};
 use crate::{CrivError, Result};
+
+mod refresh;
+
+use refresh::{RefreshCause, RefreshSession};
+
+const POLL_INTERVAL: Duration = Duration::from_millis(250);
+const DEBOUNCE: Duration = Duration::from_millis(250);
+const RECONFIGURATION_RETRY: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
 enum Format {
@@ -36,23 +44,23 @@ pub struct WatchOptions {
 
 /// Acquire the Watch lock before starting a single refresh or a live session.
 pub fn run(root: &Path, options: &WatchOptions) -> Result<()> {
-    let files = RepositoryFiles::open_vault(root)?;
+    let files = crate::config::open_vault(root)?;
     let mode = if options.once {
         WatchMode::Once
     } else {
         WatchMode::Live
     };
-    let _lock = WatchSessionLock::acquire_from(&files, mode)?;
+    let _lock = WatchSessionLock::acquire(&files, mode)?;
     if options.once {
         run_once(&files, options.format)?;
         return Ok(());
     }
-    let mut session = LiveWatchSession::start_from(&files)?;
+    let mut session = LiveWatchSession::start(&files, Arc::new(NotifyWatcherFactory))?;
 
     println!("criv watch running");
 
     loop {
-        session.step(Duration::from_millis(250))?;
+        session.step(POLL_INTERVAL)?;
     }
 }
 
@@ -94,7 +102,8 @@ struct NotifyWatcherAdapter {
 impl NotifyWatcherAdapter {
     fn start(set: &WatchSet) -> Result<Self> {
         let (tx, receiver) = mpsc::channel::<DebounceEventResult>();
-        let mut debouncer = new_debouncer(Duration::from_millis(250), move |event| {
+        let mut debouncer = new_debouncer(DEBOUNCE, move |event| {
+            // The receiver drops only with this adapter, so no one awaits a lost event.
             let _ = tx.send(event);
         })
         .map_err(|err| CrivError::new(format!("failed to start watcher: {err}")))?;
@@ -179,64 +188,68 @@ enum WatchDepth {
     Recursive,
 }
 
-impl WatchTarget {
-    const fn non_recursive(path: PathBuf) -> Self {
-        Self {
-            path,
-            depth: WatchDepth::NonRecursive,
-        }
-    }
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum WatchedRole {
+    Docs,
+    Source,
+}
 
-    const fn recursive(path: PathBuf) -> Self {
-        Self {
-            path,
-            depth: WatchDepth::Recursive,
-        }
-    }
+/// The configured locations a watch generation observes: the docs root and
+/// each Source root, relative to the repository root.
+fn watched_locations(config: &Config) -> impl Iterator<Item = (WatchedRole, &str)> {
+    std::iter::once((WatchedRole::Docs, config.docs_dir())).chain(
+        config
+            .source_roots()
+            .iter()
+            .map(|source_root| (WatchedRole::Source, source_root.as_str())),
+    )
 }
 
 impl WatchSet {
-    fn active(root: &Path, config: &Config) -> Self {
+    fn active(files: &RepositoryFiles, config: &Config) -> Self {
+        let root = files.root();
         let mut targets = BTreeMap::new();
         insert_watch_target(&mut targets, root.to_path_buf(), WatchDepth::NonRecursive);
-        insert_existing_or_ancestor(&mut targets, root, &config.docs_path(root));
-        for source_root in &config.source_roots {
-            insert_existing_or_ancestor(&mut targets, root, &root.join(source_root));
+        for (_, location) in watched_locations(config) {
+            insert_existing_or_ancestor(&mut targets, files, &root.join(location));
         }
-        Self {
-            targets: targets
-                .into_iter()
-                .map(|(path, depth)| match depth {
-                    WatchDepth::NonRecursive => WatchTarget::non_recursive(path),
-                    WatchDepth::Recursive => WatchTarget::recursive(path),
-                })
-                .collect(),
-        }
+        Self::from_targets(targets)
     }
 
-    fn recovery(root: &Path, config: Option<&Config>) -> Self {
+    /// While a generation is suspended, watch the docs root as an active
+    /// generation does, and only the nearest existing directory of each
+    /// missing Source root.
+    fn recovery(files: &RepositoryFiles, config: Option<&Config>) -> Self {
+        let root = files.root();
         let mut targets = BTreeMap::new();
         insert_watch_target(&mut targets, root.to_path_buf(), WatchDepth::NonRecursive);
-        if let Some(config) = config {
-            insert_existing_or_ancestor(&mut targets, root, &config.docs_path(root));
-            for source_root in &config.source_roots {
-                let path = root.join(source_root);
-                if matches!(path_kind(root, &path), PathKind::Missing | PathKind::Unsafe) {
+        for (role, location) in config.into_iter().flat_map(watched_locations) {
+            let path = root.join(location);
+            match role {
+                WatchedRole::Docs => insert_existing_or_ancestor(&mut targets, files, &path),
+                WatchedRole::Source
+                    if matches!(
+                        path_kind(files, &path),
+                        EntryKind::Missing | EntryKind::Other
+                    ) =>
+                {
                     insert_watch_target(
                         &mut targets,
-                        nearest_existing_directory(root, &path),
+                        nearest_existing_directory(files, &path),
                         WatchDepth::NonRecursive,
                     );
                 }
+                WatchedRole::Source => {}
             }
         }
+        Self::from_targets(targets)
+    }
+
+    fn from_targets(targets: BTreeMap<PathBuf, WatchDepth>) -> Self {
         Self {
             targets: targets
                 .into_iter()
-                .map(|(path, depth)| match depth {
-                    WatchDepth::NonRecursive => WatchTarget::non_recursive(path),
-                    WatchDepth::Recursive => WatchTarget::recursive(path),
-                })
+                .map(|(path, depth)| WatchTarget { path, depth })
                 .collect(),
         }
     }
@@ -244,20 +257,20 @@ impl WatchSet {
 
 fn insert_existing_or_ancestor(
     targets: &mut BTreeMap<PathBuf, WatchDepth>,
-    root: &Path,
+    files: &RepositoryFiles,
     requested: &Path,
 ) {
-    match path_kind(root, requested) {
-        PathKind::Directory => {
+    match path_kind(files, requested) {
+        EntryKind::Directory => {
             insert_watch_target(targets, requested.to_path_buf(), WatchDepth::Recursive);
         }
-        PathKind::File => {
+        EntryKind::File => {
             insert_watch_target(targets, requested.to_path_buf(), WatchDepth::NonRecursive);
         }
-        PathKind::Missing | PathKind::Unsafe => {
+        EntryKind::Missing | EntryKind::Other => {
             insert_watch_target(
                 targets,
-                nearest_existing_directory(root, requested),
+                nearest_existing_directory(files, requested),
                 WatchDepth::NonRecursive,
             );
         }
@@ -279,10 +292,11 @@ fn insert_watch_target(
         .or_insert(depth);
 }
 
-fn nearest_existing_directory(root: &Path, requested: &Path) -> PathBuf {
+fn nearest_existing_directory(files: &RepositoryFiles, requested: &Path) -> PathBuf {
+    let root = files.root();
     let mut candidate = requested.to_path_buf();
     loop {
-        if candidate.starts_with(root) && path_kind(root, &candidate) == PathKind::Directory {
+        if candidate.starts_with(root) && path_kind(files, &candidate) == EntryKind::Directory {
             return candidate;
         }
         if candidate == root || !candidate.pop() {
@@ -292,40 +306,8 @@ fn nearest_existing_directory(root: &Path, requested: &Path) -> PathBuf {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
-enum WatchSignal {
-    Paths(Vec<PathBuf>),
-    Idle,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum WatchDecision {
-    Rebuild { cause: RefreshCause },
-    Continue,
-}
-
-const fn watch_decision(docs_changed: bool, source_changed: bool) -> WatchDecision {
-    match (docs_changed, source_changed) {
-        (_, true) => WatchDecision::Rebuild {
-            cause: RefreshCause::SourceChanged,
-        },
-        (true, false) => WatchDecision::Rebuild {
-            cause: RefreshCause::DocsChanged,
-        },
-        (false, false) => WatchDecision::Continue,
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
 struct WatchTopology {
-    paths: Vec<(String, PathKind)>,
-}
-
-#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
-enum PathKind {
-    Missing,
-    File,
-    Directory,
-    Unsafe,
+    paths: Vec<(String, EntryKind)>,
 }
 
 #[derive(Debug)]
@@ -346,10 +328,10 @@ struct ActiveWatchGeneration {
     config: Config,
     config_source: Option<String>,
     refresh: RefreshSession,
-    docs_path: PathBuf,
     topology: WatchTopology,
     watcher: WatchBinding,
     source_filter: SourceEventFilter,
+    vault_filter: VaultEventFilter,
 }
 
 #[derive(Debug)]
@@ -390,18 +372,24 @@ enum GenerationRefresh {
 impl ActiveWatchGeneration {
     /// Guard publication with this generation's config and prefer reconfiguration
     /// if a second read detects a change, even when the refresh failed.
+    /// A configuration that changed, or that cannot be read, is a reconfiguration:
+    /// the session reads it again and reports that read's failure.
     fn refresh(&mut self, files: &RepositoryFiles, cause: RefreshCause) -> GenerationRefresh {
-        let expected_config_source = self.config_source.clone();
-        let result = self
-            .refresh
-            .refresh_with_precommit_check(cause, || match read_config_source(files) {
-                Ok(source) if source == expected_config_source => Ok(()),
-                Ok(_) => Err(CrivError::new(
-                    "watch configuration changed before State publication",
-                )),
-                Err(err) => Err(err),
-            });
-        if read_config_source(files).ok() != Some(self.config_source.clone()) {
+        let expected = &self.config_source;
+        let mut changed_before_commit = false;
+        let result = self.refresh.refresh(cause, || {
+            let observed = read_config_source(files)?;
+            if observed == *expected {
+                return Ok(());
+            }
+            changed_before_commit = true;
+            Err(CrivError::new(
+                "watch configuration changed before State publication",
+            ))
+        });
+        let unchanged = !changed_before_commit
+            && read_config_source(files).is_ok_and(|source| source == self.config_source);
+        if !unchanged {
             return GenerationRefresh::Reconfigure;
         }
         match result {
@@ -413,31 +401,33 @@ impl ActiveWatchGeneration {
     /// Start watching before the initial refresh so changes during its build stay queued.
     fn candidate(
         files: &RepositoryFiles,
-        root: &Path,
         config: Config,
         config_source: Option<String>,
         factory: &dyn WatcherFactory,
     ) -> std::result::Result<Self, CandidateFailure> {
-        let docs_path = config.docs_path(root);
-        require_real_docs_root(root, &docs_path).map_err(CandidateFailure::candidate)?;
-        let topology = WatchTopology::observe(root, &config);
-        let watcher = WatchBinding::start(factory, WatchSet::active(root, &config))
+        let root = files.root();
+        require_real_docs_root(files, &config.docs_path(root))
+            .map_err(CandidateFailure::candidate)?;
+        let topology = WatchTopology::observe(files, &config);
+        let watcher = WatchBinding::start(factory, WatchSet::active(files, &config))
             .map_err(CandidateFailure::watcher)?;
-        let mut refresh = RefreshSession::live_from(files, &config);
+        let mut refresh = RefreshSession::new(files, &config);
         let summary = refresh
-            .refresh(RefreshCause::Initial)
+            .refresh(RefreshCause::Initial, || Ok(()))
             .map_err(CandidateFailure::candidate)?
             .text_summary();
         println!("{summary}");
-        let source_filter = SourceEventFilter::new(root, &config);
+        let source_filter =
+            SourceEventFilter::new(root, &config).map_err(CandidateFailure::candidate)?;
+        let vault_filter = VaultEventFilter::new(root, &config);
         Ok(Self {
             config,
             config_source,
             refresh,
-            docs_path,
             topology,
             watcher,
             source_filter,
+            vault_filter,
         })
     }
 }
@@ -445,7 +435,6 @@ impl ActiveWatchGeneration {
 #[derive(Debug)]
 struct LiveWatchSession {
     files: RepositoryFiles,
-    root: PathBuf,
     active: ActiveWatchGeneration,
     recovery: Option<WatchBinding>,
     watcher_factory: Arc<dyn WatcherFactory>,
@@ -455,20 +444,11 @@ struct LiveWatchSession {
 }
 
 impl LiveWatchSession {
-    fn start_from(files: &RepositoryFiles) -> Result<Self> {
-        Self::start_with_factory(files, Arc::new(NotifyWatcherFactory))
-    }
-
-    fn start_with_factory(
-        files: &RepositoryFiles,
-        watcher_factory: Arc<dyn WatcherFactory>,
-    ) -> Result<Self> {
-        let root = files.root();
+    fn start(files: &RepositoryFiles, watcher_factory: Arc<dyn WatcherFactory>) -> Result<Self> {
         let config_source = read_config_source(files)?;
         let config = Config::parse(config_source.as_deref())?;
         let active = ActiveWatchGeneration::candidate(
             files,
-            root,
             config,
             config_source,
             watcher_factory.as_ref(),
@@ -476,7 +456,6 @@ impl LiveWatchSession {
         .map_err(|failure| failure.error)?;
         Ok(Self {
             files: files.clone(),
-            root: root.to_path_buf(),
             active,
             recovery: None,
             watcher_factory,
@@ -488,8 +467,8 @@ impl LiveWatchSession {
 
     /// Process one event batch, replacing stale configuration before ordinary refreshes.
     fn step(&mut self, timeout: Duration) -> Result<()> {
-        let signal = self.poll(timeout)?;
-        if self.must_reconfigure(&signal) {
+        let paths = self.poll(timeout)?;
+        if self.must_reconfigure(&paths) {
             self.reconfigure();
             return Ok(());
         }
@@ -497,19 +476,29 @@ impl LiveWatchSession {
             return Ok(());
         }
 
-        let docs_changed = self.docs_changed(&signal);
-        let source_changed = self.source_changed(&signal);
-        if let WatchDecision::Rebuild { cause } = watch_decision(docs_changed, source_changed) {
-            match self.active.refresh(&self.files, cause) {
-                GenerationRefresh::Summary(summary) => println!("{summary}"),
-                GenerationRefresh::Failed(err) => eprintln!("criv watch: {err}"),
-                GenerationRefresh::Reconfigure => self.reconfigure(),
-            }
+        let cause = if paths
+            .iter()
+            .any(|path| self.active.source_filter.relevant(path))
+        {
+            RefreshCause::SourceChanged
+        } else if paths
+            .iter()
+            .any(|path| self.active.vault_filter.relevant(path))
+        {
+            RefreshCause::DocsChanged
+        } else {
+            return Ok(());
+        };
+        match self.active.refresh(&self.files, cause) {
+            GenerationRefresh::Summary(summary) => println!("{summary}"),
+            GenerationRefresh::Failed(err) => eprintln!("criv watch: {err}"),
+            GenerationRefresh::Reconfigure => self.reconfigure(),
         }
         Ok(())
     }
 
-    fn poll(&mut self, timeout: Duration) -> Result<WatchSignal> {
+    /// The changed paths of one event batch; an idle poll returns none.
+    fn poll(&mut self, timeout: Duration) -> Result<Vec<PathBuf>> {
         let poll = if self.suspended {
             if let Some(recovery) = self.recovery.as_mut() {
                 recovery.adapter.poll(timeout)
@@ -523,45 +512,33 @@ impl LiveWatchSession {
             self.active.watcher.adapter.poll(timeout)
         };
         match poll {
-            WatcherPoll::Paths(paths) if paths.is_empty() => Ok(WatchSignal::Idle),
-            WatcherPoll::Paths(paths) => Ok(WatchSignal::Paths(paths)),
-            WatcherPoll::Idle => Ok(WatchSignal::Idle),
+            WatcherPoll::Paths(paths) => Ok(paths),
+            WatcherPoll::Idle => Ok(Vec::new()),
             WatcherPoll::Error(error) => {
                 eprintln!("criv watch: watcher error: {error}");
                 self.recovery = None;
                 self.suspend("watcher adapter error");
-                Ok(WatchSignal::Idle)
+                Ok(Vec::new())
             }
             WatcherPoll::Disconnected => Err(CrivError::new("watcher event channel disconnected")),
         }
     }
 
-    fn docs_changed(&self, signal: &WatchSignal) -> bool {
-        matches!(signal, WatchSignal::Paths(paths) if paths.iter().any(|path| path.starts_with(&self.active.docs_path)))
-    }
-
-    fn source_changed(&self, signal: &WatchSignal) -> bool {
-        matches!(signal, WatchSignal::Paths(paths) if paths.iter().any(|path| {
-            self.active.source_filter.relevant(path)
-        }))
-    }
-
-    fn must_reconfigure(&self, signal: &WatchSignal) -> bool {
+    fn must_reconfigure(&self, paths: &[PathBuf]) -> bool {
         if self.suspended {
-            return !matches!(signal, WatchSignal::Idle) || Instant::now() >= self.next_retry;
+            return !paths.is_empty() || Instant::now() >= self.next_retry;
         }
-        if !matches!(signal, WatchSignal::Paths(_)) {
+        if paths.is_empty() {
             return false;
         }
         let config_changed = read_config_source(&self.files)
             .map_or(true, |source| source != self.active.config_source);
         config_changed
-            || WatchTopology::observe(&self.root, &self.active.config) != self.active.topology
-            || WatchSet::active(&self.root, &self.active.config) != self.active.watcher.set
+            || WatchTopology::observe(&self.files, &self.active.config) != self.active.topology
+            || WatchSet::active(&self.files, &self.active.config) != self.active.watcher.set
     }
 
     fn reconfigure(&mut self) {
-        let root = self.root.clone();
         let mut recovery_config = None;
         let candidate = (|| {
             let config_source = read_config_source(&self.files)?;
@@ -569,7 +546,6 @@ impl LiveWatchSession {
             recovery_config = Some(config.clone());
             ActiveWatchGeneration::candidate(
                 &self.files,
-                &root,
                 config,
                 config_source,
                 self.watcher_factory.as_ref(),
@@ -591,7 +567,7 @@ impl LiveWatchSession {
                 if failure.watcher_unavailable {
                     self.recovery = None;
                 } else {
-                    let recovery_set = WatchSet::recovery(&root, recovery_config.as_ref());
+                    let recovery_set = WatchSet::recovery(&self.files, recovery_config.as_ref());
                     match WatchBinding::start(self.watcher_factory.as_ref(), recovery_set) {
                         Ok(recovery) => self.recovery = Some(recovery),
                         Err(watcher_error) => {
@@ -608,7 +584,7 @@ impl LiveWatchSession {
     fn suspend(&mut self, cause: &str) {
         self.suspended = true;
         self.next_retry = Instant::now()
-            .checked_add(Duration::from_secs(1))
+            .checked_add(RECONFIGURATION_RETRY)
             .unwrap_or_else(Instant::now);
         if self.failure.as_deref() != Some(cause) {
             eprintln!("criv watch: reconfiguration failed: {cause}; keeping last successful State");
@@ -619,88 +595,46 @@ impl LiveWatchSession {
 
 /// Read the exact configuration text so a generation can detect any replacement.
 fn read_config_source(files: &RepositoryFiles) -> Result<Option<String>> {
-    files.read_optional_string(Path::new("criv.toml"))
+    files.read_optional_string(Path::new(crate::config::CONFIG_FILE))
 }
 
 impl WatchTopology {
-    fn observe(root: &Path, config: &Config) -> Self {
-        let mut paths = config
-            .source_roots
-            .iter()
-            .map(|path| (path.clone(), path_kind(root, &root.join(path))))
+    fn observe(files: &RepositoryFiles, config: &Config) -> Self {
+        let root = files.root();
+        let mut paths = watched_locations(config)
+            .map(|(_, location)| (location.to_string(), path_kind(files, &root.join(location))))
             .collect::<Vec<_>>();
-        paths.push((
-            config.docs_dir.clone(),
-            path_kind(root, &config.docs_path(root)),
-        ));
         paths.sort();
         Self { paths }
     }
 }
 
-fn path_kind(root: &Path, path: &Path) -> PathKind {
-    let Ok(relative) = path.strip_prefix(root) else {
-        return PathKind::Unsafe;
-    };
-    let mut current = root.to_path_buf();
-    let components = relative.components().collect::<Vec<_>>();
-    if components.is_empty() {
-        return exact_path_kind(root);
-    }
-    for (index, component) in components.iter().enumerate() {
-        current.push(component.as_os_str());
-        let kind = exact_path_kind(&current);
-        if index.saturating_add(1) == components.len() {
-            return kind;
-        }
-        match kind {
-            PathKind::Directory => {}
-            PathKind::Missing => return PathKind::Missing,
-            PathKind::File | PathKind::Unsafe => return PathKind::Unsafe,
-        }
-    }
-    PathKind::Unsafe
+/// The kind of an absolute path below the repository root; a path outside it
+/// is `Other`.
+fn path_kind(files: &RepositoryFiles, path: &Path) -> EntryKind {
+    path.strip_prefix(files.root())
+        .map_or(EntryKind::Other, |relative| files.entry_kind(relative))
 }
 
-fn exact_path_kind(path: &Path) -> PathKind {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() || is_junction(path) => PathKind::Unsafe,
-        Ok(metadata) if metadata.is_file() => PathKind::File,
-        Ok(metadata) if metadata.is_dir() => PathKind::Directory,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => PathKind::Missing,
-        Err(_) | Ok(_) => PathKind::Unsafe,
-    }
-}
-
-fn require_real_docs_root(root: &Path, path: &Path) -> Result<()> {
-    match path_kind(root, path) {
-        PathKind::Directory => Ok(()),
-        PathKind::File | PathKind::Unsafe => Err(CrivError::new(format!(
+fn require_real_docs_root(files: &RepositoryFiles, path: &Path) -> Result<()> {
+    match path_kind(files, path) {
+        EntryKind::Directory => Ok(()),
+        EntryKind::File | EntryKind::Other => Err(CrivError::new(format!(
             "configured docs root {} must be a real directory",
             path.display()
         ))),
-        PathKind::Missing => Err(CrivError::new(format!(
+        EntryKind::Missing => Err(CrivError::new(format!(
             "configured docs root {} does not exist",
             path.display()
         ))),
     }
 }
 
-#[cfg(windows)]
-fn is_junction(path: &Path) -> bool {
-    junction::exists(path).unwrap_or(false)
-}
-
-#[cfg(not(windows))]
-const fn is_junction(_path: &Path) -> bool {
-    false
-}
-
 /// A single `criv watch --once` rebuild, warmed by the on-disk source graph
 /// cache left behind by the previous run.
 fn run_once(files: &RepositoryFiles, format: Format) -> Result<()> {
-    let mut refresh = RefreshSession::one_shot_from(files)?;
-    let result = refresh.refresh(RefreshCause::Initial)?;
+    let mut refresh = RefreshSession::new(files, &Config::load_from(files)?);
+    let result = refresh.refresh(RefreshCause::Initial, || Ok(()))?;
     match format {
         Format::Text => {
             println!("{}", result.text_summary());
@@ -708,10 +642,10 @@ fn run_once(files: &RepositoryFiles, format: Format) -> Result<()> {
         }
         Format::Json => {
             let report = RefreshReport {
-                ok: result.errors() == 0,
-                snapshot: result.snapshot(),
-                errors: result.errors(),
-                warnings: result.warnings(),
+                ok: result.errors == 0,
+                snapshot: &result.snapshot,
+                errors: result.errors,
+                warnings: result.warnings,
                 next: "criv check",
             };
             let json = serde_json::to_string_pretty(&report).map_err(|err| {
@@ -732,18 +666,64 @@ struct RefreshReport<'a> {
     next: &'a str,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum WatchMode {
     Live,
     Once,
 }
 
 impl WatchMode {
+    const ALL: [Self; 2] = [Self::Live, Self::Once];
+
     const fn label(self) -> &'static str {
         match self {
             Self::Live => "live",
             Self::Once => "once",
         }
+    }
+}
+
+/// The diagnostic `.criv/watch.lock` record of ADR-0095. It names the owner
+/// for a contention message and never decides ownership.
+#[derive(Debug, Eq, PartialEq)]
+struct WatchLockRecord {
+    pid: u32,
+    mode: WatchMode,
+}
+
+impl WatchLockRecord {
+    const SCHEMA: &'static str = "schema criv.watch-lock.v1";
+
+    fn render(&self) -> String {
+        format!(
+            "{}\npid {}\nmode {}\n",
+            Self::SCHEMA,
+            self.pid,
+            self.mode.label()
+        )
+    }
+
+    fn parse(contents: &str) -> Option<Self> {
+        let lines = contents.lines().collect::<Vec<_>>();
+        let [schema, pid, mode] = lines.as_slice() else {
+            return None;
+        };
+        if *schema != Self::SCHEMA {
+            return None;
+        }
+        let pid = pid.strip_prefix("pid ")?.parse().ok()?;
+        let mode = mode.strip_prefix("mode ")?;
+        let mode = WatchMode::ALL
+            .into_iter()
+            .find(|candidate| candidate.label() == mode)?;
+        Some(Self { pid, mode })
+    }
+
+    fn read(file: &mut fs::File) -> Option<Self> {
+        file.rewind().ok()?;
+        let mut contents = String::new();
+        file.read_to_string(&mut contents).ok()?;
+        Self::parse(&contents)
     }
 }
 
@@ -753,17 +733,11 @@ struct WatchSessionLock {
 }
 
 impl WatchSessionLock {
-    #[cfg(test)]
-    fn acquire(root: &Path, mode: WatchMode) -> Result<Self> {
-        let files = RepositoryFiles::open(root)?;
-        Self::acquire_from(&files, mode)
-    }
-
-    fn acquire_from(files: &RepositoryFiles, mode: WatchMode) -> Result<Self> {
-        let requested_path = files.root().join(".criv/watch.lock");
+    fn acquire(files: &RepositoryFiles, mode: WatchMode) -> Result<Self> {
+        let requested_path = files.root().join(layout::WATCH_LOCK);
         let (_, mut file) = files
-            .write_scope(Path::new(".criv"))?
-            .open_regular_file(Path::new(".criv/watch.lock"))
+            .write_scope(Path::new(layout::DIR))?
+            .open_regular_file(Path::new(layout::WATCH_LOCK))
             .map_err(|err| {
                 CrivError::new(format!(
                     "unsafe watch lock path {}: {err}",
@@ -771,26 +745,29 @@ impl WatchSessionLock {
                 ))
             })?;
 
-        if let Err(err) = file.try_lock() {
-            if matches!(err, fs::TryLockError::WouldBlock) {
-                let detail = read_watch_lock_record(&mut file)
-                    .map(|record| format!(" (mode {}, pid {})", record.mode, record.pid))
-                    .unwrap_or_default();
+        match repository::lock_within(&file, Duration::ZERO) {
+            Ok(true) => {}
+            Ok(false) => {
+                let detail = WatchLockRecord::read(&mut file).map_or_else(String::new, |owner| {
+                    format!(" (mode {}, pid {})", owner.mode.label(), owner.pid)
+                });
                 return Err(CrivError::new(format!(
                     "another watch session owns State refresh{detail}; do not start another watch or run `criv watch --once` while it is active"
                 )));
             }
-            return Err(CrivError::new(format!(
-                "failed to acquire operating-system watch lock at {}: {err}",
-                requested_path.display()
-            )));
+            Err(err) => {
+                return Err(CrivError::new(format!(
+                    "failed to acquire operating-system watch lock at {}: {err}",
+                    requested_path.display()
+                )));
+            }
         }
 
-        let record = format!(
-            "schema criv.watch-lock.v1\npid {}\nmode {}\n",
-            std::process::id(),
-            mode.label()
-        );
+        let record = WatchLockRecord {
+            pid: std::process::id(),
+            mode,
+        }
+        .render();
         file.set_len(0)
             .and_then(|()| file.rewind())
             .and_then(|()| file.write_all(record.as_bytes()))
@@ -805,31 +782,6 @@ impl WatchSessionLock {
     }
 }
 
-struct WatchLockRecord {
-    pid: u32,
-    mode: &'static str,
-}
-
-fn read_watch_lock_record(file: &mut fs::File) -> Option<WatchLockRecord> {
-    file.rewind().ok()?;
-    let mut contents = String::new();
-    file.read_to_string(&mut contents).ok()?;
-    let lines = contents.lines().collect::<Vec<_>>();
-    let [schema, pid, mode] = lines.as_slice() else {
-        return None;
-    };
-    if *schema != "schema criv.watch-lock.v1" {
-        return None;
-    }
-    let pid = pid.strip_prefix("pid ")?.parse().ok()?;
-    let mode = match mode.strip_prefix("mode ")? {
-        "live" => "live",
-        "once" => "once",
-        _ => return None,
-    };
-    Some(WatchLockRecord { pid, mode })
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -840,12 +792,29 @@ mod tests {
 
     use super::*;
 
+    const fn recursive(path: PathBuf) -> WatchTarget {
+        WatchTarget {
+            path,
+            depth: WatchDepth::Recursive,
+        }
+    }
+
+    const fn flat(path: PathBuf) -> WatchTarget {
+        WatchTarget {
+            path,
+            depth: WatchDepth::NonRecursive,
+        }
+    }
+
+    /// Upper bound for the operating system to deliver one file event.
+    const NOTIFY_EVENT_BOUND: Duration = Duration::from_secs(3);
+
     fn watcher_reports_path(mut watcher: NotifyWatcherAdapter, expected: &Path) -> bool {
         let deadline = Instant::now()
-            .checked_add(Duration::from_secs(3))
+            .checked_add(NOTIFY_EVENT_BOUND)
             .unwrap_or_else(Instant::now);
         while Instant::now() < deadline {
-            if let WatcherPoll::Paths(paths) = watcher.poll(Duration::from_millis(250))
+            if let WatcherPoll::Paths(paths) = watcher.poll(POLL_INTERVAL)
                 && paths.iter().any(|path| path == expected)
             {
                 return true;
@@ -860,7 +829,7 @@ mod tests {
         let source = temp.path().join("src");
         fs::create_dir(&source).unwrap();
         let set = WatchSet {
-            targets: vec![WatchTarget::recursive(source.clone())],
+            targets: vec![recursive(source.clone())],
         };
         let watcher = NotifyWatcherAdapter::start(&set).unwrap();
         let changed = source.join("changed.rs");
@@ -876,10 +845,7 @@ mod tests {
         let source = temp.path().join("src");
         fs::create_dir(&source).unwrap();
         let set = WatchSet {
-            targets: vec![
-                WatchTarget::non_recursive(temp.path().to_path_buf()),
-                WatchTarget::recursive(source.clone()),
-            ],
+            targets: vec![flat(temp.path().to_path_buf()), recursive(source.clone())],
         };
         let watcher = NotifyWatcherAdapter::start(&set).unwrap();
         let changed = source.join("changed.rs");
@@ -901,15 +867,17 @@ mod tests {
         ))
         .unwrap();
 
-        let set = WatchSet::active(root, &config);
+        let files = RepositoryFiles::open(root).unwrap();
+        let root = files.root();
+        let set = WatchSet::active(&files, &config);
 
         assert_eq!(
             set.targets,
             vec![
-                WatchTarget::non_recursive(root.to_path_buf()),
-                WatchTarget::recursive(root.join("docs")),
-                WatchTarget::non_recursive(root.join("generated")),
-                WatchTarget::recursive(root.join("src")),
+                flat(root.to_path_buf()),
+                recursive(root.join("docs")),
+                flat(root.join("generated")),
+                recursive(root.join("src")),
             ]
         );
     }
@@ -926,14 +894,16 @@ mod tests {
         ))
         .unwrap();
 
-        let set = WatchSet::recovery(root, Some(&config));
+        let files = RepositoryFiles::open(root).unwrap();
+        let root = files.root();
+        let set = WatchSet::recovery(&files, Some(&config));
 
         assert_eq!(
             set.targets,
             vec![
-                WatchTarget::non_recursive(root.to_path_buf()),
-                WatchTarget::recursive(root.join("docs")),
-                WatchTarget::non_recursive(root.join("generated")),
+                flat(root.to_path_buf()),
+                recursive(root.join("docs")),
+                flat(root.join("generated")),
             ]
         );
     }
@@ -964,8 +934,7 @@ mod tests {
         fs::write(root.join("criv.toml"), "[index]\nsource = false\n").unwrap();
         let files = RepositoryFiles::open(root).unwrap();
         let mut session =
-            LiveWatchSession::start_with_factory(&files, Arc::new(DisconnectedWatcherFactory))
-                .unwrap();
+            LiveWatchSession::start(&files, Arc::new(DisconnectedWatcherFactory)).unwrap();
 
         let error = session.step(Duration::ZERO).unwrap_err();
 
@@ -1029,11 +998,9 @@ mod tests {
         )
         .unwrap();
         let files = RepositoryFiles::open(root).unwrap();
-        let session = LiveWatchSession::start_with_factory(
-            &files,
-            Arc::new(ScriptedWatcherFactory::new(vec![vec![]])),
-        )
-        .unwrap();
+        let session =
+            LiveWatchSession::start(&files, Arc::new(ScriptedWatcherFactory::new(vec![vec![]])))
+                .unwrap();
         (temp, files, session)
     }
 
@@ -1054,27 +1021,31 @@ mod tests {
             .collect()
     }
 
-    /// Verify that replacement files are installed before the final commit guard.
-    fn assert_publication_checkpoint(files: &RepositoryFiles) {
-        let record: serde_json::Value = serde_json::from_str(
-            &files
-                .read_string(Path::new(".criv/state-transaction.json"))
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(record["phase"], "installed");
+    fn published_snapshot(root: &Path) -> String {
+        fs::read_to_string(root.join(layout::LATEST))
+            .unwrap()
+            .trim()
+            .to_string()
+    }
+
+    fn one_shot_refresh(files: &RepositoryFiles) {
+        RefreshSession::new(files, &Config::load_from(files).unwrap())
+            .refresh(RefreshCause::Initial, || Ok(()))
+            .unwrap();
+    }
+
+    fn append_to_config(files: &RepositoryFiles, line: &str) -> String {
+        let path = files.root().join("criv.toml");
+        let config = fs::read_to_string(&path).unwrap();
+        fs::write(&path, format!("{config}{line}\n")).unwrap();
+        config
     }
 
     #[test]
     /// Keep the returned summary valid after the generation advances.
     fn ordinary_refresh_publishes_an_owned_summary() {
         let (_temp, files, mut session) = refresh_fixture();
-        let before = session
-            .active
-            .refresh
-            .previous_snapshot()
-            .unwrap()
-            .to_owned();
+        let before = published_snapshot(files.root());
         fs::write(
             files.root().join("docs/note.md"),
             "---\nid: note\nkind: doc\ntitle: Changed\n---\n",
@@ -1084,61 +1055,36 @@ mod tests {
         let GenerationRefresh::Summary(summary) = outcome else {
             panic!("{outcome:?}")
         };
-        let after = session.active.refresh.previous_snapshot().unwrap();
+        let after = published_snapshot(files.root());
         assert_ne!(before, after);
-        assert!(summary.contains(after));
-        assert_eq!(
-            fs::read_to_string(files.root().join(".criv/latest"))
-                .unwrap()
-                .trim(),
-            after
-        );
+        assert!(summary.contains(&after));
     }
 
     #[test]
-    /// Reject stale configuration and retain pending source work for the retry.
     fn changed_configuration_rejects_publication_and_preserves_source_retry() {
         let (_temp, files, mut session) = refresh_fixture();
         let before = published_artifacts(files.root());
-        let previous = session
-            .active
-            .refresh
-            .previous_snapshot()
-            .unwrap()
-            .to_owned();
+        let previous = published_snapshot(files.root());
         fs::write(
             files.root().join("src/lib.rs"),
             "pub fn recovered_source() {}\n",
         )
         .unwrap();
-        session.active.refresh.before_next_publication(|files| {
-            assert_publication_checkpoint(files);
-            let path = files.root().join("criv.toml");
-            let config = fs::read_to_string(&path).unwrap();
-            fs::write(path, format!("{config}# changed during publication\n")).unwrap();
-        });
+        let config = append_to_config(&files, "# changed before publication");
         assert!(matches!(
             session.active.refresh(&files, RefreshCause::SourceChanged),
             GenerationRefresh::Reconfigure
         ));
         assert_eq!(published_artifacts(files.root()), before);
-        assert_eq!(
-            session.active.refresh.previous_snapshot(),
-            Some(previous.as_str())
-        );
-        fs::write(
-            files.root().join("criv.toml"),
-            session.active.config_source.as_ref().unwrap(),
-        )
-        .unwrap();
+        assert_eq!(published_snapshot(files.root()), previous);
+        fs::write(files.root().join("criv.toml"), config).unwrap();
         assert!(matches!(
             session.active.refresh(&files, RefreshCause::DocsChanged),
             GenerationRefresh::Summary(_)
         ));
         let live = fs::read_to_string(files.root().join(".criv/state.json")).unwrap();
         assert!(live.contains("recovered_source"));
-        let mut one_shot = RefreshSession::one_shot_from(&files).unwrap();
-        one_shot.refresh(RefreshCause::Initial).unwrap();
+        one_shot_refresh(&files);
         assert_eq!(
             fs::read_to_string(files.root().join(".criv/state.json")).unwrap(),
             live
@@ -1150,38 +1096,18 @@ mod tests {
     fn unreadable_configuration_requests_reconfiguration_and_rolls_back() {
         let (_temp, files, mut session) = refresh_fixture();
         let before = published_artifacts(files.root());
-        let previous = session
-            .active
-            .refresh
-            .previous_snapshot()
-            .unwrap()
-            .to_owned();
-        session.active.refresh.before_next_publication(|files| {
-            assert_publication_checkpoint(files);
-            fs::remove_file(files.root().join("criv.toml")).unwrap();
-            fs::create_dir(files.root().join("criv.toml")).unwrap();
-        });
+        let previous = published_snapshot(files.root());
+        fs::remove_file(files.root().join("criv.toml")).unwrap();
+        fs::create_dir(files.root().join("criv.toml")).unwrap();
         assert!(matches!(
             session.active.refresh(&files, RefreshCause::DocsChanged),
             GenerationRefresh::Reconfigure
         ));
         assert_eq!(published_artifacts(files.root()), before);
-        assert_eq!(
-            session.active.refresh.previous_snapshot(),
-            Some(previous.as_str())
-        );
+        assert_eq!(published_snapshot(files.root()), previous);
     }
 
-    #[test]
-    /// Return the refresh error when the active configuration still matches.
-    fn unchanged_configuration_reports_refresh_failure() {
-        let (_temp, files, mut session) = refresh_fixture();
-        let previous = session
-            .active
-            .refresh
-            .previous_snapshot()
-            .unwrap()
-            .to_owned();
+    fn corrupt_a_snapshot(files: &RepositoryFiles) {
         fs::write(
             files
                 .root()
@@ -1190,44 +1116,52 @@ mod tests {
             "{}\n",
         )
         .unwrap();
+    }
+
+    #[test]
+    fn unchanged_configuration_reports_refresh_failure() {
+        let (_temp, files, mut session) = refresh_fixture();
+        let previous = published_snapshot(files.root());
+        corrupt_a_snapshot(&files);
         let before = published_artifacts(files.root());
         assert!(matches!(
             session.active.refresh(&files, RefreshCause::DocsChanged),
             GenerationRefresh::Failed(_)
         ));
         assert_eq!(published_artifacts(files.root()), before);
-        assert_eq!(
-            session.active.refresh.previous_snapshot(),
-            Some(previous.as_str())
-        );
+        assert_eq!(published_snapshot(files.root()), previous);
     }
 
     #[test]
-    /// Give configuration replacement priority over an obsolete refresh error.
-    fn session_reconfigures_before_reporting_refresh_failure_and_recovers() {
+    fn changed_configuration_takes_priority_over_a_refresh_failure() {
+        let (_temp, files, mut session) = refresh_fixture();
+        corrupt_a_snapshot(&files);
+        let before = published_artifacts(files.root());
+        append_to_config(&files, "# changed during a failing refresh");
+        assert!(matches!(
+            session.active.refresh(&files, RefreshCause::DocsChanged),
+            GenerationRefresh::Reconfigure
+        ));
+        assert_eq!(published_artifacts(files.root()), before);
+    }
+
+    #[test]
+    fn session_suspends_on_invalid_configuration_and_recovers() {
         let (_temp, files, initial) = refresh_fixture();
         let factory = Arc::new(ScriptedWatcherFactory::new(vec![
             vec![WatcherPoll::Paths(vec![files.root().join("docs/note.md")])],
             vec![],
             vec![],
         ]));
-        let mut session = LiveWatchSession::start_with_factory(&files, factory).unwrap();
+        let mut session = LiveWatchSession::start(&files, factory).unwrap();
         let before = published_artifacts(files.root());
-        let previous = session
-            .active
-            .refresh
-            .previous_snapshot()
-            .unwrap()
-            .to_owned();
+        let previous = published_snapshot(files.root());
         fs::write(
             files.root().join("docs/note.md"),
             "---\nid: note\nkind: doc\ntitle: Recovered\n---\n",
         )
         .unwrap();
-        session.active.refresh.before_next_publication(|files| {
-            assert_publication_checkpoint(files);
-            fs::write(files.root().join("criv.toml"), "[index").unwrap();
-        });
+        fs::write(files.root().join("criv.toml"), "[index").unwrap();
         session.step(Duration::ZERO).unwrap();
         assert!(session.suspended);
         assert!(
@@ -1238,10 +1172,7 @@ mod tests {
                 .contains("failed to parse criv.toml")
         );
         assert_eq!(published_artifacts(files.root()), before);
-        assert_eq!(
-            session.active.refresh.previous_snapshot(),
-            Some(previous.as_str())
-        );
+        assert_eq!(published_snapshot(files.root()), previous);
         fs::write(
             files.root().join("criv.toml"),
             initial.active.config_source.unwrap(),
@@ -1251,17 +1182,41 @@ mod tests {
         session.step(Duration::ZERO).unwrap();
         assert!(!session.suspended);
         assert!(session.failure.is_none());
-        assert_ne!(
-            session.active.refresh.previous_snapshot(),
-            Some(previous.as_str())
-        );
+        assert_ne!(published_snapshot(files.root()), previous);
         let live = fs::read_to_string(files.root().join(".criv/state.json")).unwrap();
-        let mut one_shot = RefreshSession::one_shot_from(&files).unwrap();
-        one_shot.refresh(RefreshCause::Initial).unwrap();
+        one_shot_refresh(&files);
         assert_eq!(
             fs::read_to_string(files.root().join(".criv/state.json")).unwrap(),
             live
         );
+    }
+
+    #[test]
+    fn event_paths_choose_docs_reuse_or_source_refresh() {
+        let (_temp, files, _initial) = refresh_fixture();
+        let factory = Arc::new(ScriptedWatcherFactory::new(vec![vec![
+            WatcherPoll::Paths(vec![files.root().join("docs/note.md")]),
+            WatcherPoll::Paths(vec![files.root().join("src/lib.rs")]),
+        ]]));
+        let mut session = LiveWatchSession::start(&files, factory).unwrap();
+        fs::write(
+            files.root().join("src/lib.rs"),
+            "pub fn changed_source() {}\n",
+        )
+        .unwrap();
+        fs::write(
+            files.root().join("docs/note.md"),
+            "---\nid: note\nkind: doc\ntitle: Docs Event Title\n---\n",
+        )
+        .unwrap();
+        let state = || fs::read_to_string(files.root().join(".criv/state.json")).unwrap();
+
+        session.step(Duration::ZERO).unwrap();
+        assert!(state().contains("Docs Event Title"));
+        assert!(!state().contains("changed_source"));
+
+        session.step(Duration::ZERO).unwrap();
+        assert!(state().contains("changed_source"));
     }
 
     #[derive(Debug)]
@@ -1284,7 +1239,6 @@ mod tests {
     }
 
     #[test]
-    /// Build the candidate from its snapshot, then process queued config changes.
     fn candidate_uses_its_snapshot_then_observes_the_queued_configuration_event() {
         let (_temp, files, _initial) = refresh_fixture();
         let original = read_config_source(&files).unwrap();
@@ -1292,7 +1246,7 @@ mod tests {
             path: files.root().join("criv.toml"),
             starts: AtomicUsize::new(0),
         });
-        let mut session = LiveWatchSession::start_with_factory(&files, factory.clone()).unwrap();
+        let mut session = LiveWatchSession::start(&files, factory.clone()).unwrap();
         assert_eq!(session.active.config_source, original);
         assert!(
             fs::read_to_string(files.root().join(".criv/state.json"))
@@ -1306,8 +1260,7 @@ mod tests {
             read_config_source(&files).unwrap()
         );
         let live = fs::read_to_string(files.root().join(".criv/state.json")).unwrap();
-        let mut one_shot = RefreshSession::one_shot_from(&files).unwrap();
-        one_shot.refresh(RefreshCause::Initial).unwrap();
+        one_shot_refresh(&files);
         assert_eq!(
             fs::read_to_string(files.root().join(".criv/state.json")).unwrap(),
             live
@@ -1325,7 +1278,7 @@ mod tests {
             vec![],
         ]));
         let files = RepositoryFiles::open(root).unwrap();
-        let mut session = LiveWatchSession::start_with_factory(&files, factory.clone()).unwrap();
+        let mut session = LiveWatchSession::start(&files, factory.clone()).unwrap();
 
         session.step(Duration::ZERO).unwrap();
         assert_eq!(factory.starts.lock().unwrap().len(), 1);
@@ -1362,36 +1315,13 @@ mod tests {
         fs::write(root.join("criv.toml"), "[index]\nsource = false\n").unwrap();
         let factory = Arc::new(FailingWatcherFactory::default());
         let files = RepositoryFiles::open(root).unwrap();
-        let mut session = LiveWatchSession::start_with_factory(&files, factory.clone()).unwrap();
+        let mut session = LiveWatchSession::start(&files, factory.clone()).unwrap();
         session.step(Duration::ZERO).unwrap();
 
         session.next_retry = Instant::now();
         session.step(Duration::ZERO).unwrap();
 
         assert_eq!(factory.starts.load(Ordering::SeqCst), 2);
-    }
-
-    #[test]
-    fn watch_decisions_distinguish_docs_and_source_changes() {
-        assert_eq!(
-            watch_decision(true, false),
-            WatchDecision::Rebuild {
-                cause: RefreshCause::DocsChanged
-            }
-        );
-        assert_eq!(
-            watch_decision(false, true),
-            WatchDecision::Rebuild {
-                cause: RefreshCause::SourceChanged
-            }
-        );
-        assert_eq!(
-            watch_decision(true, true),
-            WatchDecision::Rebuild {
-                cause: RefreshCause::SourceChanged
-            }
-        );
-        assert_eq!(watch_decision(false, false), WatchDecision::Continue);
     }
 
     #[cfg(unix)]
@@ -1403,15 +1333,15 @@ mod tests {
         let outside = TempDir::new().unwrap();
         fs::create_dir(outside.path().join("docs")).unwrap();
         symlink(outside.path(), repository.path().join("linked")).unwrap();
+        let files = RepositoryFiles::open(repository.path()).unwrap();
+        let linked_docs = files.root().join("linked/docs");
 
-        assert_eq!(
-            path_kind(repository.path(), &repository.path().join("linked/docs")),
-            PathKind::Unsafe
-        );
-        assert!(
-            require_real_docs_root(repository.path(), &repository.path().join("linked/docs"))
-                .is_err()
-        );
+        assert_eq!(path_kind(&files, &linked_docs), EntryKind::Other);
+        assert!(require_real_docs_root(&files, &linked_docs).is_err());
+    }
+
+    fn lock(root: &Path, mode: WatchMode) -> Result<WatchSessionLock> {
+        WatchSessionLock::acquire(&RepositoryFiles::open(root)?, mode)
     }
 
     #[test]
@@ -1419,20 +1349,21 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let root = temp.path();
         fs::create_dir_all(root.join(".criv")).unwrap();
-        let first = super::WatchSessionLock::acquire(root, super::WatchMode::Live).unwrap();
+        let first = lock(root, WatchMode::Live).unwrap();
 
-        let error = super::WatchSessionLock::acquire(root, super::WatchMode::Once).unwrap_err();
+        let error = lock(root, WatchMode::Once).unwrap_err();
 
         assert!(
-            error
-                .to_string()
-                .contains("another watch session owns State refresh"),
+            error.to_string().contains(&format!(
+                "another watch session owns State refresh (mode live, pid {})",
+                std::process::id()
+            )),
             "unexpected error: {error}"
         );
         drop(first);
         assert!(root.join(".criv/watch.lock").is_file());
 
-        super::WatchSessionLock::acquire(root, super::WatchMode::Once).unwrap();
+        lock(root, WatchMode::Once).unwrap();
     }
 
     #[test]
@@ -1450,11 +1381,11 @@ mod tests {
         file.sync_all().unwrap();
         drop(file);
 
-        let mut lock = super::WatchSessionLock::acquire(root, super::WatchMode::Live).unwrap();
+        let mut held = lock(root, WatchMode::Live).unwrap();
 
-        lock._file.rewind().unwrap();
+        held._file.rewind().unwrap();
         let mut contents = String::new();
-        lock._file.read_to_string(&mut contents).unwrap();
+        held._file.read_to_string(&mut contents).unwrap();
         assert_eq!(
             contents,
             format!(
@@ -1462,7 +1393,7 @@ mod tests {
                 std::process::id()
             )
         );
-        drop(lock);
+        drop(held);
     }
 
     #[test]
@@ -1482,7 +1413,7 @@ mod tests {
             let owners = Arc::clone(&owners);
             threads.push(std::thread::spawn(move || {
                 start.wait();
-                let lock = WatchSessionLock::acquire(&root, WatchMode::Live);
+                let lock = lock(&root, WatchMode::Live);
                 attempts.fetch_add(1, Ordering::SeqCst);
                 if let Ok(lock) = lock {
                     owners.fetch_add(1, Ordering::SeqCst);

@@ -6,6 +6,7 @@ targets:
   symbols:
     - criv.toml
     - hawk.toml
+    - .fallowrc.json
     - mise.toml
     - hk.pkl
     - scripts/measure-performance.sh
@@ -36,7 +37,7 @@ bundled Pkl evaluator, so no separate `pkl` CLI is needed.
 
 The top-level `steps` block in `hk.pkl` runs in the `check`, `fix`, and
 `pre-commit` hooks. It holds the gatekeepers (merge-conflict markers, files
-over 500 KB outside `brag-output/`, and private keys), the formatters, and the
+over 500 KB, and private keys), the formatters, and the
 workflow and shell linters. `pre-commit` adds gitleaks on the staged changes,
 and `check` adds gitleaks on the Git history. `hk fix` does not stage its
 changes; pass `--stage` to stage them.
@@ -309,32 +310,33 @@ is required. Large-workload measurement remains deferred.
 
 Obsidian and VS Code validation are hosted-CI suites rather than automatic hk
 steps. Contributors changing a companion should run its package scripts
-directly. Run `npm ci` from the repository root first. The Obsidian companion
-commands are:
+directly. Run `npm ci` from the repository root first. Hosted CI and the
+release quality job run the same root scripts:
 
 ```sh
-npm audit --workspace criv-obsidian-plugin --audit-level=high
-npm --prefix .obsidian/plugins/criv run format:check
-npm --prefix .obsidian/plugins/criv run lint
-npm --prefix .obsidian/plugins/criv test
-npm --prefix .obsidian/plugins/criv run build:wasm
-npm --prefix .obsidian/plugins/criv run build:plugin
-npm --prefix .obsidian/plugins/criv run build
+npm run check:editor-contracts
+npm run check:obsidian
+npm run check:vscode
 ```
 
-The combined build preserves the release and manual entry point by running the
-Wasm build followed by the plugin build. The Wasm command invokes `wasm-pack`
-through `mise exec cargo:wasm-pack@0.15.1`, so the repository's pinned tools are
-used rather than whichever Rust or `wasm-pack` appears first in the shell.
-It writes `criv_wasm.js`, `criv_wasm_bg.js`, and `criv_wasm_bg.wasm` under
-`.obsidian/plugins/criv/pkg/`. The plugin bundle keeps that runtime import
-external, so a distributable plugin must carry the generated `pkg/` directory
-beside `main.js`.
+`check:obsidian` runs the Obsidian companion audit, format check, lint, tests,
+and build. `check:vscode` runs the VS Code companion audit, format check, lint,
+unit tests, and extension-host integration tests; hosted CI runs it under Xvfb.
 
-If Obsidian reports that the criv Wasm runtime is unavailable, run the combined
-build, confirm those three runtime files exist, and reload the plugin. A state
-schema or parse error is separate: regenerate `.criv/state.json` with `criv
-watch --once` instead of rebuilding Wasm.
+Both companions use the same script names: `build:wasm`, `build`,
+`check-types`, `dev`, `test`, `lint`, `format`, and `format:check`.
+`build:wasm` builds the `web` Wasm target once into
+`packages/criv-editor-state/pkg/`. It runs `wasm-pack` through `mise exec`, so
+the tool versions pinned in `mise.toml` are used rather than whichever Rust or
+`wasm-pack` appears first in the shell. `build` and `test` run it first. The
+bundles embed the Wasm bytes, so `main.js` and `dist/extension.js` need no
+`pkg/` directory beside them
+([[0170-share-editor-state-behaviour-and-embed-the-wasm-runtime|ADR-0170]]).
+
+If an editor reports that the criv Wasm runtime is unavailable, run its
+`build` and reload the plugin or window. A state schema or parse error is
+separate: regenerate `.criv/state.json` with `criv watch --once` instead of
+rebuilding Wasm.
 
 The VS Code-compatible extension lives in `extensions/vscode-criv`. Its local
 tasks are exposed through mise and npm:
@@ -364,13 +366,9 @@ architecture documentation; neither watch nor check compiles them.
 vscode-package` build a local `vscode-criv.vsix` without publishing. `mise run
 vscode-install` builds that VSIX and installs it into the local editor; reload
 the window afterwards. The
-prepublish hook builds the Node.js Wasm target into
-`extensions/vscode-criv/pkg/`; the VSIX includes `criv_wasm.js` and
-`criv_wasm_bg.wasm` from that directory. If the extension reports an unavailable
-Wasm runtime, rebuild `build:wasm`, recreate the VSIX, confirm those files are
-present in the package, and reload the editor window. Regenerate invalid state
-with `criv watch --once`; do not treat a state-validation error as a runtime
-packaging failure.
+prepublish hook runs `build`, which embeds the Wasm runtime in
+`dist/extension.js`. Regenerate invalid state with `criv watch --once`; do not
+treat a state-validation error as a runtime packaging failure.
 
 The optional viewer is local-only under
 [[0087-keep-editor-setup-out-of-init|ADR-0087]]. The project does not
@@ -399,3 +397,11 @@ artifacts so its compiler work stays isolated from the other parallel checks.
 This policy is captured in [[0043-hawk-visibility-analysis|ADR-0043]] and the
 local/hosted validation boundary is
 [[0061-hook-owned-local-validation-and-direct-ci-profile|ADR-0061]].
+
+The `fallow` hk step runs `npm run check:fallow` in the pre-push hook when a
+companion package, the root npm manifests, or `.fallowrc.json` change. It runs
+`fallow dead-code` and `fallow dupes` on `@criv/editor-state`, the VS Code
+extension, and the Obsidian plugin, and needs the root `npm ci`.
+`check:editor-contracts` runs the same script in CI and release. Use
+`npx fallow health` for advisory complexity reports. This policy is captured in
+[[0195-fallow-dead-code-and-duplication-analysis-for-typescript|ADR-0195]].

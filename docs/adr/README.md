@@ -167,3 +167,37 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0154-cache-hosted-toolchains-with-mise-and-compiler-results-with-mbx|ADR-0154]] - Cache hosted toolchains with mise and compiler results with mbx
 - [[0155-remove-likec4-from-criv|ADR-0155]] - Remove LikeC4 from criv
 - [[0157-run-rust-tests-with-cargo-nextest|ADR-0157]] - Run Rust tests with cargo-nextest
+- [[0158-give-each-note-notation-one-owner|ADR-0158]] - Give each note notation one owner
+- [[0159-derive-configuration-defaults-from-one-type|ADR-0159]] - Derive configuration defaults from one type
+- [[0160-own-the-published-state-grammar-in-the-wire-crate|ADR-0160]] - Own the published State grammar in the wire crate
+- [[0161-describe-source-languages-in-one-table|ADR-0161]] - Describe Source languages in one table
+- [[0162-keep-the-vault-model-deep-and-state-fingerprints-in-state|ADR-0162]] - Keep the vault model deep and State fingerprints in State
+- [[0163-separate-the-adr-gate-from-one-reconcile-transaction|ADR-0163]] - Separate the ADR gate from one reconcile transaction
+- [[0164-type-git-revisions-on-one-opened-repository|ADR-0164]] - Type Git revisions on one opened repository
+- [[0165-define-repository-files-without-a-forwarding-layer|ADR-0165]] - Define repository files without a forwarding layer
+- [[0166-own-refresh-inside-the-watch-generation|ADR-0166]] - Own refresh inside the watch generation
+- [[0167-publish-state-without-a-staging-copy|ADR-0167]] - Publish State without a staging copy
+- [[0168-keep-state-hashing-inside-state|ADR-0168]] - Keep State hashing inside State
+- [[0169-load-query-data-per-command|ADR-0169]] - Load query data per command
+- [[0170-share-editor-state-behaviour-and-embed-the-wasm-runtime|ADR-0170]] - Share editor State behaviour and embed the Wasm runtime
+- [[0171-retain-state-wire-and-elixir-rules-after-the-editor-state-move|ADR-0171]] - Retain State wire and Elixir rules after the editor-state move
+- [[0172-retain-the-obsidian-owner-layout-with-typescript-tests|ADR-0172]] - Retain the Obsidian owner layout with TypeScript tests
+- [[0173-observe-discovery-through-a-feature-gated-selection-api|ADR-0173]] - Observe discovery through a feature-gated selection API
+- [[0174-guard-runtime-boundaries-with-tree-wide-policies|ADR-0174]] - Guard runtime boundaries with tree-wide policies
+- [[0175-declare-the-command-tree-and-shipped-skills-once|ADR-0175]] - Declare the command tree and shipped skills once
+- [[0176-guard-runtime-boundaries-over-the-whole-source-tree|ADR-0176]] - Guard runtime boundaries over the whole source tree
+- [[0177-register-policy-patterns-once-in-the-vault|ADR-0177]] - Register policy patterns once in the vault
+- [[0178-keep-configuration-as-normalized-data|ADR-0178]] - Keep configuration as normalized data
+- [[0179-report-every-enforcement-failure-in-one-report|ADR-0179]] - Report every enforcement failure in one report
+- [[0180-keep-installation-safe-without-caller-checks|ADR-0180]] - Keep installation safe without caller checks
+- [[0182-record-prior-snapshot-hashes-in-the-publication-transaction|ADR-0182]] - Record prior snapshot hashes in the publication transaction
+- [[0183-derive-source-graph-indexes-from-its-files|ADR-0183]] - Derive Source graph indexes from its files
+- [[0184-give-each-query-reverse-index-scope-its-own-type|ADR-0184]] - Give each query reverse index scope its own type
+- [[0185-vscode-unit-tests-by-feature-directory|ADR-0185]] - VS Code unit tests by feature directory
+- [[0189-keep-each-source-file-with-its-fingerprint-and-parent-links|ADR-0189]] - Keep each Source file with its fingerprint and parent links
+- [[0190-judge-docs-watch-events-by-the-vault-prune-rules|ADR-0190]] - Judge docs watch events by the vault prune rules
+- [[0191-give-every-import-node-the-directive-id-form|ADR-0191]] - Give every import node the directive id form
+- [[0192-retain-explicit-source-lookup-results-after-the-editor-state-move|ADR-0192]] - Retain explicit source lookup results after the editor-state move
+- [[0193-follow-the-cli-source-wikilink-rule-in-editors|ADR-0193]] - Follow the CLI source Wikilink rule in editors
+- [[0194-check-editor-companions-through-shared-scripts-and-fixtures|ADR-0194]] - Check editor companions through shared scripts and fixtures
+- [[0195-fallow-dead-code-and-duplication-analysis-for-typescript|ADR-0195]] - Fallow dead-code and duplication analysis for TypeScript

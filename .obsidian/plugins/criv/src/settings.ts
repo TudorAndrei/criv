@@ -1,19 +1,20 @@
 import { PluginSettingTab, Setting } from "obsidian";
 import type { App, Plugin } from "obsidian";
-import { safeVaultPath } from "./source/model";
+import { CRIV_STATE_PATH, safeVaultPath } from "@criv/editor-state";
 
 export interface CrivSettings {
   statePath: string;
   externalEditorUrl: string;
 }
 
-export const DEFAULT_SETTINGS: CrivSettings = {
-  statePath: ".criv/state.json",
+const DEFAULT_SETTINGS: CrivSettings = {
+  statePath: CRIV_STATE_PATH,
   externalEditorUrl: "vscode://file/{path}",
 };
 
+/** The one owner of persisted plugin settings and the settings tab. */
 export class ObsidianSettingsOwner {
-  settings: CrivSettings = { ...DEFAULT_SETTINGS };
+  private settings: CrivSettings = { ...DEFAULT_SETTINGS };
 
   constructor(
     private readonly app: App,
@@ -21,27 +22,32 @@ export class ObsidianSettingsOwner {
     private readonly reloadState: () => Promise<unknown>,
   ) {}
 
-  async load(): Promise<void> {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.plugin.loadData());
+  get current(): Readonly<CrivSettings> {
+    return this.settings;
   }
 
-  replace(settings: CrivSettings): void {
-    this.settings = settings;
+  async load(): Promise<void> {
+    this.settings = { ...DEFAULT_SETTINGS, ...(await this.plugin.loadData()) };
   }
 
   async setStatePath(value: string): Promise<void> {
     this.settings.statePath = safeVaultPath(value) ?? DEFAULT_SETTINGS.statePath;
-    await this.save();
+    await this.plugin.saveData(this.settings);
     await this.reloadState();
   }
 
-  async updateExternalEditorUrl(value: string): Promise<void> {
+  async setExternalEditorUrl(value: string): Promise<void> {
     this.settings.externalEditorUrl = value.trim() || DEFAULT_SETTINGS.externalEditorUrl;
-    await this.save();
+    await this.plugin.saveData(this.settings);
   }
 
-  async save(): Promise<void> {
-    await this.plugin.saveData(this.settings);
+  /**
+   * The external editor URL for a file. `{path}` is its absolute path with `/`
+   * separators and no leading slash, as `vscode://file/{path}` expects.
+   */
+  externalEditorUrl(absolutePath: string): string {
+    const path = absolutePath.replace(/\\/g, "/").replace(/^\/+/, "");
+    return this.settings.externalEditorUrl.replace("{path}", encodeURI(path));
   }
 
   createTab(): PluginSettingTab {
@@ -67,21 +73,21 @@ class CrivSettingTab extends PluginSettingTab {
       .setDesc("Path to the criv watcher state file, relative to the vault root.")
       .addText((text) =>
         text
-          .setPlaceholder(".criv/state.json")
-          .setValue(this.owner.settings.statePath)
+          .setPlaceholder(CRIV_STATE_PATH)
+          .setValue(this.owner.current.statePath)
           .onChange(async (value) => this.owner.setStatePath(value)),
       );
 
     new Setting(containerEl)
       .setName("External editor URL")
       .setDesc(
-        "URL template for opening source files. Use {path} for the repo-relative source path.",
+        "URL template for opening source files. Use {path} for the absolute file path without its leading slash.",
       )
       .addText((text) =>
         text
           .setPlaceholder("vscode://file/{path}")
-          .setValue(this.owner.settings.externalEditorUrl)
-          .onChange(async (value) => this.owner.updateExternalEditorUrl(value)),
+          .setValue(this.owner.current.externalEditorUrl)
+          .onChange(async (value) => this.owner.setExternalEditorUrl(value)),
       );
   }
 }

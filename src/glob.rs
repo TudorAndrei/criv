@@ -1,4 +1,4 @@
-use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
+use globset::{Glob, GlobBuilder, GlobSet, GlobSetBuilder};
 
 use crate::{CrivError, Result};
 
@@ -7,66 +7,69 @@ pub struct GlobMatcher {
     sets: Vec<(GlobSet, Vec<usize>)>,
 }
 
+/// The globs of a list, each compiled or with its syntax error, by index.
+pub struct CompiledGlobs {
+    pub(crate) matcher: GlobMatcher,
+    pub(crate) errors: Vec<Option<String>>,
+}
+
+fn glob(pattern: &str) -> std::result::Result<Glob, globset::Error> {
+    GlobBuilder::new(pattern)
+        .literal_separator(true)
+        .backslash_escape(true)
+        .build()
+}
+
 impl GlobMatcher {
     pub(crate) fn new(patterns: &[String]) -> Result<Self> {
-        Self::from_patterns(patterns, (0..patterns.len()).collect())
+        let globs = patterns
+            .iter()
+            .map(|pattern| {
+                glob(pattern)
+                    .map_err(|err| CrivError::new(format!("invalid glob `{pattern}`: {err}")))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Self::from_globs(globs, (0..patterns.len()).collect())
+            .map_err(|err| CrivError::new(format!("failed to compile globs: {err}")))
     }
 
-    /// Compiles every valid pattern and preserves its original index. This is
-    /// for legacy matching paths where an invalid glob has always meant
-    /// "does not match", rather than a validation error.
-    pub(crate) fn from_valid_patterns(patterns: &[String]) -> Self {
+    /// Compiles every valid pattern, keeping its index, and reports the
+    /// syntax error of each invalid one.
+    pub(crate) fn compile_each(patterns: &[String]) -> CompiledGlobs {
+        let mut errors = Vec::with_capacity(patterns.len());
         let mut valid = Vec::new();
         for (index, pattern) in patterns.iter().enumerate() {
-            if GlobBuilder::new(pattern)
-                .literal_separator(true)
-                .backslash_escape(true)
-                .build()
-                .is_ok()
-            {
-                valid.push((index, pattern.clone()));
+            match glob(pattern) {
+                Ok(glob) => {
+                    valid.push((index, glob));
+                    errors.push(None);
+                }
+                Err(err) => errors.push(Some(err.kind().to_string())),
             }
         }
-        Self::from_patterns(
-            &valid
-                .iter()
-                .map(|(_, pattern)| pattern.clone())
-                .collect::<Vec<_>>(),
-            valid.iter().map(|(index, _)| *index).collect(),
-        )
-        .unwrap_or_else(
-            // A valid aggregate can exceed globset's automaton limit. Keep the
-            // tolerant contract by compiling each valid pattern independently.
-            |_| Self {
-                sets: valid
-                    .iter()
-                    .filter_map(|(index, pattern)| {
-                        Self::from_patterns(std::slice::from_ref(pattern), vec![*index]).ok()
-                    })
-                    .flat_map(|matcher| matcher.sets)
-                    .collect(),
-            },
-        )
+        let (indices, globs): (Vec<_>, Vec<_>) = valid.iter().cloned().unzip();
+        // A valid aggregate can exceed globset's automaton limit; then each
+        // glob gets its own set.
+        let matcher = Self::from_globs(globs, indices).unwrap_or_else(|_| Self {
+            sets: valid
+                .into_iter()
+                .filter_map(|(index, glob)| Self::from_globs(vec![glob], vec![index]).ok())
+                .flat_map(|matcher| matcher.sets)
+                .collect(),
+        });
+        CompiledGlobs { matcher, errors }
     }
 
-    fn from_patterns(patterns: &[String], pattern_indices: Vec<usize>) -> Result<Self> {
+    fn from_globs(
+        globs: Vec<Glob>,
+        pattern_indices: Vec<usize>,
+    ) -> std::result::Result<Self, globset::Error> {
         let mut builder = GlobSetBuilder::new();
-        for pattern in patterns {
-            builder.add(
-                GlobBuilder::new(pattern)
-                    .literal_separator(true)
-                    .backslash_escape(true)
-                    .build()
-                    .map_err(|err| CrivError::new(format!("invalid glob `{pattern}`: {err}")))?,
-            );
+        for glob in globs {
+            builder.add(glob);
         }
         Ok(Self {
-            sets: vec![(
-                builder
-                    .build()
-                    .map_err(|err| CrivError::new(format!("failed to compile globs: {err}")))?,
-                pattern_indices,
-            )],
+            sets: vec![(builder.build()?, pattern_indices)],
         })
     }
 

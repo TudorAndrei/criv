@@ -1,15 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use criv_state_wire::source_identity::{
-    ElixirCallableKind, ElixirOwner as SharedElixirOwner, ElixirSelector, SourceSelector,
+    ElixirCallableKind, ElixirOwner, ElixirSelector, SourceSelector,
 };
 use tree_sitter::Node;
 
+use super::syntax::{
+    Depth, descendants, first_named_child, matching_close, node_range, node_text, split_top_level,
+    split_top_level_operator,
+};
 use super::{
     CallableFilter, DirectiveFilter, DirectiveKind, FieldSignature, Import, InterfaceSignature,
     Language, LexicalScope, ModuleDecl, ModuleRelationshipRole, Relationship, RelationshipKind,
-    RelationshipTarget, SourceFile, Symbol, SymbolId, SymbolKind, SymbolOwner, SymbolRange,
-    node_text,
+    RelationshipTarget, SourceFile, Symbol, SymbolId, SymbolKind, SymbolRange, symbol_in,
 };
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -48,7 +51,7 @@ impl ElixirRelationships {
         let mut relationships = Self::default();
         for (path, file) in files {
             for (index, symbol) in file.symbols.iter().enumerate() {
-                let Some(SymbolOwner::Module { name: module }) = symbol.owner.as_ref() else {
+                let Some(ElixirOwner::Module { name: module }) = symbol.owner.as_ref() else {
                     continue;
                 };
                 let module = relationships.modules.entry(module.clone()).or_default();
@@ -96,7 +99,7 @@ impl ElixirRelationships {
         caller: &SymbolId,
         relationship: &Relationship,
     ) -> Option<SymbolId> {
-        let caller_symbol = symbol(files, caller)?;
+        let caller_symbol = symbol_in(files, caller)?;
         let file = files.get(&caller.path)?;
         match &relationship.target {
             RelationshipTarget::Dynamic { .. } => None,
@@ -178,7 +181,7 @@ impl ElixirRelationships {
         relationship: &Relationship,
     ) -> String {
         let file = files.get(&caller.path);
-        let owner = symbol(files, caller).and_then(|symbol| symbol.owner.as_ref());
+        let owner = symbol_in(files, caller).and_then(|symbol| symbol.owner.as_ref());
         match &relationship.target {
             RelationshipTarget::Callable {
                 module,
@@ -243,26 +246,13 @@ pub(super) const fn is_executable_query_edge(kind: RelationshipKind) -> bool {
     matches!(kind, RelationshipKind::Call | RelationshipKind::Delegate)
 }
 
-pub(super) fn compatibility_aliases(symbol: &Symbol) -> Vec<String> {
-    let mut aliases = vec![symbol.name.clone()];
-    if let Some(arity) = symbol.arity {
-        aliases.push(format!("{}/{arity}", symbol.name));
-        if let Some(SymbolOwner::Module { name: module }) = symbol.owner.as_ref() {
-            aliases.push(format!("{module}.{}/{arity}", symbol.name));
-        }
-    }
-    aliases.sort();
-    aliases.dedup();
-    aliases
-}
-
 pub(super) fn symbol_selector(
     kind: SymbolKind,
-    owner: &SymbolOwner,
+    owner: &ElixirOwner,
     name: &str,
     arity: Option<usize>,
 ) -> Option<String> {
-    let owner = shared_owner(owner);
+    let owner = owner.clone();
     if matches!(
         kind,
         SymbolKind::Module
@@ -290,21 +280,6 @@ pub(super) fn symbol_selector(
         | SymbolKind::Behaviour => return None,
     };
     Some(SourceSelector::elixir(ElixirSelector::callable(owner, kind, name, arity?)).to_string())
-}
-
-fn shared_owner(owner: &SymbolOwner) -> SharedElixirOwner {
-    match owner {
-        SymbolOwner::Module { name } => SharedElixirOwner::module(name),
-        SymbolOwner::Implementation { protocol, for_type } => {
-            SharedElixirOwner::implementation(protocol, for_type)
-        }
-    }
-}
-
-fn symbol<'a>(files: &'a BTreeMap<String, SourceFile>, id: &SymbolId) -> Option<&'a Symbol> {
-    files
-        .get(&id.path)
-        .and_then(|file| file.symbols.iter().find(|symbol| symbol.id == *id))
 }
 
 fn local_resolution(
@@ -348,7 +323,7 @@ fn callable_identity_matches(symbol: &Symbol, name: &str, arity: usize) -> bool 
 
 fn directive_is_active(
     directive: &Import,
-    owner: Option<&SymbolOwner>,
+    owner: Option<&ElixirOwner>,
     line: usize,
     site: usize,
 ) -> bool {
@@ -361,7 +336,7 @@ fn directive_is_active(
 
 fn resolve_module(
     file: &SourceFile,
-    owner: Option<&SymbolOwner>,
+    owner: Option<&ElixirOwner>,
     module: &str,
     line: usize,
     site: usize,
@@ -371,7 +346,7 @@ fn resolve_module(
 
 fn resolve_module_inner(
     file: &SourceFile,
-    owner: Option<&SymbolOwner>,
+    owner: Option<&ElixirOwner>,
     module: &str,
     line: usize,
     site: usize,
@@ -421,7 +396,7 @@ fn resolve_module_inner(
 
 fn effective_imports(
     file: &SourceFile,
-    owner: Option<&SymbolOwner>,
+    owner: Option<&ElixirOwner>,
     line: usize,
     site: usize,
 ) -> Vec<String> {
@@ -441,7 +416,7 @@ fn effective_imports(
 
 fn import_kind_allows(
     file: &SourceFile,
-    owner: Option<&SymbolOwner>,
+    owner: Option<&ElixirOwner>,
     module: &str,
     line: usize,
     site: usize,
@@ -484,7 +459,7 @@ fn import_kind_allows(
 
 fn resolve_directive_module(
     file: &SourceFile,
-    owner: Option<&SymbolOwner>,
+    owner: Option<&ElixirOwner>,
     directive: &Import,
 ) -> String {
     if directive.absolute {
@@ -575,14 +550,8 @@ struct ModuleBody {
 }
 
 pub(super) fn parse_file(path: &str, contents: &str, root: Node<'_>) -> SourceFile {
-    let mut file = SourceFile {
-        path: path.into(),
-        language: Language::Elixir,
-        imports: Vec::new(),
-        modules: Vec::new(),
-        symbols: Vec::new(),
-    };
-    collect_modules(root, contents, path, None, &mut file, 0);
+    let mut file = SourceFile::new(path, Language::Elixir);
+    collect_modules(root, contents, path, None, &mut file, Depth::ROOT);
     file
 }
 
@@ -592,25 +561,18 @@ fn collect_modules(
     path: &str,
     parent_module: Option<&str>,
     file: &mut SourceFile,
-    depth: usize,
+    depth: Depth,
 ) {
-    if depth >= super::MAX_AST_DEPTH {
-        return;
-    }
     if let Some(Declaration::Module(module)) = declaration(node, contents) {
         parse_module(node, module, contents, path, parent_module, file);
         return;
     }
+    let Some(depth) = depth.child() else {
+        return;
+    };
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        collect_modules(
-            child,
-            contents,
-            path,
-            parent_module,
-            file,
-            depth.saturating_add(1),
-        );
+        collect_modules(child, contents, path, parent_module, file, depth);
     }
 }
 
@@ -662,7 +624,7 @@ fn parse_module(
             return;
         };
         (
-            SymbolOwner::Implementation {
+            ElixirOwner::Implementation {
                 protocol: protocol.clone(),
                 for_type: for_type.clone(),
             },
@@ -681,12 +643,12 @@ fn parse_module(
         } else {
             SymbolKind::Module
         };
-        (SymbolOwner::Module { name: name.clone() }, name, kind)
+        (ElixirOwner::Module { name: name.clone() }, name, kind)
     };
 
     let range = node_range(node);
     let mut module_relationships = match &owner {
-        SymbolOwner::Implementation { protocol, for_type } => vec![
+        ElixirOwner::Implementation { protocol, for_type } => vec![
             Relationship {
                 kind: RelationshipKind::ProtocolImplementation,
                 target: RelationshipTarget::Module {
@@ -706,7 +668,7 @@ fn parse_module(
                 site: node.start_byte(),
             },
         ],
-        SymbolOwner::Module { .. } => Vec::new(),
+        ElixirOwner::Module { .. } => Vec::new(),
     };
     let symbol_index = file.symbols.len();
     file.modules.push(ModuleDecl {
@@ -741,7 +703,7 @@ fn parse_module(
             module_name: &display_name,
             allow_bodyless_function: initial_kind == SymbolKind::Protocol,
         }
-        .collect(do_block, file, &mut body, 0);
+        .collect(do_block, file, &mut body, Depth::ROOT);
     }
 
     let final_kind = if initial_kind == SymbolKind::Protocol {
@@ -770,9 +732,10 @@ fn parse_module(
         body.fields.clone(),
         module_relationships,
     );
+    let module_id = symbol.id.clone();
 
-    emit_callables(path, &display_name, &owner, &body, file);
-    emit_callbacks(path, &display_name, &owner, &body, file);
+    emit_callables(path, &display_name, &owner, &module_id, &body, file);
+    emit_callbacks(path, &display_name, &owner, &module_id, &body, file);
 }
 
 struct ModuleBodyWalk<'a> {
@@ -783,14 +746,11 @@ struct ModuleBodyWalk<'a> {
 }
 
 impl ModuleBodyWalk<'_> {
-    fn collect(&self, node: Node<'_>, file: &mut SourceFile, body: &mut ModuleBody, depth: usize) {
+    fn collect(&self, node: Node<'_>, file: &mut SourceFile, body: &mut ModuleBody, depth: Depth) {
         let contents = self.contents;
         let path = self.path;
         let module_name = self.module_name;
         let allow_bodyless_function = self.allow_bodyless_function;
-        if depth >= super::MAX_AST_DEPTH {
-            return;
-        }
         if let Some(declaration) = declaration(node, contents) {
             match declaration {
                 Declaration::Module(module) => {
@@ -851,9 +811,12 @@ impl ModuleBodyWalk<'_> {
             return;
         }
 
+        let Some(depth) = depth.child() else {
+            return;
+        };
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
-            self.collect(child, file, body, depth.saturating_add(1));
+            self.collect(child, file, body, depth);
         }
     }
 }
@@ -862,7 +825,7 @@ fn collect_directives(
     node: Node<'_>,
     contents: &str,
     module_name: &str,
-    owner: &SymbolOwner,
+    owner: &ElixirOwner,
     scope: LexicalScope,
     file: &mut SourceFile,
 ) {
@@ -914,7 +877,7 @@ fn parse_directive(
     node: Node<'_>,
     contents: &str,
     module_name: &str,
-    owner: &SymbolOwner,
+    owner: &ElixirOwner,
     scope: LexicalScope,
     kind: DirectiveKind,
 ) -> Vec<Import> {
@@ -948,10 +911,7 @@ fn parse_directive(
                         .next()
                         .map(str::to_string)
                         .filter(|value| !value.starts_with(':')),
-                    DirectiveKind::Import
-                    | DirectiveKind::Require
-                    | DirectiveKind::Use
-                    | DirectiveKind::Legacy => None,
+                    DirectiveKind::Import | DirectiveKind::Require | DirectiveKind::Use => None,
                 })
             } else if kind == DirectiveKind::Alias {
                 module.rsplit('.').next().map(str::to_string)
@@ -1029,7 +989,7 @@ fn parse_callable_filters(value: &str) -> Vec<CallableFilter> {
 }
 
 fn collect_attribute(node: Node<'_>, contents: &str, module_name: &str, body: &mut ModuleBody) {
-    let Some(call) = descendant_call(node) else {
+    let Some(call) = descendants(node).find(|node| node.kind() == "call") else {
         return;
     };
     let Some(attribute) =
@@ -1116,6 +1076,7 @@ fn callable_clause(
                 path,
                 module_name,
                 &mut relationships,
+                Depth::ROOT,
             );
         }
         head = head.child_by_field_name("left")?;
@@ -1156,6 +1117,7 @@ fn callable_clause(
             path,
             module_name,
             &mut relationships,
+            Depth::ROOT,
         );
     }
     relationships.sort();
@@ -1243,7 +1205,14 @@ fn collect_default_relationship(
     relationships: &mut Vec<Relationship>,
 ) {
     if let Some(default) = node.child_by_field_name("right") {
-        collect_expression_relationships(default, contents, path, module_name, relationships);
+        collect_expression_relationships(
+            default,
+            contents,
+            path,
+            module_name,
+            relationships,
+            Depth::ROOT,
+        );
     }
 }
 
@@ -1253,25 +1222,20 @@ fn collect_expression_relationships(
     path: &str,
     module_name: &str,
     relationships: &mut Vec<Relationship>,
+    depth: Depth,
 ) {
-    collect_expression_relationships_depth(node, contents, path, module_name, relationships, 0);
-}
-
-#[expect(
-    clippy::too_many_lines,
-    reason = "expression traversal keeps all Elixir syntax cases in one exhaustive dispatcher"
-)]
-fn collect_expression_relationships_depth(
-    node: Node<'_>,
-    contents: &str,
-    path: &str,
-    module_name: &str,
-    relationships: &mut Vec<Relationship>,
-    depth: usize,
-) {
-    if depth >= super::MAX_AST_DEPTH {
-        return;
-    }
+    let recurse = |child: Node<'_>, relationships: &mut Vec<Relationship>| {
+        if let Some(depth) = depth.child() {
+            collect_expression_relationships(
+                child,
+                contents,
+                path,
+                module_name,
+                relationships,
+                depth,
+            );
+        }
+    };
     if node.kind() == "unary_operator"
         && operator_text(node, contents).as_deref() == Some("&")
         && let Some(capture) = capture_relationship(node, contents, path, module_name)
@@ -1282,27 +1246,21 @@ fn collect_expression_relationships_depth(
 
     if node.kind() == "binary_operator" && operator_text(node, contents).as_deref() == Some("|>") {
         if let Some(left) = node.child_by_field_name("left") {
-            collect_expression_relationships_depth(
-                left,
-                contents,
-                path,
-                module_name,
-                relationships,
-                depth.saturating_add(1),
-            );
+            recurse(left, relationships);
         }
         if let Some(right) = node.child_by_field_name("right") {
             if right.kind() == "call" {
-                collect_call_relationship(right, contents, path, module_name, 1, relationships);
-            } else {
-                collect_expression_relationships_depth(
+                collect_call_relationship(
                     right,
                     contents,
                     path,
                     module_name,
+                    1,
                     relationships,
-                    depth.saturating_add(1),
+                    depth,
                 );
+            } else {
+                recurse(right, relationships);
             }
         }
         return;
@@ -1324,14 +1282,7 @@ fn collect_expression_relationships_depth(
         });
         for field in ["left", "right"] {
             if let Some(child) = node.child_by_field_name(field) {
-                collect_expression_relationships_depth(
-                    child,
-                    contents,
-                    path,
-                    module_name,
-                    relationships,
-                    depth.saturating_add(1),
-                );
+                recurse(child, relationships);
             }
         }
         return;
@@ -1355,33 +1306,19 @@ fn collect_expression_relationships_depth(
             .child_by_field_name("operand")
             .or_else(|| first_named_child(node))
         {
-            collect_expression_relationships_depth(
-                operand,
-                contents,
-                path,
-                module_name,
-                relationships,
-                depth.saturating_add(1),
-            );
+            recurse(operand, relationships);
         }
         return;
     }
 
     if node.kind() == "call" {
-        collect_call_relationship(node, contents, path, module_name, 0, relationships);
+        collect_call_relationship(node, contents, path, module_name, 0, relationships, depth);
         return;
     }
 
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        collect_expression_relationships_depth(
-            child,
-            contents,
-            path,
-            module_name,
-            relationships,
-            depth.saturating_add(1),
-        );
+        recurse(child, relationships);
     }
 }
 
@@ -1392,6 +1329,7 @@ fn collect_call_relationship(
     module_name: &str,
     pipeline_arguments: usize,
     relationships: &mut Vec<Relationship>,
+    depth: Depth,
 ) {
     let Some(target_node) = node.child_by_field_name("target") else {
         return;
@@ -1402,7 +1340,7 @@ fn collect_call_relationship(
     }
     let arguments = direct_child_kind(node, "arguments");
     let arity = arguments
-        .map_or(0, named_child_count)
+        .map_or(0, |arguments| arguments.named_child_count())
         .saturating_add(pipeline_arguments);
 
     if target_text == "apply" && pipeline_arguments == 0 {
@@ -1423,14 +1361,31 @@ fn collect_call_relationship(
         });
     }
 
+    let Some(depth) = depth.child() else {
+        return;
+    };
     if let Some(arguments) = arguments {
         let mut cursor = arguments.walk();
         for argument in arguments.named_children(&mut cursor) {
-            collect_expression_relationships(argument, contents, path, module_name, relationships);
+            collect_expression_relationships(
+                argument,
+                contents,
+                path,
+                module_name,
+                relationships,
+                depth,
+            );
         }
     }
     if let Some(do_block) = direct_child_kind(node, "do_block") {
-        collect_expression_relationships(do_block, contents, path, module_name, relationships);
+        collect_expression_relationships(
+            do_block,
+            contents,
+            path,
+            module_name,
+            relationships,
+            depth,
+        );
     }
 }
 
@@ -1609,7 +1564,7 @@ fn static_list_arity(node: Node<'_>, contents: &str) -> Option<usize> {
             return None;
         }
         arity = arity.saturating_add(if child.kind() == "keywords" {
-            named_child_count(child)
+            child.named_child_count()
         } else {
             1
         });
@@ -1629,70 +1584,23 @@ fn dynamic_target(path: &str, node: Node<'_>, label: String, arity: usize) -> Re
     }
 }
 
-fn named_child_count(node: Node<'_>) -> usize {
-    node.named_child_count()
-}
-
 fn named_children(node: Node<'_>) -> Vec<Node<'_>> {
     let mut cursor = node.walk();
     node.named_children(&mut cursor).collect()
 }
 
-fn is_elixir_special_form(target: &str) -> bool {
-    matches!(
-        target,
-        "alias"
-            | "import"
-            | "require"
-            | "use"
-            | "def"
-            | "defp"
-            | "defmacro"
-            | "defmacrop"
-            | "defguard"
-            | "defguardp"
-            | "defdelegate"
-            | "defmodule"
-            | "defprotocol"
-            | "defimpl"
-            | "defstruct"
-            | "defexception"
-            | "case"
-            | "cond"
-            | "if"
-            | "unless"
-            | "with"
-            | "for"
-            | "receive"
-            | "try"
-            | "fn"
-            | "quote"
-            | "unquote"
-    )
+/// A call whose subtree yields no relationships: a declaration or a quote.
+fn is_excluded_call_tree(target: &str) -> bool {
+    target.parse::<Declaration>().is_ok() || matches!(target, "quote" | "unquote")
 }
 
-fn is_excluded_call_tree(target: &str) -> bool {
-    matches!(
-        target,
-        "alias"
-            | "import"
-            | "require"
-            | "use"
-            | "def"
-            | "defp"
-            | "defmacro"
-            | "defmacrop"
-            | "defguard"
-            | "defguardp"
-            | "defdelegate"
-            | "defmodule"
-            | "defprotocol"
-            | "defimpl"
-            | "defstruct"
-            | "defexception"
-            | "quote"
-            | "unquote"
-    )
+/// A call that is syntax, not a callable: an excluded tree or control flow.
+fn is_elixir_special_form(target: &str) -> bool {
+    is_excluded_call_tree(target)
+        || matches!(
+            target,
+            "case" | "cond" | "if" | "unless" | "with" | "for" | "receive" | "try" | "fn"
+        )
 }
 
 #[expect(
@@ -1702,7 +1610,8 @@ fn is_excluded_call_tree(target: &str) -> bool {
 fn emit_callables(
     path: &str,
     module_name: &str,
-    owner: &SymbolOwner,
+    owner: &ElixirOwner,
+    module_id: &SymbolId,
     body: &ModuleBody,
     file: &mut SourceFile,
 ) {
@@ -1820,14 +1729,7 @@ fn emit_callables(
             continue;
         };
         file.symbols.push(Symbol {
-            id: SymbolId {
-                path: path.into(),
-                name: name.clone(),
-                selector,
-            },
-            name: name.clone(),
-            kind,
-            parent: None,
+            parent_id: Some(module_id.clone()),
             owner: Some(owner.clone()),
             arity: Some(arity),
             exported,
@@ -1845,10 +1747,9 @@ fn emit_callables(
                 defaults,
                 specifications,
             }),
-            range,
             clause_ranges: ranges,
-            calls: Vec::new(),
             relationships,
+            ..Symbol::new(path, name.clone(), kind, selector, range)
         });
     }
 }
@@ -1870,7 +1771,8 @@ fn effective_relationship_arity(
 fn emit_callbacks(
     path: &str,
     module_name: &str,
-    owner: &SymbolOwner,
+    owner: &ElixirOwner,
+    module_id: &SymbolId,
     body: &ModuleBody,
     file: &mut SourceFile,
 ) {
@@ -1884,14 +1786,7 @@ fn emit_callbacks(
             .optional_callbacks
             .contains(&(callback.name.clone(), callback.arity));
         file.symbols.push(Symbol {
-            id: SymbolId {
-                path: path.into(),
-                name: callback.name.clone(),
-                selector,
-            },
-            name: callback.name.clone(),
-            kind: callback.kind,
-            parent: None,
+            parent_id: Some(module_id.clone()),
             owner: Some(owner.clone()),
             arity: Some(callback.arity),
             exported: true,
@@ -1909,17 +1804,20 @@ fn emit_callbacks(
                 defaults: Vec::new(),
                 specifications: vec![callback.text.clone()],
             }),
-            range: callback.range,
-            clause_ranges: vec![callback.range],
-            calls: Vec::new(),
-            relationships: Vec::new(),
+            ..Symbol::new(
+                path,
+                callback.name.clone(),
+                callback.kind,
+                selector,
+                callback.range,
+            )
         });
     }
 }
 
 fn module_symbol(
     path: &str,
-    owner: SymbolOwner,
+    owner: ElixirOwner,
     name: String,
     kind: SymbolKind,
     range: SymbolRange,
@@ -1929,24 +1827,15 @@ fn module_symbol(
     fields.sort();
     fields.dedup();
     let selector = symbol_selector(kind, &owner, &name, None).unwrap_or_else(|| {
-        SourceSelector::elixir(ElixirSelector::owner(shared_owner(&owner))).to_string()
+        SourceSelector::elixir(ElixirSelector::owner(owner.clone())).to_string()
     });
     Symbol {
-        id: SymbolId {
-            path: path.into(),
-            name: name.clone(),
-            selector,
-        },
-        name: name.clone(),
-        kind,
-        parent: None,
         owner: Some(owner),
-        arity: None,
         exported: true,
         interface_signature: Some(InterfaceSignature {
             language: Language::Elixir,
             symbol_kind: kind,
-            qualified_name: name,
+            qualified_name: name.clone(),
             visibility: Some("public".into()),
             inputs: Vec::new(),
             output: None,
@@ -1957,10 +1846,8 @@ fn module_symbol(
             defaults: Vec::new(),
             specifications: Vec::new(),
         }),
-        range,
-        clause_ranges: vec![range],
-        calls: Vec::new(),
         relationships,
+        ..Symbol::new(path, name, kind, selector, range)
     }
 }
 
@@ -2069,11 +1956,7 @@ impl std::str::FromStr for Attribute {
 }
 
 fn unsafe_subtree(node: Node<'_>) -> bool {
-    if node.is_error() || node.is_missing() {
-        return true;
-    }
-    let mut cursor = node.walk();
-    node.children(&mut cursor).any(unsafe_subtree)
+    descendants(node).any(|node| node.is_error() || node.is_missing())
 }
 
 fn static_module_name(text: &str, parent: Option<&str>) -> Option<String> {
@@ -2156,29 +2039,21 @@ fn keyword_value<'tree>(
     contents: &str,
     wanted_key: &str,
 ) -> Option<Node<'tree>> {
-    if node.kind() == "pair"
-        && node
-            .child_by_field_name("key")
-            .and_then(|key| node_text(key, contents))
-            .is_some_and(|key| {
-                key.trim().trim_end_matches(':') == wanted_key.trim().trim_end_matches(':')
-            })
-    {
-        return node.child_by_field_name("value");
-    }
-    let mut cursor = node.walk();
-    node.named_children(&mut cursor)
-        .find_map(|child| keyword_value(child, contents, wanted_key))
+    let wanted_key = wanted_key.trim().trim_end_matches(':');
+    descendants(node)
+        .find(|node| {
+            node.kind() == "pair"
+                && node
+                    .child_by_field_name("key")
+                    .and_then(|key| node_text(key, contents))
+                    .is_some_and(|key| key.trim().trim_end_matches(':') == wanted_key)
+        })
+        .and_then(|pair| pair.child_by_field_name("value"))
 }
 
 fn operator_text(node: Node<'_>, contents: &str) -> Option<String> {
     node.child_by_field_name("operator")
         .and_then(|operator| node_text(operator, contents))
-}
-
-fn first_named_child(node: Node<'_>) -> Option<Node<'_>> {
-    let mut cursor = node.walk();
-    node.named_children(&mut cursor).next()
 }
 
 fn direct_child_kind<'tree>(node: Node<'tree>, kind: &str) -> Option<Node<'tree>> {
@@ -2192,21 +2067,6 @@ fn named_children_text(node: Node<'_>, contents: &str) -> Vec<String> {
     node.named_children(&mut cursor)
         .filter_map(|child| node_text(child, contents))
         .collect()
-}
-
-fn descendant_call(node: Node<'_>) -> Option<Node<'_>> {
-    if node.kind() == "call" {
-        return Some(node);
-    }
-    let mut cursor = node.walk();
-    node.named_children(&mut cursor).find_map(descendant_call)
-}
-
-fn node_range(node: Node<'_>) -> SymbolRange {
-    SymbolRange {
-        start_line: node.start_position().row.saturating_add(1),
-        end_line: node.end_position().row.saturating_add(1),
-    }
 }
 
 fn lexical_scope(node: Node<'_>) -> LexicalScope {
@@ -2230,80 +2090,14 @@ fn signature_parts(text: &str) -> Option<(String, usize, Vec<String>, Option<Str
         let close = matching_close(head, open, '(', ')')?;
         let name = normalize_callable_name(head.get(..open)?.trim());
         let params_start = open.checked_add(1)?;
-        let params = split_top_level(head.get(params_start..close)?, ',');
+        let params = split_top_level(head.get(params_start..close)?, ',')
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
         return (!name.is_empty()).then_some((name, params.len(), params, output));
     }
     let name = normalize_callable_name(head);
     (!name.is_empty()).then_some((name, 0, Vec::new(), output))
-}
-
-fn split_top_level_operator<'a>(value: &'a str, operator: &str) -> Option<(&'a str, &'a str)> {
-    let mut depths = [0usize; 4];
-    for (index, character) in value.char_indices() {
-        update_delimiter_depths(&mut depths, character);
-        if depths == [0; 4]
-            && let Some(tail) = value.get(index..)
-            && tail.starts_with(operator)
-            && let Some(right_start) = index.checked_add(operator.len())
-            && let (Some(left), Some(right)) = (value.get(..index), value.get(right_start..))
-        {
-            return Some((left, right));
-        }
-    }
-    None
-}
-
-fn matching_close(value: &str, open: usize, open_char: char, close_char: char) -> Option<usize> {
-    let mut depth = 0usize;
-    for (offset, character) in value.get(open..)?.char_indices() {
-        if character == open_char {
-            depth = depth.saturating_add(1);
-        } else if character == close_char {
-            depth = depth.saturating_sub(1);
-            if depth == 0 {
-                return open.checked_add(offset);
-            }
-        }
-    }
-    None
-}
-
-fn split_top_level(value: &str, separator: char) -> Vec<String> {
-    let mut rows = Vec::new();
-    let mut depths = [0usize; 4];
-    let mut start = 0usize;
-    for (index, character) in value.char_indices() {
-        update_delimiter_depths(&mut depths, character);
-        if character == separator && depths == [0; 4] {
-            if let Some(row) = value.get(start..index).map(str::trim)
-                && !row.is_empty()
-            {
-                rows.push(row.to_string());
-            }
-            start = index.saturating_add(character.len_utf8());
-        }
-    }
-    if let Some(row) = value.get(start..).map(str::trim)
-        && !row.is_empty()
-    {
-        rows.push(row.to_string());
-    }
-    rows
-}
-
-const fn update_delimiter_depths(depths: &mut [usize; 4], character: char) {
-    let [parentheses, brackets, braces, angles] = depths;
-    match character {
-        '(' => *parentheses = parentheses.saturating_add(1),
-        ')' => *parentheses = parentheses.saturating_sub(1),
-        '[' => *brackets = brackets.saturating_add(1),
-        ']' => *brackets = brackets.saturating_sub(1),
-        '{' => *braces = braces.saturating_add(1),
-        '}' => *braces = braces.saturating_sub(1),
-        '<' => *angles = angles.saturating_add(1),
-        '>' => *angles = angles.saturating_sub(1),
-        _ => {}
-    }
 }
 
 fn struct_fields(node: Node<'_>, contents: &str) -> Vec<FieldSignature> {
@@ -2359,8 +2153,39 @@ mod tests {
     }
 
     #[test]
+    fn callables_and_callbacks_record_their_module_as_parent() {
+        let file = parse(
+            "lib/sample.ex",
+            "defmodule Outer do\n  @callback run(term) :: term\n  def call(value), do: value\n  defmodule Inner do\n    def call(value), do: value\n  end\nend\n",
+        );
+        let id_of = |selector: &str| {
+            file.symbols
+                .iter()
+                .find(|symbol| symbol.id.selector == selector)
+                .map(|symbol| symbol.id.clone())
+                .unwrap()
+        };
+        let parent_of = |selector: &str| {
+            file.symbols
+                .iter()
+                .find(|symbol| symbol.id.selector == selector)
+                .and_then(|symbol| symbol.parent_id.clone())
+        };
+        let outer = id_of("module:Outer");
+        let inner = id_of("module:Outer.Inner");
+
+        assert_eq!(
+            parent_of("module:Outer/callback:run/1"),
+            Some(outer.clone())
+        );
+        assert_eq!(parent_of("module:Outer/fn:call/1"), Some(outer));
+        assert_eq!(parent_of("module:Outer.Inner/fn:call/1"), Some(inner));
+        assert_eq!(parent_of("module:Outer"), None);
+    }
+
+    #[test]
     fn creates_stable_selectors_for_elixir_owners_and_callables() {
-        let module = SymbolOwner::Module {
+        let module = ElixirOwner::Module {
             name: "My App.Δ".into(),
         };
         assert_eq!(
@@ -2376,7 +2201,7 @@ mod tests {
             "module:My%20App.%CE%94/macro-callback:build%21/1"
         );
 
-        let implementation = SymbolOwner::Implementation {
+        let implementation = ElixirOwner::Implementation {
             protocol: "Enumerable".into(),
             for_type: "My App".into(),
         };

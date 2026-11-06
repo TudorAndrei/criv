@@ -1,0 +1,190 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import test from "node:test";
+import { createPackagedCrivStateModule } from "@criv/editor-state/packaged";
+import type { CrivInitialProjections } from "@criv/editor-state";
+import type { App } from "obsidian";
+
+import type { SourceResolver, StatePort } from "../src/ports";
+import { ObsidianSourceReferencesOwner } from "../src/source/references";
+import {
+  crivLinkRanges,
+  frontmatterPatternTargets,
+  linkedSourcesFromMarkdown,
+  resolvePattern,
+  resolveSource,
+  resolveSourceResult,
+} from "../src/source/model";
+
+interface LinkCase {
+  target: string;
+  source: string | null;
+  ambiguous: boolean | null;
+  pattern: string | null;
+  note: string | null;
+}
+
+const fixture = JSON.parse(
+  readFileSync(resolve(__dirname, "../../../../fixtures/link-resolution.json"), "utf8"),
+) as { state: unknown; cases: LinkCase[] };
+
+async function loadedFixture(): Promise<{
+  projections: CrivInitialProjections;
+  resolver: SourceResolver;
+}> {
+  const revision = await createPackagedCrivStateModule().loadState(JSON.stringify(fixture.state));
+  const projections = revision.initialProjections();
+  const sources = new Map(projections.sources.map((source) => [source.path, source]));
+  return {
+    projections,
+    resolver: {
+      lookupSourceTarget: (target) => revision.lookupSourceTarget(target),
+      sourceEntry: (path) => sources.get(path),
+    },
+  };
+}
+
+test("resolves the shared link fixture like the criv CLI", async (t) => {
+  const { projections, resolver } = await loadedFixture();
+
+  // Obsidian resolves note links itself; criv adds source and pattern links.
+  for (const testCase of fixture.cases.filter((candidate) => candidate.note === null)) {
+    await t.test(testCase.target, () => {
+      const result = resolveSourceResult(resolver, testCase.target);
+      if (testCase.ambiguous) {
+        assert.equal(result.kind, "ambiguous");
+      } else {
+        assert.equal(result.kind === "resolved" ? result.source.entry.path : null, testCase.source);
+      }
+      assert.equal(resolvePattern(projections, testCase.target), testCase.pattern);
+    });
+  }
+});
+
+test("lists each linked source file once and previews a symbol at its lines", async () => {
+  const { resolver } = await loadedFixture();
+
+  const sources = linkedSourcesFromMarkdown(
+    "[[src/lib.rs#run]] [[source:src/lib.rs]] [[src/helper.rs#help|helper]] [[missing.rs]]",
+    resolver,
+  );
+
+  assert.deepEqual(
+    sources.map((source) => [source.entry.path, source.lines]),
+    [
+      ["src/lib.rs", { start: 1, end: 1 }],
+      ["src/helper.rs", { start: 1, end: 1 }],
+    ],
+  );
+  assert.deepEqual(resolveSource(resolver, "source:src/lib.rs#L4-L6")?.lines, {
+    start: 4,
+    end: 6,
+  });
+});
+
+test("classifies source, pattern, and problem links but not note links", async () => {
+  const { projections, resolver } = await loadedFixture();
+
+  const ranges = crivLinkRanges(
+    "[[src/lib.rs]] [[missing.rs]] [[shared.rs]] [[match:ADR-0001/no-block-on]] [[A note]]",
+    projections,
+    resolver,
+  );
+
+  assert.deepEqual(
+    ranges.map((range) => [range.status.kind, range.target]),
+    [
+      ["source", "src/lib.rs"],
+      ["problem", "missing.rs"],
+      ["problem", "shared.rs"],
+      ["pattern", "match:ADR-0001/no-block-on"],
+    ],
+  );
+  assert.equal(
+    ranges[1]?.status.kind === "problem" && ranges[1].status.message,
+    "Unresolved criv target: missing.rs.",
+  );
+});
+
+test("editor warnings follow a State reload without a document change", async () => {
+  const { projections, resolver } = await loadedFixture();
+  let current: CrivInitialProjections | null = null;
+  const port = { current: () => current, sourceResolver: () => resolver } as StatePort;
+  const extension = new ObsidianSourceReferencesOwner(
+    {} as App,
+    port,
+  ).editorExtension() as unknown as {
+    plugin: new (
+      view: unknown,
+      state: StatePort,
+    ) => { decorations: unknown[]; update(update: unknown): void };
+    arg: StatePort;
+  };
+  const text = "[[src/lib.rs]] [[missing.rs]]";
+  const view = {
+    visibleRanges: [{ from: 0, to: text.length }],
+    state: { sliceDoc: (from: number, to: number) => text.slice(from, to) },
+  };
+  const plugin = new extension.plugin(view, extension.arg);
+  assert.deepEqual(plugin.decorations, []);
+
+  current = projections;
+  plugin.update({ docChanged: false, viewportChanged: false, view });
+
+  assert.deepEqual(
+    plugin.decorations.map((range) => (range as { from: number; to: number }).from),
+    [15],
+  );
+});
+
+test("completing a source after [[ writes the bare selector in place of the Wikilink", async () => {
+  const suggest = new ObsidianSourceReferencesOwner({} as App, {} as StatePort).createSuggest();
+  let line = "See [[src/li]] here";
+  const cursor = { line: 0, ch: "See [[src/li".length };
+  const editor = {
+    getLine: () => line,
+    getRange: (from: { ch: number }, to: { ch: number }) => line.slice(from.ch, to.ch),
+    replaceRange: (text: string, from: { ch: number }, to: { ch: number }) => {
+      line = line.slice(0, from.ch) + text + line.slice(to.ch);
+    },
+  };
+
+  const trigger = suggest.onTrigger(cursor, editor as never, null);
+  assert.equal(trigger?.query, "src/li");
+  Object.assign(suggest, { context: { ...trigger, editor } });
+  suggest.selectSuggestion(
+    { target: "src/lib.rs#fn:run", label: "run", kind: "function", path: "src/lib.rs", detail: "" },
+    {} as never,
+  );
+
+  assert.equal(line, "See src/lib.rs#fn:run here");
+});
+
+test("names frontmatter pattern targets by their owning note", () => {
+  const projections = {
+    registeredPatterns: ["ADR-0001/no-block-on"],
+    patternMatches: {
+      "ADR-0001/no-block-on": [{ file: "src/lib.rs", range: "L1:C1-L1:C10", captures: {} }],
+    },
+  } as unknown as CrivInitialProjections;
+
+  const targets = frontmatterPatternTargets(
+    {
+      id: "ADR-0001",
+      policy: { patterns: [{ id: "no-block-on" }, "missing"] },
+      targets: { patterns: ["local", { ref: "ADR-0001/no-block-on" }] },
+    },
+    projections,
+  );
+
+  assert.deepEqual(
+    targets.map((target) => [target.source, target.id, target.status, target.matches.length]),
+    [
+      ["targets", "local", "local", 0],
+      ["targets", "ADR-0001/no-block-on", "resolved", 1],
+      ["policy", "ADR-0001/no-block-on", "resolved", 1],
+      ["policy", "ADR-0001/missing", "unresolved", 0],
+    ],
+  );
+});

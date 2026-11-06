@@ -10,7 +10,6 @@
     ".claude/**",
     "docs/adr/[0-9]*.md",
     "fixtures/**",
-    "brag-output/**",
     "site/**",
     ".site-build/**"
   ]

@@ -1,11 +1,17 @@
 import * as vscode from "vscode";
+import {
+  formatBytes,
+  type CrivAssetEntry,
+  type CrivInitialProjections,
+  type CrivSourceEntry,
+} from "@criv/editor-state";
 
-import { assetTreePresentation } from "./assets";
-import type { CrivAssetEntry, CrivStateSnapshot } from "./state/model";
+import { CRIV_COMMANDS } from "./commands/identifiers";
 import type { WorkspaceStateStatus } from "./state/store";
-import type { CrivSourceEntry } from "./state/wasm";
 
-export class CrivStateTreeProvider implements vscode.TreeDataProvider<CrivTreeItem> {
+export class CrivStateTreeProvider
+  implements vscode.TreeDataProvider<CrivTreeItem>, vscode.Disposable
+{
   private status: WorkspaceStateStatus = { generation: 0, kind: "loading" };
   private readonly didChangeTreeData = new vscode.EventEmitter<CrivTreeItem | undefined>();
 
@@ -25,8 +31,8 @@ export class CrivStateTreeProvider implements vscode.TreeDataProvider<CrivTreeIt
       return this.rootItems();
     }
 
-    if (element.kind === "section" && element.section && this.status.kind === "ready") {
-      return sectionChildren(element.section, this.status.snapshot);
+    if (element.section && this.status.kind === "ready") {
+      return sectionChildren(element.section, this.status.projections);
     }
 
     return [];
@@ -39,82 +45,83 @@ export class CrivStateTreeProvider implements vscode.TreeDataProvider<CrivTreeIt
   private rootItems(): CrivTreeItem[] {
     switch (this.status.kind) {
       case "ready":
-        return readyRootItems(this.status.snapshot);
+        return readyRootItems(this.status.projections);
       case "loading":
-        return [new CrivTreeItem("Loading criv state", "message")];
+        return [new CrivTreeItem("Loading criv state")];
       case "missing":
       case "unavailable":
       case "invalid":
-        return [new CrivTreeItem(this.status.message, "message")];
+        return [new CrivTreeItem(this.status.message)];
     }
   }
 }
 
 type TreeSection = "summary" | "sources" | "assets" | "patterns";
 
+/** A section item expands to its section's rows; every other item is a leaf. */
 class CrivTreeItem extends vscode.TreeItem {
   constructor(
     label: string,
-    readonly kind: "section" | "message" | "source" | "asset" | "pattern",
     readonly section?: TreeSection,
   ) {
     super(
       label,
-      kind === "section"
-        ? vscode.TreeItemCollapsibleState.Collapsed
-        : vscode.TreeItemCollapsibleState.None,
+      section ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None,
     );
   }
 }
 
-function readyRootItems(snapshot: CrivStateSnapshot): CrivTreeItem[] {
+function readyRootItems(projections: CrivInitialProjections): CrivTreeItem[] {
   return [
-    sectionItem("Summary", "summary", `${snapshot.summary.node_count} nodes`),
-    sectionItem("Source Files", "sources", `${snapshot.sources.length}`),
-    sectionItem("Documentation Assets", "assets", `${snapshot.assets.length}`),
-    sectionItem("Registered Patterns", "patterns", `${snapshot.registeredPatterns.length}`),
+    sectionItem("Summary", "summary", `${projections.summary.node_count} nodes`),
+    sectionItem("Source Files", "sources", `${projections.sources.length}`),
+    sectionItem("Documentation Assets", "assets", `${projections.assets.length}`),
+    sectionItem("Registered Patterns", "patterns", `${projections.registeredPatterns.length}`),
   ];
 }
 
-function sectionChildren(section: TreeSection, snapshot: CrivStateSnapshot): CrivTreeItem[] {
+function sectionChildren(
+  section: TreeSection,
+  projections: CrivInitialProjections,
+): CrivTreeItem[] {
   switch (section) {
     case "summary":
-      return summaryItems(snapshot);
+      return summaryItems(projections);
     case "sources":
-      return snapshot.sources.map(sourceItem);
+      return projections.sources.map(sourceItem);
     case "assets":
-      return snapshot.assets.length > 0
-        ? snapshot.assets.map(assetItem)
-        : [new CrivTreeItem("No previewable assets", "message")];
+      return projections.assets.length > 0
+        ? projections.assets.map(assetItem)
+        : [new CrivTreeItem("No previewable assets")];
     case "patterns":
-      return snapshot.registeredPatterns.length > 0
-        ? snapshot.registeredPatterns.map(patternItem)
-        : [new CrivTreeItem("No registered patterns", "message")];
+      return projections.registeredPatterns.length > 0
+        ? projections.registeredPatterns.map(patternItem)
+        : [new CrivTreeItem("No registered patterns")];
   }
 }
 
-function summaryItems(snapshot: CrivStateSnapshot): CrivTreeItem[] {
+function summaryItems(projections: CrivInitialProjections): CrivTreeItem[] {
   return [
-    new CrivTreeItem(`Schema: ${snapshot.summary.schema}`, "message"),
-    new CrivTreeItem(`Nodes: ${snapshot.summary.node_count}`, "message"),
-    new CrivTreeItem(`Edges: ${snapshot.summary.edge_count}`, "message"),
-    new CrivTreeItem(`Sources: ${snapshot.summary.source_count}`, "message"),
-    new CrivTreeItem(`Assets: ${snapshot.summary.asset_count}`, "message"),
-    new CrivTreeItem(`Patterns: ${snapshot.summary.pattern_count}`, "message"),
+    new CrivTreeItem(`Schema: ${projections.summary.schema}`),
+    new CrivTreeItem(`Nodes: ${projections.summary.node_count}`),
+    new CrivTreeItem(`Edges: ${projections.summary.edge_count}`),
+    new CrivTreeItem(`Sources: ${projections.summary.source_count}`),
+    new CrivTreeItem(`Assets: ${projections.summary.asset_count}`),
+    new CrivTreeItem(`Patterns: ${projections.summary.pattern_count}`),
   ];
 }
 
 function sectionItem(label: string, section: TreeSection, description: string): CrivTreeItem {
-  const item = new CrivTreeItem(label, "section", section);
+  const item = new CrivTreeItem(label, section);
   item.description = description;
   return item;
 }
 
 function sourceItem(source: CrivSourceEntry): CrivTreeItem {
-  const item = new CrivTreeItem(source.path, "source");
+  const item = new CrivTreeItem(source.path);
   item.description = source.mime;
   item.command = {
-    command: "criv.openSourceTarget",
+    command: CRIV_COMMANDS.openSourceTarget,
     title: "Open Source Target",
     arguments: [source.path],
   };
@@ -122,17 +129,16 @@ function sourceItem(source: CrivSourceEntry): CrivTreeItem {
 }
 
 function assetItem(asset: CrivAssetEntry): CrivTreeItem {
-  const row = assetTreePresentation(asset);
-  const item = new CrivTreeItem(row.label, "asset");
-  item.description = row.description;
+  const item = new CrivTreeItem(asset.path);
+  item.description = `${asset.mime} · ${formatBytes(asset.bytes)}`;
   item.command = {
-    command: row.command,
+    command: CRIV_COMMANDS.openAsset,
     title: "Open Documentation Asset",
-    arguments: row.arguments,
+    arguments: [asset.path],
   };
   return item;
 }
 
 function patternItem(pattern: string): CrivTreeItem {
-  return new CrivTreeItem(pattern, "pattern");
+  return new CrivTreeItem(pattern);
 }

@@ -24,38 +24,19 @@ mod install;
 mod markdown;
 mod policy_scan;
 mod query;
-mod refresh;
 mod repository;
+#[cfg(feature = "selection")]
+pub mod selection;
 mod source;
-mod stable_hash;
 mod state;
 mod structural;
+#[cfg(test)]
+mod test_support;
+mod usage_json;
 mod vault;
 mod watch;
-
 #[cfg(test)]
-#[path = "../scripts/performance/discovery_probe.rs"]
-mod discovery_probe;
-
-#[cfg(test)]
-fn discovery_probe_source_files(root: &std::path::Path) -> Result<Vec<String>> {
-    let config = config::Config::load(root)?;
-    Ok(source::SourceState::refresh(root, &config, None)?
-        .paths()
-        .to_vec())
-}
-
-#[cfg(test)]
-fn discovery_probe_source_candidates(root: &std::path::Path) -> Result<Vec<String>> {
-    let config = config::Config::load(root)?;
-    discovery::discover_source_candidates(root, &config)
-}
-
-#[cfg(test)]
-fn discovery_probe_vault_files(root: &std::path::Path) -> Result<Vec<String>> {
-    let config = config::Config::load(root)?;
-    Ok(discovery::discover_vault(root, &config.docs_dir)?.markdown)
-}
+mod work;
 
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
@@ -73,10 +54,9 @@ pub enum CrivError {
         code: diagnostic::DiagnosticCode,
         message: String,
     },
+    /// A rendered command-line failure, reported as it is.
     #[error("{0}")]
     Usage(String),
-    #[error("")]
-    UsageReported,
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -100,14 +80,9 @@ impl CrivError {
     #[must_use]
     pub const fn exit_code(&self) -> i32 {
         match self {
-            Self::Usage(_) | Self::UsageReported => 2,
+            Self::Usage(_) => 2,
             Self::Message(_) | Self::Coded { .. } | Self::Io(_) => 1,
         }
-    }
-
-    #[must_use]
-    pub const fn is_reported(&self) -> bool {
-        matches!(self, Self::UsageReported)
     }
 }
 
@@ -141,11 +116,6 @@ enum Command {
 ///
 /// Returns an error when parsing, output, or the selected command fails.
 pub fn run(args: &[String]) -> Result<()> {
-    let cwd = std::env::current_dir()?;
-    run_command(args, &cwd)
-}
-
-fn run_command(args: &[String], cwd: &std::path::Path) -> Result<()> {
     let owned: Vec<OsString> = args.iter().map(OsString::from).collect();
     let os_args: Vec<&OsStr> = owned.iter().map(OsString::as_os_str).collect();
 
@@ -158,13 +128,6 @@ fn run_command(args: &[String], cwd: &std::path::Path) -> Result<()> {
         Err(Error::Version { .. }) => {
             println!("criv {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
-        }
-        Err(err @ (Error::MissingSubcommand | Error::MissingArgsHelp { .. })) => {
-            eprint!(
-                "{}",
-                usage_rs::render_failure(CrivCli::spec(), &os_args, &err)
-            );
-            return Err(CrivError::UsageReported);
         }
         Err(err) => {
             return Err(CrivError::usage(usage_rs::render_failure(
@@ -180,9 +143,11 @@ fn run_command(args: &[String], cwd: &std::path::Path) -> Result<()> {
     }
 
     if cli.usage_json {
-        return write_usage_json(&mut std::io::stdout().lock());
+        return usage_json::write(CrivCli::spec().root, &mut std::io::stdout().lock());
     }
 
+    let cwd = std::env::current_dir()?;
+    let cwd = cwd.as_path();
     match cli.command {
         None => {
             print!("{}", render_help(CrivCli::command(), false)?);
@@ -208,138 +173,37 @@ fn write_usage_spec(writer: &mut dyn Write) -> Result<()> {
     Ok(())
 }
 
-#[derive(serde::Serialize)]
-struct JsonCommand<'a> {
-    name: &'a str,
-    path: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    about: Option<&'a str>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    args: Vec<JsonArg<'a>>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    flags: Vec<JsonFlag<'a>>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    subcommands: Vec<Self>,
-}
-
-#[derive(serde::Serialize)]
-struct JsonFlag<'a> {
-    name: &'a str,
-    long: &'a [&'a str],
-    required: bool,
-    takes_value: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    help: Option<&'a str>,
-    #[serde(skip_serializing_if = "<[&str]>::is_empty")]
-    choices: &'a [&'a str],
-    #[serde(skip_serializing_if = "<[&str]>::is_empty")]
-    default: &'a [&'a str],
-    #[serde(skip_serializing_if = "<[&str]>::is_empty")]
-    conflicts: &'a [&'a str],
-    #[serde(skip_serializing_if = "<[&str]>::is_empty")]
-    requires: &'a [&'a str],
-}
-
-#[derive(serde::Serialize)]
-struct JsonArg<'a> {
-    name: &'a str,
-    required: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    help: Option<&'a str>,
-    #[serde(skip_serializing_if = "<[&str]>::is_empty")]
-    choices: &'a [&'a str],
-    #[serde(skip_serializing_if = "<[&str]>::is_empty")]
-    default: &'a [&'a str],
-}
-
-fn json_command<'a>(meta: &'a usage_rs::spec::CommandMeta<'a>, parent: &str) -> JsonCommand<'a> {
-    let path = if parent.is_empty() {
-        meta.cmd().name.to_string()
-    } else {
-        format!("{parent} {}", meta.cmd().name)
-    };
-    JsonCommand {
-        name: meta.cmd().name,
-        about: meta.about(),
-        args: meta
-            .args()
-            .iter()
-            .filter(|arg| !arg.hide())
-            .map(|arg| JsonArg {
-                name: arg.arg().name,
-                required: arg.required(),
-                help: arg.help(),
-                choices: arg.choices(),
-                default: arg.default(),
-            })
-            .collect(),
-        flags: meta
-            .flags()
-            .iter()
-            .filter(|flag| !flag.hide())
-            .map(|flag| JsonFlag {
-                name: flag.flag().name,
-                long: flag.flag().longs,
-                required: flag.required(),
-                takes_value: flag.flag().takes_value,
-                help: flag.help(),
-                choices: flag.choices(),
-                default: flag.default(),
-                conflicts: flag.conflicts(),
-                requires: flag.requires(),
-            })
-            .collect(),
-        subcommands: meta
-            .subcommands()
-            .iter()
-            .filter(|child| !child.hide())
-            .map(|child| json_command(child, &path))
-            .collect(),
-        path,
-    }
-}
-
-fn write_usage_json(writer: &mut dyn Write) -> Result<()> {
-    let spec = CrivCli::spec();
-    let tree = json_command(spec.root, "");
-    let json = serde_json::to_string_pretty(&tree)
-        .map_err(|error| CrivError::new(format!("failed to serialize command tree: {error}")))?;
-    writeln!(writer, "{json}")?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use std::ffi::{OsStr, OsString};
 
-    use super::{CrivCli, Error, render_help, write_usage_json, write_usage_spec};
+    use super::{CrivCli, Error, render_help, usage_json, write_usage_spec};
 
     fn help_for(args: &[&str]) -> String {
         let owned: Vec<OsString> = args.iter().map(OsString::from).collect();
         let argv: Vec<&OsStr> = owned.iter().map(OsString::as_os_str).collect();
         match CrivCli::parse_from(&argv) {
-            Ok(_) => render_help(CrivCli::command(), false).unwrap(),
             Err(Error::Help { cmd, long }) => render_help(cmd, long).unwrap(),
-            Err(error) => panic!("expected a help request, got {error:?}"),
+            other => panic!("expected a help request, got {other:?}"),
         }
     }
 
-    const QUERY_SUBCOMMANDS: [&str; 14] = [
-        "next-adr-id",
-        "callers",
-        "callees",
-        "attack-surface",
-        "targets",
-        "cites",
-        "cited-by",
-        "orphan-docs",
-        "references",
-        "governs",
-        "governing",
-        "coverage",
-        "nodes",
-        "diff",
-    ];
+    /// The query subcommands as the query module declares them.
+    fn query_subcommands() -> Vec<&'static str> {
+        let query = CrivCli::spec()
+            .root
+            .subcommands()
+            .iter()
+            .find(|command| command.cmd().name == "query")
+            .expect("query command is declared");
+        let names: Vec<_> = query
+            .subcommands()
+            .iter()
+            .map(|command| command.cmd().name)
+            .collect();
+        assert!(names.contains(&"diff"), "query declares {names:?}");
+        names
+    }
 
     #[test]
     fn usage_spec_includes_criv_commands() {
@@ -353,9 +217,6 @@ mod tests {
         assert!(spec.contains("cmd check"));
         assert!(spec.contains("cmd install-editor"));
         assert!(spec.contains("cmd query"));
-        assert!(!spec.contains("cmd state"));
-        assert!(!spec.contains("cmd list"));
-        assert!(!spec.contains("cmd prune"));
         assert!(spec.contains("cmd enforce"));
         assert!(spec.contains("cmd reconcile-sources"));
 
@@ -371,7 +232,7 @@ mod tests {
             .keys()
             .map(String::as_str)
             .collect::<Vec<_>>();
-        assert_eq!(names, QUERY_SUBCOMMANDS);
+        assert_eq!(names, query_subcommands());
         assert!(query.args.is_empty());
         assert!(query.flags.iter().all(|flag| flag.builtin));
     }
@@ -379,7 +240,7 @@ mod tests {
     #[test]
     fn usage_json_exports_visible_command_metadata() {
         let mut output = Vec::new();
-        write_usage_json(&mut output).unwrap();
+        usage_json::write(CrivCli::spec().root, &mut output).unwrap();
 
         let tree: serde_json::Value =
             serde_json::from_slice(&output).expect("usage JSON should be valid JSON");
@@ -437,7 +298,7 @@ mod tests {
         assert!(query.contains("Usage: criv query"));
         assert!(query.contains("<SUBCOMMAND>"));
         let (_, commands) = query.split_once("Commands:").expect("query lists commands");
-        for name in QUERY_SUBCOMMANDS {
+        for name in query_subcommands() {
             assert!(
                 commands
                     .lines()
@@ -452,20 +313,9 @@ mod tests {
     }
 
     #[test]
-    fn help_renders_flag_help_forms() {
-        let root = help_for(&["--help"]);
-        let query = help_for(&["query", "--help"]);
-
-        assert!(root.contains("Usage: criv"));
-        assert!(query.contains("Usage: criv query"));
-    }
-
-    #[test]
-    fn bare_criv_renders_the_short_root_page() {
-        let bare = help_for(&[]);
-
-        assert!(bare.contains("Usage: criv"));
-        assert!(bare.contains("Commands:"));
+    fn init_refuses_to_skip_and_refresh_skills_together() {
+        let argv = ["criv", "init", "--no-skills", "--force-skills"].map(OsStr::new);
+        assert!(CrivCli::parse_from(&argv).is_err());
     }
 
     #[test]

@@ -1,1 +1,0 @@
-Documentation drifts. criv keeps ADR history explicit, validates supersession, and checks the links between decisions and code before a change lands.

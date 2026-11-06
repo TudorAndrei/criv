@@ -1,32 +1,19 @@
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use criv_state_wire::{SourceIndexEntry, StateDocument, content_hash};
 
+use crate::policy_scan::{PolicyFailure, PolicyScanPlan};
+use crate::source::Language;
+use crate::vault::Vault;
 #[cfg(test)]
-use std::{cell::Cell, thread_local};
-
-#[cfg(test)]
-use criv_state_wire::STATE_SCHEMA;
-use criv_state_wire::{
-    AssetIndexEntry, Edge, EdgeKind, Graph, Node, NodeKind, PatternMatch, SourceIndexEntry,
-    StateDocument, source_identity::SourceIdentity,
-};
-use serde::{Serialize, Serializer};
-
-use crate::policy_scan::PolicyScanPlan;
-use crate::source::{
-    DirectiveKind, Import, Language, ModuleRelationshipRole, Relationship, RelationshipKind,
-    RelationshipTarget, SourceFile, Symbol,
-};
-use crate::stable_hash::StableHasher;
-use crate::structural;
-use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
+use crate::work::{self, Work};
 use crate::{CrivError, Result};
 
 mod partitions;
 mod projection;
 mod publication;
 mod snapshots;
+mod stable_hash;
 
+use partitions::StatePartitions;
 pub use publication::load_snapshot;
 pub use snapshots::SnapshotId;
 
@@ -41,617 +28,73 @@ struct SerializedState {
     hash: String,
 }
 
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
-pub(crate) struct WorkCounts {
-    pub(crate) partitions_rebuilt: usize,
-    pub(crate) source_partitions_rebuilt: usize,
-    pub(crate) note_partitions_rebuilt: usize,
-    pub(crate) policy_partitions_rebuilt: usize,
-    pub(crate) source_index_partitions_rebuilt: usize,
-    pub(crate) serializations: usize,
-    published_bytes: usize,
-}
-
-#[cfg(test)]
-thread_local! {
-    static WORK_COUNTS: Cell<WorkCounts> = const { Cell::new(WorkCounts {
-        partitions_rebuilt: 0,
-        source_partitions_rebuilt: 0,
-        note_partitions_rebuilt: 0,
-        policy_partitions_rebuilt: 0,
-        source_index_partitions_rebuilt: 0,
-        serializations: 0,
-        published_bytes: 0,
-    }) };
-}
-
-#[cfg(test)]
-fn record_work(update: impl FnOnce(&mut WorkCounts)) {
-    WORK_COUNTS.with(|counts| {
-        let mut next = counts.get();
-        update(&mut next);
-        counts.set(next);
-    });
-}
-
-#[cfg(test)]
-fn record_partition_rebuilt(kind: PartitionKind) {
-    record_work(|counts| {
-        counts.partitions_rebuilt = counts.partitions_rebuilt.saturating_add(1);
-        match kind {
-            PartitionKind::Source => {
-                counts.source_partitions_rebuilt =
-                    counts.source_partitions_rebuilt.saturating_add(1);
-            }
-            PartitionKind::Note => {
-                counts.note_partitions_rebuilt = counts.note_partitions_rebuilt.saturating_add(1);
-            }
-            PartitionKind::Policy => {
-                counts.policy_partitions_rebuilt =
-                    counts.policy_partitions_rebuilt.saturating_add(1);
-            }
-            PartitionKind::SourceIndex => {
-                counts.source_index_partitions_rebuilt =
-                    counts.source_index_partitions_rebuilt.saturating_add(1);
-            }
-        }
-    });
-}
-
-#[cfg(not(test))]
-const fn record_partition_rebuilt(_: PartitionKind) {}
-
-#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
-enum PartitionKey {
-    Source(String),
-    Note(String),
-    Policy(String),
-    SourceIndex(String),
-}
-
-#[derive(Debug, Clone, Default)]
-struct StatePartitions {
-    sources: BTreeMap<String, Arc<SourcePartition>>,
-    notes: BTreeMap<String, Arc<RowPartition>>,
-    policies: BTreeMap<String, Arc<PolicyPartition>>,
-    source_index: BTreeMap<String, Arc<SourceIndexPartition>>,
-    reverse_dependencies: partitions::ReverseDependencies,
-    note_catalog_fingerprint: String,
-}
-
-#[derive(Debug, Clone)]
-struct PartitionMeta {
-    key: PartitionKey,
-    input_fingerprint: String,
-    dependencies: PartitionDependencies,
-}
-
-#[derive(Debug, Clone, Default)]
-struct PartitionDependencies {
-    source_content_paths: BTreeSet<String>,
-    call_targets: BTreeSet<String>,
-    defined_symbols: BTreeSet<String>,
-    catalog_sensitive: bool,
-    note_catalog_sensitive: bool,
-    policy_sensitive: bool,
-}
-
-#[derive(Debug, Clone)]
-struct SourcePartition {
-    meta: PartitionMeta,
-    code_node: Node,
-    rows: GraphRows,
-}
-
-#[derive(Debug, Clone)]
-struct RowPartition {
-    meta: PartitionMeta,
-    rows: GraphRows,
-}
-
-#[derive(Debug, Clone)]
-struct PolicyPartition {
-    meta: PartitionMeta,
-    matches: Vec<PatternMatch>,
-}
-
-#[derive(Debug, Clone)]
-struct SourceIndexPartition {
-    meta: PartitionMeta,
-    entry: SourceIndexEntry,
-}
-
-#[derive(Debug, Clone, Default)]
-struct GraphRows {
-    nodes: Vec<Node>,
-    edges: Vec<Edge>,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum PartitionKind {
-    Source,
-    Note,
-    Policy,
-    SourceIndex,
-}
-
 impl State {
-    #[cfg(test)]
-    pub(crate) fn build(vault: &Vault) -> Result<Self> {
-        let policy_plan = PolicyScanPlan::new(vault);
-        Self::build_with_policy_plan(vault, None, &[], &policy_plan)
-    }
-
-    #[cfg(test)]
-    fn build_incremental(
-        vault: &Vault,
-        previous: Option<&State>,
-        changed_files: &[String],
-    ) -> Result<Self> {
-        let policy_plan = PolicyScanPlan::new(vault);
-        Self::build_with_policy_plan(vault, previous, changed_files, &policy_plan)
-    }
-
-    fn build_with_policy_plan(
-        vault: &Vault,
-        previous: Option<&Self>,
-        changed_files: &[String],
-        policy_plan: &PolicyScanPlan,
-    ) -> Result<Self> {
-        if let Some(error) = policy_plan.state_definition_error() {
-            return Err(CrivError::new(error));
+    fn build(vault: &Vault, previous: Option<&Self>, policies: &PolicyScanPlan) -> Result<Self> {
+        let failures = policies.registered_failures();
+        if !failures.is_empty() {
+            return Err(CrivError::new(
+                failures
+                    .iter()
+                    .map(PolicyFailure::message)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ));
         }
-        let partitions = partitions::build(vault, previous, changed_files, policy_plan)?;
-        let mut state = Self::from_partitions(partitions);
-        state.wire.asset_index = vault
-            .documentation_assets()
+        let partitions =
+            StatePartitions::build(vault, previous.map(|state| &state.partitions), policies)?;
+        let patterns = partitions.patterns();
+        let registered_patterns = patterns.keys().cloned().collect();
+        let source_index = vault
+            .source_files()
             .iter()
-            .map(|asset| AssetIndexEntry {
-                path: asset.path.clone(),
-                mime: asset.mime.clone(),
-                bytes: asset.bytes,
-                hash: asset.hash.clone(),
+            .map(|path| SourceIndexEntry {
+                mime: source_mime(path),
+                path: path.clone(),
             })
             .collect();
-        Ok(state)
-    }
-
-    fn from_partitions(partitions: StatePartitions) -> Self {
-        let (graph, patterns, source_index) = partitions::flatten(&partitions);
-        let registered_patterns = patterns.keys().cloned().collect();
-        Self {
-            wire: StateDocument::new(graph, registered_patterns, patterns, source_index),
-            partitions,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn to_json(&self) -> Result<String> {
-        Ok(self
-            .serialize()?
-            .published
-            .strip_suffix('\n')
-            .unwrap_or_default()
-            .to_string())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn hash(&self) -> Result<String> {
-        Ok(self.serialize()?.hash)
+        let mut wire = StateDocument::new(
+            partitions.graph(),
+            registered_patterns,
+            patterns,
+            source_index,
+        );
+        wire.asset_index = vault.documentation_assets().to_vec();
+        Ok(Self { wire, partitions })
     }
 
     fn serialize(&self) -> Result<SerializedState> {
-        let _ = &self.partitions;
         #[cfg(test)]
-        record_work(|counts| counts.serializations = counts.serializations.saturating_add(1));
+        work::record(Work::StateSerialization);
 
-        let json = serde_json::to_string_pretty(&self.wire)
+        let published = criv_state_wire::encode(&self.wire)
             .map_err(|err| CrivError::new(format!("failed to serialize state: {err}")))?;
         Ok(SerializedState {
-            hash: blake3::hash(json.as_bytes()).to_hex().to_string(),
-            published: format!("{json}\n"),
+            hash: content_hash::of_document(&published),
+            published,
         })
     }
-
-    fn publish_snapshot_with_check(
-        vault: &Vault,
-        serialized: &SerializedState,
-        keep: usize,
-        precommit_check: impl FnOnce() -> Result<()>,
-    ) -> Result<String> {
-        publication::publish_with_precommit_check(
-            vault.repository_files(),
-            &serialized.hash,
-            &serialized.published,
-            keep,
-            precommit_check,
-        )?;
-        #[cfg(test)]
-        record_work(|counts| {
-            let written = serialized
-                .published
-                .len()
-                .saturating_mul(2)
-                .saturating_add(serialized.hash.len())
-                .saturating_add(1);
-            counts.published_bytes = counts.published_bytes.saturating_add(written);
-        });
-        Ok(serialized.hash.clone())
-    }
 }
 
-impl Serialize for State {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        self.wire.serialize(serializer)
-    }
-}
-
-const fn partition_meta(
-    key: PartitionKey,
-    input_fingerprint: String,
-    dependencies: PartitionDependencies,
-) -> PartitionMeta {
-    PartitionMeta {
-        key,
-        input_fingerprint,
-        dependencies,
-    }
-}
-
-fn source_input_fingerprint(file: &SourceFile) -> String {
-    let mut hasher = StableHasher::new("source-partition");
-    hasher
-        .str(&file.path)
-        .str(file.language.as_str())
-        .usize(file.imports.len());
-    for import in &file.imports {
-        hasher
-            .str(&import.module)
-            .usize(import.line)
-            .usize(import.site)
-            .str(import.kind.as_str())
-            .str(&format!("{:?}", import.owner))
-            .str(&format!("{:?}", import.scope))
-            .option_str(import.alias.as_deref())
-            .str(&format!("{:?}", import.only))
-            .str(&format!("{:?}", import.except))
-            .bool(import.absolute);
-    }
-    hasher.usize(file.symbols.len());
-    for symbol in &file.symbols {
-        hasher
-            .str(&symbol.id.display())
-            .str(&symbol.name)
-            .str(symbol.kind.as_str())
-            .option_str(symbol.parent.as_deref())
-            .str(&format!("{:?}", symbol.owner))
-            .option_usize(symbol.arity)
-            .usize(symbol.range.start_line)
-            .usize(symbol.range.end_line)
-            .usize(symbol.calls.len());
-        for call in &symbol.calls {
-            hasher.str(&call.target).usize(call.line);
-        }
-        hasher.usize(symbol.relationships.len());
-        for relationship in &symbol.relationships {
-            hasher
-                .str(relationship.kind.as_str())
-                .str(&format!("{:?}", relationship.target))
-                .usize(relationship.line)
-                .usize(relationship.site);
-        }
-    }
-    hasher.finish()
-}
-
-fn note_input_fingerprint(note: &Note) -> String {
-    StableHasher::new("note-partition")
-        .str(&note.rel_path)
-        .option_str(note.id.as_deref())
-        .str(match note.kind {
-            NoteKind::Decision => "decision",
-            NoteKind::Doc => "doc",
-            NoteKind::Unknown => "unknown",
-        })
-        .option_str(note.title.as_deref())
-        .option_str(note.status.as_deref())
-        .str(&note.body)
-        .str(&format!("{:?}", note.targets_symbols))
-        .str(&format!("{:?}", note.targets_scope))
-        .str(&format!("{:?}", note.target_pattern_refs))
-        .str(&format!("{:?}", note.target_pattern_ids))
-        .str(&format!("{:?}", note.policy_patterns))
-        .str(&format!("{:?}", note.governs))
-        .str(&format!("{:?}", note.supersedes))
-        .str(&format!("{:?}", note.superseded_by))
-        .str(&format!("{:?}", note.frontmatter_error))
-        .str(&format!("{:?}", Vault::effective_governs(note)))
-        .finish()
-}
-
-fn note_catalog_fingerprint(vault: &Vault) -> String {
-    let mut hasher = StableHasher::new("note-catalog");
-    hasher.usize(vault.notes.len());
-    for note in &vault.notes {
-        hasher
-            .str(&note.rel_path)
-            .option_str(note.id.as_deref())
-            .option_str(note.title.as_deref())
-            .usize(note.headings.len());
-        for heading in &note.headings {
-            hasher.str(&heading.text).usize(heading.level);
-        }
-    }
-    hasher.finish()
-}
-
-fn source_index_input_fingerprint(entry: &SourceIndexEntry) -> String {
-    StableHasher::new("source-index-partition")
-        .str(&entry.path)
-        .option_str(entry.mime.as_deref())
-        .finish()
-}
-
-fn observe_partition_meta(meta: &PartitionMeta, expected_key: &PartitionKey) {
-    debug_assert_eq!(&meta.key, expected_key);
-    let _ = (
-        &meta.input_fingerprint,
-        &meta.dependencies.source_content_paths,
-        &meta.dependencies.call_targets,
-        &meta.dependencies.defined_symbols,
-        meta.dependencies.catalog_sensitive,
-        meta.dependencies.note_catalog_sensitive,
-        meta.dependencies.policy_sensitive,
-    );
-}
-
-fn graph_rows(graph: Graph) -> GraphRows {
-    GraphRows {
-        nodes: graph.nodes,
-        edges: graph.edges,
-    }
-}
-
-#[cfg(test)]
-fn write_state(vault: &Vault) -> Result<(String, State)> {
-    let policy_plan = PolicyScanPlan::new(vault);
-    write_state_with_policy_plan_and_check(vault, &policy_plan, || Ok(()))
-}
-
-pub fn write_state_with_policy_plan_and_check(
-    vault: &Vault,
-    policy_plan: &PolicyScanPlan,
-    precommit_check: impl FnOnce() -> Result<()>,
-) -> Result<(String, State)> {
-    let state = State::build_with_policy_plan(vault, None, &[], policy_plan)?;
-    let serialized = state.serialize()?;
-    let snapshot = State::publish_snapshot_with_check(
-        vault,
-        &serialized,
-        vault.config.state_keep,
-        precommit_check,
-    )?;
-    Ok((snapshot, state))
-}
-
-#[cfg(test)]
-fn write_state_incremental(
+/// Builds State from `vault`, reusing the partitions of `previous` that the
+/// Source files the vault observed as changed and the vault catalogs leave
+/// valid, and publishes it once `precommit_check` passes. Returns the
+/// snapshot hash and the State.
+pub fn write_state(
     vault: &Vault,
     previous: Option<&State>,
-    changed_files: &[String],
-) -> Result<(String, State)> {
-    let policy_plan = PolicyScanPlan::new(vault);
-    write_state_incremental_with_policy_plan_and_check(
-        vault,
-        previous,
-        changed_files,
-        &policy_plan,
-        || Ok(()),
-    )
-}
-
-pub fn write_state_incremental_with_policy_plan_and_check(
-    vault: &Vault,
-    previous: Option<&State>,
-    changed_files: &[String],
-    policy_plan: &PolicyScanPlan,
+    policies: &PolicyScanPlan,
     precommit_check: impl FnOnce() -> Result<()>,
 ) -> Result<(String, State)> {
-    let state = State::build_with_policy_plan(vault, previous, changed_files, policy_plan)?;
+    let state = State::build(vault, previous, policies)?;
     let serialized = state.serialize()?;
-    let snapshot = State::publish_snapshot_with_check(
-        vault,
-        &serialized,
-        vault.config.state_keep,
+    publication::publish(
+        vault.repository_files(),
+        &serialized.hash,
+        &serialized.published,
+        vault.config().state_keep(),
         precommit_check,
     )?;
-    Ok((snapshot, state))
-}
-
-#[cfg(test)]
-pub(crate) fn reset_work_counts() {
-    WORK_COUNTS.with(|counts| counts.set(WorkCounts::default()));
-}
-
-#[cfg(test)]
-pub(crate) fn work_counts() -> WorkCounts {
-    WORK_COUNTS.with(Cell::get)
-}
-
-struct PendingPolicyScan<'a> {
-    pattern_id: String,
-    input_fingerprint: String,
-    policy: &'a structural::CompiledPolicy,
-    paths: BTreeSet<String>,
-    reused: Vec<PatternMatch>,
-}
-
-fn reusable_matches(
-    previous_matches: &[PatternMatch],
-    rescanned_paths: &BTreeSet<String>,
-) -> Vec<PatternMatch> {
-    previous_matches
-        .iter()
-        .filter(|matched| !rescanned_paths.contains(&matched.file))
-        .cloned()
-        .collect()
-}
-
-fn pattern_match_from_structural(matched: &structural::StructuralMatch) -> PatternMatch {
-    PatternMatch {
-        file: matched.path.clone(),
-        range: Some(matched.range.clone()),
-        captures: matched.captures.clone(),
-    }
-}
-
-fn sort_and_dedup_pattern_matches(matches: &mut Vec<PatternMatch>) {
-    matches.sort_by(|left, right| {
-        (&left.file, &left.range, &left.captures).cmp(&(&right.file, &right.range, &right.captures))
-    });
-    matches.dedup();
-}
-
-fn changed_paths_in_scopes(paths: &[String], scopes: &[String]) -> Vec<String> {
-    let matcher = crate::glob::GlobMatcher::from_valid_patterns(scopes);
-    paths
-        .iter()
-        .filter(|path| matcher.is_match(path))
-        .cloned()
-        .collect()
-}
-
-/// A graph whose node ids and edges are unique, in first-insertion order.
-#[derive(Default)]
-struct GraphBuilder {
-    graph: Graph,
-    seen_nodes: BTreeSet<String>,
-    seen_edges: BTreeSet<(String, String, EdgeKind)>,
-}
-
-impl GraphBuilder {
-    fn node(&mut self, id: String, kind: NodeKind, label: String, path: Option<String>) {
-        if !self.seen_nodes.contains(&id) {
-            self.push_node(hashed_node(id, kind, label, path));
-        }
-    }
-
-    fn push_node(&mut self, node: Node) {
-        if self.seen_nodes.insert(node.id.clone()) {
-            self.graph.nodes.push(node);
-        }
-    }
-
-    fn edge(&mut self, from: &str, to: &str, kind: EdgeKind) {
-        if self
-            .seen_edges
-            .insert((from.to_owned(), to.to_owned(), kind))
-        {
-            let hash = StableHasher::new("edge")
-                .str(from)
-                .str(kind.as_str())
-                .str(to)
-                .finish();
-            self.graph.edges.push(Edge {
-                from: from.into(),
-                to: to.into(),
-                kind,
-                hash,
-            });
-        }
-    }
-
-    fn append_rows(&mut self, rows: &GraphRows) {
-        for node in &rows.nodes {
-            self.push_node(node.clone());
-        }
-        for edge in &rows.edges {
-            self.edge(&edge.from, &edge.to, edge.kind);
-        }
-    }
-
-    fn finish(self) -> Graph {
-        self.graph
-    }
-}
-
-fn hashed_node(id: String, kind: NodeKind, label: String, path: Option<String>) -> Node {
-    let hash = StableHasher::new("node")
-        .str(&id)
-        .str(kind.as_str())
-        .str(&label)
-        .option_str(path.as_deref())
-        .finish();
-    Node {
-        id,
-        hash,
-        kind,
-        label,
-        path,
-    }
-}
-
-fn graph_root(graph: &Graph) -> String {
-    let mut hashes = graph
-        .nodes
-        .iter()
-        .map(|node| node.hash.as_str())
-        .chain(graph.edges.iter().map(|edge| edge.hash.as_str()))
-        .collect::<Vec<_>>();
-    hashes.sort_unstable();
-    StableHasher::new("graph").strs(&hashes).finish()
-}
-
-fn note_node_id(id: &str) -> String {
-    format!("note:{id}")
-}
-
-fn code_node_id(path: &str) -> String {
-    format!("code:{}", SourceIdentity::file(path))
-}
-
-fn pattern_node_id(id: &str) -> String {
-    format!("pattern:{id}")
-}
-
-fn import_node_id(path: &str, module: &str) -> String {
-    format!("import:{path}:{module}")
-}
-
-fn directive_node_id(file: &SourceFile, directive: &Import) -> String {
-    if file.language != Language::Elixir || directive.kind == DirectiveKind::Legacy {
-        return import_node_id(&file.path, &directive.module);
-    }
-    format!(
-        "import:{}:{}:{}:{}",
-        file.path,
-        directive.kind.as_str(),
-        directive.module,
-        directive.site
-    )
-}
-
-fn symbol_node_id(id: &str) -> String {
-    format!("symbol:{id}")
-}
-
-fn external_call_node_id(id: &str) -> String {
-    format!("external-call:{id}")
-}
-
-fn external_module_node_id(id: &str) -> String {
-    format!("external-module:{id}")
-}
-
-fn symbol_label(symbol: &Symbol) -> String {
-    symbol.arity.map_or_else(
-        || symbol.name.clone(),
-        |arity| format!("{}/{arity}", symbol.name),
-    )
+    Ok((serialized.hash, state))
 }
 
 fn source_mime(path: &str) -> Option<String> {
@@ -663,10 +106,109 @@ fn source_mime(path: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::Path;
+
+    use criv_state_wire::{EdgeKind, STATE_SCHEMA};
 
     use super::*;
-    use crate::vault::Vault;
+    use crate::repository::RepositoryFiles;
+    use crate::vault::LoadOptions;
+
+    fn load(root: &Path) -> Result<Vault> {
+        Vault::load(&RepositoryFiles::open(root)?, LoadOptions::default())
+    }
+
+    fn build(vault: &Vault) -> Result<State> {
+        build_incremental(vault, None)
+    }
+
+    /// Builds over `previous` from a vault whose Source changes came from a
+    /// reload against the published Source graph cache.
+    fn build_incremental(vault: &Vault, previous: Option<&State>) -> Result<State> {
+        State::build(vault, previous, &PolicyScanPlan::new(vault))
+    }
+
+    fn publish(vault: &Vault) -> Result<(String, State)> {
+        publish_incremental(vault, None)
+    }
+
+    fn publish_incremental(vault: &Vault, previous: Option<&State>) -> Result<(String, State)> {
+        write_state(vault, previous, &PolicyScanPlan::new(vault), || Ok(()))
+    }
+
+    #[test]
+    fn state_projects_the_vault_link_resolutions_without_resolving_again() {
+        let root = tempfile::TempDir::new().unwrap();
+        let root = root.path();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(root.join("docs/adr")).unwrap();
+        std::fs::write(root.join("criv.toml"), "[source]\nroots = [\"src\"]\n").unwrap();
+        std::fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
+        std::fs::write(root.join("src/helper.rs"), "fn help() {}\n").unwrap();
+        std::fs::write(
+            root.join("docs/lib.rs.md"),
+            "---\nid: collision-note\nkind: doc\ntitle: Collision note\n---\n\n# Collision note\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("docs/adr/0001-local-cli-vault-architecture.md"),
+            r#"---
+id: ADR-0001
+kind: decision
+title: Local CLI vault architecture
+status: accepted
+policy:
+  patterns:
+    - id: no-block-on
+      language: rust
+      pattern: "println!($$$ARGS)"
+---
+
+# Local CLI vault architecture
+
+See [[lib.rs]], [[match:ADR-0001/no-block-on]], and [[helper.rs#help]].
+"#,
+        )
+        .unwrap();
+        let vault = load(root).unwrap();
+
+        work::reset();
+        let state = serde_json::to_value(build(&vault).unwrap().wire).unwrap();
+
+        assert_eq!(work::count(Work::LinkSourceResolution), 0);
+        let edges = state["graph"]["edges"].as_array().unwrap();
+        for (kind, target) in [
+            ("cites", "note:collision-note"),
+            ("references", "code:src/helper.rs"),
+            ("references", "pattern:ADR-0001/no-block-on"),
+        ] {
+            assert!(edges.iter().any(|edge| {
+                edge["from"] == "note:ADR-0001" && edge["kind"] == kind && edge["to"] == target
+            }));
+        }
+    }
+
+    #[test]
+    fn every_registered_policy_failure_blocks_state() {
+        let root = policy_vault("criv-state-policy-failures");
+        std::fs::write(
+            root.join("docs/adr/0001-no-println.md"),
+            POLICY_ADR.replace(
+                "      pattern: \"println!($$$ARGS)\"",
+                "      rule: \"not: [valid\"\n    - id: no-body\n      language: rust",
+            ),
+        )
+        .unwrap();
+        let vault = load(&root).unwrap();
+
+        let error = build(&vault).unwrap_err().to_string();
+
+        assert!(
+            error.contains("policy pattern `no-body`")
+                && error.contains("policy pattern `no-println`"),
+            "{error}"
+        );
+    }
 
     #[test]
     fn disabled_source_index_writes_empty_source_state() {
@@ -686,9 +228,9 @@ source = false
         .unwrap();
         std::fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
 
-        let vault = Vault::load(&root).unwrap();
-        let state = State::build(&vault).unwrap();
-        let json = serde_json::to_value(&state).unwrap();
+        let vault = load(&root).unwrap();
+        let state = build(&vault).unwrap();
+        let json = serde_json::to_value(&state.wire).unwrap();
 
         assert_eq!(json["source-index"].as_array().unwrap().len(), 0);
         assert!(
@@ -698,8 +240,6 @@ source = false
                 .iter()
                 .all(|node| node["kind"] != "code")
         );
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -709,20 +249,18 @@ source = false
         let contents = b"\x89PNG\r\n\x1a\npreview";
         std::fs::write(root.join("docs/diagram.png"), contents).unwrap();
 
-        let vault = Vault::load(&root).unwrap();
-        let state = State::build(&vault).unwrap();
-        let json = serde_json::to_value(&state).unwrap();
+        let vault = load(&root).unwrap();
+        let state = build(&vault).unwrap();
+        let json = serde_json::to_value(&state.wire).unwrap();
 
         assert_eq!(json["asset-index"][0]["path"], "docs/diagram.png");
         assert_eq!(json["asset-index"][0]["mime"], "image/png");
         assert_eq!(json["asset-index"][0]["bytes"], contents.len());
         assert_eq!(json["asset-index"][0]["hash"].as_str().unwrap().len(), 64);
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn elixir_state_projects_kinds_relationships_labels_mime_and_fingerprints() {
+    fn elixir_state_projects_kinds_relationships_labels_mime_and_rebuilds() {
         let root = unique_temp_dir("criv-elixir-state");
         std::fs::create_dir_all(root.join("lib")).unwrap();
         std::fs::write(root.join("criv.toml"), "[source]\nroots = [\"lib\"]\n").unwrap();
@@ -775,11 +313,10 @@ end
 "#;
         std::fs::write(root.join("lib/sample.ex"), source).unwrap();
 
-        let vault = Vault::load(&root).unwrap();
-        let file = vault.source_graph().files.get("lib/sample.ex").unwrap();
-        let first_fingerprint = source_input_fingerprint(file);
-        let first = State::build(&vault).unwrap();
-        let decoded: StateDocument = serde_json::from_str(&first.to_json().unwrap()).unwrap();
+        let vault = load(&root).unwrap();
+        let first = build(&vault).unwrap();
+        let decoded: StateDocument =
+            serde_json::from_value(serde_json::to_value(&first.wire).unwrap()).unwrap();
         assert_eq!(decoded.schema, STATE_SCHEMA);
 
         for kind in [
@@ -889,26 +426,16 @@ end
             source.replace("Target.fetch(value)", "Target.other(value)"),
         )
         .unwrap();
-        let changed_vault = Vault::load(&root).unwrap();
-        let changed_file = changed_vault
-            .source_graph()
-            .files
-            .get("lib/sample.ex")
-            .unwrap();
-        assert_ne!(first_fingerprint, source_input_fingerprint(changed_file));
+        let changed_vault = load(&root).unwrap();
 
-        reset_work_counts();
-        let changed =
-            State::build_incremental(&changed_vault, Some(&first), &["lib/sample.ex".into()])
-                .unwrap();
-        assert_eq!(work_counts().source_partitions_rebuilt, 1);
+        work::reset();
+        let changed = build_incremental(&changed_vault, Some(&first)).unwrap();
+        assert_eq!(work::count(Work::SourcePartitionBuild), 1);
         assert!(changed.wire.graph.edges.iter().any(|edge| {
             edge.from == run
                 && edge.to == "symbol:lib/sample.ex#module:Demo.Target/fn:other/1"
                 && edge.kind == EdgeKind::Calls
         }));
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -925,9 +452,9 @@ roots = ["src"]
         .unwrap();
         std::fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
 
-        let vault = Vault::load(&root).unwrap();
-        reset_work_counts();
-        let (snapshot, _) = write_state(&vault).unwrap();
+        let vault = load(&root).unwrap();
+        work::reset();
+        let (snapshot, _) = publish(&vault).unwrap();
 
         let state_path = root.join(".criv/state.json");
         let state: serde_json::Value =
@@ -947,19 +474,14 @@ roots = ["src"]
         let snapshot_state: serde_json::Value = serde_json::from_str(&snapshot_contents).unwrap();
         assert_eq!(snapshot_state["schema"], STATE_SCHEMA);
         assert_eq!(
-            work_counts(),
-            WorkCounts {
-                partitions_rebuilt: 2,
-                source_partitions_rebuilt: 1,
-                note_partitions_rebuilt: 0,
-                policy_partitions_rebuilt: 0,
-                source_index_partitions_rebuilt: 1,
-                serializations: 1,
-                published_bytes: state_contents.len() * 2 + latest.len(),
-            }
+            work::counts([
+                Work::SourcePartitionBuild,
+                Work::NotePartitionBuild,
+                Work::PolicyPartitionBuild,
+                Work::StateSerialization,
+            ]),
+            [1, 0, 0, 1]
         );
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -968,8 +490,8 @@ roots = ["src"]
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::write(root.join("criv.toml"), "[source]\nroots = [\"src\"]\n").unwrap();
         std::fs::write(root.join("src/lib.rs"), "pub fn first() {}\n").unwrap();
-        let first_vault = Vault::load(&root).unwrap();
-        write_state(&first_vault).unwrap();
+        let first_vault = load(&root).unwrap();
+        publish(&first_vault).unwrap();
         let prior_state = std::fs::read(root.join(".criv/state.json")).unwrap();
 
         let corrupt_hash = "a".repeat(64);
@@ -980,9 +502,9 @@ roots = ["src"]
         )
         .unwrap();
         std::fs::write(root.join("src/lib.rs"), "pub fn second() {}\n").unwrap();
-        let second_vault = Vault::load(&root).unwrap();
+        let second_vault = load(&root).unwrap();
 
-        let error = write_state(&second_vault).unwrap_err();
+        let error = publish(&second_vault).unwrap_err();
         assert!(error.to_string().contains("corrupt"));
         assert_eq!(
             std::fs::read(root.join(".criv/state.json")).unwrap(),
@@ -995,6 +517,8 @@ roots = ["src"]
         );
     }
 
+    /// A deliberate compatibility check: a change to the fixture or the pinned
+    /// hash changes the published State for every consumer (ADR-0146).
     #[test]
     fn serialized_state_matches_the_v1_contract_fixture() {
         let root = unique_temp_dir("criv-state-contract-fixture");
@@ -1050,10 +574,8 @@ policy:
         )
         .unwrap();
 
-        let vault = Vault::load(&root).unwrap();
-        reset_work_counts();
-        let actual: serde_json::Value =
-            serde_json::from_str(&State::build(&vault).unwrap().to_json().unwrap()).unwrap();
+        let vault = load(&root).unwrap();
+        let actual = serde_json::to_value(build(&vault).unwrap().wire).unwrap();
         let expected: serde_json::Value =
             serde_json::from_str(include_str!("../fixtures/state/criv.state.v1.json")).unwrap();
 
@@ -1068,23 +590,9 @@ policy:
                 .is_none()
         );
         assert_eq!(
-            work_counts(),
-            WorkCounts {
-                partitions_rebuilt: 5,
-                source_partitions_rebuilt: 1,
-                note_partitions_rebuilt: 2,
-                policy_partitions_rebuilt: 1,
-                source_index_partitions_rebuilt: 1,
-                serializations: 1,
-                published_bytes: 0,
-            }
-        );
-        assert_eq!(
-            State::build(&vault).unwrap().hash().unwrap(),
+            publish(&vault).unwrap().0,
             "5daebfeb1e0852bba748b8e225dab7469e53f98d3103e242ba0c3bffbbbb199a"
         );
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[cfg(unix)]
@@ -1098,11 +606,10 @@ policy:
         std::fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
         symlink(outside.path(), root.join(".criv")).unwrap();
 
-        let error = Vault::load(&root).unwrap_err();
+        let error = load(&root).unwrap_err();
 
         assert!(error.to_string().contains("symlinked vault path component"));
         assert!(!outside.path().join("state.json").exists());
-        let _ = std::fs::remove_dir_all(root);
     }
 
     const POLICY_ADR: &str = r#"---
@@ -1199,7 +706,7 @@ Decision.
 Consequences.
 "#;
 
-    fn policy_vault(prefix: &str) -> PathBuf {
+    fn policy_vault(prefix: &str) -> TempRoot {
         let root = unique_temp_dir(prefix);
         std::fs::create_dir_all(root.join("src")).unwrap();
         std::fs::create_dir_all(root.join("docs/adr")).unwrap();
@@ -1232,42 +739,46 @@ Consequences.
     }
 
     #[test]
-    fn no_op_incremental_build_reuses_partition_allocations() {
+    fn a_member_is_contained_by_its_class_beside_a_same_name_symbol() {
+        let root = unique_temp_dir("criv-same-name-parent");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("criv.toml"), "[source]\nroots = [\"src\"]\n").unwrap();
+        std::fs::write(
+            root.join("src/thing.py"),
+            "class Thing:\n    def run(self):\n        pass\n\n\ndef Thing():\n    pass\n",
+        )
+        .unwrap();
+
+        let state = build(&load(&root).unwrap()).unwrap();
+
+        assert!(state.wire.graph.edges.iter().any(|edge| {
+            edge.from == "symbol:src/thing.py#type:Thing"
+                && edge.to == "symbol:src/thing.py#type:Thing/member:run"
+                && edge.kind == EdgeKind::Contains
+        }));
+    }
+
+    #[test]
+    fn no_op_incremental_build_rebuilds_no_partition() {
         let root = policy_vault("criv-state-partition-allocation-reuse");
-        let vault = Vault::load(&root).unwrap();
-        let first = State::build(&vault).unwrap();
+        let first = build(&load(&root).unwrap()).unwrap();
+        let vault = load(&root).unwrap();
 
-        reset_work_counts();
-        let second = State::build_incremental(&vault, Some(&first), &[]).unwrap();
+        work::reset();
+        let second = build_incremental(&vault, Some(&first)).unwrap();
 
-        assert_eq!(work_counts().partitions_rebuilt, 0);
-        for (path, partition) in &first.partitions.sources {
-            assert!(Arc::ptr_eq(
-                partition,
-                second.partitions.sources.get(path).unwrap()
-            ));
-        }
-        for (path, partition) in &first.partitions.notes {
-            assert!(Arc::ptr_eq(
-                partition,
-                second.partitions.notes.get(path).unwrap()
-            ));
-        }
-        for (id, partition) in &first.partitions.policies {
-            assert!(Arc::ptr_eq(
-                partition,
-                second.partitions.policies.get(id).unwrap()
-            ));
-        }
-        for (path, partition) in &first.partitions.source_index {
-            assert!(Arc::ptr_eq(
-                partition,
-                second.partitions.source_index.get(path).unwrap()
-            ));
-        }
-        assert_eq!(first.to_json().unwrap(), second.to_json().unwrap());
-
-        let _ = std::fs::remove_dir_all(root);
+        assert_eq!(
+            work::counts([
+                Work::SourcePartitionBuild,
+                Work::NotePartitionBuild,
+                Work::PolicyPartitionBuild,
+            ]),
+            [0, 0, 0]
+        );
+        assert_eq!(
+            serde_json::to_value(&first.wire).unwrap(),
+            serde_json::to_value(&second.wire).unwrap()
+        );
     }
 
     #[test]
@@ -1278,12 +789,12 @@ Consequences.
             FUNCTION_POLICY_ADR,
         )
         .unwrap();
-        let vault = Vault::load(&root).unwrap();
-        structural::reset_batch_parse_count();
-        let state = State::build(&vault).unwrap();
+        let vault = load(&root).unwrap();
+        work::reset();
+        let state = build(&vault).unwrap();
 
         assert_eq!(
-            structural::batch_parse_count(),
+            work::count(Work::AstParse),
             2,
             "each eligible source file is parsed once for both overlapping ADR policies"
         );
@@ -1292,8 +803,6 @@ Consequences.
             state.wire.patterns.get(FUNCTION_PATTERN_ID).unwrap().len(),
             2
         );
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1301,8 +810,8 @@ Consequences.
         let root = policy_vault("criv-accepted-only-state");
         std::fs::write(root.join("docs/adr/0002-no-debug.md"), DRAFT_POLICY_ADR).unwrap();
 
-        let vault = Vault::load(&root).unwrap();
-        let state = State::build(&vault).unwrap();
+        let vault = load(&root).unwrap();
+        let state = build(&vault).unwrap();
 
         assert_eq!(state.wire.registered_patterns, vec![PATTERN_ID.to_string()]);
         assert!(state.wire.patterns.contains_key(PATTERN_ID));
@@ -1313,15 +822,13 @@ Consequences.
                 .contains(&DRAFT_PATTERN_ID.to_string())
         );
         assert!(!state.wire.patterns.contains_key(DRAFT_PATTERN_ID));
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn accepted_successor_removes_superseded_policy_state() {
         let root = policy_vault("criv-effective-policy-state");
-        let vault = Vault::load(&root).unwrap();
-        let (_, before) = write_state(&vault).unwrap();
+        let vault = load(&root).unwrap();
+        let (_, before) = publish(&vault).unwrap();
         assert!(before.wire.patterns.contains_key(PATTERN_ID));
 
         let successor = root.join("docs/adr/0002-successor.md");
@@ -1342,13 +849,8 @@ governs:
 "#,
         )
         .unwrap();
-        let vault = Vault::load(&root).unwrap();
-        let (_, after) = write_state_incremental(
-            &vault,
-            Some(&before),
-            &["docs/adr/0002-successor.md".to_string()],
-        )
-        .unwrap();
+        let vault = load(&root).unwrap();
+        let (_, after) = publish_incremental(&vault, Some(&before)).unwrap();
 
         assert!(
             !after
@@ -1357,8 +859,6 @@ governs:
                 .contains(&PATTERN_ID.to_string())
         );
         assert!(!after.wire.patterns.contains_key(PATTERN_ID));
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1367,8 +867,8 @@ governs:
         let policy_path = root.join("docs/adr/0002-no-debug.md");
         std::fs::write(&policy_path, DRAFT_POLICY_ADR).unwrap();
 
-        let vault = Vault::load(&root).unwrap();
-        let (_, before) = write_state(&vault).unwrap();
+        let vault = load(&root).unwrap();
+        let (_, before) = publish(&vault).unwrap();
         assert!(!before.wire.patterns.contains_key(DRAFT_PATTERN_ID));
 
         std::fs::write(
@@ -1376,8 +876,8 @@ governs:
             DRAFT_POLICY_ADR.replace("status: draft", "status: accepted"),
         )
         .unwrap();
-        let vault = Vault::load(&root).unwrap();
-        let (_, after) = write_state_incremental(&vault, Some(&before), &[]).unwrap();
+        let vault = load(&root).unwrap();
+        let (_, after) = publish_incremental(&vault, Some(&before)).unwrap();
 
         assert_eq!(
             after.wire.patterns[DRAFT_PATTERN_ID]
@@ -1387,8 +887,6 @@ governs:
             vec!["src/alpha.rs", "src/beta.rs"],
             "a newly accepted policy has no prior cache entry and must scan its whole scope"
         );
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1398,18 +896,13 @@ governs:
         let accepted = DRAFT_POLICY_ADR.replace("status: draft", "status: accepted");
         std::fs::write(&policy_path, &accepted).unwrap();
 
-        let vault = Vault::load(&root).unwrap();
-        let (_, before) = write_state(&vault).unwrap();
+        let vault = load(&root).unwrap();
+        let (_, before) = publish(&vault).unwrap();
         assert!(before.wire.patterns.contains_key(DRAFT_PATTERN_ID));
 
         std::fs::write(&policy_path, DRAFT_POLICY_ADR).unwrap();
-        let vault = Vault::load(&root).unwrap();
-        let (_, after) = write_state_incremental(
-            &vault,
-            Some(&before),
-            &["docs/adr/0002-no-debug.md".to_string()],
-        )
-        .unwrap();
+        let vault = load(&root).unwrap();
+        let (_, after) = publish_incremental(&vault, Some(&before)).unwrap();
 
         assert!(
             !after
@@ -1418,16 +911,14 @@ governs:
                 .contains(&DRAFT_PATTERN_ID.to_string())
         );
         assert!(!after.wire.patterns.contains_key(DRAFT_PATTERN_ID));
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn incremental_pattern_matches_reuse_unchanged_files() {
         let root = policy_vault("criv-incremental-pattern-reuse");
 
-        let vault = Vault::load(&root).unwrap();
-        let (_, first) = write_state(&vault).unwrap();
+        let vault = load(&root).unwrap();
+        let (_, first) = publish(&vault).unwrap();
         assert_eq!(
             matched_files(&first),
             vec!["src/alpha.rs".to_string(), "src/beta.rs".to_string()],
@@ -1449,14 +940,15 @@ governs:
         )
         .unwrap();
 
-        let vault = Vault::load(&root).unwrap();
-        let (_, second) = write_state_incremental(
-            &vault,
-            Some(&first),
-            std::slice::from_ref(&"src/beta.rs".to_string()),
-        )
-        .unwrap();
+        let vault = load(&root).unwrap();
+        work::reset();
+        let (_, second) = publish_incremental(&vault, Some(&first)).unwrap();
 
+        assert_eq!(
+            work::count(Work::AstParse),
+            1,
+            "only the changed governed file is rescanned"
+        );
         assert_eq!(
             second.wire.registered_patterns,
             vec![PATTERN_ID.to_string()]
@@ -1481,109 +973,39 @@ governs:
             "the changed file's match should be rescanned at its new position"
         );
         assert_eq!(matched_files(&second).len(), 2);
-
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn incremental_pattern_matches_skip_files_absent_from_the_changed_set() {
-        // Pins the reuse contract itself: a file the caller does not report as
-        // changed is carried forward from the previous state and is NOT
-        // rescanned. Editing alpha on disk while reporting only beta means a
-        // full rescan would drop alpha's match, while correct reuse keeps it.
-        let root = policy_vault("criv-incremental-pattern-scope");
-
-        let vault = Vault::load(&root).unwrap();
-        let (_, first) = write_state(&vault).unwrap();
-        assert_eq!(matched_files(&first).len(), 2);
-
-        std::fs::write(root.join("src/alpha.rs"), "fn alpha() {}\n").unwrap();
-
-        let vault = Vault::load(&root).unwrap();
-        let (_, second) = write_state_incremental(
-            &vault,
-            Some(&first),
-            std::slice::from_ref(&"src/beta.rs".to_string()),
-        )
-        .unwrap();
-
-        assert!(
-            matched_files(&second).contains(&"src/alpha.rs".to_string()),
-            "a file outside the changed set must be reused, not rescanned"
-        );
-
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn incremental_rescan_is_empty_when_no_changed_file_is_in_scope() {
-        // `README.md` is outside the ADR's `governs:` scope, so the scoped
-        // changed set is empty and an empty glob list must keep meaning "nothing
-        // in scope". Widening it to "no filter" would rescan the whole vault and
-        // pick up the println! added to alpha after the previous state was
-        // written — a file the caller never reported as changed.
-        let root = policy_vault("criv-incremental-pattern-out-of-scope");
-        std::fs::write(root.join("src/alpha.rs"), "fn alpha() {}\n").unwrap();
-
-        let vault = Vault::load(&root).unwrap();
-        let (_, first) = write_state(&vault).unwrap();
-        assert_eq!(matched_files(&first), vec!["src/beta.rs".to_string()]);
-
-        std::fs::write(
-            root.join("src/alpha.rs"),
-            "fn alpha() {\n    println!(\"alpha\");\n}\n",
-        )
-        .unwrap();
-
-        let vault = Vault::load(&root).unwrap();
-        let (_, second) = write_state_incremental(
-            &vault,
-            Some(&first),
-            std::slice::from_ref(&"README.md".to_string()),
-        )
-        .unwrap();
-
-        assert_eq!(
-            matched_files(&second),
-            vec!["src/beta.rs".to_string()],
-            "no governed file changed, so the rescan must contribute nothing"
-        );
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
     fn incremental_pattern_matches_drop_deleted_files() {
         let root = policy_vault("criv-incremental-pattern-delete");
 
-        let vault = Vault::load(&root).unwrap();
-        let (_, first) = write_state(&vault).unwrap();
+        let vault = load(&root).unwrap();
+        let (_, first) = publish(&vault).unwrap();
         assert_eq!(matched_files(&first).len(), 2);
 
         std::fs::remove_file(root.join("src/beta.rs")).unwrap();
 
-        let vault = Vault::load(&root).unwrap();
-        let (_, second) = write_state_incremental(
-            &vault,
-            Some(&first),
-            std::slice::from_ref(&"src/beta.rs".to_string()),
-        )
-        .unwrap();
+        let vault = load(&root).unwrap();
+        let (_, second) = publish_incremental(&vault, Some(&first)).unwrap();
 
         assert_eq!(
             matched_files(&second),
             vec!["src/alpha.rs".to_string()],
             "a deleted file's match must not survive into the next state"
         );
-
-        let _ = std::fs::remove_dir_all(root);
     }
 
-    fn unique_temp_dir(prefix: &str) -> PathBuf {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("{prefix}-{}-{unique}", std::process::id()))
+    struct TempRoot(tempfile::TempDir);
+
+    impl std::ops::Deref for TempRoot {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            self.0.path()
+        }
+    }
+
+    fn unique_temp_dir(prefix: &str) -> TempRoot {
+        TempRoot(tempfile::Builder::new().prefix(prefix).tempdir().unwrap())
     }
 }

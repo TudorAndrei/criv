@@ -165,7 +165,7 @@ ref, and retries after concurrent note updates. The job is not part of the CI
 aggregate or local hooks and does not require Docker.
 
 The governing decision is
-[[0072-keep-performance-observation-outside-core|ADR-0072]].
+[[0173-observe-discovery-through-a-feature-gated-selection-api|ADR-0173]].
 
 ## Release boundary
 

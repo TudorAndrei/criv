@@ -1,14 +1,15 @@
-import { ItemView, Notice, TFile } from "obsidian";
+import { FileSystemAdapter, ItemView, Notice, TFile } from "obsidian";
 import type { App, WorkspaceLeaf } from "obsidian";
-import type { AssetIndexEntry, CrivState, FrontmatterPatternTarget, LinkedSource } from "./model";
-import { frontmatterPatternTargets, linkedSourcesFromMarkdown, safeVaultPath } from "./model";
-import type { StatePort } from "../ports";
 import {
-  assetResourceUrl,
-  isPassiveImage,
-  replaceFailedAssetPreview,
-  resolveActiveAsset,
-} from "./assets";
+  errorMessage,
+  formatBytes,
+  type CrivAssetEntry,
+  type CrivInitialProjections,
+} from "@criv/editor-state";
+import type { FrontmatterPatternTarget, LinkedSource } from "./model";
+import { frontmatterPatternTargets, linkedSourcesFromMarkdown } from "./model";
+import type { StatePort } from "../ports";
+import { assetResourceUrl } from "./assets";
 import { languageForPath, readSourcePreview, renderPreview, renderPreviewError } from "./preview";
 
 export const SOURCE_PANEL_VIEW_TYPE = "criv-source-panel";
@@ -17,11 +18,11 @@ export class ObsidianSourcePanelOwner {
   constructor(
     private readonly app: App,
     private readonly state: StatePort,
-    private readonly externalEditorUrl: () => string,
+    private readonly externalEditorUrl: (absolutePath: string) => string,
   ) {}
 
   createView(leaf: WorkspaceLeaf): ItemView {
-    return new CrivSourceView(leaf, this);
+    return new CrivSourceView(leaf, this, this.state);
   }
 
   async open(): Promise<void> {
@@ -57,24 +58,16 @@ export class ObsidianSourcePanelOwner {
     }
   }
 
-  getState(): Promise<CrivState | null> {
-    return this.state.getState();
-  }
-
-  stateStatus(): string {
-    return this.state.stateStatus();
-  }
-
   async linkedSourcesForActiveFile(): Promise<LinkedSource[]> {
     const file = this.app.workspace.getActiveFile();
     if (!file) {
       return [];
     }
     const markdown = await this.app.vault.cachedRead(file);
-    return linkedSourcesFromMarkdown(markdown, this.state.cachedSourceResolver());
+    return linkedSourcesFromMarkdown(markdown, this.state.sourceResolver());
   }
 
-  frontmatterPatternTargets(state: CrivState): FrontmatterPatternTarget[] {
+  frontmatterPatternTargets(state: CrivInitialProjections): FrontmatterPatternTarget[] {
     const file = this.app.workspace.getActiveFile();
     if (!file) {
       return [];
@@ -83,38 +76,29 @@ export class ObsidianSourcePanelOwner {
     return frontmatterPatternTargets(frontmatter, state);
   }
 
-  assetEntries(): Promise<AssetIndexEntry[]> {
-    return this.state.assetEntries();
-  }
-
-  async assetResourcePath(requestedPath: unknown): Promise<string | null> {
-    const asset = resolveActiveAsset(await this.assetEntries(), requestedPath);
-    if (!asset) {
-      return null;
-    }
-    const path = safeVaultPath(asset.path);
-    if (!path) {
-      return null;
-    }
-    const file = this.app.vault.getAbstractFileByPath(path);
+  assetResourcePath(asset: CrivAssetEntry): string | null {
+    const file = this.app.vault.getAbstractFileByPath(asset.path);
     return file instanceof TFile
       ? assetResourceUrl(this.app.vault.getResourcePath(file), asset.hash)
       : null;
   }
 
-  async openAsset(requestedPath: unknown): Promise<void> {
-    const asset = resolveActiveAsset(await this.assetEntries(), requestedPath);
-    const path = asset ? safeVaultPath(asset.path) : null;
-    const file = path ? this.app.vault.getAbstractFileByPath(path) : null;
+  async openAsset(asset: CrivAssetEntry): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(asset.path);
     if (!(file instanceof TFile)) {
-      throw new Error(`Could not open ${String(requestedPath)}`);
+      throw new Error(`${asset.path} is not a file in this vault`);
     }
     await this.app.workspace.getLeaf(true).openFile(file);
   }
 
+  /** Open a vault file in the external editor, which needs its absolute path. */
   openExternal(path: string): void {
-    const url = this.externalEditorUrl().replace("{path}", encodeURI(path));
-    window.open(url);
+    const { adapter } = this.app.vault;
+    if (!(adapter instanceof FileSystemAdapter)) {
+      new Notice("Opening a source in an external editor needs the desktop app.");
+      return;
+    }
+    window.open(this.externalEditorUrl(adapter.getFullPath(path)));
   }
 
   private leaf(): WorkspaceLeaf | null {
@@ -130,6 +114,7 @@ class CrivSourceView extends ItemView {
   constructor(
     leaf: WorkspaceLeaf,
     private readonly owner: ObsidianSourcePanelOwner,
+    private readonly state: StatePort,
   ) {
     super(leaf);
   }
@@ -150,11 +135,11 @@ class CrivSourceView extends ItemView {
     const container = this.containerEl.children[1] as HTMLElement;
     container.empty();
     container.addClass("criv-panel");
-    const state = await this.owner.getState();
+    const state = await this.state.load();
     if (!state) {
       container.createEl("p", {
         cls: "criv-empty",
-        text: this.owner.stateStatus(),
+        text: this.state.statusMessage(),
       });
       return;
     }
@@ -175,7 +160,7 @@ class CrivSourceView extends ItemView {
       await this.renderLinkedSource(container, source);
     }
 
-    const assets = await this.owner.assetEntries();
+    const assets = state.assets;
     const assetHeader = container.createDiv({ cls: "criv-panel-header" });
     assetHeader.createEl("h3", { text: "Documentation assets" });
     assetHeader.createSpan({ text: `${assets.length}` });
@@ -248,23 +233,28 @@ class CrivSourceView extends ItemView {
     }
   }
 
-  private async renderAsset(container: HTMLElement, asset: AssetIndexEntry): Promise<void> {
+  private async renderAsset(container: HTMLElement, asset: CrivAssetEntry): Promise<void> {
     const card = container.createDiv({ cls: "criv-asset-card" });
     const head = card.createDiv({ cls: "criv-source-card-head" });
     const openButton = head.createEl("button", { text: asset.path });
+    const showError = () => {
+      card.querySelector(".criv-asset-preview")?.remove();
+      renderPreviewError(card, asset.path);
+    };
     openButton.onclick = () => {
-      void this.owner.openAsset(asset.path).catch(() => {
-        new Notice(`Could not open ${asset.path}`);
-        replaceFailedAssetPreview(card, () => renderPreviewError(card, asset.path));
+      void this.owner.openAsset(asset).catch((error: unknown) => {
+        new Notice(`Could not open ${asset.path}: ${errorMessage(error)}`);
+        showError();
       });
     };
     head.createSpan({ text: `${asset.mime} · ${formatBytes(asset.bytes)}` });
 
-    if (!isPassiveImage(asset)) {
-      card.createDiv({ cls: "criv-asset-document", text: "Open the PDF in Obsidian" });
+    if (!asset.mime.startsWith("image/")) {
+      const name = asset.mime === "application/pdf" ? "PDF" : "asset";
+      card.createDiv({ cls: "criv-asset-document", text: `Open the ${name} in Obsidian` });
       return;
     }
-    const resource = await this.owner.assetResourcePath(asset.path);
+    const resource = this.owner.assetResourcePath(asset);
     if (!resource) {
       renderPreviewError(card, asset.path);
       return;
@@ -273,12 +263,6 @@ class CrivSourceView extends ItemView {
       cls: "criv-asset-preview",
       attr: { alt: asset.path, loading: "lazy", src: resource },
     });
-    image.onerror = () => {
-      replaceFailedAssetPreview(card, () => renderPreviewError(card, asset.path));
-    };
+    image.onerror = showError;
   }
-}
-
-function formatBytes(bytes: number): string {
-  return bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KiB`;
 }
