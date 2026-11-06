@@ -3,7 +3,7 @@
 This directory contains deterministic workload generation, sample isolation,
 and result summarization used by `scripts/measure-performance.sh`. The public
 measurement contract lives in `docs/performance.md` and
-[[0072-keep-performance-observation-outside-core|ADR-0072]].
+[[0173-observe-discovery-through-a-feature-gated-selection-api|ADR-0173]].
 
 Canonical workload inputs live in `fixtures/performance/`. Generated vaults and
 measurement results are temporary or user-selected output and are never
@@ -94,16 +94,17 @@ File-discovery evidence has seven separate tools:
 - `criv-discovery-snapshot` creates one strict APFS copy-on-write snapshot. It
   never falls back to a full copy. It checks the free-space reserve before and
   after the clone.
-- `criv-discovery-baseline` runs release-profile, test-only probes for Source
-  candidates, the complete Source build, Vault selection, and Markdown
-  selection. It records raw samples, elapsed and CPU time, peak resident
+- `criv-discovery-probe` prints the files criv selects for one profile: Source
+  candidates, the complete Source build, or Vault Markdown. It calls the
+  `criv::selection` functions, which exist only with the `selection` feature,
+  and computes byte totals and path digests itself.
+- `criv-discovery-baseline` runs the release-profile probe as a child process
+  for each sample. It records raw samples, elapsed and CPU time, peak resident
   memory, selected counts and bytes, and stable path digests.
 - `criv-discovery-fixtures` generates the deterministic scaling trees.
 - `criv-discovery-edge-fixtures` generates focused correctness repositories
   for parity, profile rules, selected links, invalid patterns, missing roots,
   and non-UTF-8 path identity.
-- `criv-discovery-adapter` exports an immutable criv revision and applies only
-  its fixed test-only probe adapter.
 - `criv-discovery-commands` measures official release commands on one strict
   workload snapshot per run. It resets the disposable Git worktree and
   generated State before each sample. It includes cold and warm one-shot
@@ -121,9 +122,10 @@ cargo run --locked -p criv-perf-harness \
   --allow-low-samples
 ```
 
-The probe is compiled only in the root library test executable. It calls the
-real private selectors without adding a command, feature, public API, or
-measurement protocol to the production binary. Full evidence uses five
+The release `criv` binary is built without the `selection` feature, so it has
+no probe command, public selection API, or measurement protocol. Build it in a
+separate Cargo invocation from the harness: one invocation that names both
+packages unifies the feature into the measured binary. Full evidence uses five
 samples. Low-sample smoke runs can supply `--workload-id` and
 `--workload-digest` directly. A relative median absolute deviation above ten percent causes one
 complete repeat and marks a second unstable attempt as unsuitable for a gate.

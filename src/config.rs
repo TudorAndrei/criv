@@ -119,19 +119,13 @@ impl Default for Config {
 }
 
 impl Config {
-    #[cfg(test)]
-    pub(crate) fn load(root: &Path) -> Result<Self> {
-        let files = RepositoryFiles::open(root)?;
-        Self::load_from(&files)
-    }
-
     pub(crate) fn load_from(files: &RepositoryFiles) -> Result<Self> {
         let contents = files.read_optional_string(Path::new(CONFIG_FILE))?;
         Self::parse(contents.as_deref())
     }
 
     /// Parses checkout or Git-tree configuration with the same defaults and
-    /// path normalization used by `Config::load`.
+    /// path normalization used by `Config::load_from`.
     pub(crate) fn parse(contents: Option<&str>) -> Result<Self> {
         let Some(contents) = contents else {
             return Ok(Self::default());

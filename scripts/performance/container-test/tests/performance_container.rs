@@ -30,7 +30,7 @@ fn performance_harness_runs_in_pinned_container() {
         r#"FROM {RUST_IMAGE}
 WORKDIR /workspace
 COPY . .
-RUN cargo build --release --locked --package criv --package criv-perf-harness
+RUN cargo build --release --locked --package criv && cargo build --release --locked --package criv-perf-harness
 CMD ["bash", "-c", "target/release/criv-perf-harness --repository-root /workspace --binary /workspace/target/release/criv --profile release --samples 1 --allow-low-samples --case check --manifest fixtures/performance/barrs-small.toml --results-root /tmp/criv-performance-results && test -n \"$(find /tmp/criv-performance-results -name summary.json -print -quit)\" && echo {READY_MESSAGE}"]
 "#
     );

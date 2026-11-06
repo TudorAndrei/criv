@@ -18,9 +18,9 @@ const SAMPLE_SCHEMA: &str = "criv.discovery-sample.v1";
 const SUMMARY_SCHEMA: &str = "criv.discovery-summary.v1";
 const PROBE_SCHEMA: &str = "criv.discovery-probe.v1";
 const PROBE_PREFIX: &str = "criv-discovery-probe-v1 ";
-const ROOT_ENV: &str = "CRIV_DISCOVERY_PROBE_ROOT";
+const PROBE_BIN: &str = "criv-discovery-probe";
 
-/// Measure criv discovery profiles through the test-only selector probe
+/// Measure criv discovery profiles through the criv-discovery-probe executable
 #[derive(Debug, Cli)]
 #[usage(bin = "criv-discovery-baseline", unknown_flags = "error")]
 struct Args {
@@ -39,13 +39,10 @@ struct Args {
     /// BLAKE3 workload identity for a smoke run without an inventory.
     #[usage(long)]
     workload_digest: Option<String>,
-    /// Compiled criv library-test executable. Build it automatically when omitted.
+    /// Compiled criv-discovery-probe executable. Build it automatically when omitted.
     #[usage(long)]
     probe_executable: Option<PathBuf>,
-    /// Receipt for a test-only adapter applied to an immutable production revision.
-    #[usage(long)]
-    adapter_receipt: Option<PathBuf>,
-    /// Human-readable identity for the probe source and adapter.
+    /// Human-readable identity for the probe build.
     #[usage(long, default = "current-main-control")]
     probe_label: String,
     /// Discovery profile to measure. Repeat to select more than one.
@@ -71,7 +68,6 @@ enum Profile {
     Source,
     SourceCandidates,
     Vault,
-    Markdown,
 }
 
 impl Profile {
@@ -80,24 +76,11 @@ impl Profile {
             Self::Source => "source",
             Self::SourceCandidates => "source_candidates",
             Self::Vault => "vault",
-            Self::Markdown => "markdown",
         }
-    }
-
-    fn test_name(self) -> String {
-        format!("discovery_probe::{}", self.id())
     }
 }
 
-// Markdown is retained only for explicitly selected historical probes.
-const DEFAULT_PROFILES: [Profile; 3] = [Profile::Source, Profile::SourceCandidates, Profile::Vault];
-
-const ALL_PROFILES: [Profile; 4] = [
-    Profile::Source,
-    Profile::SourceCandidates,
-    Profile::Vault,
-    Profile::Markdown,
-];
+const ALL_PROFILES: [Profile; 3] = [Profile::Source, Profile::SourceCandidates, Profile::Vault];
 
 #[derive(Debug, Serialize)]
 struct RunIdentity {
@@ -115,8 +98,6 @@ struct RunIdentity {
     probe_digest: String,
     harness: String,
     harness_digest: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    adapter: Option<AdapterIdentity>,
     rustc_verbose: String,
     operating_system: String,
     architecture: String,
@@ -125,18 +106,6 @@ struct RunIdentity {
     samples: usize,
     paths_dumped: bool,
     profiles: Vec<&'static str>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct AdapterIdentity {
-    schema: String,
-    revision: String,
-    commit: String,
-    patch_digest: String,
-    probe_digest: String,
-    output: String,
-    #[serde(default)]
-    receipt_digest: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -241,11 +210,6 @@ fn run(mut args: Args) -> Result<(), String> {
     validate_args(&args)?;
     let repository_root = canonical(&args.repository_root)?;
     let workload_root = canonical(&args.workload_root)?;
-    let adapter = args
-        .adapter_receipt
-        .as_ref()
-        .map(|path| read_adapter_identity(path, &repository_root))
-        .transpose()?;
     let (workload_id, workload_digest) = workload_identity(&args)?;
     let probe_executable = match args.probe_executable.take() {
         Some(path) => canonical(&path)?,
@@ -254,7 +218,7 @@ fn run(mut args: Args) -> Result<(), String> {
     validate_executable(&probe_executable)?;
 
     let profiles = if args.profiles.is_empty() {
-        DEFAULT_PROFILES.to_vec()
+        ALL_PROFILES.to_vec()
     } else {
         args.profiles.sort();
         args.profiles.dedup();
@@ -263,16 +227,11 @@ fn run(mut args: Args) -> Result<(), String> {
     let probe_digest = file_digest(&probe_executable)?;
     let harness = std::env::current_exe().map_err(display_error)?;
     let harness_digest = file_digest(&harness)?;
-    let (revision, dirty) = match adapter.as_ref() {
-        Some(adapter) => (adapter.commit.clone(), true),
-        None => (
-            command_text(&repository_root, "git", &["rev-parse", "HEAD"])
-                .unwrap_or_else(|_| "unavailable".into()),
-            command_text(&repository_root, "git", &["status", "--porcelain"])
-                .map(|value| !value.trim().is_empty())
-                .unwrap_or(true),
-        ),
-    };
+    let revision = command_text(&repository_root, "git", &["rev-parse", "HEAD"])
+        .unwrap_or_else(|_| "unavailable".into());
+    let dirty = command_text(&repository_root, "git", &["status", "--porcelain"])
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(true);
     let started_at_utc = command_text(&repository_root, "date", &["-u", "+%Y-%m-%dT%H:%M:%SZ"])
         .unwrap_or_else(|_| unix_millis().to_string());
     let rustc_verbose = command_text(&repository_root, "rustc", &["--version", "--verbose"])
@@ -308,7 +267,6 @@ fn run(mut args: Args) -> Result<(), String> {
         probe_digest: probe_digest.clone(),
         harness: harness.display().to_string(),
         harness_digest,
-        adapter,
         rustc_verbose,
         operating_system,
         architecture,
@@ -411,35 +369,12 @@ fn processor_identity(root: &Path) -> String {
         .unwrap_or_else(|_| "unknown".into())
 }
 
-fn read_adapter_identity(path: &Path, repository_root: &Path) -> Result<AdapterIdentity, String> {
-    let bytes = fs::read(path)
-        .map_err(|error| format!("failed to read adapter receipt {}: {error}", path.display()))?;
-    let mut identity: AdapterIdentity = serde_json::from_slice(&bytes).map_err(display_error)?;
-    if identity.schema != "criv.discovery-adapter.v1" {
-        return Err(format!(
-            "unsupported discovery adapter schema {}",
-            identity.schema
-        ));
-    }
-    let output = canonical(Path::new(&identity.output))?;
-    if output != repository_root {
-        return Err(format!(
-            "adapter receipt output {} does not match repository-root {}",
-            output.display(),
-            repository_root.display()
-        ));
-    }
-    identity.receipt_digest = bytes_digest(&bytes);
-    Ok(identity)
-}
-
 impl Profile {
     fn from_id(value: &str) -> Result<Self, String> {
         match value {
             "source" => Ok(Self::Source),
             "source_candidates" => Ok(Self::SourceCandidates),
             "vault" => Ok(Self::Vault),
-            "markdown" => Ok(Self::Markdown),
             _ => Err(format!("unknown discovery profile {value}")),
         }
     }
@@ -527,11 +462,13 @@ fn validate_explicit_workload_identity(
 fn build_probe(repository_root: &Path) -> Result<PathBuf, String> {
     let output = Command::new("cargo")
         .args([
-            "test",
+            "build",
             "--locked",
             "--release",
-            "--lib",
-            "--no-run",
+            "--package",
+            "criv-perf-harness",
+            "--bin",
+            PROBE_BIN,
             "--message-format=json-render-diagnostics",
         ])
         .current_dir(repository_root)
@@ -550,24 +487,20 @@ fn build_probe(repository_root: &Path) -> Result<PathBuf, String> {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
         };
-        let is_criv_test = value.get("reason").and_then(|value| value.as_str())
+        let is_probe = value.get("reason").and_then(|value| value.as_str())
             == Some("compiler-artifact")
             && value
                 .pointer("/target/name")
                 .and_then(|value| value.as_str())
-                == Some("criv")
-            && value
-                .pointer("/profile/test")
-                .and_then(|value| value.as_bool())
-                == Some(true);
-        if is_criv_test {
+                == Some(PROBE_BIN);
+        if is_probe {
             executable = value
                 .get("executable")
                 .and_then(|value| value.as_str())
                 .map(PathBuf::from);
         }
     }
-    executable.ok_or_else(|| "cargo did not report the criv library-test executable".into())
+    executable.ok_or_else(|| format!("cargo did not report the {PROBE_BIN} executable"))
 }
 
 #[expect(
@@ -633,19 +566,13 @@ fn run_probe(
 ) -> Result<ChildOutput, String> {
     let mut command = Command::new(executable);
     command
-        .args([
-            "--ignored",
-            "--exact",
-            &profile.test_name(),
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env(ROOT_ENV, workload_root)
+        .args(["--profile", profile.id(), "--root"])
+        .arg(workload_root)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if dump_paths {
-        command.env("CRIV_DISCOVERY_PROBE_DUMP", "1");
+        command.arg("--dump-paths");
     }
     run_child(command)
 }
@@ -654,10 +581,7 @@ fn parse_probe(stdout: &[u8], profile: Profile) -> Result<ProbeOutput, String> {
     let text = String::from_utf8_lossy(stdout);
     let payload = text
         .lines()
-        .find_map(|line| {
-            line.find(PROBE_PREFIX)
-                .map(|index| &line[index + PROBE_PREFIX.len()..])
-        })
+        .find_map(|line| line.strip_prefix(PROBE_PREFIX))
         .ok_or_else(|| "probe output marker is missing".to_string())?;
     let output: ProbeOutput = serde_json::from_str(payload).map_err(display_error)?;
     if output.schema != PROBE_SCHEMA {
@@ -1024,7 +948,6 @@ mod tests {
             workload_id: Some("fixture".into()),
             workload_digest: Some("a".repeat(64)),
             probe_executable: None,
-            adapter_receipt: None,
             probe_label: "test".into(),
             profiles: vec![],
             samples: 5,
@@ -1088,10 +1011,8 @@ mod tests {
     }
 
     #[test]
-    fn probe_parser_finds_output_inside_libtest_line() {
-        let stdout = br#"running 1 test
-test discovery_probe::source ... criv-discovery-probe-v1 {"schema":"criv.discovery-probe.v1","profile":"source","selected_files":1,"selected_bytes":8,"path_digest":"abc","groups":[]}
-ok
+    fn probe_parser_reads_the_marked_line() {
+        let stdout = br#"criv-discovery-probe-v1 {"schema":"criv.discovery-probe.v1","profile":"source","selected_files":1,"selected_bytes":8,"path_digest":"abc","groups":[]}
 "#;
         let output = parse_probe(stdout, Profile::Source).unwrap();
         assert_eq!(output.profile, "source");

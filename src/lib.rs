@@ -25,6 +25,8 @@ mod markdown;
 mod policy_scan;
 mod query;
 mod repository;
+#[cfg(feature = "selection")]
+pub mod selection;
 mod source;
 mod state;
 mod structural;
@@ -32,34 +34,6 @@ mod vault;
 mod watch;
 #[cfg(test)]
 mod work;
-
-#[cfg(test)]
-#[path = "../scripts/performance/discovery_probe.rs"]
-mod discovery_probe;
-
-#[cfg(test)]
-fn discovery_probe_source_files(root: &std::path::Path) -> Result<Vec<String>> {
-    let config = config::Config::load(root)?;
-    let files = repository::RepositoryFiles::open(root)?;
-    Ok(source::SourceState::refresh(&files, &config, None)?
-        .paths()
-        .to_vec())
-}
-
-#[cfg(test)]
-fn discovery_probe_source_candidates(root: &std::path::Path) -> Result<Vec<String>> {
-    let config = config::Config::load(root)?;
-    discovery::discover_source_candidates(
-        &repository::RepositoryFiles::open(root)?,
-        &discovery::SourceScope::new(&config)?,
-    )
-}
-
-#[cfg(test)]
-fn discovery_probe_vault_files(root: &std::path::Path) -> Result<Vec<String>> {
-    let config = config::Config::load(root)?;
-    Ok(discovery::discover_vault(root, &config.docs_dir)?.markdown)
-}
 
 use std::ffi::{OsStr, OsString};
 use std::io::Write;

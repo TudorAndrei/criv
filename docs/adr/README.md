@@ -182,3 +182,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0170-share-editor-state-behaviour-and-embed-the-wasm-runtime|ADR-0170]] - Share editor State behaviour and embed the Wasm runtime
 - [[0171-retain-state-wire-and-elixir-rules-after-the-editor-state-move|ADR-0171]] - Retain State wire and Elixir rules after the editor-state move
 - [[0172-retain-the-obsidian-owner-layout-with-typescript-tests|ADR-0172]] - Retain the Obsidian owner layout with TypeScript tests
+- [[0173-observe-discovery-through-a-feature-gated-selection-api|ADR-0173]] - Observe discovery through a feature-gated selection API

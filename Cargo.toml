@@ -83,6 +83,9 @@ usage-rs = "7.1.4"
 [target.'cfg(windows)'.dependencies]
 junction = "2"
 
+[features]
+selection = []
+
 [[test]]
 name = "acceptance"
 harness = false

@@ -45,7 +45,9 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Build release binaries
-        run: cargo build --locked --release --package criv --package criv-perf-harness
+        run: |
+          cargo build --locked --release --package criv
+          cargo build --locked --release --package criv-perf-harness
 
       - name: Measure canonical workloads
         env:

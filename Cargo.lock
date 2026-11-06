@@ -496,6 +496,7 @@ name = "criv-perf-harness"
 version = "0.14.0"
 dependencies = [
  "blake3",
+ "criv",
  "criv-state-wire",
  "libc",
  "serde",

@@ -1494,8 +1494,8 @@ roots = ["src"]
         .unwrap();
         std::fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
 
-        let config = Config::load(root).unwrap();
         let files = RepositoryFiles::open(root).unwrap();
+        let config = Config::load_from(&files).unwrap();
         let source = SourceState::refresh(&files, &config, None).unwrap();
         let expected = source.paths().to_vec();
         let vault = Vault::load(
