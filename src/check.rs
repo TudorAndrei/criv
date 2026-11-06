@@ -11,7 +11,7 @@ use std::fs;
 use serde::Serialize;
 use usage_rs::{Args as UsageArgs, ValueEnum};
 
-use crate::config::CONFIG_FILE;
+use crate::config::{CONFIG_FILE, Config};
 use crate::diagnostic::{self, Diagnostic, DiagnosticCode, LspRange, Severity, SourceLocation};
 #[cfg(test)]
 use crate::git::ChangedEntry;
@@ -132,14 +132,9 @@ fn validate_changed(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
     }
 
     let vault = Vault::load(files, LoadOptions::default())?;
-    if changed_scope_requires_full_check(&changes, &vault.config().adr_prefix()) {
+    let Some(changed_paths) = changed_scope(&changes, vault.config()) else {
         return validate_all(&vault);
-    }
-
-    let changed_paths = changes
-        .affected_paths()
-        .into_iter()
-        .collect::<BTreeSet<_>>();
+    };
     let Validation {
         mut diagnostics,
         policies,
@@ -147,6 +142,14 @@ fn validate_changed(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
     diagnostics.extend(policies.scan(&vault, Some(&changed_paths))?);
     diagnostic::sort(&mut diagnostics);
     Ok(diagnostics)
+}
+
+/// The paths a check of `changes` may be limited to, or `None` when the
+/// change can alter what a full check finds beyond its own paths: a deletion
+/// or rename, a decision, or the configuration.
+pub fn changed_scope(changes: &ChangedSet, config: &Config) -> Option<BTreeSet<String>> {
+    (!changed_scope_requires_full_check(changes, &config.adr_prefix()))
+        .then(|| changes.affected_paths())
 }
 
 fn changed_scope_requires_full_check(changes: &ChangedSet, adr_prefix: &str) -> bool {

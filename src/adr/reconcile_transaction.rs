@@ -8,7 +8,7 @@ use std::path::Path;
 
 use crate::check;
 use crate::diagnostic::Diagnostic;
-use crate::git::{ChangedEntry, Comparison, GitRepository};
+use crate::git::{ChangedSet, Comparison, GitRepository};
 use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
@@ -24,11 +24,45 @@ pub enum Mode {
 /// One reconcile run's repository and the commits it compares.
 pub(super) struct Context<'a> {
     pub(super) files: &'a RepositoryFiles,
-    pub(super) git: &'a GitRepository,
+    pub(super) git: GitRepository,
     pub(super) base_ref: &'a str,
-    pub(super) target_sha: &'a str,
-    pub(super) head_sha: &'a str,
-    pub(super) merge_base: &'a str,
+    pub(super) target_sha: String,
+    pub(super) head_sha: String,
+    pub(super) merge_base: String,
+    /// Every change from `merge_base` to `head_sha`.
+    pub(super) history: ChangedSet,
+}
+
+impl<'a> Context<'a> {
+    fn open(files: &'a RepositoryFiles, base_ref: &'a str, command: &str) -> Result<Self> {
+        let git = GitRepository::discover(files.root())?
+            .ok_or_else(|| CrivError::new(format!("`{command}` requires a Git worktree")))?;
+        let target_sha = git.resolve_commit(base_ref).map_err(|_| {
+            CrivError::new(format!(
+                "cannot resolve base ref `{base_ref}` to a commit; fetch complete history and retry"
+            ))
+        })?;
+        let head_sha = git.resolve_commit("HEAD")?;
+        let merge_base = git.merge_base(&target_sha, &head_sha).map_err(|error| {
+            CrivError::new(format!("{error}; fetch complete history and retry"))
+        })?;
+        let history = git.changed_set(
+            &Comparison::Trees {
+                old_ref: &merge_base,
+                new_ref: &head_sha,
+            },
+            &[],
+        )?;
+        Ok(Self {
+            files,
+            git,
+            base_ref,
+            target_sha,
+            head_sha,
+            merge_base,
+            history,
+        })
+    }
 }
 
 /// The files a transaction writes and the paths it deletes.
@@ -79,7 +113,26 @@ pub(super) trait Reconciliation {
     fn verify_written(_context: &Context<'_>) -> Result<()> {
         Ok(())
     }
-    fn proves(receipt: &Self::Receipt, git: &GitRepository, staged: &[ChangedEntry]) -> bool;
+}
+
+/// The `--check` failure for `base_ref`, or `None` when nothing needs
+/// reconciliation. Nothing is printed.
+pub(super) fn conflict<R: Reconciliation>(
+    files: &RepositoryFiles,
+    base_ref: &str,
+) -> Result<Option<String>> {
+    let context = Context::open(files, base_ref, R::COMMAND)?;
+    let plan = R::plan(&context)?;
+    Ok((!R::is_current(&plan)).then(|| check_failure::<R>(&context, &plan)))
+}
+
+fn check_failure<R: Reconciliation>(context: &Context<'_>, plan: &R::Plan) -> String {
+    format!(
+        "{}; run `{} --base {}`",
+        R::conflict(context, plan),
+        R::COMMAND,
+        context.base_ref
+    )
 }
 
 pub(super) fn run<R: Reconciliation>(
@@ -88,38 +141,17 @@ pub(super) fn run<R: Reconciliation>(
     mode: Mode,
 ) -> Result<()> {
     let name = <R::Receipt as Receipt>::NAME;
-    let git = GitRepository::discover(files.root())?
-        .ok_or_else(|| CrivError::new(format!("`{}` requires a Git worktree", R::COMMAND)))?;
-    let target_sha = git.resolve_commit(base_ref).map_err(|_| {
-        CrivError::new(format!(
-            "cannot resolve base ref `{base_ref}` to a commit; fetch complete history and retry"
-        ))
-    })?;
-    let head_sha = git.resolve_commit("HEAD")?;
-    let merge_base = git
-        .merge_base(&target_sha, &head_sha)
-        .map_err(|error| CrivError::new(format!("{error}; fetch complete history and retry")))?;
-    let context = Context {
-        files,
-        git: &git,
-        base_ref,
-        target_sha: &target_sha,
-        head_sha: &head_sha,
-        merge_base: &merge_base,
-    };
+    let context = Context::open(files, base_ref, R::COMMAND)?;
+    let git = &context.git;
     let plan = R::plan(&context)?;
-    println!("{name} target: {target_sha}");
+    println!("{name} target: {}", context.target_sha);
     if R::is_current(&plan) {
         println!("{}", R::CURRENT);
         return Ok(());
     }
     R::print(&plan);
     if mode == Mode::Check {
-        return Err(CrivError::new(format!(
-            "{}; run `{} --base {base_ref}`",
-            R::conflict(&context, &plan),
-            R::COMMAND
-        )));
+        return Err(CrivError::new(check_failure::<R>(&context, &plan)));
     }
     let dirty = git.dirty_paths()?;
     if !dirty.is_empty() && !R::resumes(&plan) {
@@ -135,7 +167,7 @@ pub(super) fn run<R: Reconciliation>(
     let paths = writes.paths();
     let snapshot = Snapshot::capture(
         files,
-        &git,
+        git,
         &paths
             .iter()
             .map(String::as_str)
@@ -156,7 +188,7 @@ pub(super) fn run<R: Reconciliation>(
         git.stage_paths(&paths)?;
         R::verify_written(&context)?;
         let staged = git.changed_set(&Comparison::Staged, &[])?;
-        if !R::proves(&receipt, &git, &staged.entries) {
+        if !receipt.allows_transaction(git, &staged.entries) {
             return Err(CrivError::new(format!(
                 "{name} receipt does not prove the complete staged transaction"
             )));
@@ -184,7 +216,7 @@ pub(super) fn run<R: Reconciliation>(
 }
 
 fn ensure_stable(context: &Context<'_>, moment: &str) -> Result<()> {
-    if super::receipt::target_is_stable(context.git, context.base_ref, context.target_sha) {
+    if super::receipt::target_is_stable(&context.git, context.base_ref, &context.target_sha) {
         Ok(())
     } else {
         Err(CrivError::new(format!(

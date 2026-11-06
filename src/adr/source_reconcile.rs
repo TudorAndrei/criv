@@ -4,10 +4,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use criv_state_wire::content_hash;
+
 use super::governs;
 use super::receipt::{self, Receipt, SourceFile, SourceMapping, SourceReceipt};
 use super::reconcile_transaction::{Context, FileWrite, Reconciliation, Writes};
-use crate::git::{ChangeStatus, ChangedEntry, Comparison, GitRepository};
+use crate::git::{ChangeStatus, ChangedEntry};
 use crate::vault::{LoadOptions, Vault};
 use crate::{CrivError, Result};
 
@@ -34,38 +36,29 @@ impl Reconciliation for SourceReconciliation {
 
     fn plan(context: &Context<'_>) -> Result<Plan> {
         let vault = Vault::load(context.files, LoadOptions::default())?;
-        let changes = context.git.changed_set(
-            &Comparison::Trees {
-                old_ref: context.merge_base,
-                new_ref: context.head_sha,
-            },
-            &[],
-        )?;
-        let required = required_reconciliations(&vault, &changes.entries)?;
+        let required = required_reconciliations(&vault, &context.history.entries)?;
 
         let mut files = Vec::new();
-        if !required.is_empty() {
-            for note in vault
-                .notes()
+        for note in vault
+            .notes()
+            .iter()
+            .filter(|note| vault.is_effective_decision(note))
+        {
+            if !note
+                .governs()
                 .iter()
-                .filter(|note| vault.is_effective_decision(note))
+                .any(|path| required.contains_key(path))
             {
-                if !note
-                    .governs()
-                    .iter()
-                    .any(|path| required.contains_key(path))
-                {
-                    continue;
-                }
-                let before = context.files.read_string(Path::new(note.rel_path()))?;
-                let after = governs::rewrite(&before, &required)?;
-                if before != after {
-                    files.push(PlannedFile {
-                        path: note.rel_path().to_string(),
-                        before,
-                        after,
-                    });
-                }
+                continue;
+            }
+            let before = context.files.read_string(Path::new(note.rel_path()))?;
+            let after = governs::rewrite(&before, &required)?;
+            if before != after {
+                files.push(PlannedFile {
+                    path: note.rel_path().to_string(),
+                    before,
+                    after,
+                });
             }
         }
         let mut used = BTreeSet::new();
@@ -146,24 +139,20 @@ impl Reconciliation for SourceReconciliation {
         Ok(SourceReceipt {
             schema: SourceReceipt::SCHEMA.into(),
             base_ref: context.base_ref.to_owned(),
-            target_sha: context.target_sha.to_owned(),
-            head_sha: context.head_sha.to_owned(),
-            merge_base: context.merge_base.to_owned(),
+            target_sha: context.target_sha.clone(),
+            head_sha: context.head_sha.clone(),
+            merge_base: context.merge_base.clone(),
             mappings: plan.mappings.clone(),
             files: plan
                 .files
                 .iter()
                 .map(|file| SourceFile {
                     path: file.path.clone(),
-                    before_hash: receipt::hash(file.before.as_bytes()),
-                    after_hash: receipt::hash(file.after.as_bytes()),
+                    before_hash: content_hash::of_bytes(file.before.as_bytes()),
+                    after_hash: content_hash::of_bytes(file.after.as_bytes()),
                 })
                 .collect(),
         })
-    }
-
-    fn proves(receipt: &SourceReceipt, git: &GitRepository, staged: &[ChangedEntry]) -> bool {
-        receipt.allows_transaction(git, staged)
     }
 }
 

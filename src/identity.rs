@@ -48,6 +48,12 @@ pub fn parse_adr_stem(stem: &str) -> Option<(u32, Option<&str>)> {
     Some((parse_adr_number(number)?, slug))
 }
 
+/// Split the stem of an ADR path or link target, with or without `.md`.
+pub fn parse_adr_path(path: &str) -> Option<(u32, Option<&str>)> {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    parse_adr_stem(name.strip_suffix(".md").unwrap_or(name))
+}
+
 fn parse_adr_number(digits: &str) -> Option<u32> {
     (digits.len() == 4 && digits.bytes().all(|byte| byte.is_ascii_digit()))
         .then(|| digits.parse().ok())

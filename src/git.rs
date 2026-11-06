@@ -66,7 +66,7 @@ impl ChangedSet {
     /// Every repository-relative path whose identity participates in this
     /// transaction. Renames and copies include both sides so consumers cannot
     /// accidentally ignore an old path that stopped existing.
-    pub(crate) fn affected_paths(&self) -> Vec<String> {
+    pub(crate) fn affected_paths(&self) -> BTreeSet<String> {
         let mut paths = BTreeSet::new();
         for entry in &self.entries {
             paths.insert(entry.path.clone());
@@ -74,7 +74,7 @@ impl ChangedSet {
                 paths.insert(previous.clone());
             }
         }
-        paths.into_iter().collect()
+        paths
     }
 }
 
@@ -183,13 +183,16 @@ impl GitRepository {
         for path in paths {
             options.pathspec(*path);
         }
-        let (diff, old_ref, new) = match comparison {
+        let (diff, label, old_ref, new) = match comparison {
             Comparison::Staged => {
-                let old_tree = self.head_tree();
+                let old_tree = self.head_tree().map_err(failed)?;
                 let diff =
                     self.repository
                         .diff_tree_to_index(old_tree.as_ref(), None, Some(&mut options));
-                (diff, "HEAD".to_owned(), Revision::Index)
+                let label = "HEAD".to_owned();
+                // An unborn `HEAD` has no commit to compare from.
+                let old_ref = old_tree.is_some().then(|| label.clone());
+                (diff, label, old_ref, Revision::Index)
             }
             Comparison::Trees { old_ref, new_ref } => {
                 let old_tree = self.tree_at(old_ref).map_err(failed)?;
@@ -202,6 +205,7 @@ impl GitRepository {
                 (
                     diff,
                     (*old_ref).to_owned(),
+                    Some((*old_ref).to_owned()),
                     Revision::Commit((*new_ref).to_owned()),
                 )
             }
@@ -217,6 +221,7 @@ impl GitRepository {
                 (
                     diff,
                     (*upstream_ref).to_owned(),
+                    Some((*upstream_ref).to_owned()),
                     Revision::Commit("HEAD".to_owned()),
                 )
             }
@@ -225,15 +230,20 @@ impl GitRepository {
                 let diff = self
                     .repository
                     .diff_tree_to_workdir_with_index(Some(&old_tree), Some(&mut options));
-                (diff, (*old_ref).to_owned(), Revision::Worktree)
+                (
+                    diff,
+                    (*old_ref).to_owned(),
+                    Some((*old_ref).to_owned()),
+                    Revision::Worktree,
+                )
             }
         };
         let diff = diff.map_err(|error| CrivError::new(format!("{comparison} failed: {error}")))?;
-        let entries = changed_entries(diff, Some(&old_ref), &new)?;
+        let entries = changed_entries(diff, old_ref.as_deref(), &new)?;
         Ok(ChangedSet {
             entries,
-            basis: format!("Git comparison {old_ref}..{new}"),
-            old_ref: Some(old_ref),
+            basis: format!("Git comparison {label}..{new}"),
+            old_ref,
             new: Some(new),
         })
     }
@@ -601,11 +611,14 @@ impl GitRepository {
             .map_err(git_error("Git index could not be read"))
     }
 
-    fn head_tree(&self) -> Option<git2::Tree<'_>> {
-        self.repository
-            .head()
-            .ok()
-            .and_then(|head| head.peel_to_tree().ok())
+    /// The `HEAD` tree, or `None` while `HEAD` is unborn.
+    fn head_tree(&self) -> Result<Option<git2::Tree<'_>>> {
+        let failed = git_error("Git HEAD does not resolve to a tree");
+        match self.repository.head() {
+            Ok(head) => head.peel_to_tree().map(Some).map_err(failed),
+            Err(error) if error.code() == git2::ErrorCode::UnbornBranch => Ok(None),
+            Err(error) => Err(failed(error)),
+        }
     }
 
     fn tree_at(&self, reference: &str) -> Result<git2::Tree<'_>> {
@@ -776,7 +789,10 @@ mod tests {
 
         assert_eq!(
             changes.affected_paths(),
-            vec!["docs/new.md".to_string(), "docs/old.md".to_string()]
+            std::collections::BTreeSet::from([
+                "docs/new.md".to_string(),
+                "docs/old.md".to_string()
+            ])
         );
     }
 

@@ -126,6 +126,65 @@ fn staged_println_source(world: &mut VaultWorld) {
     support::git(root, &["add", "src/lib.rs"]);
 }
 
+#[given("a committed Rust source that calls println")]
+fn committed_println_source(world: &mut VaultWorld) {
+    let root = world.directory.path();
+    std::fs::create_dir_all(root.join("src")).expect("create source directory");
+    std::fs::write(
+        root.join("src/lib.rs"),
+        "pub fn run() {\n    println!(\"blocked\");\n}\n",
+    )
+    .expect("write source");
+    commit_all(root, "add source");
+}
+
+#[given("a staged decision that forbids println in Rust sources")]
+fn staged_println_policy(world: &mut VaultWorld) {
+    let root = world.directory.path();
+    std::fs::write(
+        root.join("docs/adr/0999-no-println.md"),
+        "---\nid: ADR-0999\nkind: decision\ntitle: No println\nstatus: accepted\ndate: 2026-08-03\ngoverns:\n  - src/**/*.rs\npolicy:\n  patterns:\n    - id: no-println\n      language: rust\n      pattern: \"println!($$$ARGS)\"\n---\n\n# No println\n",
+    )
+    .expect("write decision");
+    support::git(root, &["add", "docs"]);
+}
+
+#[given(expr = "a target branch that adds decision {int} {string}")]
+fn target_branch_decision(world: &mut VaultWorld, number: u32, title: String) {
+    let root = world.directory.path();
+    support::git(root, &["checkout", "-q", "-b", "target"]);
+    write_decision(root, number, &title);
+    commit_all(root, "target decision");
+    support::git(root, &["checkout", "-q", "main"]);
+}
+
+#[given("a topic branch that adds a note")]
+fn topic_branch_note(world: &mut VaultWorld) {
+    let root = world.directory.path();
+    support::git(root, &["checkout", "-q", "-b", "topic"]);
+    write_note(root, "topic-note", "Valid content.");
+    commit_all(root, "topic note");
+}
+
+#[given(expr = "a topic branch that adds decision {int} {string}")]
+fn topic_branch_decision(world: &mut VaultWorld, number: u32, title: String) {
+    let root = world.directory.path();
+    support::git(root, &["checkout", "-q", "-b", "topic"]);
+    write_decision(root, number, &title);
+    commit_all(root, "topic decision");
+}
+
+fn write_decision(root: &Path, number: u32, title: &str) {
+    let slug = title.to_lowercase().replace(' ', "-");
+    std::fs::write(
+        root.join(format!("docs/adr/{number:04}-{slug}.md")),
+        format!(
+            "---\nid: ADR-{number:04}\nkind: decision\ntitle: {title}\nstatus: accepted\ndate: 2026-11-06\n---\n\n# {title}\n\n## Context\n\n{title} needs a context.\n\n## Decision\n\nChoose {title}.\n\n## Consequences\n\n{title} follows.\n"
+        ),
+    )
+    .expect("write decision");
+}
+
 fn write_note(root: &Path, id: &str, body: &str) {
     std::fs::write(
         root.join(format!("docs/{id}.md")),
@@ -178,6 +237,17 @@ fn run_command(world: &mut VaultWorld, arguments: String) {
             .args(arguments.split_whitespace())
             .output()
             .expect("run criv"),
+    );
+}
+
+#[when("I enforce the CI stage in JSON against the target branch")]
+fn enforce_ci_against_target(world: &mut VaultWorld) {
+    world.output = Some(
+        support::criv(world.directory.path())
+            .env("CRIV_BASE_REF", "target")
+            .args(["enforce", "--stage", "ci", "--format", "json"])
+            .output()
+            .expect("run CI enforcement"),
     );
 }
 
@@ -239,6 +309,24 @@ fn stderr_contains(world: &mut VaultWorld, expected: String) {
 #[then(expr = "stdout is {string}")]
 fn stdout_is(world: &mut VaultWorld, expected: String) {
     assert_eq!(String::from_utf8_lossy(&world.output().stdout), expected);
+}
+
+/// An empty `code` names a passing report.
+#[then(expr = "stdout is one JSON report with code {string}")]
+fn stdout_is_json_report(world: &mut VaultWorld, code: String) {
+    let report: serde_json::Value =
+        serde_json::from_slice(&world.output().stdout).expect("stdout is one JSON value");
+    assert_eq!(
+        report.get("ok").and_then(serde_json::Value::as_bool),
+        Some(code.is_empty()),
+        "{report}"
+    );
+    let expected = (!code.is_empty()).then_some(code.as_str());
+    assert_eq!(
+        report.get("code").and_then(serde_json::Value::as_str),
+        expected,
+        "{report}"
+    );
 }
 
 /// The single test name this harness reports to cargo-nextest.

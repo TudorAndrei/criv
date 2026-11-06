@@ -1,5 +1,7 @@
 //! The ADR immutability gate that enforcement runs on a changed set.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use super::receipt::{self, IdentityReceipt, Receipt, SourceReceipt};
 use crate::config::{CONFIG_FILE, Config, Stage};
 use crate::git::{ChangeStatus, ChangedEntry, ChangedSet, GitRepository, Revision};
@@ -16,15 +18,32 @@ pub fn change_violations(
     let Some(git) = GitRepository::discover(files.root()).ok().flatten() else {
         return immutability_violations(config, changes, |_| false);
     };
-    Gate {
+    let identity = IdentityReceipt::read(files);
+    let source = SourceReceipt::read(files);
+    let gate = Gate {
         files,
         git: &git,
         changes,
         stage,
-        identity: IdentityReceipt::read(files).ok().flatten(),
-        source: SourceReceipt::read(files).ok().flatten(),
-    }
-    .violations(config)
+        renames: changes
+            .and_then(|changes| receipt::composed_renames(&changes.entries).ok())
+            .unwrap_or_default(),
+        identity: identity
+            .as_ref()
+            .ok()
+            .and_then(Option::as_ref)
+            .map(|receipt| IdentityProof::new(receipt, &git, changes)),
+    };
+    let proofs = [gate.proof(&identity), gate.proof(&source)];
+    let staged = proofs.iter().any(|proof| proof.staged);
+    let mut violations = immutability_violations(config, changes, |entry| {
+        staged
+            || gate.allows(entry)
+            || (stage == Stage::Ci && gate.is_branch_local_ci_change(entry))
+    });
+    violations.extend(proofs.into_iter().filter_map(|proof| proof.failure));
+    violations.extend(gate.scope_violation(config));
+    violations
 }
 
 struct Gate<'a> {
@@ -32,82 +51,103 @@ struct Gate<'a> {
     git: &'a GitRepository,
     changes: Option<&'a ChangedSet>,
     stage: Stage,
-    identity: Option<IdentityReceipt>,
-    source: Option<SourceReceipt>,
+    /// The Git renames composed across the compared history.
+    renames: BTreeMap<String, String>,
+    identity: Option<IdentityProof<'a>>,
+}
+
+/// What one receipt proves about the selected transaction.
+struct Proof {
+    /// The receipt is exactly the staged commit transaction.
+    staged: bool,
+    failure: Option<String>,
+}
+
+/// The identity receipt's proofs, each computed once for the gate.
+struct IdentityProof<'a> {
+    receipt: &'a IdentityReceipt,
+    index: bool,
+    history: bool,
+    /// The compared commits that are exactly the receipt's transaction.
+    commits: BTreeSet<&'a str>,
+}
+
+impl<'a> IdentityProof<'a> {
+    fn new(
+        receipt: &'a IdentityReceipt,
+        git: &GitRepository,
+        changes: Option<&'a ChangedSet>,
+    ) -> Self {
+        let entries = changes.map_or(&[][..], |changes| changes.entries.as_slice());
+        Self {
+            receipt,
+            index: receipt.proves_index(git),
+            history: changes.is_some_and(|changes| receipt.proves_history(git, changes)),
+            commits: entries
+                .iter()
+                .filter_map(|entry| match &entry.new {
+                    Revision::Commit(commit) => Some(commit.as_str()),
+                    _ => None,
+                })
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .filter(|commit| receipt.allows_commit(git, commit))
+                .collect(),
+        }
+    }
 }
 
 impl Gate<'_> {
-    fn violations(&self, config: &Config) -> Vec<String> {
-        let entries = self.changes.map(|changes| changes.entries.as_slice());
-        let staged = |proves: &dyn Fn(&[ChangedEntry]) -> bool| {
-            self.stage == Stage::Commit && entries.is_some_and(proves)
+    /// A malformed receipt, or a current one that does not prove the staged
+    /// transaction, is a violation.
+    fn proof<R: Receipt>(&self, receipt: &crate::Result<Option<R>>) -> Proof {
+        let receipt = match receipt {
+            Ok(Some(receipt)) => receipt,
+            Ok(None) => {
+                return Proof {
+                    staged: false,
+                    failure: None,
+                };
+            }
+            Err(error) => {
+                return Proof {
+                    staged: false,
+                    failure: Some(error.to_string()),
+                };
+            }
         };
-        let identity_proves = staged(&|entries| {
-            self.identity
-                .as_ref()
-                .is_some_and(|receipt| receipt.allows_transaction(self.git, entries))
-        });
-        let source_proves = staged(&|entries| {
-            self.source
-                .as_ref()
-                .is_some_and(|receipt| receipt.allows_transaction(self.git, entries))
-        });
-        let mut violations = immutability_violations(config, self.changes, |entry| {
-            identity_proves
-                || source_proves
-                || self.allows(entry)
-                || (self.stage == Stage::Ci && self.is_branch_local_ci_change(entry))
-        });
-        if self
-            .identity
-            .as_ref()
-            .is_some_and(|receipt| receipt.planned_from_head(self.git))
-            && !identity_proves
-        {
-            violations.push(format!(
-                "{} receipt does not prove the complete staged transaction",
-                IdentityReceipt::NAME
-            ));
+        let staged = self.stage == Stage::Commit
+            && self
+                .changes
+                .is_some_and(|changes| receipt.allows_transaction(self.git, &changes.entries));
+        Proof {
+            staged,
+            failure: (!staged && receipt.planned_from_head(self.git)).then(|| {
+                format!(
+                    "{} receipt does not prove the complete staged transaction",
+                    R::NAME
+                )
+            }),
         }
-        if self
-            .source
-            .as_ref()
-            .is_some_and(|receipt| receipt.planned_from_head(self.git))
-            && !source_proves
-        {
-            violations.push(format!(
-                "{} receipt does not prove the complete staged transaction",
-                SourceReceipt::NAME
-            ));
-        }
-        violations.extend(self.scope_violation(config));
-        violations
     }
 
     /// Accept receipt-proven changes or an exact portable-link migration.
     fn allows(&self, entry: &ChangedEntry) -> bool {
-        if self.changes.is_some_and(|changes| {
-            receipt::source_history_allows(self.files, self.git, changes, entry)
-        }) {
+        if receipt::source_history_allows(self.files, self.git, &self.renames, entry) {
             return true;
         }
-        if let Some(receipt) = &self.identity {
+        if let Some(proof) = &self.identity {
             // A committed receipt proves the entire tree transition, including
             // paths that Git reports as modifications when ADR mappings overlap.
             if let Revision::Commit(commit) = &entry.new
-                && receipt.allows_commit(self.git, commit)
+                && proof.commits.contains(commit.as_str())
             {
                 return true;
             }
-            if self
-                .changes
-                .is_some_and(|changes| receipt.allows_history_change(self.git, changes, entry))
-            {
+            if proof.history && proof.receipt.covers(entry) {
                 return true;
             }
-            if matches!(entry.status, ChangeStatus::Renamed | ChangeStatus::Deleted)
-                && receipt.allows_change(self.git, entry)
-            {
+            if proof.index && proof.receipt.records_move(entry) {
                 return true;
             }
         }
@@ -154,13 +194,29 @@ impl Gate<'_> {
             return None;
         }
         // An unborn `HEAD` or a configuration added by this change has no
-        // earlier scope.
-        let previous = self
+        // earlier scope. One that cannot be read has an unknown scope.
+        let old_ref = changes.old_ref.clone()?;
+        let previous = match self
             .git
-            .text(&Revision::Commit(changes.old_ref.clone()?), CONFIG_FILE)
-            .ok()?;
-        let previous = Config::parse(Some(&previous)).ok()?;
-        if previous.docs_dir() == current.docs_dir() && previous.adr_dir() == current.adr_dir() {
+            .file(&Revision::Commit(old_ref.clone()), CONFIG_FILE)
+        {
+            Ok(None) => return None,
+            Ok(Some(file)) => String::from_utf8(file.bytes)
+                .map_err(|error| error.to_string())
+                .and_then(|text| Config::parse(Some(&text)).map_err(|error| error.to_string())),
+            Err(error) => Err(error.to_string()),
+        };
+        let previous = match previous {
+            Ok(previous) => previous,
+            Err(error) => {
+                return paths().any(|path| current.is_adr_path(path)).then(|| {
+                    format!(
+                        "{CONFIG_FILE} at `{old_ref}` cannot be read, so the decision scope it moves from is unknown in the same transaction as a decision change: {error}"
+                    )
+                });
+            }
+        };
+        if previous.same_decision_scope(current) {
             return None;
         }
         paths()
@@ -242,13 +298,7 @@ fn portable_adr_link_alias(body: &str) -> Option<&str> {
     if target_fragment != alias_fragment {
         return None;
     }
-    let target_base = target_base.trim();
-    let basename = target_base
-        .trim_end_matches(".md")
-        .split('/')
-        .next_back()
-        .unwrap_or(target_base);
-    identity::parse_adr_stem(basename)
+    identity::parse_adr_path(target_base.trim())
         .is_some_and(|(target_number, _)| target_number == number)
         .then_some(alias)
 }
@@ -354,14 +404,19 @@ mod tests {
     }
 
     #[test]
-    /// Require a valid complete transaction before a receipt grants permission.
-    fn absent_comparison_and_invalid_receipt_do_not_prove_changes() {
+    /// A malformed receipt proves nothing and is itself a violation.
+    fn a_malformed_receipt_is_reported_and_proves_no_change() {
         let root = decision_repository();
         let files = RepositoryFiles::open(root.path()).unwrap();
         fs::create_dir_all(root.path().join(".criv")).unwrap();
         fs::write(root.path().join(IdentityReceipt::PATH), "invalid receipt").unwrap();
+        let malformed =
+            "ADR reconciliation receipt is malformed; remove it only after recovering the worktree";
         for stage in [Stage::Commit, Stage::Push, Stage::Ci] {
-            assert!(change_violations(&files, &Config::default(), None, stage).is_empty());
+            assert_eq!(
+                change_violations(&files, &Config::default(), None, stage),
+                [malformed]
+            );
         }
         fs::write(
             root.path().join("docs/adr/0001-base.md"),
@@ -369,9 +424,34 @@ mod tests {
         )
         .unwrap();
         let changes = worktree_changes(root.path());
-        assert_eq!(
-            change_violations(&files, &Config::default(), Some(&changes), Stage::Commit).len(),
-            1
+        let violations =
+            change_violations(&files, &Config::default(), Some(&changes), Stage::Commit);
+        assert!(violations[0].starts_with("docs/adr/0001-base.md:"));
+        assert_eq!(violations[1..], [malformed]);
+    }
+
+    #[test]
+    fn an_unreadable_previous_configuration_blocks_a_decision_change() {
+        let root = decision_repository();
+        let files = RepositoryFiles::open(root.path()).unwrap();
+        fs::write(root.path().join("criv.toml"), "[patterns.old]\n").unwrap();
+        git(
+            root.path(),
+            &["commit", "-qam", "unsupported configuration"],
+        );
+        fs::write(root.path().join("criv.toml"), "").unwrap();
+        fs::write(root.path().join("docs/adr/0002-new.md"), "New\n").unwrap();
+        git(root.path(), &["add", "."]);
+        let violations = change_violations(
+            &files,
+            &Config::default(),
+            Some(&worktree_changes(root.path())),
+            Stage::Commit,
+        );
+        assert_eq!(violations.len(), 1);
+        assert!(
+            violations[0].starts_with("criv.toml at `HEAD` cannot be read"),
+            "{violations:?}"
         );
     }
 

@@ -30,7 +30,7 @@ pub struct EnforceOptions {
     /// Consume Git's pre-push ref-update records from standard input.
     #[usage(long, hide)]
     pre_push: bool,
-    #[usage(long, hide, requires = "pre_push")]
+    #[usage(long, hide, requires = "--pre-push", required_if = "--pre-push")]
     remote_name: Option<String>,
 }
 
@@ -38,7 +38,7 @@ pub struct EnforceOptions {
 pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
     if options.pre_push && options.stage != Stage::Push {
         return Err(CrivError::usage(
-            "--pre-push is only valid with --stage push",
+            "error: --pre-push is only valid with --stage push",
         ));
     }
     let files = crate::config::open_vault(root)?;
@@ -52,9 +52,13 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
     let ci_base_ref = (options.stage == Stage::Ci)
         .then(|| env::var("CRIV_BASE_REF").ok())
         .flatten();
-    if let Some(base_ref) = &ci_base_ref {
-        crate::adr::reconcile_identities(&files, base_ref, crate::adr::Mode::Check)?;
-    }
+    let identity_conflicts = ci_base_ref
+        .as_deref()
+        .map(|base_ref| crate::adr::identity_conflict(&files, base_ref))
+        .transpose()?
+        .into_iter()
+        .flatten()
+        .collect();
 
     let check::Validation {
         diagnostics,
@@ -64,84 +68,148 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();
 
     let changes = changed_entries(root, options, ci_base_ref.as_deref())?;
-    let changed_files = changes.as_ref().map(ChangedSet::affected_paths);
-    let scanned_files = changed_files
+    let changed_count = changes
         .as_ref()
-        .filter(|_| options.stage != Stage::Ci);
-    let violations = policies
-        .scan(
-            &vault,
-            scanned_files
-                .map(|paths| paths.iter().cloned().collect::<BTreeSet<_>>())
-                .as_ref(),
-        )?
+        .map_or(0, |changes| changes.affected_paths().len());
+    let scanned_files = changes
+        .as_ref()
+        .filter(|_| options.stage != Stage::Ci)
+        .and_then(|changes| check::changed_scope(changes, vault.config()));
+    let policy_violations = policies
+        .scan(&vault, scanned_files.as_ref())?
         .iter()
         .map(Diagnostic::describe)
-        .collect::<Vec<_>>();
-    let import_violations = import_policy_violations(&vault, scanned_files)?;
+        .collect();
+    let import_violations = import_policy_violations(&vault, scanned_files.as_ref())?;
     let adr_violations =
         crate::adr::change_violations(&files, vault.config(), changes.as_ref(), options.stage);
-    let changed_count = changed_files.as_ref().map_or(0, Vec::len);
-    let basis = changes
-        .as_ref()
-        .map_or("no comparison", |changes| changes.basis.as_str());
-    let failure = enforce_failure(violations, import_violations, adr_violations, errors);
-
-    if options.format == Format::Json {
-        let report = EnforceReport {
-            stage: options.stage.as_str(),
-            ok: failure.is_none(),
-            errors,
-            warnings,
-            changed_files: changed_count,
-            basis,
-            violations: failure
-                .as_ref()
-                .map_or(&[][..], |failure| &failure.violations),
-            code: failure.as_ref().map(|failure| failure.code),
-            fix: failure.as_ref().and_then(|failure| failure.code.fix()),
-        };
-        let json = serde_json::to_string_pretty(&report).map_err(|err| {
-            CrivError::new(format!("failed to serialize enforcement report: {err}"))
-        })?;
-        println!("{json}");
-        return match failure {
-            Some(failure) => Err(CrivError::coded(failure.code, failure.message)),
-            None => Ok(()),
-        };
-    }
-
-    match options.stage {
-        Stage::Commit => {
-            println!(
-                "commit enforcement: {errors} validation errors, {warnings} warnings, {changed_count} staged files ({basis})"
-            );
-        }
-        Stage::Push => {
-            println!(
-                "push enforcement: {errors} validation errors, {warnings} warnings, {changed_count} changed files ({basis})"
-            );
-        }
-        Stage::Ci => {
-            println!("ci enforcement: {errors} validation errors, {warnings} warnings ({basis})");
-        }
-    }
-
-    if let Some(failure) = failure {
-        for violation in &failure.violations {
-            println!("{violation}");
-        }
-        return Err(CrivError::coded(failure.code, failure.message));
-    }
-
-    println!("enforcement passed");
-    Ok(())
+    let failures = Failure::in_priority_order(
+        identity_conflicts,
+        policy_violations,
+        import_violations,
+        adr_violations,
+        errors,
+    );
+    let report = EnforceReport {
+        stage: options.stage.as_str(),
+        ok: failures.is_empty(),
+        errors,
+        warnings,
+        changed_files: changed_count,
+        basis: changes
+            .as_ref()
+            .map_or("no comparison", |changes| changes.basis.as_str()),
+        violations: failures
+            .iter()
+            .flat_map(|failure| failure.violations.iter().cloned())
+            .collect(),
+        codes: failures.iter().map(|failure| failure.code).collect(),
+        code: failures.first().map(|failure| failure.code),
+        fix: failures.first().and_then(|failure| failure.code.fix()),
+    };
+    report.print(options.format, options.stage)?;
+    report.code.map_or(Ok(()), |code| {
+        Err(CrivError::coded(
+            code,
+            failures
+                .iter()
+                .map(|failure| failure.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; "),
+        ))
+    })
 }
 
-struct EnforceFailure {
+impl EnforceReport<'_> {
+    fn print(&self, format: Format, stage: Stage) -> Result<()> {
+        if format == Format::Json {
+            let json = serde_json::to_string_pretty(self).map_err(|err| {
+                CrivError::new(format!("failed to serialize enforcement report: {err}"))
+            })?;
+            println!("{json}");
+            return Ok(());
+        }
+        let Self {
+            errors,
+            warnings,
+            changed_files,
+            basis,
+            ..
+        } = self;
+        let files = stage
+            .changed_files_noun()
+            .map(|noun| format!(", {changed_files} {noun}"))
+            .unwrap_or_default();
+        println!(
+            "{} enforcement: {errors} validation errors, {warnings} warnings{files} ({basis})",
+            self.stage
+        );
+        for violation in &self.violations {
+            println!("{violation}");
+        }
+        if self.ok {
+            println!("enforcement passed");
+        }
+        Ok(())
+    }
+}
+
+/// One failing category of an enforcement run.
+struct Failure {
     code: DiagnosticCode,
     message: String,
     violations: Vec<String>,
+}
+
+impl Failure {
+    /// Every failing category; the first sets the exit status.
+    fn in_priority_order(
+        identity_conflicts: Vec<String>,
+        policy_violations: Vec<String>,
+        import_violations: Vec<String>,
+        adr_violations: Vec<String>,
+        errors: usize,
+    ) -> Vec<Self> {
+        [
+            Self::new(
+                DiagnosticCode::AdrIdConflict,
+                "ADR ID conflict",
+                identity_conflicts,
+            ),
+            Self::new(
+                DiagnosticCode::PolicyViolation,
+                "policy violation",
+                policy_violations,
+            ),
+            Self::new(
+                DiagnosticCode::ImportPolicyViolation,
+                "import policy violation",
+                import_violations,
+            ),
+            Self::new(
+                DiagnosticCode::AdrImmutabilityViolation,
+                "ADR immutability violation",
+                adr_violations,
+            ),
+        ]
+        .into_iter()
+        .flatten()
+        .chain((errors > 0).then(|| Self {
+            code: DiagnosticCode::EnforcementFailed,
+            message: "enforcement failed".into(),
+            violations: Vec::new(),
+        }))
+        .collect()
+    }
+
+    /// The category of `violations`, or `None` when it has none.
+    fn new(code: DiagnosticCode, noun: &str, violations: Vec<String>) -> Option<Self> {
+        (!violations.is_empty()).then(|| Self {
+            code,
+            message: format!("{} {noun}(s) found", violations.len()),
+            violations,
+        })
+    }
 }
 
 #[derive(Serialize)]
@@ -152,62 +220,20 @@ struct EnforceReport<'a> {
     warnings: usize,
     changed_files: usize,
     basis: &'a str,
-    violations: &'a [String],
+    /// Every violation, grouped by failing category in `codes` order.
+    violations: Vec<String>,
+    /// Every failing category, highest priority first.
+    codes: Vec<DiagnosticCode>,
+    /// The highest-priority failing category, which sets the exit status.
     #[serde(skip_serializing_if = "Option::is_none")]
     code: Option<DiagnosticCode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     fix: Option<&'static str>,
 }
 
-fn enforce_failure(
-    violations: Vec<String>,
-    import_violations: Vec<String>,
-    adr_violations: Vec<String>,
-    errors: usize,
-) -> Option<EnforceFailure> {
-    let (code, message, violations) = if !violations.is_empty() {
-        (
-            DiagnosticCode::PolicyViolation,
-            format!("{} policy violation(s) found", violations.len()),
-            violations,
-        )
-    } else if !import_violations.is_empty() {
-        (
-            DiagnosticCode::ImportPolicyViolation,
-            format!(
-                "{} import policy violation(s) found",
-                import_violations.len()
-            ),
-            import_violations,
-        )
-    } else if !adr_violations.is_empty() {
-        (
-            DiagnosticCode::AdrImmutabilityViolation,
-            format!(
-                "{} ADR immutability violation(s) found",
-                adr_violations.len()
-            ),
-            adr_violations,
-        )
-    } else if errors > 0 {
-        (
-            DiagnosticCode::EnforcementFailed,
-            "enforcement failed".into(),
-            Vec::new(),
-        )
-    } else {
-        return None;
-    };
-    Some(EnforceFailure {
-        code,
-        message,
-        violations,
-    })
-}
-
 fn import_policy_violations(
     vault: &Vault,
-    changed_files: Option<&Vec<String>>,
+    changed_files: Option<&BTreeSet<String>>,
 ) -> Result<Vec<String>> {
     let mut violations = Vec::new();
     for config in vault.config().import_policies() {
@@ -305,16 +331,15 @@ fn changed_entries(
             .as_ref()
             .map(|repo| repo.changed_set(&Comparison::Staged, &[]))
             .transpose(),
-        Stage::Push if options.pre_push => pre_push_changed_entries(
-            required_repository(repository.as_ref())?,
-            options
-                .remote_name
-                .as_deref()
-                .ok_or_else(|| CrivError::new("pre-push enforcement requires a remote name"))?,
-            &read_pre_push_updates()?,
-        )
-        .map(Some),
-        Stage::Push => repository.as_ref().map(manual_push_changed_set).transpose(),
+        Stage::Push => match options.remote_name.as_deref() {
+            Some(remote_name) => pre_push_changed_entries(
+                required_repository(repository.as_ref())?,
+                remote_name,
+                &read_pre_push_updates()?,
+            )
+            .map(Some),
+            None => repository.as_ref().map(manual_push_changed_set).transpose(),
+        },
         Stage::Ci => ci_changed_entries(
             repository.as_ref(),
             ci_base_ref,

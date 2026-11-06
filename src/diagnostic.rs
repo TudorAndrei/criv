@@ -12,6 +12,7 @@ use crate::markdown::line_index;
 pub enum DiagnosticCode {
     AdrDirNonDecision,
     AdrFilename,
+    AdrIdConflict,
     AdrIdExhausted,
     AdrImmutabilityViolation,
     AmbiguousPolicyPatternBody,
@@ -57,6 +58,7 @@ impl DiagnosticCode {
         match self {
             Self::AdrDirNonDecision => "adr-dir-non-decision",
             Self::AdrFilename => "adr-filename",
+            Self::AdrIdConflict => "adr-id-conflict",
             Self::AdrIdExhausted => "adr-id-exhausted",
             Self::AdrImmutabilityViolation => "adr-immutability-violation",
             Self::AmbiguousPolicyPatternBody => "ambiguous-policy-pattern-body",
@@ -105,6 +107,9 @@ impl DiagnosticCode {
                 "Set `kind: decision` in the frontmatter, or move the file out of the ADR directory."
             }
             Self::AdrFilename => "Rename the file to `NNNN-kebab-title.md`.",
+            Self::AdrIdConflict => {
+                "Run `criv adr reconcile --base <ref>` to renumber the branch-local ADRs."
+            }
             Self::AdrImmutabilityViolation => {
                 "Restore the accepted ADR, and record the change in a new ADR with `supersedes:`."
             }

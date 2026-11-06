@@ -15,10 +15,6 @@ use crate::git::{ChangeStatus, ChangedEntry, ChangedSet, GitRepository, Revision
 use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
-pub(super) fn hash(bytes: &[u8]) -> String {
-    content_hash::of_bytes(bytes)
-}
-
 /// A receipt file under `.criv/`.
 pub(super) trait Receipt: DeserializeOwned + Serialize {
     const SCHEMA: &'static str;
@@ -27,6 +23,15 @@ pub(super) trait Receipt: DeserializeOwned + Serialize {
 
     fn schema(&self) -> &str;
     fn head_sha(&self) -> &str;
+    fn base_ref(&self) -> &str;
+    fn target_sha(&self) -> &str;
+
+    /// The staged transaction is exactly this receipt.
+    fn allows_transaction(&self, git: &GitRepository, entries: &[ChangedEntry]) -> bool;
+
+    fn target_is_stable(&self, git: &GitRepository) -> bool {
+        target_is_stable(git, self.base_ref(), self.target_sha())
+    }
 
     fn read(files: &RepositoryFiles) -> Result<Option<Self>> {
         let Some(contents) = files.read_optional_string(Path::new(Self::PATH))? else {
@@ -81,7 +86,7 @@ fn holds(
     match (git.file(revision, path), recorded) {
         (Ok(None), None) => true,
         (Ok(Some(file)), Some(recorded)) => {
-            hash(&file.bytes) == recorded.hash && file.mode == recorded.mode
+            content_hash::of_bytes(&file.bytes) == recorded.hash && file.mode == recorded.mode
         }
         _ => false,
     }
@@ -151,6 +156,18 @@ impl Receipt for IdentityReceipt {
     fn head_sha(&self) -> &str {
         &self.head_sha
     }
+
+    fn base_ref(&self) -> &str {
+        &self.base_ref
+    }
+
+    fn target_sha(&self) -> &str {
+        &self.target_sha
+    }
+
+    fn allows_transaction(&self, git: &GitRepository, entries: &[ChangedEntry]) -> bool {
+        self.proves_index(git) && self.paths_match(entries)
+    }
 }
 
 impl IdentityFile {
@@ -182,10 +199,6 @@ impl IdentityReceipt {
             .map(|file| file.path.as_str())
             .chain(self.deletions.iter().map(String::as_str))
             .collect()
-    }
-
-    fn target_is_stable(&self, git: &GitRepository) -> bool {
-        target_is_stable(git, &self.base_ref, &self.target_sha)
     }
 
     fn sources_hold(&self, git: &GitRepository) -> bool {
@@ -223,23 +236,17 @@ impl IdentityReceipt {
         actual == self.paths()
     }
 
-    fn proves_index(&self, git: &GitRepository) -> bool {
+    /// The index holds this receipt's outputs, planned from the current
+    /// `HEAD` against a target that has not moved.
+    pub(super) fn proves_index(&self, git: &GitRepository) -> bool {
         self.planned_from_head(git)
             && self.target_is_stable(git)
             && self.sources_hold(git)
             && self.holds_at(git, &Revision::Index)
     }
 
-    /// The staged transaction is exactly this receipt.
-    pub(super) fn allows_transaction(&self, git: &GitRepository, entries: &[ChangedEntry]) -> bool {
-        self.proves_index(git) && self.paths_match(entries)
-    }
-
-    /// Git may present the staged ADR move as either a rename or a deletion.
-    pub(super) fn allows_change(&self, git: &GitRepository, entry: &ChangedEntry) -> bool {
-        if !self.proves_index(git) {
-            return false;
-        }
+    /// Git may present a recorded ADR move as either a rename or a deletion.
+    pub(super) fn records_move(&self, entry: &ChangedEntry) -> bool {
         match entry.status {
             ChangeStatus::Renamed => entry.previous_path.as_deref().is_some_and(|old_path| {
                 self.mappings
@@ -273,27 +280,25 @@ impl IdentityReceipt {
         })
     }
 
-    /// A combined push comparison may end at a later commit or merge. Admit
-    /// only receipt paths whose exact transaction is in the compared history
-    /// and whose outputs have not changed since that commit.
-    pub(super) fn allows_history_change(
-        &self,
-        git: &GitRepository,
-        changes: &ChangedSet,
-        entry: &ChangedEntry,
-    ) -> bool {
+    /// A combined push comparison may end at a later commit or merge. The
+    /// compared history holds this exact transaction, and its outputs have
+    /// not changed since that commit.
+    pub(super) fn proves_history(&self, git: &GitRepository, changes: &ChangedSet) -> bool {
         let (Some(old_ref), Some(Revision::Commit(new_ref))) =
             (changes.old_ref.as_deref(), changes.new.as_ref())
         else {
             return false;
         };
-        let Ok(commits) = git.commits_between(old_ref, new_ref) else {
-            return false;
-        };
+        git.commits_between(old_ref, new_ref).is_ok_and(|commits| {
+            commits.iter().any(|commit| self.allows_commit(git, commit))
+                && self.outputs_survive(git, new_ref)
+        })
+    }
+
+    /// Every path of `entry` is one this transaction writes or deletes.
+    pub(super) fn covers(&self, entry: &ChangedEntry) -> bool {
         let expected = self.paths();
-        commits.iter().any(|commit| self.allows_commit(git, commit))
-            && self.outputs_survive(git, new_ref)
-            && expected.contains(entry.path.as_str())
+        expected.contains(entry.path.as_str())
             && entry
                 .previous_path
                 .as_deref()
@@ -383,12 +388,18 @@ impl Receipt for SourceReceipt {
     fn head_sha(&self) -> &str {
         &self.head_sha
     }
-}
 
-impl SourceReceipt {
+    fn base_ref(&self) -> &str {
+        &self.base_ref
+    }
+
+    fn target_sha(&self) -> &str {
+        &self.target_sha
+    }
+
     /// The staged transaction rewrites exactly the receipt's ADRs, and each
     /// rewrite changes only the `governs:` paths of a proven rename.
-    pub(super) fn allows_transaction(&self, git: &GitRepository, entries: &[ChangedEntry]) -> bool {
+    fn allows_transaction(&self, git: &GitRepository, entries: &[ChangedEntry]) -> bool {
         let renames_proven = git
             .changed_set(
                 &crate::git::Comparison::Trees {
@@ -402,10 +413,7 @@ impl SourceReceipt {
                 let actual = actual.into_iter().collect::<BTreeSet<_>>();
                 self.mappings.iter().all(|mapping| actual.contains(mapping))
             });
-        if !self.planned_from_head(git)
-            || !target_is_stable(git, &self.base_ref, &self.target_sha)
-            || !renames_proven
-        {
+        if !self.planned_from_head(git) || !self.target_is_stable(git) || !renames_proven {
             return false;
         }
         let expected = self
@@ -434,39 +442,35 @@ impl SourceReceipt {
                 ) else {
                     return false;
                 };
-                hash(before.as_bytes()) == file.before_hash
-                    && hash(after.as_bytes()) == file.after_hash
+                content_hash::of_bytes(before.as_bytes()) == file.before_hash
+                    && content_hash::of_bytes(after.as_bytes()) == file.after_hash
                     && governs::transition_matches(&before, &after, &replacements)
             })
     }
 }
 
-/// A modified decision whose only change follows the Git renames composed
-/// across the compared history.
+/// A modified decision whose only change follows `renames`, the Git renames
+/// composed across the compared history.
 pub(super) fn source_history_allows(
     files: &RepositoryFiles,
     git: &GitRepository,
-    changes: &ChangedSet,
+    renames: &BTreeMap<String, String>,
     entry: &ChangedEntry,
 ) -> bool {
-    if entry.status != ChangeStatus::Modified || entry.previous_path.is_some() {
+    if entry.status != ChangeStatus::Modified || entry.previous_path.is_some() || renames.is_empty()
+    {
         return false;
     }
-    let Ok(replacements) = composed_renames(&changes.entries) else {
-        return false;
-    };
     let Some(old_ref) = entry.old_ref.as_deref() else {
         return false;
     };
-    if replacements.is_empty() {
-        return false;
-    }
     let old = git.text(&Revision::Commit(old_ref.to_owned()), &entry.path);
     let new = read_text(files, git, &entry.new, &entry.path);
-    matches!((old, new), (Ok(old), Ok(new)) if governs::transition_matches(&old, &new, &replacements))
+    matches!((old, new), (Ok(old), Ok(new)) if governs::transition_matches(&old, &new, renames))
 }
 
-fn composed_renames(entries: &[ChangedEntry]) -> Result<BTreeMap<String, String>> {
+/// The renames among `entries` with each chain followed to its last path.
+pub(super) fn composed_renames(entries: &[ChangedEntry]) -> Result<BTreeMap<String, String>> {
     let direct = rename_mappings(entries)?;
     let by_old = direct
         .iter()

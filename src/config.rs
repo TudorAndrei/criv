@@ -11,6 +11,9 @@ use crate::{CrivError, Result};
 /// The repository-relative path of the vault configuration.
 pub const CONFIG_FILE: &str = "criv.toml";
 
+/// The file name of the decision index in the ADR directory.
+const ADR_INDEX: &str = "README.md";
+
 /// Open a repository that holds a vault, which is one with a [`CONFIG_FILE`].
 pub fn open_vault(root: &Path) -> Result<RepositoryFiles> {
     let files = RepositoryFiles::open(root)?;
@@ -57,6 +60,16 @@ impl Stage {
             Self::Commit => "commit",
             Self::Push => "push",
             Self::Ci => "ci",
+        }
+    }
+
+    /// What an enforcement report calls the files this stage compares; CI
+    /// validates the whole vault and reports no count.
+    pub const fn changed_files_noun(self) -> Option<&'static str> {
+        match self {
+            Self::Commit => Some("staged files"),
+            Self::Push => Some("changed files"),
+            Self::Ci => None,
         }
     }
 }
@@ -152,11 +165,16 @@ impl Config {
         prefix
     }
 
-    /// A decision file: Markdown in the ADR directory, other than its README.
+    /// Whether `other` places decisions in the same directory.
+    pub(crate) fn same_decision_scope(&self, other: &Self) -> bool {
+        self.docs_dir == other.docs_dir && self.adr_dir == other.adr_dir
+    }
+
+    /// A decision file: Markdown in the ADR directory, other than its index.
     pub(crate) fn is_adr_path(&self, path: &str) -> bool {
         let prefix = self.adr_prefix();
         path.strip_prefix(&prefix)
-            .is_some_and(|name| name != "README.md")
+            .is_some_and(|name| name != ADR_INDEX)
             && Path::new(path)
                 .extension()
                 .is_some_and(|extension| extension == "md")
@@ -275,6 +293,46 @@ struct RawEnforce {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The shipped template states every default key, so a new `Config`
+    /// field does not compile here until it has a template key.
+    #[test]
+    fn the_init_template_states_every_default() {
+        let template = crate::init::templates::DEFAULT_CONFIG;
+        assert_eq!(Config::parse(Some(template)).unwrap(), Config::default());
+
+        let Config {
+            docs_dir: _,
+            adr_dir: _,
+            source_roots: _,
+            source_exclude: _,
+            source_index: _,
+            state_keep: _,
+            enforce_stages: _,
+            // An empty list of `[[enforce.imports]]` tables has no key.
+            import_policies: _,
+        } = Config::default();
+        let keys = [
+            "vault.docs",
+            "vault.adr",
+            "source.roots",
+            "source.exclude",
+            "index.source",
+            "state.keep",
+            "enforce.stages",
+        ];
+        let template: toml::Value = toml::from_str(template).unwrap();
+        for key in keys {
+            let (table, field) = key.split_once('.').unwrap();
+            assert!(
+                template
+                    .get(table)
+                    .and_then(|value| value.get(field))
+                    .is_some(),
+                "the template must state {key} rather than rely on the default"
+            );
+        }
+    }
 
     #[test]
     fn parses_optional_contents_with_load_defaults_and_normalization() {

@@ -2,7 +2,7 @@
 name: checking-drift
 description: Use when a criv command fails or prints a diagnostic, when reading a criv error code, fix line, or next command, or when validating that documents, ADR metadata, wiki-links, source references, and generated state still match the code.
 metadata:
-  criv-template: blake3:1a4046b7816df3ef
+  criv-template: blake3:815fa1cb442e6535
 ---
 
 # Checking drift
@@ -68,6 +68,7 @@ Key recovery on the code when there is one. These are the coded failures:
 | `policy-violation`           | An ADR policy pattern matched. Change the code, or supersede the ADR.                       |
 | `import-policy-violation`    | An import broke a rule in `criv.toml`.                                                      |
 | `adr-immutability-violation` | An accepted ADR changed. Restore it and write a successor.                                  |
+| `adr-id-conflict`            | A branch ADR id is taken on the base ref. Run `criv adr reconcile --base <ref>`.            |
 | `enforcement-failed`         | Validation errors blocked the stage. Run `criv check`.                                      |
 | `vault-outside-git-root`     | The vault is not the root of the Git worktree. Run criv from the worktree root.             |
 | `adr-id-exhausted`           | No free four-digit ADR id remains.                                                          |
@@ -78,7 +79,7 @@ command line was wrong.
 ## Machine-readable runs
 
 - `criv check --format json` — diagnostics with `code`, `path`, `line`, `message`, and `fix`.
-- `criv enforce --stage ci --format json` — one object with the counts, the violations, the failure `code`, and its `fix`.
+- `criv enforce --stage ci --format json` — one object with the counts, every violation, every failing category in `codes`, the first one as `code`, and its `fix`.
 - `criv watch --once --format json` — the snapshot, the counts, and the next command.
 - `criv --usage-json` — the whole command tree, with every flag, choice, and default.
 

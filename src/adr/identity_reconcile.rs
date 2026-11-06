@@ -4,12 +4,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use criv_state_wire::content_hash;
+
 use super::receipt::{
     self, IdentityFile, IdentityMapping, IdentityReceipt, IdentitySource, Receipt,
 };
 use super::reconcile_transaction::{Context, FileWrite, Reconciliation, Writes};
 use crate::config::{CONFIG_FILE, Config};
-use crate::git::{ChangeStatus, ChangedEntry, Comparison, GitRepository, Revision};
+use crate::git::{ChangeStatus, Comparison, GitRepository, Revision};
 use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 use crate::{identity, markdown};
@@ -45,10 +47,6 @@ impl Reconciliation for IdentityReconciliation {
     const COMMIT_MESSAGE: &'static str = "docs(adr): reconcile provisional identifiers";
     const CURRENT: &'static str = "ADR allocation is current; no reconciliation is required";
 
-    fn plan(context: &Context<'_>) -> Result<Plan> {
-        build_plan(context)
-    }
-
     fn is_current(plan: &Plan) -> bool {
         plan.mappings.is_empty()
     }
@@ -65,10 +63,19 @@ impl Reconciliation for IdentityReconciliation {
         }
     }
 
-    fn conflict(context: &Context<'_>, _plan: &Plan) -> String {
+    fn conflict(context: &Context<'_>, plan: &Plan) -> String {
         format!(
-            "ADR allocation conflicts with target {}",
-            context.target_sha
+            "ADR allocation conflicts with target {} ({})",
+            context.target_sha,
+            plan.mappings
+                .iter()
+                .map(|mapping| format!(
+                    "{} -> {}",
+                    identity::format_adr_id(mapping.old_id),
+                    identity::format_adr_id(mapping.new_id)
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
         )
     }
 
@@ -115,8 +122,8 @@ impl Reconciliation for IdentityReconciliation {
     }
 
     fn receipt(context: &Context<'_>, plan: &Plan, writes: &Writes) -> Result<IdentityReceipt> {
-        let git = context.git;
-        let head = Revision::Commit(context.head_sha.to_owned());
+        let git = &context.git;
+        let head = Revision::Commit(context.head_sha.clone());
         let files = writes
             .files
             .keys()
@@ -127,8 +134,10 @@ impl Reconciliation for IdentityReconciliation {
                 })?;
                 Ok(IdentityFile {
                     path: path.clone(),
-                    before_hash: before.as_ref().map(|file| receipt::hash(&file.bytes)),
-                    after_hash: receipt::hash(&after.bytes),
+                    before_hash: before
+                        .as_ref()
+                        .map(|file| content_hash::of_bytes(&file.bytes)),
+                    after_hash: content_hash::of_bytes(&after.bytes),
                     before_mode: before.map(|file| file.mode),
                     after_mode: after.mode,
                 })
@@ -146,7 +155,7 @@ impl Reconciliation for IdentityReconciliation {
                     .mode;
                 Ok(IdentitySource {
                     path: adr.path.clone(),
-                    before_hash: receipt::hash(adr.contents.as_bytes()),
+                    before_hash: content_hash::of_bytes(adr.contents.as_bytes()),
                     before_mode: mode,
                 })
             })
@@ -154,9 +163,9 @@ impl Reconciliation for IdentityReconciliation {
         Ok(IdentityReceipt {
             schema: IdentityReceipt::SCHEMA.into(),
             base_ref: context.base_ref.to_owned(),
-            head_sha: context.head_sha.to_owned(),
-            target_sha: context.target_sha.to_owned(),
-            merge_base: context.merge_base.to_owned(),
+            head_sha: context.head_sha.clone(),
+            target_sha: context.target_sha.clone(),
+            merge_base: context.merge_base.clone(),
             mappings: plan.receipt_mappings.clone(),
             sources,
             deletions: superseded_paths(&plan.receipt_mappings)
@@ -168,134 +177,109 @@ impl Reconciliation for IdentityReconciliation {
     }
 
     fn verify_written(context: &Context<'_>) -> Result<()> {
-        materialized_receipt(context.files, context.git)?
+        materialized_receipt(context.files, &context.git)?
             .ok_or_else(|| CrivError::new("ADR reconciliation receipt is missing"))
             .map(|_| ())
     }
 
-    fn proves(receipt: &IdentityReceipt, git: &GitRepository, staged: &[ChangedEntry]) -> bool {
-        receipt.allows_transaction(git, staged)
-    }
-}
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the reconciliation plan validates one complete Git and vault snapshot"
+    )]
+    fn plan(context: &Context<'_>) -> Result<Plan> {
+        let Context {
+            files,
+            git,
+            target_sha,
+            head_sha,
+            merge_base,
+            history,
+            ..
+        } = context;
+        let target = Revision::Commit(target_sha.clone());
+        let config = Config::load_from(files)?;
+        let target_config = git
+            .file(&target, CONFIG_FILE)?
+            .map(|file| {
+                String::from_utf8(file.bytes)
+                    .map_err(|_| CrivError::new(format!("target {CONFIG_FILE} is not UTF-8")))
+            })
+            .transpose()?;
+        let target_config = Config::parse(target_config.as_deref())?;
+        if !config.same_decision_scope(&target_config) {
+            return Err(CrivError::new(
+                "refusing ADR reconciliation because vault.docs or vault.adr differs from the target; cannot prove ADR ownership",
+            ));
+        }
+        let adr_prefix = config.adr_prefix();
+        let target_paths = git.tree_paths(target_sha, &adr_prefix)?;
+        let merge_paths = git
+            .tree_paths(merge_base, &adr_prefix)?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let target_adrs = target_paths
+            .iter()
+            .filter(|path| config.is_adr_path(path))
+            .map(|path| parse_adr(&config, path, git.text(&target, path)?))
+            .collect::<Result<Vec<_>>>()?;
+        ensure_unique(&target_adrs, "target")?;
+        let target_by_id = target_adrs
+            .iter()
+            .map(|adr| (adr.id, adr))
+            .collect::<BTreeMap<_, _>>();
+        let target_paths = target_paths.into_iter().collect::<BTreeSet<_>>();
+        let provenance = Provenance {
+            git,
+            config: &config,
+            merge_base,
+            target_sha,
+            merge_paths: &merge_paths,
+            target_paths: &target_paths,
+        };
 
-/// A receipt planned from the current `HEAD` must describe the worktree
-/// exactly; a receipt from an earlier `HEAD` is inert.
-fn materialized_receipt(
-    files: &RepositoryFiles,
-    git: &GitRepository,
-) -> Result<Option<IdentityReceipt>> {
-    let Some(receipt) = IdentityReceipt::read(files)? else {
-        return Ok(None);
-    };
-    if !receipt.planned_from_head(git) {
-        return Ok(None);
-    }
-    receipt.verify_materialized(git)?;
-    Ok(Some(receipt))
-}
-
-#[expect(
-    clippy::too_many_lines,
-    reason = "the reconciliation plan validates one complete Git and vault snapshot"
-)]
-fn build_plan(context: &Context<'_>) -> Result<Plan> {
-    let Context {
-        files,
-        git,
-        target_sha,
-        merge_base,
-        ..
-    } = *context;
-    let target = Revision::Commit(target_sha.to_owned());
-    let config = Config::load_from(files)?;
-    let target_config = git
-        .file(&target, CONFIG_FILE)?
-        .map(|file| {
-            String::from_utf8(file.bytes)
-                .map_err(|_| CrivError::new(format!("target {CONFIG_FILE} is not UTF-8")))
-        })
-        .transpose()?;
-    let target_config = Config::parse(target_config.as_deref())?;
-    if config.docs_dir() != target_config.docs_dir() || config.adr_dir() != target_config.adr_dir()
-    {
-        return Err(CrivError::new(
-            "refusing ADR reconciliation because vault.docs or vault.adr differs from the target; cannot prove ADR ownership",
-        ));
-    }
-    let adr_prefix = config.adr_prefix();
-    let target_paths = git.tree_paths(target_sha, &adr_prefix)?;
-    let merge_paths = git
-        .tree_paths(merge_base, &adr_prefix)?
-        .into_iter()
-        .collect::<BTreeSet<_>>();
-    let target_adrs = target_paths
-        .iter()
-        .filter(|path| config.is_adr_path(path))
-        .map(|path| parse_adr(path, git.text(&target, path)?))
-        .collect::<Result<Vec<_>>>()?;
-    ensure_unique(&target_adrs, "target")?;
-    let target_by_id = target_adrs
-        .iter()
-        .map(|adr| (adr.id, adr))
-        .collect::<BTreeMap<_, _>>();
-    let target_paths = target_paths.into_iter().collect::<BTreeSet<_>>();
-    let provenance = Provenance {
-        git,
-        merge_base,
-        target_sha,
-        merge_paths: &merge_paths,
-        target_paths: &target_paths,
-    };
-
-    let materialized = materialized_receipt(files, git)?;
-    let prior_mappings = materialized
-        .as_ref()
-        .map(|receipt| receipt.mappings.as_slice())
-        .unwrap_or_default();
-    let current_paths = prior_mappings
-        .iter()
-        .map(|mapping| (mapping.old_path.as_str(), mapping.new_path.as_str()))
-        .collect::<BTreeMap<_, _>>();
-    let history_changes = git.changed_set(
-        &Comparison::Trees {
-            old_ref: merge_base,
-            new_ref: "HEAD",
-        },
-        &[],
-    )?;
-    let changes = git.changed_set(
-        &Comparison::Trees {
-            old_ref: merge_base,
-            new_ref: "HEAD",
-        },
-        &[&adr_prefix],
-    )?;
-    let worktree_changes =
-        git.changed_set(&Comparison::Worktree { old_ref: "HEAD" }, &[&adr_prefix])?;
-    let worktree_moves = worktree_changes
-        .entries
-        .iter()
-        .filter(|entry| matches!(entry.status, ChangeStatus::Renamed | ChangeStatus::Copied))
-        .filter_map(|entry| {
-            entry
-                .previous_path
-                .as_deref()
-                .map(|previous| (previous, entry.path.as_str()))
-        })
-        .collect::<BTreeMap<_, _>>();
-    let worktree_additions = worktree_changes
-        .entries
-        .iter()
-        .filter(|entry| entry.status == ChangeStatus::Added)
-        .filter(|entry| config.is_adr_path(&entry.path))
-        .map(|entry| entry.path.as_str())
-        .collect::<Vec<_>>();
-    let mut receipt_sources = Vec::new();
-    let mut branch_adrs = changes
+        let materialized = materialized_receipt(files, git)?;
+        let prior_mappings = materialized
+            .as_ref()
+            .map(|receipt| receipt.mappings.as_slice())
+            .unwrap_or_default();
+        let current_paths = prior_mappings
+            .iter()
+            .map(|mapping| (mapping.old_path.as_str(), mapping.new_path.as_str()))
+            .collect::<BTreeMap<_, _>>();
+        let renames = receipt::composed_renames(&history.entries).unwrap_or_default();
+        let changes = git.changed_set(
+            &Comparison::Trees {
+                old_ref: merge_base,
+                new_ref: head_sha,
+            },
+            &[&adr_prefix],
+        )?;
+        let worktree_changes =
+            git.changed_set(&Comparison::Worktree { old_ref: head_sha }, &[&adr_prefix])?;
+        let worktree_moves = worktree_changes
+            .entries
+            .iter()
+            .filter(|entry| matches!(entry.status, ChangeStatus::Renamed | ChangeStatus::Copied))
+            .filter_map(|entry| {
+                entry
+                    .previous_path
+                    .as_deref()
+                    .map(|previous| (previous, entry.path.as_str()))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let worktree_additions = worktree_changes
+            .entries
+            .iter()
+            .filter(|entry| entry.status == ChangeStatus::Added)
+            .filter(|entry| config.is_adr_path(&entry.path))
+            .map(|entry| entry.path.as_str())
+            .collect::<Vec<_>>();
+        let mut receipt_sources = Vec::new();
+        let mut branch_adrs = changes
         .entries
         .iter()
         .filter(|entry| config.is_adr_path(&entry.path))
-        .filter(|entry| !receipt::source_history_allows(files, git, &history_changes, entry))
+        .filter(|entry| !receipt::source_history_allows(files, git, &renames, entry))
         .map(|entry| match entry.status {
             ChangeStatus::Added => {
                 let current_path = current_paths
@@ -316,10 +300,11 @@ fn build_plan(context: &Context<'_>) -> Result<Plan> {
                     ))
                 })?;
                 provenance.ensure_new(&entry.path, &contents)?;
-                let adr = parse_adr(current_path, contents)?;
+                let adr = parse_adr(&config, current_path, contents)?;
                 receipt_sources.push(parse_adr(
+                    &config,
                     &entry.path,
-                    git.text(&Revision::Commit("HEAD".into()), &entry.path)?,
+                    git.text(&Revision::Commit(head_sha.clone()), &entry.path)?,
                 )?);
                 Ok(adr)
             }
@@ -337,93 +322,115 @@ fn build_plan(context: &Context<'_>) -> Result<Plan> {
             ))),
         })
         .collect::<Result<Vec<_>>>()?;
-    let mut branch_paths = branch_adrs
-        .iter()
-        .map(|adr| adr.path.clone())
-        .collect::<BTreeSet<_>>();
-    for entry in &worktree_changes.entries {
-        if !config.is_adr_path(&entry.path) {
-            continue;
-        }
-        match entry.status {
-            ChangeStatus::Added if branch_paths.insert(entry.path.clone()) => {
-                let contents = files.read_string(Path::new(&entry.path))?;
-                provenance.ensure_new(&entry.path, &contents)?;
-                branch_adrs.push(parse_adr(&entry.path, contents)?);
+        let mut branch_paths = branch_adrs
+            .iter()
+            .map(|adr| adr.path.clone())
+            .collect::<BTreeSet<_>>();
+        for entry in &worktree_changes.entries {
+            if !config.is_adr_path(&entry.path) {
+                continue;
             }
-            ChangeStatus::Renamed | ChangeStatus::Copied
-                if entry
-                    .previous_path
-                    .as_deref()
-                    .is_some_and(|path| merge_paths.contains(path)) =>
+            match entry.status {
+                ChangeStatus::Added if branch_paths.insert(entry.path.clone()) => {
+                    let contents = files.read_string(Path::new(&entry.path))?;
+                    provenance.ensure_new(&entry.path, &contents)?;
+                    branch_adrs.push(parse_adr(&config, &entry.path, contents)?);
+                }
+                ChangeStatus::Renamed | ChangeStatus::Copied
+                    if entry
+                        .previous_path
+                        .as_deref()
+                        .is_some_and(|path| merge_paths.contains(path)) =>
+                {
+                    return Err(CrivError::new(format!(
+                        "ADR `{}` was renamed or copied from published ADR `{}`; published ADR content is immutable",
+                        entry.path,
+                        entry.previous_path.as_deref().unwrap_or_default()
+                    )));
+                }
+                _ => {}
+            }
+        }
+        ensure_unique(&branch_adrs, "branch-local")?;
+
+        let target_max = target_adrs.iter().map(|adr| adr.id).max().unwrap_or(0);
+        let conflicted = branch_adrs.iter().any(|adr| {
+            target_paths.contains(&adr.path)
+                || target_by_id
+                    .get(&adr.id)
+                    .is_some_and(|target| target.path != adr.path)
+                || adr.id <= target_max
+        });
+        let mappings = if conflicted {
+            allocation_mappings(&branch_adrs, target_max)?
+        } else {
+            Vec::new()
+        };
+        let receipt_mappings = mappings
+            .iter()
+            .map(|mapping| {
+                let original = prior_mappings
+                    .iter()
+                    .find(|prior| prior.new_path == mapping.old_path)
+                    .unwrap_or(mapping);
+                IdentityMapping {
+                    old_id: original.old_id,
+                    new_id: mapping.new_id,
+                    old_path: original.old_path.clone(),
+                    new_path: mapping.new_path.clone(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let destination_paths = mappings
+            .iter()
+            .map(|mapping| mapping.new_path.as_str())
+            .collect::<BTreeSet<_>>();
+        if destination_paths.len() != mappings.len() {
+            return Err(CrivError::new("ADR reconciliation destinations collide"));
+        }
+        for mapping in &mappings {
+            if mapping.old_path != mapping.new_path
+                && files.entry_exists(Path::new(&mapping.new_path))?
+                && !mappings
+                    .iter()
+                    .any(|other| other.old_path == mapping.new_path)
             {
                 return Err(CrivError::new(format!(
-                    "ADR `{}` was renamed or copied from published ADR `{}`; published ADR content is immutable",
-                    entry.path,
-                    entry.previous_path.as_deref().unwrap_or_default()
+                    "ADR reconciliation destination `{}` already exists",
+                    mapping.new_path
                 )));
             }
-            _ => {}
         }
-    }
-    ensure_unique(&branch_adrs, "branch-local")?;
-
-    let target_max = target_adrs.iter().map(|adr| adr.id).max().unwrap_or(0);
-    let conflicted = branch_adrs.iter().any(|adr| {
-        target_paths.contains(&adr.path)
-            || target_by_id
-                .get(&adr.id)
-                .is_some_and(|target| target.path != adr.path)
-            || adr.id <= target_max
-    });
-    let mappings = allocation_mappings(&branch_adrs, target_max, conflicted)?;
-    let receipt_mappings = mappings
-        .iter()
-        .map(|mapping| {
-            let original = prior_mappings
-                .iter()
-                .find(|prior| prior.new_path == mapping.old_path)
-                .unwrap_or(mapping);
-            IdentityMapping {
-                old_id: original.old_id,
-                new_id: mapping.new_id,
-                old_path: original.old_path.clone(),
-                new_path: mapping.new_path.clone(),
-            }
+        Ok(Plan {
+            mappings,
+            receipt_mappings,
+            branch_adrs,
+            receipt_sources,
+            resumes: materialized.is_some(),
         })
-        .collect::<Vec<_>>();
-    let destination_paths = mappings
-        .iter()
-        .map(|mapping| mapping.new_path.as_str())
-        .collect::<BTreeSet<_>>();
-    if destination_paths.len() != mappings.len() {
-        return Err(CrivError::new("ADR reconciliation destinations collide"));
     }
-    for mapping in &mappings {
-        if mapping.old_path != mapping.new_path
-            && files.entry_exists(Path::new(&mapping.new_path))?
-            && !mappings
-                .iter()
-                .any(|other| other.old_path == mapping.new_path)
-        {
-            return Err(CrivError::new(format!(
-                "ADR reconciliation destination `{}` already exists",
-                mapping.new_path
-            )));
-        }
+}
+
+/// A receipt planned from the current `HEAD` must describe the worktree
+/// exactly; a receipt from an earlier `HEAD` is inert.
+fn materialized_receipt(
+    files: &RepositoryFiles,
+    git: &GitRepository,
+) -> Result<Option<IdentityReceipt>> {
+    let Some(receipt) = IdentityReceipt::read(files)? else {
+        return Ok(None);
+    };
+    if !receipt.planned_from_head(git) {
+        return Ok(None);
     }
-    Ok(Plan {
-        mappings,
-        receipt_mappings,
-        branch_adrs,
-        receipt_sources,
-        resumes: materialized.is_some(),
-    })
+    receipt.verify_materialized(git)?;
+    Ok(Some(receipt))
 }
 
 /// The published ADRs a branch-created ADR must not carry content from.
 struct Provenance<'a> {
     git: &'a GitRepository,
+    config: &'a Config,
     merge_base: &'a str,
     target_sha: &'a str,
     merge_paths: &'a BTreeSet<String>,
@@ -441,11 +448,7 @@ impl Provenance<'_> {
             .map(|path| (self.merge_base, path))
             .chain(self.target_paths.iter().map(|path| (self.target_sha, path)));
         for (revision, candidate) in candidates {
-            if candidate == path
-                || !Path::new(candidate)
-                    .extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
-            {
+            if candidate == path || !self.config.is_adr_path(candidate) {
                 continue;
             }
             let source = self
@@ -533,14 +536,7 @@ fn is_standard_adr_heading(heading: &str) -> bool {
     )
 }
 
-fn allocation_mappings(
-    branch_adrs: &[AdrFile],
-    target_max: u32,
-    conflicted: bool,
-) -> Result<Vec<IdentityMapping>> {
-    if !conflicted {
-        return Ok(Vec::new());
-    }
+fn allocation_mappings(branch_adrs: &[AdrFile], target_max: u32) -> Result<Vec<IdentityMapping>> {
     let mut ordered = branch_adrs.to_vec();
     ordered.sort_by_key(|adr| adr.id);
     let allocation_end = target_max
@@ -580,28 +576,22 @@ fn allocation_mappings(
         .collect()
 }
 
-fn adr_stem(path: &str) -> Option<(u32, Option<&str>)> {
-    Path::new(path)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .and_then(identity::parse_adr_stem)
-}
-
 fn same_adr_slug(first: &str, second: &str) -> bool {
-    adr_stem(first)
-        .and_then(|(_, slug)| slug)
-        .zip(adr_stem(second).and_then(|(_, slug)| slug))
+    let slug = |path| identity::parse_adr_path(path).and_then(|(_, slug)| slug);
+    slug(first)
+        .zip(slug(second))
         .is_some_and(|(first, second)| first == second)
 }
 
-fn parse_adr(path: &str, contents: String) -> Result<AdrFile> {
-    if Path::new(path)
-        .extension()
-        .is_none_or(|extension| extension != "md")
-    {
-        return Err(CrivError::new(format!("ADR `{path}` must be Markdown")));
+fn parse_adr(config: &Config, path: &str, contents: String) -> Result<AdrFile> {
+    if !config.is_adr_path(path) {
+        return Err(CrivError::new(format!(
+            "ADR `{path}` must be Markdown in the ADR directory"
+        )));
     }
-    let Some((id, Some(slug))) = adr_stem(path).filter(|(_, slug)| slug != &Some("")) else {
+    let Some((id, Some(slug))) =
+        identity::parse_adr_path(path).filter(|(_, slug)| slug != &Some(""))
+    else {
         return Err(CrivError::new(format!(
             "branch-local ADR `{path}` must use NNNN-kebab-title.md"
         )));
@@ -658,30 +648,21 @@ fn superseded_paths(mappings: &[IdentityMapping]) -> Vec<&str> {
         .collect()
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "candidate rewriting keeps file safety checks with their rewrite decisions"
-)]
 fn rewrite_candidates(context: &Context<'_>, plan: &Plan) -> Result<BTreeMap<String, String>> {
     let Context {
         files,
         git,
+        head_sha,
         merge_base,
+        history,
         ..
-    } = *context;
-    let changed_paths = git
-        .changed_set(
-            &Comparison::Trees {
-                old_ref: merge_base,
-                new_ref: "HEAD",
-            },
-            &[],
-        )?
+    } = context;
+    let changed_paths = history
         .entries
-        .into_iter()
-        .map(|entry| (entry.path.clone(), entry))
+        .iter()
+        .map(|entry| (entry.path.as_str(), entry))
         .collect::<BTreeMap<_, _>>();
-    let mut paths = git.tree_paths("HEAD", ".")?;
+    let mut paths = git.tree_paths(head_sha, ".")?;
     for adr in &plan.branch_adrs {
         if !paths.contains(&adr.path) {
             paths.push(adr.path.clone());
@@ -689,13 +670,14 @@ fn rewrite_candidates(context: &Context<'_>, plan: &Plan) -> Result<BTreeMap<Str
     }
     let ownership = Rewriter {
         git,
+        head_sha,
         merge_base,
         mappings: &plan.mappings,
     };
     let mut rewrites = BTreeMap::new();
     let mut inherited_references = None;
     for path in paths {
-        if path == IdentityReceipt::PATH || path.starts_with(".git/") {
+        if path == IdentityReceipt::PATH {
             continue;
         }
         if !files.file_exists(Path::new(&path))? {
@@ -715,7 +697,7 @@ fn rewrite_candidates(context: &Context<'_>, plan: &Plan) -> Result<BTreeMap<Str
             // untracked path, so it has no `HEAD` diff entry to attribute.
             rewrite_text(&contents, &plan.mappings)?
         } else {
-            match changed_paths.get(&path) {
+            match changed_paths.get(path.as_str()) {
                 Some(entry) if entry.status == ChangeStatus::Added => {
                     if reference_edits(&contents, &plan.mappings)?.is_empty() {
                         contents.clone()
@@ -774,6 +756,7 @@ fn rewrite_candidates(context: &Context<'_>, plan: &Plan) -> Result<BTreeMap<Str
 /// Rewrites only the reference lines the branch added since the merge base.
 struct Rewriter<'a> {
     git: &'a GitRepository,
+    head_sha: &'a str,
     merge_base: &'a str,
     mappings: &'a [IdentityMapping],
 }
@@ -806,7 +789,7 @@ impl Rewriter<'_> {
     fn owned_lines(&self, contents: &str, original_path: &str, path: &str) -> Result<String> {
         let ranges = self
             .git
-            .added_lines(self.merge_base, original_path, "HEAD", path)?;
+            .added_lines(self.merge_base, original_path, self.head_sha, path)?;
         let mut output = String::new();
         for (index, line) in contents.split_inclusive('\n').enumerate() {
             let line_number = index.saturating_add(1);
@@ -1095,6 +1078,7 @@ mod tests {
     #[test]
     fn a_quoted_frontmatter_id_agrees_with_its_filename() {
         let adr = parse_adr(
+            &Config::default(),
             "docs/adr/0004-quoted.md",
             "---\nid: \"ADR-0004\"\nkind: decision\ntitle: Quoted\nstatus: draft\n---\n".into(),
         )
@@ -1116,7 +1100,7 @@ mod tests {
             adr("docs/adr/0007-earlier.md", 7, "earlier"),
         ];
         assert_eq!(
-            allocation_mappings(&branch_adrs, 12, true).unwrap(),
+            allocation_mappings(&branch_adrs, 12).unwrap(),
             vec![
                 mapping(
                     7,
@@ -1127,13 +1111,8 @@ mod tests {
                 mapping(9, 14, "docs/adr/0009-later.md", "docs/adr/0014-later.md"),
             ]
         );
-        assert!(
-            allocation_mappings(&branch_adrs, 12, false)
-                .unwrap()
-                .is_empty()
-        );
-        let error = allocation_mappings(&[adr("docs/adr/0001-topic.md", 1, "topic")], 9999, true)
-            .unwrap_err();
+        let error =
+            allocation_mappings(&[adr("docs/adr/0001-topic.md", 1, "topic")], 9999).unwrap_err();
         assert!(error.to_string().contains("ADR-9999"));
     }
 }
