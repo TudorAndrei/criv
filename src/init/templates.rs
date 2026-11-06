@@ -3,12 +3,13 @@ use serde::Serialize;
 
 use crate::{CrivError, Result};
 
-pub fn default_config() -> String {
-    DEFAULT_CONFIG.to_string()
-}
+pub const DEFAULT_CONFIG: &str = include_str!("fixtures/criv.toml");
 
 pub fn default_state() -> Result<String> {
-    json_pretty(&StateDocument::default(), layout::STATE)
+    let mut json = serde_json::to_string_pretty(&StateDocument::default())
+        .map_err(|err| CrivError::new(format!("failed to serialize {}: {err}", layout::STATE)))?;
+    json.push('\n');
+    Ok(json)
 }
 
 pub fn adr_readme() -> Result<String> {
@@ -20,13 +21,6 @@ pub fn adr_readme() -> Result<String> {
     Ok(format!(
         "---\n{frontmatter}---\n\n# Architectural Decisions\n\nAccepted decisions live in this directory as MADR-style notes named `NNNN-kebab-title.md`.\n"
     ))
-}
-
-fn json_pretty(value: &impl Serialize, label: &str) -> Result<String> {
-    let mut json = serde_json::to_string_pretty(value)
-        .map_err(|err| CrivError::new(format!("failed to serialize {label}: {err}")))?;
-    json.push('\n');
-    Ok(json)
 }
 
 #[derive(Debug, Serialize)]
@@ -47,8 +41,6 @@ impl Default for AdrReadmeFrontmatter {
         }
     }
 }
-
-const DEFAULT_CONFIG: &str = include_str!("fixtures/criv.toml");
 
 #[cfg(test)]
 mod tests {

@@ -9,6 +9,7 @@ use criv_state_wire::layout;
 use usage_rs::Args as UsageArgs;
 
 use crate::Result;
+use crate::config::CONFIG_FILE;
 use crate::install::{self, InstallMode, SkillPublication};
 use crate::repository::RepositoryFiles;
 
@@ -25,62 +26,46 @@ pub fn run(root: &Path, options: &InitOptions) -> Result<()> {
     let scope = files.write_scope(Path::new("."))?;
     let mut created = Vec::new();
     let mut refreshed = Vec::new();
-    let mut link_messages = Vec::new();
 
-    if options.force_skills {
-        if !options.no_skills {
-            let report = install::install_skills_from(&files, InstallMode::Refresh)?;
-            collect_skill_publications(&report, &mut created, &mut refreshed);
-            link_messages.push(
-                install::describe_claude_publication(report.claude_publication()).to_string(),
-            );
+    if !options.force_skills {
+        scope.create_dir(Path::new("docs/adr"))?;
+        scope.create_dir(Path::new(layout::SNAPSHOTS))?;
+        for (path, contents) in [
+            (CONFIG_FILE, templates::DEFAULT_CONFIG.to_owned()),
+            (layout::STATE, templates::default_state()?),
+            ("docs/adr/README.md", templates::adr_readme()?),
+        ] {
+            if scope.write_new(Path::new(path), &contents)? {
+                created.push(path.to_owned());
+            }
         }
-        print_init_result(created, refreshed, link_messages);
-        return Ok(());
     }
 
-    write_template(
-        &scope,
-        crate::config::CONFIG_FILE,
-        &templates::default_config(),
-        &mut created,
-    )?;
+    let claude_message = if options.no_skills {
+        None
+    } else {
+        let mode = if options.force_skills {
+            InstallMode::Refresh
+        } else {
+            InstallMode::CreateOnly
+        };
+        let report = install::install_skills(&files, mode)?;
+        for fact in report.skill_publications() {
+            match fact.publication {
+                SkillPublication::Created => created.push(fact.path.clone()),
+                SkillPublication::Refreshed => refreshed.push(fact.path.clone()),
+                SkillPublication::Preserved => {}
+            }
+        }
+        Some(install::describe_claude_publication(
+            report.claude_publication(),
+        ))
+    };
 
-    scope.create_dir(Path::new("docs/adr"))?;
-    scope.create_dir(Path::new(layout::SNAPSHOTS))?;
-
-    write_template(
-        &scope,
-        layout::STATE,
-        &templates::default_state()?,
-        &mut created,
-    )?;
-    write_template(
-        &scope,
-        "docs/adr/README.md",
-        &templates::adr_readme()?,
-        &mut created,
-    )?;
-
-    if !options.no_skills {
-        let report = install::install_skills_from(&files, InstallMode::CreateOnly)?;
-        collect_skill_publications(&report, &mut created, &mut refreshed);
-        link_messages
-            .push(install::describe_claude_publication(report.claude_publication()).to_string());
+    if !options.force_skills {
+        scope.append_line_if_missing(Path::new(".gitignore"), &format!("{}/", layout::DIR))?;
     }
 
-    scope.append_line_if_missing(Path::new(".gitignore"), &format!("{}/", layout::DIR))?;
-
-    print_init_result(created, refreshed, link_messages);
-
-    Ok(())
-}
-
-fn print_init_result(
-    created: Vec<&'static str>,
-    refreshed: Vec<&'static str>,
-    link_messages: Vec<String>,
-) {
     if created.is_empty() && refreshed.is_empty() {
         println!("criv vault already initialized");
     } else {
@@ -92,36 +77,9 @@ fn print_init_result(
             println!("refreshed {path}");
         }
     }
-    for message in link_messages {
+    if let Some(message) = claude_message {
         println!("{message}");
     }
-}
 
-fn collect_skill_publications(
-    report: &install::InstallReport,
-    created: &mut Vec<&'static str>,
-    refreshed: &mut Vec<&'static str>,
-) {
-    for fact in report.skill_publications() {
-        match fact.publication {
-            SkillPublication::Created => created.push(fact.path),
-            SkillPublication::Refreshed => refreshed.push(fact.path),
-            SkillPublication::Preserved => {}
-        }
-    }
-}
-
-fn write_template(
-    scope: &crate::repository::RepositoryWriteScope<'_>,
-    path: &'static str,
-    contents: &str,
-    created: &mut Vec<&'static str>,
-) -> Result<()> {
-    // Scaffolding lands all over the repository, so the scope is the root
-    // itself. Per ADR-0044 that still enforces root confinement, symlink
-    // rejection, and relative-path validation.
-    if scope.write_new(Path::new(path), contents)? {
-        created.push(path);
-    }
     Ok(())
 }

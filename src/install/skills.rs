@@ -1,6 +1,7 @@
 //! Lifecycle for the generated runtime skills shipped with criv.
 //!
-//! Callers install the canonical inventory or inspect its best-effort status.
+//! Callers install the canonical inventory or ask for the best-effort
+//! outdated-skills advisory.
 //! Template identity, marker handling, confined publication, and the
 //! `.claude/skills` link-or-copy policy stay inside this module.
 
@@ -25,9 +26,9 @@ pub enum SkillPublication {
     Preserved,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SkillPublicationFact {
-    pub(crate) path: &'static str,
+    pub(crate) path: String,
     pub(crate) publication: SkillPublication,
 }
 
@@ -81,9 +82,9 @@ pub enum InstalledSkillStatus {
     Unreadable,
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct InstalledSkillFact {
-    path: &'static str,
+    path: String,
     status: InstalledSkillStatus,
 }
 
@@ -102,69 +103,27 @@ pub struct SkillInventory {
 }
 
 impl SkillInventory {
-    fn skill_statuses(&self) -> &[InstalledSkillFact] {
-        &self.skills
-    }
-
-    const fn claude_layout(&self) -> ClaudeLayout {
-        self.claude
-    }
-
     /// Paths that preserve the text-only stale-skill advisory contract.
     /// Missing and unreadable installations remain deliberately best-effort.
-    pub(crate) fn advisory_outdated_paths(&self) -> Vec<&'static str> {
+    fn advisory_outdated_paths(&self) -> Vec<&str> {
         let mut outdated = Vec::new();
-        if self.claude_layout() == ClaudeLayout::Copied {
+        if self.claude == ClaudeLayout::Copied {
             outdated.push(CLAUDE_SKILLS_DIR);
         }
-        outdated.extend(self.skill_statuses().iter().filter_map(|fact| {
+        outdated.extend(self.skills.iter().filter_map(|fact| {
             matches!(
                 fact.status,
                 InstalledSkillStatus::Stale | InstalledSkillStatus::Legacy
             )
-            .then_some(fact.path)
+            .then_some(fact.path.as_str())
         }));
         outdated
     }
-
-    #[cfg(test)]
-    pub(crate) fn status(&self, path: &str) -> Option<InstalledSkillStatus> {
-        self.skills
-            .iter()
-            .find(|fact| fact.path == path)
-            .map(|fact| fact.status)
-    }
-}
-
-/// Install all generated skills through one create-only or refresh operation.
-#[cfg(test)]
-fn install(root: &Path, mode: InstallMode) -> Result<InstallReport> {
-    let files = RepositoryFiles::open(root)?;
-    install_from(&files, mode)
-}
-
-pub fn install_from(files: &RepositoryFiles, mode: InstallMode) -> Result<InstallReport> {
-    install_with_linker(files, mode, |scope, replace_directory| {
-        scope.link_dir(
-            Path::new(CLAUDE_SKILLS_DIR),
-            Path::new(AGENT_SKILLS_DIR),
-            replace_directory,
-        )
-    })
-}
-
-/// Inspect installed skill identity without making advisory checks fallible.
-#[cfg(test)]
-pub(crate) fn inventory(root: &Path) -> SkillInventory {
-    let Ok(files) = RepositoryFiles::open(root) else {
-        return unreadable_inventory();
-    };
-    inventory_from(&files)
 }
 
 /// The text note that tells a user to refresh outdated agent skills.
 pub fn outdated_skills_advisory(files: &RepositoryFiles) -> Option<String> {
-    let outdated = inventory_from(files).advisory_outdated_paths().len();
+    let outdated = inventory(files).advisory_outdated_paths().len();
     let subject = match outdated {
         0 => return None,
         1 => "skill is",
@@ -175,57 +134,40 @@ pub fn outdated_skills_advisory(files: &RepositoryFiles) -> Option<String> {
     ))
 }
 
-pub fn inventory_from(files: &RepositoryFiles) -> SkillInventory {
+fn inventory(files: &RepositoryFiles) -> SkillInventory {
     let skills = SKILLS
         .iter()
         .map(|skill| InstalledSkillFact {
-            path: skill.agent_path,
+            path: skill.agent_path(),
             status: installed_status(files, skill),
         })
         .collect();
     SkillInventory {
         skills,
-        claude: claude_layout(files),
+        claude: claude_layout(files).unwrap_or(ClaudeLayout::Other),
     }
 }
 
-#[cfg(test)]
-fn unreadable_inventory() -> SkillInventory {
-    SkillInventory {
-        skills: SKILLS
-            .iter()
-            .map(|skill| InstalledSkillFact {
-                path: skill.agent_path,
-                status: InstalledSkillStatus::Unreadable,
-            })
-            .collect(),
-        claude: ClaudeLayout::Other,
-    }
-}
-
-fn install_with_linker(
-    files: &RepositoryFiles,
-    mode: InstallMode,
-    linker: impl FnOnce(&RepositoryWriteScope<'_>, bool) -> Result<LinkOutcome>,
-) -> Result<InstallReport> {
-    let initial_claude_layout = installable_claude_layout(files)?;
+pub fn install_skills(files: &RepositoryFiles, mode: InstallMode) -> Result<InstallReport> {
+    let initial_claude_layout = claude_layout(files).map_err(|error| {
+        CrivError::new(format!(
+            "cannot install Claude skills because `.claude` must be a real repository directory: {error}"
+        ))
+    })?;
     let scope = files.write_scope(Path::new("."))?;
-    let mut skills = Vec::with_capacity(SKILLS.len());
-    for skill in SKILLS {
-        skills.push(publish_skill(
-            files,
-            &scope,
-            skill.agent_path,
-            skill.contents,
-            mode,
-        )?);
-    }
+    let skills = SKILLS
+        .iter()
+        .map(|skill| publish_skill(files, &scope, skill.agent_path(), skill.contents, mode))
+        .collect::<Result<Vec<_>>>()?;
 
-    let replace = mode == InstallMode::Refresh;
     let link_outcome = if initial_claude_layout == ClaudeLayout::Linked {
         LinkOutcome::Unchanged
     } else {
-        linker(&scope, replace)?
+        scope.link_dir(
+            Path::new(CLAUDE_SKILLS_DIR),
+            Path::new(AGENT_SKILLS_DIR),
+            mode == InstallMode::Refresh,
+        )?
     };
     let claude = match link_outcome {
         LinkOutcome::Unchanged => ClaudePublication::Current,
@@ -233,9 +175,7 @@ fn install_with_linker(
         LinkOutcome::Replaced => ClaudePublication::Replaced,
         LinkOutcome::DirectoryInTheWay => ClaudePublication::Blocked,
         LinkOutcome::Unsupported => {
-            for skill in SKILLS {
-                publish_skill(files, &scope, skill.claude_path, skill.contents, mode)?;
-            }
+            copy_claude_skills(files, &scope, mode)?;
             ClaudePublication::Copied
         }
     };
@@ -243,18 +183,30 @@ fn install_with_linker(
     Ok(InstallReport { skills, claude })
 }
 
+/// The `.claude/skills` fallback for a platform without directory links.
+fn copy_claude_skills(
+    files: &RepositoryFiles,
+    scope: &RepositoryWriteScope<'_>,
+    mode: InstallMode,
+) -> Result<()> {
+    for skill in SKILLS {
+        publish_skill(files, scope, skill.claude_path(), skill.contents, mode)?;
+    }
+    Ok(())
+}
+
 fn publish_skill(
     files: &RepositoryFiles,
     scope: &RepositoryWriteScope<'_>,
-    path: &'static str,
+    path: String,
     contents: &str,
     mode: InstallMode,
 ) -> Result<SkillPublicationFact> {
     let contents = stamp_skill(contents);
-    let publication = if mode == InstallMode::Refresh && files.file_exists(Path::new(path))? {
-        scope.write_atomic(Path::new(path), &contents)?;
+    let publication = if mode == InstallMode::Refresh && files.file_exists(Path::new(&path))? {
+        scope.write_atomic(Path::new(&path), &contents)?;
         SkillPublication::Refreshed
-    } else if scope.write_new(Path::new(path), &contents)? {
+    } else if scope.write_new(Path::new(&path), &contents)? {
         SkillPublication::Created
     } else {
         SkillPublication::Preserved
@@ -263,7 +215,7 @@ fn publish_skill(
 }
 
 fn installed_status(files: &RepositoryFiles, skill: &SkillTemplate) -> InstalledSkillStatus {
-    let contents = match files.read_optional_string(Path::new(skill.agent_path)) {
+    let contents = match files.read_optional_string(Path::new(&skill.agent_path())) {
         Ok(Some(contents)) => contents,
         Ok(None) => return InstalledSkillStatus::Missing,
         Err(_) => return InstalledSkillStatus::Unreadable,
@@ -275,40 +227,49 @@ fn installed_status(files: &RepositoryFiles, skill: &SkillTemplate) -> Installed
     }
 }
 
-fn claude_layout(files: &RepositoryFiles) -> ClaudeLayout {
-    files
-        .link_layout(Path::new(CLAUDE_SKILLS_DIR), Path::new(AGENT_SKILLS_DIR))
-        .map_or(ClaudeLayout::Other, map_claude_layout)
-}
-
-fn installable_claude_layout(files: &RepositoryFiles) -> Result<ClaudeLayout> {
-    files
-        .link_layout(Path::new(CLAUDE_SKILLS_DIR), Path::new(AGENT_SKILLS_DIR))
-        .map(map_claude_layout)
-        .map_err(|error| {
-            CrivError::new(format!(
-                "cannot install Claude skills because `.claude` must be a real repository directory: {error}"
-            ))
-        })
-}
-
-const fn map_claude_layout(layout: LinkLayout) -> ClaudeLayout {
-    match layout {
+fn claude_layout(files: &RepositoryFiles) -> Result<ClaudeLayout> {
+    let layout = files.link_layout(Path::new(CLAUDE_SKILLS_DIR), Path::new(AGENT_SKILLS_DIR))?;
+    Ok(match layout {
         LinkLayout::Missing => ClaudeLayout::Missing,
         LinkLayout::Expected => ClaudeLayout::Linked,
         LinkLayout::Directory => ClaudeLayout::Copied,
         LinkLayout::Other => ClaudeLayout::Other,
-    }
+    })
 }
 
 #[derive(Debug)]
 struct SkillTemplate {
-    agent_path: &'static str,
-    claude_path: &'static str,
+    name: &'static str,
     contents: &'static str,
 }
 
+/// One shipped skill, read from `assets/skills/<name>/SKILL.md`.
+macro_rules! skill {
+    ($name:literal) => {
+        SkillTemplate {
+            name: $name,
+            contents: include_str!(concat!("../../assets/skills/", $name, "/SKILL.md")),
+        }
+    };
+}
+
+const SKILLS: &[SkillTemplate] = &[
+    skill!("criv"),
+    skill!("criv-me"),
+    skill!("writing-decisions"),
+    skill!("referencing-code"),
+    skill!("checking-drift"),
+];
+
 impl SkillTemplate {
+    fn agent_path(&self) -> String {
+        format!("{AGENT_SKILLS_DIR}/{}/SKILL.md", self.name)
+    }
+
+    fn claude_path(&self) -> String {
+        format!("{CLAUDE_SKILLS_DIR}/{}/SKILL.md", self.name)
+    }
+
     fn identity(&self) -> String {
         format!("blake3:{}", template_hash(&unstamp_skill(self.contents)))
     }
@@ -435,41 +396,6 @@ fn skill_marker(contents: &str) -> Option<String> {
     None
 }
 
-const SKILL_CRIV: &str = include_str!("../../assets/skills/criv/SKILL.md");
-const SKILL_CRIV_ME: &str = include_str!("../../assets/skills/criv-me/SKILL.md");
-const SKILL_WRITING_DECISIONS: &str =
-    include_str!("../../assets/skills/writing-decisions/SKILL.md");
-const SKILL_REFERENCING_CODE: &str = include_str!("../../assets/skills/referencing-code/SKILL.md");
-const SKILL_CHECKING_DRIFT: &str = include_str!("../../assets/skills/checking-drift/SKILL.md");
-
-const SKILLS: &[SkillTemplate] = &[
-    SkillTemplate {
-        agent_path: ".agents/skills/criv/SKILL.md",
-        claude_path: ".claude/skills/criv/SKILL.md",
-        contents: SKILL_CRIV,
-    },
-    SkillTemplate {
-        agent_path: ".agents/skills/criv-me/SKILL.md",
-        claude_path: ".claude/skills/criv-me/SKILL.md",
-        contents: SKILL_CRIV_ME,
-    },
-    SkillTemplate {
-        agent_path: ".agents/skills/writing-decisions/SKILL.md",
-        claude_path: ".claude/skills/writing-decisions/SKILL.md",
-        contents: SKILL_WRITING_DECISIONS,
-    },
-    SkillTemplate {
-        agent_path: ".agents/skills/referencing-code/SKILL.md",
-        claude_path: ".claude/skills/referencing-code/SKILL.md",
-        contents: SKILL_REFERENCING_CODE,
-    },
-    SkillTemplate {
-        agent_path: ".agents/skills/checking-drift/SKILL.md",
-        claude_path: ".claude/skills/checking-drift/SKILL.md",
-        contents: SKILL_CHECKING_DRIFT,
-    },
-];
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -477,52 +403,79 @@ mod tests {
 
     use super::*;
 
+    fn install(root: &Path, mode: InstallMode) -> Result<InstallReport> {
+        install_skills(&RepositoryFiles::open(root)?, mode)
+    }
+
+    fn inventory_at(root: &Path) -> SkillInventory {
+        inventory(&RepositoryFiles::open(root).unwrap())
+    }
+
+    fn status(inventory: &SkillInventory, path: &str) -> Option<InstalledSkillStatus> {
+        inventory
+            .skills
+            .iter()
+            .find(|fact| fact.path == path)
+            .map(|fact| fact.status)
+    }
+
+    #[test]
+    fn shipped_table_lists_every_skill_folder() {
+        let assets = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/skills");
+        let mut folders: Vec<String> = fs::read_dir(assets)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        folders.sort();
+        let mut table: Vec<&str> = SKILLS.iter().map(|skill| skill.name).collect();
+        table.sort_unstable();
+        assert_eq!(folders, table);
+    }
+
     #[test]
     fn inventory_distinguishes_missing_current_stale_legacy_and_unreadable() {
         let root = temp_root("inventory-status");
-        let missing = inventory(&root);
-        assert!(
-            SKILLS.iter().all(
-                |skill| missing.status(skill.agent_path) == Some(InstalledSkillStatus::Missing)
-            )
-        );
+        let missing = inventory_at(&root);
+        assert!(SKILLS.iter().all(|skill| {
+            status(&missing, &skill.agent_path()) == Some(InstalledSkillStatus::Missing)
+        }));
         assert_eq!(missing.claude, ClaudeLayout::Missing);
 
         install(&root, InstallMode::CreateOnly).unwrap();
-        let stale_path = SKILLS[0].agent_path;
-        let legacy_path = SKILLS[1].agent_path;
-        let unreadable_path = SKILLS[2].agent_path;
-        let current_path = SKILLS[3].agent_path;
-        let stale = fs::read_to_string(root.join(stale_path)).unwrap();
+        let stale_path = SKILLS[0].agent_path();
+        let legacy_path = SKILLS[1].agent_path();
+        let unreadable_path = SKILLS[2].agent_path();
+        let current_path = SKILLS[3].agent_path();
+        let stale = fs::read_to_string(root.join(&stale_path)).unwrap();
         fs::write(
-            root.join(stale_path),
+            root.join(&stale_path),
             stale.replace("criv-template: blake3:", "criv-template: blake3:stale-"),
         )
         .unwrap();
-        fs::write(root.join(legacy_path), "legacy skill\n").unwrap();
-        fs::write(root.join(unreadable_path), [0xff, 0xfe]).unwrap();
+        fs::write(root.join(&legacy_path), "legacy skill\n").unwrap();
+        fs::write(root.join(&unreadable_path), [0xff, 0xfe]).unwrap();
 
-        let statuses = inventory(&root);
+        let statuses = inventory_at(&root);
         assert_eq!(
-            statuses.status(stale_path),
+            status(&statuses, &stale_path),
             Some(InstalledSkillStatus::Stale)
         );
         assert_eq!(
-            statuses.status(legacy_path),
+            status(&statuses, &legacy_path),
             Some(InstalledSkillStatus::Legacy)
         );
         assert_eq!(
-            statuses.status(unreadable_path),
+            status(&statuses, &unreadable_path),
             Some(InstalledSkillStatus::Unreadable)
         );
         assert_eq!(
-            statuses.status(current_path),
+            status(&statuses, &current_path),
             Some(InstalledSkillStatus::Current)
         );
         assert_eq!(statuses.claude, ClaudeLayout::Linked);
         assert_eq!(
             statuses.advisory_outdated_paths(),
-            vec![stale_path, legacy_path]
+            vec![stale_path.as_str(), legacy_path.as_str()]
         );
 
         remove_root(root);
@@ -540,12 +493,12 @@ mod tests {
         );
         assert_eq!(created.claude, ClaudePublication::Linked);
 
-        let path = SKILLS[0].agent_path;
-        fs::write(root.join(path), "local content\n").unwrap();
+        let path = SKILLS[0].agent_path();
+        fs::write(root.join(&path), "local content\n").unwrap();
         let preserved = install(&root, InstallMode::CreateOnly).unwrap();
         assert_eq!(preserved.skills[0].publication, SkillPublication::Preserved);
         assert_eq!(
-            fs::read_to_string(root.join(path)).unwrap(),
+            fs::read_to_string(root.join(&path)).unwrap(),
             "local content\n"
         );
         assert_eq!(preserved.claude, ClaudePublication::Current);
@@ -558,7 +511,7 @@ mod tests {
                 .all(|fact| fact.publication == SkillPublication::Refreshed)
         );
         assert_eq!(
-            inventory(&root).status(path),
+            status(&inventory_at(&root), &path),
             Some(InstalledSkillStatus::Current)
         );
 
@@ -576,7 +529,7 @@ mod tests {
 
         let blocked = install(&root, InstallMode::CreateOnly).unwrap();
         assert_eq!(blocked.claude, ClaudePublication::Blocked);
-        assert_eq!(inventory(&root).claude, ClaudeLayout::Copied);
+        assert_eq!(inventory_at(&root).claude, ClaudeLayout::Copied);
         assert_eq!(
             fs::read_to_string(claude.join("criv/SKILL.md")).unwrap(),
             "local copy\n"
@@ -584,7 +537,7 @@ mod tests {
 
         let replaced = install(&root, InstallMode::Refresh).unwrap();
         assert_eq!(replaced.claude, ClaudePublication::Replaced);
-        assert_eq!(inventory(&root).claude, ClaudeLayout::Linked);
+        assert_eq!(inventory_at(&root).claude, ClaudeLayout::Linked);
 
         remove_root(root);
     }
@@ -599,10 +552,10 @@ mod tests {
         fs::create_dir_all(root.join("wrong-skills")).unwrap();
         std::os::unix::fs::symlink("../wrong-skills", &claude).unwrap();
 
-        assert_eq!(inventory(&root).claude, ClaudeLayout::Other);
+        assert_eq!(inventory_at(&root).claude, ClaudeLayout::Other);
         let repaired = install(&root, InstallMode::CreateOnly).unwrap();
         assert_eq!(repaired.claude, ClaudePublication::Linked);
-        assert_eq!(inventory(&root).claude, ClaudeLayout::Linked);
+        assert_eq!(inventory_at(&root).claude, ClaudeLayout::Linked);
 
         remove_root(root);
     }
@@ -632,19 +585,16 @@ mod tests {
     fn unsupported_link_platform_copies_the_same_inventory() {
         let root = temp_root("copy-fallback");
         let files = RepositoryFiles::open(&root).unwrap();
-        let report = install_with_linker(&files, InstallMode::CreateOnly, |_, _| {
-            Ok(LinkOutcome::Unsupported)
-        })
-        .unwrap();
+        let scope = files.write_scope(Path::new(".")).unwrap();
+        copy_claude_skills(&files, &scope, InstallMode::CreateOnly).unwrap();
 
-        assert_eq!(report.claude, ClaudePublication::Copied);
         for skill in SKILLS {
             assert_eq!(
-                fs::read_to_string(root.join(skill.agent_path)).unwrap(),
-                fs::read_to_string(root.join(skill.claude_path)).unwrap()
+                fs::read_to_string(root.join(skill.claude_path())).unwrap(),
+                stamp_skill(skill.contents)
             );
         }
-        assert_eq!(inventory(&root).claude, ClaudeLayout::Copied);
+        assert_eq!(inventory_at(&root).claude, ClaudeLayout::Copied);
 
         remove_root(root);
     }
@@ -652,7 +602,7 @@ mod tests {
     #[test]
     fn repository_installation_matches_the_shipped_inventory() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let status = inventory(root);
+        let status = inventory_at(root);
         assert!(
             status
                 .skills

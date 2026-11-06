@@ -67,9 +67,10 @@ fn init_force_skills_refreshes_existing_skills_but_plain_init_preserves_them() {
     forced.no_skills = false;
     forced.force_skills = true;
     run(&root, &forced).unwrap();
+    assert_ne!(std::fs::read_to_string(&path).unwrap(), "locally stale\n");
     assert_eq!(
-        crate::install::skill_inventory(&root).status(".agents/skills/criv/SKILL.md"),
-        Some(crate::install::InstalledSkillStatus::Current)
+        crate::install::outdated_skills_advisory(&RepositoryFiles::open(&root).unwrap()),
+        None
     );
 
     let _ = std::fs::remove_dir_all(root);

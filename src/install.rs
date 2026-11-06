@@ -3,14 +3,8 @@
 mod editor;
 mod skills;
 
-pub use editor::{InstallEditorOptions, run as install_editor};
+pub use editor::{InstallEditorOptions, install_editor};
 pub use skills::{
-    InstallMode, InstallReport, SkillPublication, describe_claude_publication,
-    install_from as install_skills_from, outdated_skills_advisory,
+    InstallMode, SkillPublication, describe_claude_publication, install_skills,
+    outdated_skills_advisory,
 };
-
-#[cfg(test)]
-pub(crate) use skills::inventory as skill_inventory;
-
-#[cfg(test)]
-pub(crate) use skills::InstalledSkillStatus;
