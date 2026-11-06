@@ -9,7 +9,7 @@
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
-use std::process::{Child, Command as ProcessCommand, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 mod support;
 
 use predicates::prelude::*;
-use support::criv;
+use support::{criv, git, git_repository, git_stdout};
 use tempfile::TempDir;
 
 fn normalize_newlines(contents: &str) -> String {
@@ -47,9 +47,7 @@ fn init_with_skills(root: &Path) {
 }
 
 fn init_git_vault(root: &Path) {
-    git(root, &["init", "-b", "main"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "main");
     init(root);
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "initial vault"]);
@@ -60,17 +58,11 @@ fn doc(id: &str, title: &str, body: &str) -> String {
 }
 
 #[test]
-fn vault_validation_and_publication_are_independent_of_architecture() {
+fn check_and_watch_once_need_no_external_tools_and_replace_a_corrupt_state() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     let empty_path = TempDir::new().unwrap();
     init(root);
-    fs::create_dir_all(root.join("docs/architecture")).unwrap();
-    fs::write(
-        root.join("docs/architecture/model.c4"),
-        "not a valid diagram\n",
-    )
-    .unwrap();
     fs::create_dir_all(root.join(".criv")).unwrap();
     fs::write(
         root.join(".criv/state.json"),
@@ -92,11 +84,7 @@ fn vault_validation_and_publication_are_independent_of_architecture() {
 
     let state: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(root.join(".criv/state.json")).unwrap()).unwrap();
-    assert!(state.get("architecture").is_none());
-    assert_eq!(
-        fs::read_to_string(root.join("docs/architecture/model.c4")).unwrap(),
-        "not a valid diagram\n"
-    );
+    assert!(state["graph"]["nodes"].is_array(), "{state}");
 }
 
 #[test]
@@ -310,6 +298,16 @@ fn check_nudges_only_text_output_for_stale_skills() {
         .assert()
         .success()
         .stdout(predicate::str::is_empty());
+
+    criv(root)
+        .args(["init", "--force-skills"])
+        .assert()
+        .success();
+    criv(root)
+        .arg("check")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("out of date").not());
 }
 
 #[test]
@@ -322,38 +320,6 @@ fn check_is_silent_about_deliberately_absent_skills() {
         .assert()
         .success()
         .stdout(predicate::str::contains("out of date").not());
-}
-
-#[test]
-fn force_skills_cli_refresh_creates_only_skills() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    criv(root).args(["init", "--no-skills"]).assert().success();
-
-    criv(root)
-        .args(["init", "--force-skills"])
-        .assert()
-        .success();
-
-    assert!(root.join(".agents/skills/criv/SKILL.md").exists());
-    assert!(root.join(".claude/skills/criv/SKILL.md").exists());
-    assert!(!root.join(".obsidian").exists());
-    assert!(!root.join(".vscode/extensions.json").exists());
-    assert!(!root.join(".githooks").exists());
-}
-
-#[test]
-fn init_rejects_removed_editor_options() {
-    let temp = TempDir::new().unwrap();
-
-    for option in ["--no-obsidian", "--no-vscode"] {
-        criv(temp.path())
-            .args(["init", option])
-            .assert()
-            .failure()
-            .code(2)
-            .stderr(predicate::str::contains("unexpected argument"));
-    }
 }
 
 #[test]
@@ -380,7 +346,7 @@ fn unreadable_skill_content_never_breaks_check_or_machine_formats() {
 }
 
 #[test]
-fn init_check_watch_query_search_and_enforce_workflow() {
+fn init_check_watch_query_and_enforce_workflow() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
 
@@ -419,24 +385,14 @@ fn init_check_watch_query_search_and_enforce_workflow() {
 }
 
 #[test]
-fn source_graph_cache_is_written_and_refreshed() {
+fn source_queries_see_edits_made_after_an_earlier_run() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
 
     init(root);
     fs::create_dir_all(root.join("src")).unwrap();
     fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
-
     criv(root).args(["watch", "--once"]).assert().success();
-
-    let cache_path = root.join(".criv/source-graph.json");
-    assert!(cache_path.exists());
-    let before = fs::read_to_string(&cache_path).unwrap();
-    let before: serde_json::Value = serde_json::from_str(&before).unwrap();
-    let before_fingerprint = before["graph"]["file_fingerprints"]["src/lib.rs"]
-        .as_str()
-        .unwrap()
-        .to_string();
 
     fs::write(
         root.join("src/lib.rs"),
@@ -444,16 +400,11 @@ fn source_graph_cache_is_written_and_refreshed() {
     )
     .unwrap();
     criv(root).arg("check").assert().success();
-
-    let after = fs::read_to_string(&cache_path).unwrap();
-    let after: serde_json::Value = serde_json::from_str(&after).unwrap();
-    assert_eq!(after["schema"], "criv.source-graph/4");
-    assert_ne!(
-        after["graph"]["file_fingerprints"]["src/lib.rs"]
-            .as_str()
-            .unwrap(),
-        before_fingerprint
-    );
+    criv(root)
+        .args(["query", "attack-surface"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("src/lib.rs#fn:added"));
 }
 
 #[test]
@@ -684,7 +635,7 @@ fn check_accepts_valid_crlf_frontmatter() {
 }
 
 // Windows cannot represent the quote, tab, and newline characters used in the
-// filename fixture. JSON escaping remains covered there by the search test.
+// filename fixture. JSON escaping remains covered there by the check JSON test.
 #[cfg(not(windows))]
 #[test]
 fn query_json_output_is_valid_for_special_characters() {
@@ -974,9 +925,7 @@ fn elixir_acceptance_fixture_covers_the_complete_static_contract() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     init(root);
-    git(root, &["init", "-b", "main"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "main");
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "base vault"]);
 
@@ -1248,6 +1197,16 @@ fn snapshot_and_docs_queries_do_not_touch_the_source_graph_cache() {
 }
 
 #[test]
+fn bare_criv_prints_the_root_help_and_succeeds() {
+    let temp = TempDir::new().unwrap();
+    criv(temp.path())
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Usage: criv"))
+        .stdout(predicate::str::contains("Commands:"));
+}
+
+#[test]
 fn query_usage_errors_are_reported() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
@@ -1395,7 +1354,7 @@ fn query_diff_compares_snapshots_and_reports_errors() {
 }
 
 #[test]
-fn automatic_snapshot_retention_has_no_public_maintenance_commands() {
+fn automatic_snapshot_retention_keeps_the_configured_count_and_committed_state() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     query_fixture(root);
@@ -1404,9 +1363,7 @@ fn automatic_snapshot_retention_has_no_public_maintenance_commands() {
         .trim()
         .to_string();
 
-    git(root, &["init", "-b", "main"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "main");
     git(root, &["add", "-f", ".criv/state.json"]);
     git(root, &["commit", "-m", "record durable state"]);
 
@@ -1435,26 +1392,6 @@ fn automatic_snapshot_retention_has_no_public_maintenance_commands() {
             .any(|name| name == &format!("{original_hash}.json"))
     );
 
-    for args in [vec!["state"], vec!["state", "list"], vec!["state", "prune"]] {
-        criv(root)
-            .args(args)
-            .assert()
-            .failure()
-            .code(2)
-            .stderr(predicate::str::contains("unrecognized subcommand 'state'"));
-    }
-
-    criv(root)
-        .arg("--help")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("state").not());
-    criv(root)
-        .arg("--usage")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("\"name\":\"state\"").not());
-
     criv(root)
         .args(["query", "diff", "HEAD", "HEAD"])
         .assert()
@@ -1467,9 +1404,7 @@ fn query_diff_reads_state_from_a_git_ref() {
     let root = temp.path();
 
     query_fixture(root);
-    git(root, &["init"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "main");
     git(root, &["add", "-f", ".criv/state.json"]);
     git(root, &["commit", "-m", "record state"]);
 
@@ -1486,9 +1421,7 @@ fn query_diff_uses_the_requested_root_despite_inherited_git_context() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     query_fixture(root);
-    git(root, &["init"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "main");
     git(root, &["add", "-f", ".criv/state.json"]);
     git(root, &["commit", "-m", "record state"]);
 
@@ -1508,9 +1441,7 @@ fn query_diff_reads_a_git_ref_without_a_git_executable() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     query_fixture(root);
-    git(root, &["init"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "main");
     git(root, &["add", "-f", ".criv/state.json"]);
     git(root, &["commit", "-m", "record state"]);
 
@@ -1529,9 +1460,7 @@ fn query_diff_reads_a_git_ref_from_a_linked_worktree() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     query_fixture(root);
-    git(root, &["init"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "main");
     git(root, &["add", "criv.toml", "src", "docs"]);
     git(root, &["add", "-f", ".criv/state.json"]);
     git(root, &["commit", "-m", "record vault and state"]);
@@ -1551,9 +1480,7 @@ fn query_diff_rejects_non_utf8_state_from_a_git_ref() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     query_fixture(root);
-    git(root, &["init"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "main");
     fs::write(root.join(".criv/state.json"), [0xff, 0xfe]).unwrap();
     git(root, &["add", "-f", ".criv/state.json"]);
     git(root, &["commit", "-m", "record invalid state"]);
@@ -2057,23 +1984,96 @@ policy:
 }
 
 #[test]
-fn editor_source_lookup_policies_accept_the_contract_and_reject_regressions() {
+fn typescript_and_rust_rule_policies_accept_compliant_code_and_reject_each_violation() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     init(root);
     fs::create_dir_all(root.join("src")).unwrap();
     write_criv_config(root, vec!["src"], vec![], true);
 
-    let decision = normalize_newlines(include_str!(
-        "../docs/adr/0097-explicit-source-target-lookup-results.md"
-    ));
-    let frontmatter = decision
-        .strip_prefix("---\n")
-        .unwrap()
-        .split_once("\n---\n")
-        .unwrap()
-        .0;
-    let policy = frontmatter.split_once("policy:\n").unwrap().1;
+    let policy = r#"  patterns:
+    - id: no-editor-node-or-empty-lookup-api
+      language: typescript
+      pattern: $OBJECT.lookupNode($$$ARGS)
+    - id: no-vscode-raw-target-open-fallback
+      language: typescript
+      pattern: parseSourceTarget($NODE?.source_target ?? $NODE?.path ?? $TARGET)
+    - id: no-direct-obsidian-href-decode
+      language: typescript
+      rule: |
+        all:
+          - pattern: decodeURIComponent($TARGET)
+          - inside:
+              pattern: 'function linkTargets($$$ARGS): $RETURN { $$$BODY }'
+              stopBy: end
+    - id: vscode-lookup-adapter-needs-result-states
+      language: typescript
+      rule: |
+        all:
+          - pattern: 'export function resolveSourceTarget($$$ARGS): $RETURN { $$$BODY }'
+          - any:
+              - not:
+                  has:
+                    pattern: $RESULT.kind === "resolved"
+                    stopBy: end
+              - not:
+                  has:
+                    pattern: $RESULT.kind === "unresolved"
+                    stopBy: end
+              - not:
+                  has:
+                    pattern: $RESULT.kind === "ambiguous"
+                    stopBy: end
+    - id: obsidian-lookup-adapter-needs-result-states
+      language: typescript
+      rule: |
+        all:
+          - pattern: 'export function resolveSourceResult($$$ARGS): $RETURN { $$$BODY }'
+          - any:
+              - not:
+                  has:
+                    pattern: $RESULT.kind === "resolved"
+                    stopBy: end
+              - not:
+                  has:
+                    pattern: $RESULT.kind === "unresolved"
+                    stopBy: end
+              - not:
+                  has:
+                    pattern: $RESULT.kind === "ambiguous"
+                    stopBy: end
+    - id: vscode-open-needs-result-states
+      language: typescript
+      rule: |
+        all:
+          - pattern: 'async function openSourceTarget($$$ARGS): $RETURN { $$$BODY }'
+          - any:
+              - not:
+                  has:
+                    pattern: $RESULT.kind === "malformed"
+                    stopBy: end
+    - id: no-wasm-source-suffix-resolution
+      language: rust
+      rule: |
+        all:
+          - pattern: $VALUE.ends_with($QUERY)
+          - inside:
+              pattern: fn lookup_source_target(&self, $$$ARGS) -> $RETURN { $$$BODY }
+              stopBy: end
+    - id: wasm-lookup-needs-distinct-indexes
+      language: rust
+      rule: |
+        all:
+          - pattern: fn lookup_source_target(&self, $$$ARGS) -> $RETURN { $$$BODY }
+          - any:
+              - not:
+                  has:
+                    pattern: self.exact_source_lookup.get($KEY)
+                    stopBy: end
+              - not:
+                  has:
+                    pattern: self.legacy_source_lookup.get($KEY)
+                    stopBy: end"#;
     fs::write(
         root.join("docs/adr/0097-source-lookup-policy.md"),
         format!(
@@ -2406,9 +2406,7 @@ It is not active yet.
 fn adr_enforcement_preserves_text_json_repairs_and_failure_priority() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    git(root, &["init", "-b", "main"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "main");
     init(root);
     write_criv_config(root, vec!["src"], vec![], true);
     fs::create_dir_all(root.join("src")).unwrap();
@@ -2471,9 +2469,7 @@ fn commit_enforcement_scans_staged_governed_policy_files() {
     let root = temp.path();
 
     init(root);
-    git(root, &["init"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "main");
     fs::create_dir_all(root.join("src")).unwrap();
     fs::create_dir_all(root.join("docs/adr")).unwrap();
     write_criv_config(
@@ -2555,9 +2551,7 @@ fn commit_enforcement_uses_the_requested_root_despite_inherited_git_context() {
     let root = temp.path();
 
     init(root);
-    git(root, &["init"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "main");
     fs::write(root.join("tracked.txt"), "before\n").unwrap();
     git(root, &["add", "tracked.txt"]);
     git(root, &["commit", "-m", "initial"]);
@@ -2601,9 +2595,7 @@ fn manual_push_enforcement_runs_without_a_git_executable() {
     let root = temp.path();
 
     init(root);
-    git(root, &["init"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "main");
     fs::write(root.join("tracked.txt"), "before\n").unwrap();
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "initial"]);
@@ -2626,9 +2618,7 @@ fn commit_enforcement_respects_selector_governed_policy_files() {
     let root = temp.path();
 
     init(root);
-    git(root, &["init"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "main");
     fs::create_dir_all(root.join("src")).unwrap();
     fs::create_dir_all(root.join("docs/adr")).unwrap();
     write_criv_config(
@@ -2800,7 +2790,7 @@ fn long_running_watch_rebuilds_docs_sources_bursts_and_recovers() {
         "pub fn invalid_config_change() {}\n",
     )
     .unwrap();
-    assert_state_remains(root, &last_good_state, "a failed rebuild");
+    assert_state_kept_after_rejection(&mut watch, root, &last_good_state, "a failed rebuild");
 
     fs::write(root.join("criv.toml"), config).unwrap();
     fs::write(root.join("src/lib.rs"), "pub fn recovered() {}\n").unwrap();
@@ -2914,17 +2904,17 @@ fn live_watch_rebuilds_each_configuration_dimension_and_matches_one_shot() {
         "---\nid: configured-docs\nkind: doc\ntitle: Configured docs\n---\n\n# Configured docs\n",
     )
     .unwrap();
-    write_watch_config(root, "docs", vec!["src"], vec![], true);
+    write_criv_config_with_docs(root, "docs", vec!["src"], vec![], true);
     let mut watch = WatchProcess::spawn(root);
     watch.wait_until_running();
 
-    write_watch_config(root, "docs", vec!["alt"], vec![], true);
+    write_criv_config_with_docs(root, "docs", vec!["alt"], vec![], true);
     wait_for_state(&mut watch, root, "the source.roots replacement", |state| {
         state_has_node(state, "symbol:alt/visible.rs#fn:visible")
             && !state_has_node(state, "symbol:src/old.rs#fn:old_source")
     });
 
-    write_watch_config(root, "docs", vec!["alt"], vec!["**/hidden.rs"], true);
+    write_criv_config_with_docs(root, "docs", vec!["alt"], vec!["**/hidden.rs"], true);
     wait_for_state(
         &mut watch,
         root,
@@ -2935,12 +2925,12 @@ fn live_watch_rebuilds_each_configuration_dimension_and_matches_one_shot() {
         },
     );
 
-    write_watch_config(root, "docs", vec!["alt"], vec!["**/hidden.rs"], false);
+    write_criv_config_with_docs(root, "docs", vec!["alt"], vec!["**/hidden.rs"], false);
     wait_for_state(&mut watch, root, "the index.source replacement", |state| {
         !state_has_node(state, "code:alt/visible.rs")
     });
 
-    write_watch_config(root, "knowledge", vec!["alt"], vec!["**/hidden.rs"], false);
+    write_criv_config_with_docs(root, "knowledge", vec!["alt"], vec!["**/hidden.rs"], false);
     wait_for_state(&mut watch, root, "the vault.docs replacement", |state| {
         state_has_node(state, "note:configured-docs")
     });
@@ -2954,14 +2944,19 @@ fn live_watch_recovers_when_the_configured_docs_root_appears() {
     let root = temp.path();
 
     init(root);
-    write_watch_config(root, "docs", vec![], vec![], false);
+    write_criv_config_with_docs(root, "docs", vec![], vec![], false);
     let mut watch = WatchProcess::spawn(root);
     watch.wait_until_running();
     let last_good_state = fs::read_to_string(root.join(".criv/state.json")).unwrap();
 
     fs::create_dir(root.join("knowledge")).unwrap();
-    write_watch_config(root, "knowledge/docs", vec![], vec![], false);
-    assert_state_remains(root, &last_good_state, "a missing configured docs root");
+    write_criv_config_with_docs(root, "knowledge/docs", vec![], vec![], false);
+    assert_state_kept_after_rejection(
+        &mut watch,
+        root,
+        &last_good_state,
+        "a missing configured docs root",
+    );
 
     fs::create_dir_all(root.join("knowledge/docs/adr")).unwrap();
     fs::write(
@@ -2983,7 +2978,7 @@ fn live_watch_tracks_missing_and_type_changing_source_roots() {
 
     init(root);
     fs::create_dir(root.join("dynamic")).unwrap();
-    write_watch_config(root, "docs", vec!["dynamic/source.rs"], vec![], true);
+    write_criv_config_with_docs(root, "docs", vec!["dynamic/source.rs"], vec![], true);
     let mut watch = WatchProcess::spawn(root);
     watch.wait_until_running();
 
@@ -3034,65 +3029,40 @@ fn live_watch_tracks_missing_and_type_changing_source_roots() {
     assert_live_state_matches_one_shot(root, watch);
 }
 
+/// Upper bound for a live watch to finish its startup rebuild.
+const WATCH_STARTUP_BOUND: Duration = Duration::from_secs(45);
+/// Upper bound for a live watch to observe a file event and publish.
+const WATCH_EVENT_BOUND: Duration = Duration::from_secs(10);
+
 struct WatchProcess {
     child: Child,
     lines: Receiver<String>,
-    stdout_reader: Option<JoinHandle<()>>,
+    readers: Vec<JoinHandle<()>>,
 }
 
 impl WatchProcess {
     fn spawn(root: &Path) -> Self {
-        let mut child = ProcessCommand::new(assert_cmd::cargo::cargo_bin("criv"))
-            .current_dir(root)
-            .env_remove("CI")
-            .env_remove("GITHUB_ACTIONS")
-            .env_remove("CRIV_BASE_REF")
-            .env_remove("GITHUB_BASE_REF")
+        let mut child = support::criv_process(root)
             .arg("watch")
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .spawn()
             .expect("start criv watch");
-        let stdout = child.stdout.take().expect("watch stdout");
         let (tx, lines) = mpsc::channel();
-        let stdout_reader = thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                if tx
-                    .send(line.unwrap_or_else(|error| format!("<stdout error: {error}>")))
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
+        let stdout = child.stdout.take().expect("watch stdout");
+        let stderr = child.stderr.take().expect("watch stderr");
+        let readers = vec![forward_lines(stdout, tx.clone()), forward_lines(stderr, tx)];
         Self {
             child,
             lines,
-            stdout_reader: Some(stdout_reader),
+            readers,
         }
     }
 
     fn wait_until_running(&mut self) {
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(45))
-            .unwrap_or_else(Instant::now);
-        let mut output = Vec::new();
-        while Instant::now() < deadline {
-            match self.lines.recv_timeout(Duration::from_millis(100)) {
-                Ok(line) => {
-                    if line == "criv watch running" {
-                        return;
-                    }
-                    output.push(line);
-                }
-                Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
-            }
-            if let Some(status) = self.child.try_wait().expect("poll watch process") {
-                panic!("criv watch exited before startup with {status}; stdout: {output:?}");
-            }
-        }
-        panic!("timed out waiting for criv watch running; stdout: {output:?}");
+        self.wait_for_line("startup", WATCH_STARTUP_BOUND, |line| {
+            line == "criv watch running"
+        });
     }
 
     fn wait_for_snapshot(&mut self, state: &str, description: &str) {
@@ -3100,14 +3070,28 @@ impl WatchProcess {
             .to_hex()
             .to_string();
         let marker = format!("state updated: snapshot {snapshot},");
+        self.wait_for_line(description, WATCH_EVENT_BOUND, |line| {
+            line.starts_with(&marker)
+        });
+    }
+
+    /// Waits until the watch reports that it rejected a reconfiguration and
+    /// keeps its last successful State.
+    fn wait_for_rejected_reconfiguration(&mut self, description: &str) {
+        self.wait_for_line(description, WATCH_EVENT_BOUND, |line| {
+            line.starts_with("criv watch: reconfiguration failed:")
+        });
+    }
+
+    fn wait_for_line(&mut self, description: &str, bound: Duration, found: impl Fn(&str) -> bool) {
         let deadline = Instant::now()
-            .checked_add(Duration::from_secs(10))
+            .checked_add(bound)
             .unwrap_or_else(Instant::now);
         let mut output = Vec::new();
         while Instant::now() < deadline {
             match self.lines.recv_timeout(Duration::from_millis(100)) {
                 Ok(line) => {
-                    if line.starts_with(&marker) {
+                    if found(&line) {
                         return;
                     }
                     output.push(line);
@@ -3116,13 +3100,27 @@ impl WatchProcess {
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
             if let Some(status) = self.child.try_wait().expect("poll watch process") {
-                panic!(
-                    "criv watch exited before {description} completed with {status}; stdout: {output:?}"
-                );
+                panic!("criv watch exited before {description} with {status}; output: {output:?}");
             }
         }
-        panic!("timed out waiting for {description} to complete; stdout: {output:?}");
+        panic!("timed out waiting for {description}; output: {output:?}");
     }
+}
+
+fn forward_lines(
+    stream: impl std::io::Read + Send + 'static,
+    tx: mpsc::Sender<String>,
+) -> JoinHandle<()> {
+    thread::spawn(move || {
+        for line in BufReader::new(stream).lines() {
+            if tx
+                .send(line.unwrap_or_else(|error| format!("<output error: {error}>")))
+                .is_err()
+            {
+                break;
+            }
+        }
+    })
 }
 
 impl Drop for WatchProcess {
@@ -3131,12 +3129,14 @@ impl Drop for WatchProcess {
             let _ = self.child.kill();
         }
         let _ = self.child.wait();
-        if let Some(stdout_reader) = self.stdout_reader.take() {
-            let _ = stdout_reader.join();
+        for reader in self.readers.drain(..) {
+            let _ = reader.join();
         }
     }
 }
 
+/// Polls the published State file until it satisfies `predicate`, then waits
+/// for the watch to report that exact snapshot.
 fn wait_for_state(
     watch: &mut WatchProcess,
     root: &Path,
@@ -3144,7 +3144,7 @@ fn wait_for_state(
     predicate: impl Fn(&serde_json::Value) -> bool,
 ) {
     let deadline = Instant::now()
-        .checked_add(Duration::from_secs(10))
+        .checked_add(WATCH_EVENT_BOUND)
         .unwrap_or_else(Instant::now);
     let state_path = root.join(".criv/state.json");
     let mut latest = String::new();
@@ -3163,15 +3163,17 @@ fn wait_for_state(
     panic!("timed out waiting for {description}; last state: {latest}");
 }
 
-fn assert_state_remains(root: &Path, expected: &str, description: &str) {
-    let deadline = Instant::now()
-        .checked_add(Duration::from_millis(800))
-        .unwrap_or_else(Instant::now);
-    while Instant::now() < deadline {
-        let actual = fs::read_to_string(root.join(".criv/state.json")).unwrap();
-        assert_eq!(actual, expected, "state changed during {description}");
-        thread::sleep(Duration::from_millis(50));
-    }
+/// Waits for the watch to reject the reconfiguration, then proves the
+/// published State is still `expected`.
+fn assert_state_kept_after_rejection(
+    watch: &mut WatchProcess,
+    root: &Path,
+    expected: &str,
+    description: &str,
+) {
+    watch.wait_for_rejected_reconfiguration(description);
+    let actual = fs::read_to_string(root.join(".criv/state.json")).unwrap();
+    assert_eq!(actual, expected, "state changed during {description}");
 }
 
 fn state_has_node(state: &serde_json::Value, id: &str) -> bool {
@@ -3194,7 +3196,11 @@ fn assert_live_state_matches_one_shot(root: &Path, watch: WatchProcess) {
     assert_eq!(live, one_shot);
 }
 
-fn write_watch_config(
+fn write_criv_config(root: &Path, roots: Vec<&str>, exclude: Vec<&str>, source_index: bool) {
+    write_criv_config_with_docs(root, "docs", roots, exclude, source_index);
+}
+
+fn write_criv_config_with_docs(
     root: &Path,
     docs: &str,
     roots: Vec<&str>,
@@ -3204,25 +3210,6 @@ fn write_watch_config(
     let config = toml::toml! {
         [vault]
         docs = docs
-        adr = "adr"
-
-        [source]
-        roots = roots
-        exclude = exclude
-
-        [index]
-        source = source_index
-
-        [enforce]
-        stages = ["commit", "push", "ci"]
-    };
-    fs::write(root.join("criv.toml"), config.to_string()).unwrap();
-}
-
-fn write_criv_config(root: &Path, roots: Vec<&str>, exclude: Vec<&str>, source_index: bool) {
-    let config = toml::toml! {
-        [vault]
-        docs = "docs"
         adr = "adr"
 
         [source]
@@ -3570,9 +3557,7 @@ fn source_reconcile_history_proof_rejects_extra_adr_edits() {
 fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    git(root, &["init", "-b", "target"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "target");
     git(root, &["config", "core.autocrlf", "true"]);
     init(root);
     write_criv_config(root, vec!["src"], vec![], true);
@@ -3881,9 +3866,7 @@ fn source_reconcile_requires_identity_before_mutating() {
 fn adr_reconcile_renames_a_same_path_branch_local_adr() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    git(root, &["init", "-b", "target"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "target");
     init(root);
     write_criv_config(root, vec!["src"], vec![], true);
     fs::create_dir_all(root.join("src")).unwrap();
@@ -3936,9 +3919,7 @@ fn adr_reconcile_renames_a_same_path_branch_local_adr() {
 fn adr_reconcile_recognizes_and_retries_a_materialized_worktree() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    git(root, &["init", "-b", "target"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "target");
     init(root);
     write_criv_config(root, vec!["src"], vec![], true);
     fs::create_dir_all(root.join("src")).unwrap();
@@ -4088,9 +4069,7 @@ fn adr_reconcile_normalizes_git_modes_and_snapshots_overlapping_permissions() {
 
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    git(root, &["init", "-b", "target"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "target");
     init(root);
     write_criv_config(root, vec!["src"], vec![], true);
     fs::create_dir_all(root.join("src")).unwrap();
@@ -4231,9 +4210,7 @@ fn adr_reconcile_normalizes_git_modes_and_snapshots_overlapping_permissions() {
 fn adr_reconcile_rejects_a_renamed_published_adr() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    git(root, &["init", "-b", "target"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "target");
     init(root);
     write_criv_config(root, vec!["src"], vec![], true);
     fs::write(
@@ -4278,9 +4255,7 @@ fn adr_reconcile_rejects_a_renamed_published_adr() {
 fn adr_reconcile_rejects_a_short_reference_carried_by_a_low_similarity_move() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    git(root, &["init", "-b", "target"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "target");
     git(root, &["config", "core.autocrlf", "true"]);
     init(root);
     write_criv_config(root, vec!["src"], vec![], true);
@@ -4346,9 +4321,7 @@ fn adr_reconcile_rejects_a_short_reference_carried_by_a_low_similarity_move() {
 fn adr_reconcile_proves_an_overlapping_mapping_transaction() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    git(root, &["init", "-b", "target"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "target");
     git(root, &["config", "core.autocrlf", "true"]);
     init(root);
     write_criv_config(root, vec!["src"], vec![], true);
@@ -4508,9 +4481,7 @@ fn adr_reconcile_receipt_rejects_a_later_mutation_in_the_push_range() {
 fn adr_reconcile_uses_the_requested_root_despite_inherited_git_context() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    git(root, &["init", "-b", "target"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "target");
     init(root);
     fs::write(
         root.join("docs/adr/0001-base.md"),
@@ -4558,9 +4529,7 @@ fn adr_reconcile_uses_the_requested_root_despite_inherited_git_context() {
 fn adr_reconcile_detects_a_collision_from_a_linked_worktree() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
-    git(root, &["init", "-b", "target"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "target");
     init(root);
     fs::write(
         root.join("docs/adr/0001-base.md"),
@@ -4606,26 +4575,6 @@ fn adr_reconcile_detects_a_collision_from_a_linked_worktree() {
         .stdout(predicate::str::contains("ADR-0002 -> ADR-0003"));
 }
 
-#[test]
-fn git_test_helper_disables_commit_signing() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    git(root, &["init", "-b", "main"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
-    git(root, &["config", "commit.gpgsign", "true"]);
-    git(root, &["config", "gpg.program", "false"]);
-    fs::write(root.join("file.txt"), "test\n").unwrap();
-    git(root, &["add", "file.txt"]);
-
-    git(root, &["commit", "-m", "test commit"]);
-
-    assert_eq!(
-        git_stdout(root, &["log", "-1", "--format=%s"]).trim(),
-        "test commit"
-    );
-}
-
 fn adr(id: &str, title: &str, slug: &str) -> String {
     format!(
         "---\nid: ADR-{id}\nkind: decision\ntitle: {title}\nstatus: accepted\ndate: 2026-08-02\n---\n\n# {title}\n\n## Context\n\nA decision is needed.\n\n## Decision\n\n{slug}\n\n## Consequences\n\nThe decision governs the vault.\n"
@@ -4633,9 +4582,7 @@ fn adr(id: &str, title: &str, slug: &str) -> String {
 }
 
 fn adr_collision_fixture(root: &Path) {
-    git(root, &["init", "-b", "target"]);
-    git(root, &["config", "user.email", "criv@example.com"]);
-    git(root, &["config", "user.name", "criv"]);
+    git_repository(root, "target");
     init(root);
     write_criv_config(root, vec!["src"], vec![], true);
     fs::create_dir_all(root.join("src")).unwrap();
@@ -4666,39 +4613,4 @@ fn adr_collision_fixture(root: &Path) {
     git(root, &["add", "."]);
     git(root, &["commit", "-m", "target adr"]);
     git(root, &["checkout", "topic"]);
-}
-
-fn git(root: &Path, args: &[&str]) {
-    git_stdout(root, args);
-}
-
-/// Runs the Git CLI in `root`, isolated from any repository the test process
-/// itself runs in, and returns its standard output.
-fn git_stdout(root: &Path, args: &[&str]) -> String {
-    let mut command = std::process::Command::new("git");
-    command.current_dir(root);
-    for variable in [
-        "GIT_DIR",
-        "GIT_WORK_TREE",
-        "GIT_INDEX_FILE",
-        "GIT_COMMON_DIR",
-        "GIT_PREFIX",
-        "GIT_OBJECT_DIRECTORY",
-        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-    ] {
-        command.env_remove(variable);
-    }
-    let output = command
-        .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
-        .args(args)
-        .output()
-        .expect("git command should run");
-    assert!(
-        output.status.success(),
-        "git {:?} failed: {}{}",
-        args,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap()
 }

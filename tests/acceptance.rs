@@ -39,7 +39,7 @@ impl VaultWorld {
 #[given("an empty directory")]
 const fn empty_directory(_world: &mut VaultWorld) {}
 
-#[given("an initialized vault without a Git repository")]
+#[given("an initialized vault")]
 fn initialized_vault(world: &mut VaultWorld) {
     support::criv(world.directory.path())
         .args(["init", "--no-skills"])
@@ -47,10 +47,14 @@ fn initialized_vault(world: &mut VaultWorld) {
         .success();
 }
 
+#[given("no Git repository")]
+fn no_git_repository(world: &mut VaultWorld) {
+    assert!(!world.directory.path().join(".git").exists());
+}
+
 #[given("a Git repository with no staged changes")]
 fn git_repository(world: &mut VaultWorld) {
-    // The CLI embeds Git; setup also avoids requiring a Git executable.
-    git2::Repository::init(world.directory.path()).expect("initialize Git repository");
+    support::git_repository(world.directory.path(), "main");
 }
 
 #[given(expr = "a committed vault with documentation at {string} and one decision")]
@@ -69,12 +73,9 @@ fn committed_vault_with_decision(world: &mut VaultWorld, docs: String) {
         "---\nid: ADR-0001\nkind: decision\ntitle: Choose Storage\nstatus: accepted\n---\n\n# Choose Storage\n",
     )
     .expect("write decision");
-    let repository = git2::Repository::init(root).expect("initialize Git repository");
-    let tree = stage_all(&repository);
-    let signature = git2::Signature::now("criv", "criv@example.com").expect("signature");
-    repository
-        .commit(Some("HEAD"), &signature, &signature, "decide", &tree, &[])
-        .expect("commit decision");
+    support::git_repository(root, "main");
+    support::git(root, &["add", "."]);
+    support::git(root, &["commit", "-m", "decide"]);
     world.decision = Some(decision);
 }
 
@@ -85,22 +86,10 @@ fn edit_and_stage_decision(world: &mut VaultWorld) {
     let mut contents = std::fs::read_to_string(&decision).expect("read decision");
     contents.push_str("\nA later change of mind.\n");
     std::fs::write(&decision, contents).expect("edit decision");
-    stage_all(&git2::Repository::open(root).expect("open Git repository"));
+    support::git(root, &["add", "."]);
 }
 
-fn stage_all(repository: &git2::Repository) -> git2::Tree<'_> {
-    let mut index = repository.index().expect("Git index");
-    index
-        .add_all(["*"], git2::IndexAddOption::DEFAULT, None)
-        .expect("stage files");
-    index.write().expect("write Git index");
-    let tree = index.write_tree().expect("write Git tree");
-    repository.find_tree(tree).expect("find Git tree")
-}
-
-#[when(
-    regex = r"^I run criv (check|query next-adr-id|watch --once|enforce --stage ci|enforce --stage commit|check --changed)$"
-)]
+#[when(regex = r"^I run criv (.+)$")]
 fn run_command(world: &mut VaultWorld, arguments: String) {
     world.output = Some(
         support::criv(world.directory.path())
@@ -110,7 +99,7 @@ fn run_command(world: &mut VaultWorld, arguments: String) {
     );
 }
 
-#[when(regex = r"^I check staged changes in (default|text|json|github) format$")]
+#[when(expr = "I check staged changes in {word} format")]
 fn check_staged(world: &mut VaultWorld, format: String) {
     let mut command = support::criv(world.directory.path());
     command.args(["check", "--changed"]);

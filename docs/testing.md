@@ -42,8 +42,12 @@ cargo test --locked --test acceptance -- --name "Refuse vault commands"
 The hk test step also selects `.feature` changes.
 No Node.js runner, browser, or separate Cucumber installation is needed.
 Undefined or skipped steps fail the suite rather than silently passing.
-Each scenario gets its own temporary directory and invokes the built binary;
-shared test setup clears inherited Git-hook and CI context.
+Each scenario gets its own temporary directory and invokes the built binary.
+All integration test targets share `tests/support`: one list of inherited
+Git-hook and CI variables to clear, the `criv` command builders, and one Git
+fixture builder. The Git fixture builder runs the Git CLI, because workflow
+fixtures need moves, stashes, merges, and linked worktrees; criv itself still
+runs without a Git executable.
 
 ## Add or migrate a feature
 
