@@ -346,12 +346,7 @@ impl Vault {
             .into_iter()
             .map(|path| parse_note(files, &root.join(path)))
             .collect::<Result<Vec<_>>>()?;
-        let assets = load_documentation_assets(
-            files,
-            discovered.assets,
-            asset::MAX_BYTES,
-            asset::MAX_TOTAL_BYTES,
-        )?;
+        let assets = load_documentation_assets(files, discovered.assets)?;
 
         let mut note_ids = BTreeMap::new();
         let mut filenames = BTreeMap::new();
@@ -687,14 +682,12 @@ impl Vault {
 fn load_documentation_assets(
     files: &RepositoryFiles,
     mut paths: Vec<String>,
-    max_asset_bytes: u64,
-    max_total_bytes: u64,
 ) -> Result<Vec<DocumentationAsset>> {
     paths.sort();
     let mut total_bytes = 0_u64;
     let mut assets = Vec::new();
     for path in paths {
-        let Some(contents) = files.read_bounded(Path::new(&path), max_asset_bytes)? else {
+        let Some(contents) = files.read_bounded(Path::new(&path), asset::MAX_BYTES)? else {
             continue;
         };
         let Some(expected_mime) = asset::mime_for_path(&path) else {
@@ -706,7 +699,7 @@ fn load_documentation_assets(
         let bytes = u64::try_from(contents.len()).map_err(|_| {
             crate::CrivError::new(format!("asset `{path}` exceeds the supported byte range"))
         })?;
-        if total_bytes.saturating_add(bytes) > max_total_bytes {
+        if total_bytes.saturating_add(bytes) > asset::MAX_TOTAL_BYTES {
             break;
         }
         total_bytes = total_bytes.saturating_add(bytes);
@@ -986,108 +979,64 @@ mod tests {
         std::fs::write(root.path().join("docs/assets/b.png"), png).unwrap();
         std::fs::write(root.path().join("docs/assets/a.png"), png).unwrap();
         std::fs::write(root.path().join("docs/assets/wrong.jpg"), png).unwrap();
-        let oversized = [png.as_slice(), png.as_slice()].concat();
-        std::fs::write(root.path().join("docs/assets/0-oversized.png"), oversized).unwrap();
-        std::fs::write(root.path().join("docs/assets/active.svg"), b"<svg></svg>").unwrap();
-        let files = RepositoryFiles::open(root.path()).unwrap();
-
-        let assets = load_documentation_assets(
-            &files,
-            vec![
-                "docs/assets/wrong.jpg".into(),
-                "docs/assets/0-oversized.png".into(),
-                "docs/assets/b.png".into(),
-                "docs/assets/a.png".into(),
-            ],
-            u64::try_from(png.len()).unwrap(),
-            u64::try_from(png.len()).unwrap(),
+        std::fs::write(
+            root.path().join("docs/assets/0-oversized.png"),
+            sized_png(asset::MAX_BYTES + 1),
         )
         .unwrap();
+        std::fs::write(root.path().join("docs/assets/active.svg"), b"<svg></svg>").unwrap();
 
-        assert_eq!(assets.len(), 1);
-        assert_eq!(assets[0].path, "docs/assets/a.png");
+        let vault = docs_only(root.path());
+
+        let assets = vault.documentation_assets();
+        assert_eq!(
+            assets
+                .iter()
+                .map(|asset| asset.path.as_str())
+                .collect::<Vec<_>>(),
+            ["docs/assets/a.png", "docs/assets/b.png"]
+        );
         assert_eq!(assets[0].mime, "image/png");
         assert_eq!(assets[0].bytes, u64::try_from(png.len()).unwrap());
         assert_eq!(assets[0].hash.len(), 64);
+        assert!(vault.source_files().is_empty());
+    }
 
-        std::fs::remove_file(root.path().join("docs/assets/0-oversized.png")).unwrap();
+    #[test]
+    fn documentation_asset_total_bound_counts_verified_assets_and_stops_at_the_first_overflow() {
+        let root = tempfile::TempDir::new().unwrap();
+        let assets = root.path().join("docs/assets");
+        std::fs::create_dir_all(&assets).unwrap();
+        let largest = sized_png(asset::MAX_BYTES);
+        let fitting = asset::MAX_TOTAL_BYTES / asset::MAX_BYTES;
+        for index in 0..fitting {
+            std::fs::write(assets.join(format!("{index:02}.png")), &largest).unwrap();
+        }
+        let mut mismatched = largest.clone();
+        mismatched[0] = b'x';
+        std::fs::write(assets.join("00-mismatched.png"), mismatched).unwrap();
+        std::fs::write(assets.join("98-overflow.png"), &largest).unwrap();
+        std::fs::write(assets.join("99-small.png"), sized_png(16)).unwrap();
+
         let vault = docs_only(root.path());
+
         assert_eq!(
             vault
                 .documentation_assets()
                 .iter()
                 .map(|asset| asset.path.as_str())
                 .collect::<Vec<_>>(),
-            ["docs/assets/a.png", "docs/assets/b.png"]
-        );
-        assert!(vault.source_files().is_empty());
-    }
-
-    #[test]
-    fn documentation_asset_total_bound_stops_at_the_first_overflow() {
-        let root = tempfile::TempDir::new().unwrap();
-        std::fs::create_dir_all(root.path().join("docs/assets")).unwrap();
-        let ten_byte_png = b"\x89PNG\r\n\x1a\nAA";
-        let eight_byte_png = b"\x89PNG\r\n\x1a\n";
-        for (path, contents) in [
-            ("docs/assets/a.png", ten_byte_png.as_slice()),
-            ("docs/assets/b.png", ten_byte_png.as_slice()),
-            ("docs/assets/c.png", eight_byte_png.as_slice()),
-        ] {
-            std::fs::write(root.path().join(path), contents).unwrap();
-        }
-        let files = RepositoryFiles::open(root.path()).unwrap();
-
-        let assets = load_documentation_assets(
-            &files,
-            vec![
-                "docs/assets/c.png".into(),
-                "docs/assets/b.png".into(),
-                "docs/assets/a.png".into(),
-            ],
-            u64::try_from(ten_byte_png.len()).unwrap(),
-            18,
-        )
-        .unwrap();
-
-        assert_eq!(
-            assets
-                .iter()
-                .map(|asset| asset.path.as_str())
-                .collect::<Vec<_>>(),
-            ["docs/assets/a.png"]
+            (0..fitting)
+                .map(|index| format!("docs/assets/{index:02}.png"))
+                .collect::<Vec<_>>()
         );
     }
 
-    #[test]
-    fn documentation_asset_total_bound_counts_only_verified_assets() {
-        let root = tempfile::TempDir::new().unwrap();
-        std::fs::create_dir_all(root.path().join("docs/assets")).unwrap();
-        let png = b"\x89PNG\r\n\x1a\nAA";
-        std::fs::write(root.path().join("docs/assets/a.png"), png).unwrap();
-        std::fs::write(root.path().join("docs/assets/b.png"), b"not a png!").unwrap();
-        std::fs::write(root.path().join("docs/assets/c.png"), png).unwrap();
-        let files = RepositoryFiles::open(root.path()).unwrap();
-
-        let assets = load_documentation_assets(
-            &files,
-            vec![
-                "docs/assets/a.png".into(),
-                "docs/assets/b.png".into(),
-                "docs/assets/c.png".into(),
-            ],
-            10,
-            20,
-        )
-        .unwrap();
-
-        assert_eq!(
-            assets
-                .iter()
-                .map(|asset| asset.path.as_str())
-                .collect::<Vec<_>>(),
-            ["docs/assets/a.png", "docs/assets/c.png"]
-        );
+    /// A PNG signature padded to `bytes` bytes.
+    fn sized_png(bytes: u64) -> Vec<u8> {
+        let mut contents = b"\x89PNG\r\n\x1a\n".to_vec();
+        contents.resize(usize::try_from(bytes).unwrap(), 0);
+        contents
     }
 
     #[test]

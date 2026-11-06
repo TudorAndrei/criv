@@ -56,24 +56,11 @@ fn scan_wiki_links(text: &str, skip_open: impl Fn(usize) -> bool) -> Vec<WikiLin
 }
 
 pub fn find_wiki_links_with_lines(markdown: &str) -> Vec<(usize, String, Range<usize>)> {
-    let mut in_code_block = false;
-    let mut code_ranges = Vec::new();
-
-    for (event, range) in Parser::new(markdown).into_offset_iter() {
-        match event {
-            Event::Start(Tag::CodeBlock(_)) => {
-                in_code_block = true;
-                code_ranges.push(range);
-            }
-            Event::End(TagEnd::CodeBlock) => {
-                in_code_block = false;
-                code_ranges.push(range);
-            }
-            Event::Code(_) => code_ranges.push(range),
-            _ if in_code_block => code_ranges.push(range),
-            _ => {}
-        }
-    }
+    let code_ranges = Parser::new(markdown)
+        .into_offset_iter()
+        .filter(|(event, _)| matches!(event, Event::Start(Tag::CodeBlock(_)) | Event::Code(_)))
+        .map(|(_, range)| range)
+        .collect::<Vec<_>>();
 
     scan_wiki_links(markdown, |open| in_ranges(open, &code_ranges))
         .into_iter()

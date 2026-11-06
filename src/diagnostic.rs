@@ -401,71 +401,52 @@ impl SourceLocation {
 
 fn inclusive_end_position(source: &str, end: usize) -> Option<LspPosition> {
     let (offset, character) = source.get(..end)?.char_indices().next_back()?;
+    let (line, prefix) = line_prefix(source, offset)?;
     if character == '\n'
         || character == '\r' && source.as_bytes().get(offset.checked_add(1)?) == Some(&b'\n')
     {
-        let line = line_index(source, offset);
-        let (line_start, line_end) = line_bounds(source, line)?;
         return Some(LspPosition {
             line,
-            character: source
-                .get(line_start..line_end)?
-                .chars()
-                .count()
-                .saturating_sub(1),
+            character: prefix.chars().count().saturating_sub(1),
         });
     }
-    byte_to_character_position(source, offset)
+    Some(LspPosition {
+        line,
+        character: prefix.chars().count(),
+    })
 }
 
 fn byte_to_lsp_position(source: &str, offset: usize) -> Option<LspPosition> {
-    let position = byte_to_character_position(source, offset)?;
-    let (line_start, _) = line_bounds(source, position.line)?;
-    let mut prefix = source.get(line_start..offset)?;
-    if prefix.ends_with('\r') && source.as_bytes().get(offset) == Some(&b'\n') {
-        prefix = prefix.strip_suffix('\r')?;
-    }
+    let (line, prefix) = line_prefix(source, offset)?;
     Some(LspPosition {
-        line: position.line,
+        line,
         character: prefix.chars().map(char::len_utf16).sum(),
     })
 }
 
 fn byte_to_character_position(source: &str, offset: usize) -> Option<LspPosition> {
-    if offset > source.len() || !source.is_char_boundary(offset) {
-        return None;
-    }
-    let prefix = source.get(..offset)?;
-    let line = line_index(source, offset);
-    let line_start = prefix
-        .rfind('\n')
-        .map_or(Some(0), |newline| newline.checked_add(1))?;
-    let mut line_prefix = source.get(line_start..offset)?;
-    if line_prefix.ends_with('\r') && source.as_bytes().get(offset) == Some(&b'\n') {
-        line_prefix = line_prefix.strip_suffix('\r')?;
-    }
+    let (line, prefix) = line_prefix(source, offset)?;
     Some(LspPosition {
         line,
-        character: line_prefix.chars().count(),
+        character: prefix.chars().count(),
     })
 }
 
-fn line_bounds(source: &str, target_line: usize) -> Option<(usize, usize)> {
-    let mut line = 0;
-    let mut start = 0;
-    while line < target_line {
-        let newline = source.get(start..)?.find('\n')?;
-        start = start.checked_add(newline)?.checked_add(1)?;
-        line = line.checked_add(1)?;
+/// The zero-based line of `offset` and the text of that line before it; a
+/// CR that ends the line with the LF at `offset` is not part of the text.
+fn line_prefix(source: &str, offset: usize) -> Option<(usize, &str)> {
+    if offset > source.len() || !source.is_char_boundary(offset) {
+        return None;
     }
-    let mut end = source
-        .get(start..)?
-        .find('\n')
-        .map_or(Some(source.len()), |newline| start.checked_add(newline))?;
-    if end > start && source.as_bytes().get(end.checked_sub(1)?) == Some(&b'\r') {
-        end = end.checked_sub(1)?;
+    let before = source.get(..offset)?;
+    let line_start = before
+        .rfind('\n')
+        .map_or(Some(0), |newline| newline.checked_add(1))?;
+    let mut prefix = source.get(line_start..offset)?;
+    if prefix.ends_with('\r') && source.as_bytes().get(offset) == Some(&b'\n') {
+        prefix = prefix.strip_suffix('\r')?;
     }
-    Some((start, end))
+    Some((line_index(source, offset), prefix))
 }
 
 #[cfg(test)]
