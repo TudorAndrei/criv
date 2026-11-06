@@ -3,7 +3,8 @@ import type { App } from "obsidian";
 import {
   CrivStateMissingError,
   CrivStateStream,
-  errorMessage,
+  crivStatusMessage,
+  readCrivState,
   safeVaultPath,
   type CrivInitialProjections,
   type CrivSelectorSuggestion,
@@ -67,7 +68,7 @@ export class ObsidianStateOwner implements StatePort {
   }
 
   async load(): Promise<CrivInitialProjections | null> {
-    const status = this.current() ? this.stream.status : await this.stream.refresh();
+    const status = await this.stream.loaded();
     return status.kind === "ready" ? status.projections : null;
   }
 
@@ -77,15 +78,7 @@ export class ObsidianStateOwner implements StatePort {
   }
 
   statusMessage(): string {
-    const status = this.stream.status;
-    switch (status.kind) {
-      case "ready":
-        return "criv state is loaded.";
-      case "loading":
-        return "criv state is loading.";
-      default:
-        return status.message;
-    }
+    return crivStatusMessage(this.stream.status);
   }
 
   sourceResolver(): SourceResolver {
@@ -134,13 +127,7 @@ class ObsidianStateHost implements CrivStateHost<string> {
 
   async read(path: string): Promise<string> {
     this.lastRead = await this.token(path);
-    try {
-      return await this.app.vault.adapter.read(path);
-    } catch (error) {
-      throw new CrivStateMissingError(`Could not read ${path}: ${errorMessage(error)}`, {
-        cause: error,
-      });
-    }
+    return readCrivState(path, () => this.app.vault.adapter.read(path));
   }
 
   async changed(): Promise<boolean> {

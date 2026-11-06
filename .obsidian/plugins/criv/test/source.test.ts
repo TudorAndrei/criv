@@ -83,7 +83,7 @@ test("lists each linked source file once and previews a symbol at its lines", as
   });
 });
 
-test("marks unresolved and ambiguous links but not resolved ones", async () => {
+test("classifies source, pattern, and problem links but not note links", async () => {
   const { projections, resolver } = await loadedFixture();
 
   const ranges = crivLinkRanges(
@@ -93,13 +93,17 @@ test("marks unresolved and ambiguous links but not resolved ones", async () => {
   );
 
   assert.deepEqual(
-    ranges.map((range) => [range.status, range.kind, range.target]),
+    ranges.map((range) => [range.status.kind, range.target]),
     [
-      ["resolved", "source", "src/lib.rs"],
-      ["unresolved", "unknown", "missing.rs"],
-      ["ambiguous", "source", "shared.rs"],
-      ["resolved", "pattern", "match:ADR-0001/no-block-on"],
+      ["source", "src/lib.rs"],
+      ["problem", "missing.rs"],
+      ["problem", "shared.rs"],
+      ["pattern", "match:ADR-0001/no-block-on"],
     ],
+  );
+  assert.equal(
+    ranges[1]?.status.kind === "problem" && ranges[1].status.message,
+    "Unresolved criv target: missing.rs.",
   );
 });
 

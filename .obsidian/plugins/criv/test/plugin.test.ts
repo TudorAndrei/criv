@@ -41,6 +41,17 @@ test("reports a missing State file, an unsupported schema, and a path outside th
   assert.equal(await statusNotice(outside), "Invalid criv state path ../state.json.");
 });
 
+test("a failed State is not reloaded by each State query", async () => {
+  const vault = new FakeVault({ ".criv/state.json": "{" });
+  const plugin = await loadedPlugin(vault);
+  await vault.layoutReady();
+
+  await statusNotice(plugin);
+  await statusNotice(plugin);
+
+  assert.equal(vault.reads, 1);
+});
+
 test("polling reloads State only after the State file changes", async () => {
   const vault = new FakeVault({ ".criv/state.json": stateRaw });
   const plugin = await loadedPlugin(vault);
@@ -107,15 +118,17 @@ class FakeVault {
   }
 
   async layoutReady(): Promise<void> {
-    await Promise.all(this.layoutCallbacks.map(async (callback) => callback()));
-    await settle();
+    for (const callback of this.layoutCallbacks) {
+      callback();
+    }
+    await drainMicrotasks();
   }
 
   async poll(): Promise<void> {
     for (const poller of this.pollers) {
       poller();
     }
-    await settle();
+    await drainMicrotasks();
   }
 
   app(): App {
@@ -162,8 +175,10 @@ async function statusNotice(plugin: CrivPlugin): Promise<string | undefined> {
   return Notice.messages.at(-1);
 }
 
-async function settle(): Promise<void> {
-  for (let turn = 0; turn < 20; turn += 1) {
-    await new Promise((resolve) => setImmediate(resolve));
-  }
+/**
+ * The fake vault and the embedded Wasm load resolve through promises alone,
+ * so one macrotask runs every continuation a callback started.
+ */
+async function drainMicrotasks(): Promise<void> {
+  await new Promise((resolve) => setImmediate(resolve));
 }
