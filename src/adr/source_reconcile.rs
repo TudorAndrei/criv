@@ -7,7 +7,7 @@ use std::path::Path;
 use criv_state_wire::content_hash;
 
 use super::governs;
-use super::receipt::{self, Receipt, SourceFile, SourceMapping, SourceReceipt};
+use super::receipt::{self, SourceFile, SourceMapping, SourceReceipt};
 use super::reconcile_transaction::{Context, FileWrite, Reconciliation, Writes};
 use crate::git::{ChangeStatus, ChangedEntry};
 use crate::vault::{LoadOptions, Vault};
@@ -137,11 +137,7 @@ impl Reconciliation for SourceReconciliation {
 
     fn receipt(context: &Context<'_>, plan: &Plan, _writes: &Writes) -> Result<SourceReceipt> {
         Ok(SourceReceipt {
-            schema: SourceReceipt::SCHEMA.into(),
-            base_ref: context.base_ref.to_owned(),
-            target_sha: context.target_sha.clone(),
-            head_sha: context.head_sha.clone(),
-            merge_base: context.merge_base.clone(),
+            header: context.receipt_header::<SourceReceipt>(),
             mappings: plan.mappings.clone(),
             files: plan
                 .files

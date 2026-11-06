@@ -161,11 +161,7 @@ impl Reconciliation for IdentityReconciliation {
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(IdentityReceipt {
-            schema: IdentityReceipt::SCHEMA.into(),
-            base_ref: context.base_ref.to_owned(),
-            head_sha: context.head_sha.clone(),
-            target_sha: context.target_sha.clone(),
-            merge_base: context.merge_base.clone(),
+            header: context.receipt_header::<IdentityReceipt>(),
             mappings: plan.receipt_mappings.clone(),
             sources,
             deletions: superseded_paths(&plan.receipt_mappings)

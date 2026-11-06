@@ -15,22 +15,30 @@ use crate::git::{ChangeStatus, ChangedEntry, ChangedSet, GitRepository, Revision
 use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
+/// The fields every receipt records about the run that wrote it.
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) struct ReceiptHeader {
+    pub(super) schema: String,
+    pub(super) base_ref: String,
+    pub(super) head_sha: String,
+    pub(super) target_sha: String,
+    pub(super) merge_base: String,
+}
+
 /// A receipt file under `.criv/`.
 pub(super) trait Receipt: DeserializeOwned + Serialize {
     const SCHEMA: &'static str;
     const PATH: &'static str;
     const NAME: &'static str;
 
-    fn schema(&self) -> &str;
-    fn head_sha(&self) -> &str;
-    fn base_ref(&self) -> &str;
-    fn target_sha(&self) -> &str;
+    fn header(&self) -> &ReceiptHeader;
 
     /// The staged transaction is exactly this receipt.
     fn allows_transaction(&self, git: &GitRepository, entries: &[ChangedEntry]) -> bool;
 
     fn target_is_stable(&self, git: &GitRepository) -> bool {
-        target_is_stable(git, self.base_ref(), self.target_sha())
+        let header = self.header();
+        target_is_stable(git, &header.base_ref, &header.target_sha)
     }
 
     fn read(files: &RepositoryFiles) -> Result<Option<Self>> {
@@ -43,11 +51,11 @@ pub(super) trait Receipt: DeserializeOwned + Serialize {
                 Self::NAME
             ))
         })?;
-        if receipt.schema() != Self::SCHEMA {
+        let schema = &receipt.header().schema;
+        if schema != Self::SCHEMA {
             return Err(CrivError::new(format!(
-                "{} receipt schema `{}` is unsupported; expected `{}`",
+                "{} receipt schema `{schema}` is unsupported; expected `{}`",
                 Self::NAME,
-                receipt.schema(),
                 Self::SCHEMA
             )));
         }
@@ -58,7 +66,7 @@ pub(super) trait Receipt: DeserializeOwned + Serialize {
     /// from an earlier `HEAD` is inert.
     fn planned_from_head(&self, git: &GitRepository) -> bool {
         git.resolve_commit("HEAD")
-            .is_ok_and(|head| head == self.head_sha())
+            .is_ok_and(|head| head == self.header().head_sha)
     }
 }
 
@@ -117,11 +125,8 @@ pub(super) struct IdentityMapping {
 /// The receipt of `criv adr reconcile`.
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct IdentityReceipt {
-    pub(super) schema: String,
-    pub(super) base_ref: String,
-    pub(super) head_sha: String,
-    pub(super) target_sha: String,
-    pub(super) merge_base: String,
+    #[serde(flatten)]
+    pub(super) header: ReceiptHeader,
     pub(super) mappings: Vec<IdentityMapping>,
     pub(super) sources: Vec<IdentitySource>,
     pub(super) deletions: Vec<String>,
@@ -149,20 +154,8 @@ impl Receipt for IdentityReceipt {
     const PATH: &'static str = layout::ADR_RECEIPT;
     const NAME: &'static str = "ADR reconciliation";
 
-    fn schema(&self) -> &str {
-        &self.schema
-    }
-
-    fn head_sha(&self) -> &str {
-        &self.head_sha
-    }
-
-    fn base_ref(&self) -> &str {
-        &self.base_ref
-    }
-
-    fn target_sha(&self) -> &str {
-        &self.target_sha
+    fn header(&self) -> &ReceiptHeader {
+        &self.header
     }
 
     fn allows_transaction(&self, git: &GitRepository, entries: &[ChangedEntry]) -> bool {
@@ -202,7 +195,7 @@ impl IdentityReceipt {
     }
 
     fn sources_hold(&self, git: &GitRepository) -> bool {
-        let head = Revision::Commit(self.head_sha.clone());
+        let head = Revision::Commit(self.header.head_sha.clone());
         self.sources.iter().all(|source| {
             holds(
                 git,
@@ -218,7 +211,7 @@ impl IdentityReceipt {
 
     /// Whether `HEAD` held every input and `revision` holds every output.
     fn holds_at(&self, git: &GitRepository, revision: &Revision) -> bool {
-        let head = Revision::Commit(self.head_sha.clone());
+        let head = Revision::Commit(self.header.head_sha.clone());
         self.files.iter().all(|file| {
             file.before_holds(git, &head) && holds(git, revision, &file.path, Some(file.after()))
         }) && self.deletions.iter().all(|path| {
@@ -261,7 +254,7 @@ impl IdentityReceipt {
     /// `commit` is the one committed transaction after the planning `HEAD`.
     /// Push enforcement uses this after the checkout moved past that commit.
     pub(super) fn allows_commit(&self, git: &GitRepository, commit: &str) -> bool {
-        if !matches!(git.first_parent(commit), Ok(Some(parent)) if parent == self.head_sha)
+        if !matches!(git.first_parent(commit), Ok(Some(parent)) if parent == self.header.head_sha)
             || !self.target_is_stable(git)
             || !self.sources_hold(git)
         {
@@ -269,7 +262,7 @@ impl IdentityReceipt {
         }
         git.changed_set(
             &crate::git::Comparison::Trees {
-                old_ref: &self.head_sha,
+                old_ref: &self.header.head_sha,
                 new_ref: commit,
             },
             &[],
@@ -309,7 +302,7 @@ impl IdentityReceipt {
     /// the target exactly.
     fn outputs_survive(&self, git: &GitRepository, tree: &str) -> bool {
         let tree = Revision::Commit(tree.to_owned());
-        let target = Revision::Commit(self.target_sha.clone());
+        let target = Revision::Commit(self.header.target_sha.clone());
         self.files
             .iter()
             .all(|file| holds(git, &tree, &file.path, Some(file.after())))
@@ -360,11 +353,8 @@ pub(super) struct SourceMapping {
 /// The receipt of `criv adr reconcile-sources`.
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct SourceReceipt {
-    pub(super) schema: String,
-    pub(super) base_ref: String,
-    pub(super) target_sha: String,
-    pub(super) head_sha: String,
-    pub(super) merge_base: String,
+    #[serde(flatten)]
+    pub(super) header: ReceiptHeader,
     pub(super) mappings: Vec<SourceMapping>,
     pub(super) files: Vec<SourceFile>,
 }
@@ -381,20 +371,8 @@ impl Receipt for SourceReceipt {
     const PATH: &'static str = layout::SOURCE_RECEIPT;
     const NAME: &'static str = "source reconciliation";
 
-    fn schema(&self) -> &str {
-        &self.schema
-    }
-
-    fn head_sha(&self) -> &str {
-        &self.head_sha
-    }
-
-    fn base_ref(&self) -> &str {
-        &self.base_ref
-    }
-
-    fn target_sha(&self) -> &str {
-        &self.target_sha
+    fn header(&self) -> &ReceiptHeader {
+        &self.header
     }
 
     /// The staged transaction rewrites exactly the receipt's ADRs, and each
@@ -403,8 +381,8 @@ impl Receipt for SourceReceipt {
         let renames_proven = git
             .changed_set(
                 &crate::git::Comparison::Trees {
-                    old_ref: &self.merge_base,
-                    new_ref: &self.head_sha,
+                    old_ref: &self.header.merge_base,
+                    new_ref: &self.header.head_sha,
                 },
                 &[],
             )
@@ -430,7 +408,7 @@ impl Receipt for SourceReceipt {
             .iter()
             .map(|mapping| (mapping.old_path.clone(), mapping.new_path.clone()))
             .collect();
-        let head = Revision::Commit(self.head_sha.clone());
+        let head = Revision::Commit(self.header.head_sha.clone());
         expected == actual
             && entries.iter().all(|entry| {
                 entry.status == ChangeStatus::Modified && entry.previous_path.is_none()
@@ -543,6 +521,47 @@ mod tests {
             old_ref: None,
             new: Revision::Index,
         }
+    }
+
+    fn assert_round_trips<R: Receipt>(recorded: &serde_json::Value) {
+        let receipt: R = serde_json::from_value(recorded.clone()).unwrap();
+        assert_eq!(receipt.header().schema, R::SCHEMA);
+        assert_eq!(&serde_json::to_value(&receipt).unwrap(), recorded);
+    }
+
+    #[test]
+    fn recorded_receipts_round_trip_unchanged() {
+        let (head, target, base) = ("1".repeat(40), "2".repeat(40), "3".repeat(40));
+        assert_round_trips::<IdentityReceipt>(&serde_json::json!({
+            "schema": IdentityReceipt::SCHEMA,
+            "base_ref": "origin/main",
+            "head_sha": head,
+            "target_sha": target,
+            "merge_base": base,
+            "mappings": [{
+                "old_id": 7, "new_id": 9,
+                "old_path": "docs/adr/0007-topic.md", "new_path": "docs/adr/0009-topic.md"
+            }],
+            "sources": [{
+                "path": "docs/adr/0007-topic.md", "before_hash": "sha256:a", "before_mode": "100644"
+            }],
+            "deletions": ["docs/adr/0007-topic.md"],
+            "files": [{
+                "path": "docs/adr/0009-topic.md", "before_hash": null, "after_hash": "sha256:b",
+                "before_mode": null, "after_mode": "100644"
+            }]
+        }));
+        assert_round_trips::<SourceReceipt>(&serde_json::json!({
+            "schema": SourceReceipt::SCHEMA,
+            "base_ref": "origin/main",
+            "target_sha": target,
+            "head_sha": head,
+            "merge_base": base,
+            "mappings": [{ "old_path": "src/old.rs", "new_path": "src/new.rs" }],
+            "files": [{
+                "path": "docs/adr/0001-base.md", "before_hash": "sha256:a", "after_hash": "sha256:b"
+            }]
+        }));
     }
 
     #[test]

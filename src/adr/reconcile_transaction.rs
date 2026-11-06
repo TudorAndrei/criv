@@ -11,7 +11,7 @@ use crate::git::{ChangedSet, Comparison, GitRepository, IndexSnapshot};
 use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
-use super::receipt::Receipt;
+use super::receipt::{Receipt, ReceiptHeader};
 
 /// Whether a reconcile command only reports or also commits.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -59,6 +59,17 @@ impl<'a> Context<'a> {
             merge_base,
             history,
         })
+    }
+
+    /// The header of a receipt of this run.
+    pub(super) fn receipt_header<R: Receipt>(&self) -> ReceiptHeader {
+        ReceiptHeader {
+            schema: R::SCHEMA.to_owned(),
+            base_ref: self.base_ref.to_owned(),
+            head_sha: self.head_sha.clone(),
+            target_sha: self.target_sha.clone(),
+            merge_base: self.merge_base.clone(),
+        }
     }
 }
 
