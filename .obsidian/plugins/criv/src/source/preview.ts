@@ -1,5 +1,4 @@
 import type { App } from "obsidian";
-import { safeVaultPath } from "@criv/editor-state";
 import type { LinkedSource } from "./model";
 
 const PREVIEW_LINE_LIMIT = 80;
@@ -12,11 +11,9 @@ export interface SourcePreview {
   truncated: boolean;
 }
 
+/** Reads a linked source, whose path `resolveSourceResult` confined to the vault. */
 export async function readSourcePreview(app: App, linked: LinkedSource): Promise<SourcePreview> {
-  const sourcePath = safeVaultPath(linked.entry.path);
-  if (!sourcePath) {
-    throw new Error(`Invalid source path ${linked.entry.path}`);
-  }
+  const sourcePath = linked.entry.path;
   const raw = await app.vault.adapter.read(sourcePath);
   const lines = raw.split(/\r?\n/);
   const lineRange = linked.lines;

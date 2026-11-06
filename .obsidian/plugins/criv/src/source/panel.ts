@@ -9,7 +9,7 @@ import {
 import type { FrontmatterPatternTarget, LinkedSource } from "./model";
 import { frontmatterPatternTargets, linkedSourcesFromMarkdown } from "./model";
 import type { StatePort } from "../ports";
-import { assetResourceUrl, isPassiveImage, replaceFailedAssetPreview } from "./assets";
+import { assetResourceUrl } from "./assets";
 import { languageForPath, readSourcePreview, renderPreview, renderPreviewError } from "./preview";
 
 export const SOURCE_PANEL_VIEW_TYPE = "criv-source-panel";
@@ -232,16 +232,21 @@ class CrivSourceView extends ItemView {
     const card = container.createDiv({ cls: "criv-asset-card" });
     const head = card.createDiv({ cls: "criv-source-card-head" });
     const openButton = head.createEl("button", { text: asset.path });
+    const showError = () => {
+      card.querySelector(".criv-asset-preview")?.remove();
+      renderPreviewError(card, asset.path);
+    };
     openButton.onclick = () => {
       void this.owner.openAsset(asset).catch((error: unknown) => {
         new Notice(`Could not open ${asset.path}: ${errorMessage(error)}`);
-        replaceFailedAssetPreview(card, () => renderPreviewError(card, asset.path));
+        showError();
       });
     };
     head.createSpan({ text: `${asset.mime} · ${formatBytes(asset.bytes)}` });
 
-    if (!isPassiveImage(asset)) {
-      card.createDiv({ cls: "criv-asset-document", text: "Open the PDF in Obsidian" });
+    if (!asset.mime.startsWith("image/")) {
+      const name = asset.mime === "application/pdf" ? "PDF" : "asset";
+      card.createDiv({ cls: "criv-asset-document", text: `Open the ${name} in Obsidian` });
       return;
     }
     const resource = this.owner.assetResourcePath(asset);
@@ -253,8 +258,6 @@ class CrivSourceView extends ItemView {
       cls: "criv-asset-preview",
       attr: { alt: asset.path, loading: "lazy", src: resource },
     });
-    image.onerror = () => {
-      replaceFailedAssetPreview(card, () => renderPreviewError(card, asset.path));
-    };
+    image.onerror = showError;
   }
 }
