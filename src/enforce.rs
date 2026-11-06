@@ -10,8 +10,7 @@ use crate::check;
 use crate::config::{CONFIG_FILE, Stage};
 use crate::diagnostic::{Diagnostic, DiagnosticCode};
 use crate::git::{ChangedSet, ChangedSetComparison, GitRepository, is_zero_oid};
-use crate::policy_scan::PolicyScanPlan;
-use crate::vault::Vault;
+use crate::vault::{LoadOptions, Vault};
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -44,9 +43,8 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
         ));
     }
     let files = crate::config::open_vault(root)?;
-    let vault = Vault::load_from(&files)?;
-    let policy_plan = PolicyScanPlan::new(&vault);
-    if !vault.config.enforce_stages.contains(&options.stage) {
+    let vault = Vault::load(&files, LoadOptions::default())?;
+    if !vault.config().enforce_stages.contains(&options.stage) {
         return Err(CrivError::new(format!(
             "stage `{}` is not enabled in {CONFIG_FILE}",
             options.stage.as_str()
@@ -59,7 +57,10 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
         crate::adr::check_base(root, base_ref)?;
     }
 
-    let diagnostics = check::validate_vault(&vault, &policy_plan);
+    let check::Validation {
+        diagnostics,
+        policies,
+    } = check::validate_vault(&vault);
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();
 
@@ -72,7 +73,7 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
     let changed_policy_files = changed_files
         .as_ref()
         .map(|paths| paths.iter().cloned().collect::<BTreeSet<_>>());
-    let violations = policy_plan
+    let violations = policies
         .scan(&vault, changed_policy_files.as_ref())?
         .iter()
         .map(Diagnostic::describe)
@@ -80,7 +81,7 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
     let import_violations = import_policy_violations(&vault, changed_files.as_ref());
     let adr_violations = crate::adr::change_violations(
         &files,
-        &vault.config,
+        vault.config(),
         changed_entries.as_ref(),
         options.stage,
     );
@@ -210,7 +211,7 @@ fn enforce_failure(
 
 fn import_policy_violations(vault: &Vault, changed_files: Option<&Vec<String>>) -> Vec<String> {
     let mut violations = Vec::new();
-    for policy in &vault.config.import_policies {
+    for policy in &vault.config().import_policies {
         for file in vault.source_graph().files() {
             if changed_files.is_some_and(|files| !files.contains(&file.path)) {
                 continue;

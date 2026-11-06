@@ -1,16 +1,56 @@
-use super::{
-    Arc, BTreeMap, BTreeSet, Graph, GraphBuilder, PartitionDependencies, PartitionKey,
-    PartitionMeta, PatternMatch, PendingPolicyScan, PolicyPartition, PolicyScanPlan, Result,
-    SourceIndexEntry, SourceIndexPartition, State, StatePartitions, Vault, changed_paths_in_scopes,
-    graph_root, note_catalog_fingerprint, note_input_fingerprint, observe_partition_meta,
-    partition_meta, pattern_match_from_structural, reusable_matches,
-    sort_and_dedup_pattern_matches, source_index_input_fingerprint, source_mime, structural,
-};
+//! State partitions: the rows of one Source file, one note, or one registered
+//! policy, each with the fingerprint and dependencies that decide reuse.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
+use criv_state_wire::{Graph, PatternMatch};
+
+use super::projection::{self, GraphBuilder, NoteRows, PartitionDependencies, SourceRows};
+use crate::glob::GlobMatcher;
+use crate::policy_scan::PolicyScanPlan;
+use crate::stable_hash::StableHasher;
+use crate::structural::{self, CompiledPolicy, PolicyPattern, StructuralMatch};
+use crate::vault::{DecisionStatus, Note, Vault};
 #[cfg(test)]
 use crate::work::{self, Work};
+use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Default)]
-pub(super) struct ReverseDependencies {
+pub(super) struct StatePartitions {
+    pub(super) sources: BTreeMap<String, Arc<SourcePartition>>,
+    pub(super) notes: BTreeMap<String, Arc<NotePartition>>,
+    pub(super) policies: BTreeMap<String, Arc<PolicyPartition>>,
+    reverse_dependencies: ReverseDependencies,
+    note_catalog_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
+enum PartitionKey {
+    Source(String),
+    Note(String),
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct SourcePartition {
+    fingerprint: String,
+    rows: SourceRows,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct NotePartition {
+    fingerprint: String,
+    rows: NoteRows,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PolicyPartition {
+    fingerprint: String,
+    matches: Vec<PatternMatch>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ReverseDependencies {
     source_content: BTreeMap<String, BTreeSet<PartitionKey>>,
     call_target: BTreeMap<String, BTreeSet<PartitionKey>>,
     source_catalog: BTreeSet<PartitionKey>,
@@ -29,7 +69,7 @@ impl InvalidationFacts {
         vault: &Vault,
         previous: Option<&StatePartitions>,
         changed_files: &[String],
-        policy_fingerprints: &BTreeMap<String, String>,
+        policy_fingerprints: &BTreeMap<&str, String>,
         note_catalog_fingerprint: &str,
     ) -> Self {
         let Some(previous) = previous else {
@@ -55,7 +95,7 @@ impl InvalidationFacts {
             }
             if let Some(partition) = previous.sources.get(path) {
                 changed_symbol_names
-                    .extend(partition.meta.dependencies.defined_symbols.iter().cloned());
+                    .extend(partition.rows.dependencies.defined_symbols.iter().cloned());
             }
         }
 
@@ -63,8 +103,8 @@ impl InvalidationFacts {
             || policy_fingerprints.iter().any(|(id, fingerprint)| {
                 previous
                     .policies
-                    .get(id)
-                    .is_none_or(|partition| &partition.meta.input_fingerprint != fingerprint)
+                    .get(*id)
+                    .is_none_or(|partition| &partition.fingerprint != fingerprint)
             });
 
         let mut invalidated_partitions = BTreeSet::new();
@@ -108,19 +148,13 @@ impl ReverseDependencies {
         for (path, partition) in &partitions.sources {
             index.insert(
                 PartitionKey::Source(path.clone()),
-                &partition.meta.dependencies,
+                &partition.rows.dependencies,
             );
         }
         for (path, partition) in &partitions.notes {
             index.insert(
                 PartitionKey::Note(path.clone()),
-                &partition.meta.dependencies,
-            );
-        }
-        for (id, partition) in &partitions.policies {
-            index.insert(
-                PartitionKey::Policy(id.clone()),
-                &partition.meta.dependencies,
+                &partition.rows.dependencies,
             );
         }
         index
@@ -151,183 +185,180 @@ impl ReverseDependencies {
     }
 }
 
-pub(super) fn build(
-    vault: &Vault,
-    previous: Option<&State>,
-    changed_files: &[String],
-    policy_plan: &PolicyScanPlan,
-) -> Result<StatePartitions> {
-    let previous = previous.map(|state| &state.partitions);
-    let policy_fingerprints = policy_fingerprints(policy_plan);
-    let note_catalog_fingerprint = note_catalog_fingerprint(vault);
-    let invalidation = InvalidationFacts::collect(
-        vault,
-        previous,
-        changed_files,
-        &policy_fingerprints,
-        &note_catalog_fingerprint,
-    );
-    let mut partitions = StatePartitions::default();
-
-    for file in vault.source_graph().files() {
-        let key = PartitionKey::Source(file.path.clone());
-        let partition = previous
-            .and_then(|previous| previous.sources.get(&file.path))
-            .filter(|_| {
-                !invalidation.changed_source_paths.contains(&file.path)
-                    && !invalidation.affects(&key)
+impl StatePartitions {
+    pub(super) fn build(
+        vault: &Vault,
+        previous: Option<&Self>,
+        changed_files: &[String],
+        policies: &PolicyScanPlan,
+    ) -> Result<Self> {
+        let policy_fingerprints = policies
+            .owners()
+            .iter()
+            .flat_map(|owner| {
+                owner
+                    .policies()
+                    .iter()
+                    .filter(|policy| policy.is_registered())
+                    .map(|policy| {
+                        (
+                            policy.pattern_id(),
+                            policy_fingerprint(policy.definition(), owner.scopes()),
+                        )
+                    })
             })
-            .cloned()
-            .unwrap_or_else(|| {
-                #[cfg(test)]
-                work::record(Work::SourcePartitionBuild);
-                Arc::new(super::projection::build_source_partition(vault, file))
-            });
-        partitions.sources.insert(file.path.clone(), partition);
-    }
+            .collect::<BTreeMap<_, _>>();
+        let note_catalog_fingerprint = note_catalog_fingerprint(vault);
+        let invalidation = InvalidationFacts::collect(
+            vault,
+            previous,
+            changed_files,
+            &policy_fingerprints,
+            &note_catalog_fingerprint,
+        );
+        let mut partitions = Self::default();
 
-    for note in &vault.notes {
-        let key = PartitionKey::Note(note.rel_path.clone());
-        let fingerprint = note_input_fingerprint(note);
-        let partition = previous
-            .and_then(|previous| previous.notes.get(&note.rel_path))
-            .filter(|partition| {
-                partition.meta.input_fingerprint == fingerprint && !invalidation.affects(&key)
-            })
-            .cloned()
-            .unwrap_or_else(|| {
-                #[cfg(test)]
-                work::record(Work::NotePartitionBuild);
-                Arc::new(super::projection::build_note_partition(vault, note))
-            });
-        partitions.notes.insert(note.rel_path.clone(), partition);
-    }
-
-    for path in vault.source_files() {
-        let state_entry = SourceIndexEntry {
-            mime: source_mime(path),
-            path: path.clone(),
-        };
-        let fingerprint = source_index_input_fingerprint(&state_entry);
-        let partition = previous
-            .and_then(|previous| previous.source_index.get(path))
-            .filter(|partition| partition.meta.input_fingerprint == fingerprint)
-            .cloned()
-            .unwrap_or_else(|| {
-                #[cfg(test)]
-                work::record(Work::SourceIndexPartitionBuild);
-                Arc::new(SourceIndexPartition {
-                    meta: PartitionMeta {
-                        key: PartitionKey::SourceIndex(path.clone()),
-                        input_fingerprint: fingerprint,
-                        dependencies: PartitionDependencies::default(),
-                    },
-                    entry: state_entry,
+        for file in vault.source_graph().files() {
+            let fingerprint = vault
+                .source_graph()
+                .file_fingerprint(&file.path)
+                .unwrap_or_default();
+            let partition = previous
+                .and_then(|previous| previous.sources.get(&file.path))
+                .filter(|partition| {
+                    partition.fingerprint == fingerprint
+                        && !invalidation.changed_source_paths.contains(&file.path)
+                        && !invalidation.affects(&PartitionKey::Source(file.path.clone()))
                 })
-            });
-        partitions.source_index.insert(path.clone(), partition);
+                .cloned()
+                .unwrap_or_else(|| {
+                    #[cfg(test)]
+                    work::record(Work::SourcePartitionBuild);
+                    Arc::new(SourcePartition {
+                        fingerprint: fingerprint.to_string(),
+                        rows: projection::source_rows(vault, file),
+                    })
+                });
+            partitions.sources.insert(file.path.clone(), partition);
+        }
+
+        for note in vault.notes() {
+            let fingerprint = note_fingerprint(note);
+            let partition = previous
+                .and_then(|previous| previous.notes.get(note.rel_path()))
+                .filter(|partition| {
+                    partition.fingerprint == fingerprint
+                        && !invalidation.affects(&PartitionKey::Note(note.rel_path().to_string()))
+                })
+                .cloned()
+                .unwrap_or_else(|| {
+                    #[cfg(test)]
+                    work::record(Work::NotePartitionBuild);
+                    Arc::new(NotePartition {
+                        fingerprint,
+                        rows: projection::note_rows(vault, note),
+                    })
+                });
+            partitions
+                .notes
+                .insert(note.rel_path().to_string(), partition);
+        }
+
+        partitions.policies = build_policy_partitions(
+            vault,
+            previous,
+            changed_files,
+            policies,
+            policy_fingerprints,
+        )?;
+        partitions.reverse_dependencies = ReverseDependencies::index(&partitions);
+        partitions.note_catalog_fingerprint = note_catalog_fingerprint;
+        Ok(partitions)
     }
 
-    partitions.policies = build_policy_partitions(vault, previous, changed_files, policy_plan)?;
-    partitions.reverse_dependencies = ReverseDependencies::index(&partitions);
-    partitions.note_catalog_fingerprint = note_catalog_fingerprint;
-    Ok(partitions)
+    pub(super) fn graph(&self) -> Graph {
+        let mut builder = GraphBuilder::default();
+        // Every code file node precedes the Source details.
+        for partition in self.sources.values() {
+            builder.push_node(partition.rows.code_node.clone());
+        }
+        for partition in self.sources.values() {
+            builder.append_rows(&partition.rows.rows);
+        }
+        for partition in self.notes.values() {
+            builder.append_rows(&partition.rows.rows);
+        }
+        builder.finish()
+    }
+
+    pub(super) fn patterns(&self) -> BTreeMap<String, Vec<PatternMatch>> {
+        self.policies
+            .iter()
+            .map(|(id, partition)| (id.clone(), partition.matches.clone()))
+            .collect()
+    }
 }
 
-pub(super) fn flatten(
-    partitions: &StatePartitions,
-) -> (
-    Graph,
-    BTreeMap<String, Vec<PatternMatch>>,
-    Vec<SourceIndexEntry>,
-) {
-    let mut builder = GraphBuilder::default();
-
-    // Keep the public v0 ordering: every code file node precedes source details.
-    for (path, partition) in &partitions.sources {
-        observe_partition_meta(&partition.meta, &PartitionKey::Source(path.clone()));
-        builder.push_node(partition.code_node.clone());
-    }
-    for partition in partitions.sources.values() {
-        builder.append_rows(&partition.rows);
-    }
-    for (path, partition) in &partitions.notes {
-        observe_partition_meta(&partition.meta, &PartitionKey::Note(path.clone()));
-        builder.append_rows(&partition.rows);
-    }
-    let mut graph = builder.finish();
-    graph.root = graph_root(&graph);
-
-    let patterns = partitions
-        .policies
-        .iter()
-        .map(|(id, partition)| {
-            observe_partition_meta(&partition.meta, &PartitionKey::Policy(id.clone()));
-            (id.clone(), partition.matches.clone())
-        })
-        .collect();
-    let source_index = partitions
-        .source_index
-        .iter()
-        .map(|(path, partition)| {
-            observe_partition_meta(&partition.meta, &PartitionKey::SourceIndex(path.clone()));
-            partition.entry.clone()
-        })
-        .collect();
-
-    (graph, patterns, source_index)
+struct PendingPolicyScan<'a> {
+    pattern_id: &'a str,
+    fingerprint: String,
+    policy: &'a CompiledPolicy,
+    paths: BTreeSet<String>,
+    reused: Vec<PatternMatch>,
 }
 
 fn build_policy_partitions(
     vault: &Vault,
     previous: Option<&StatePartitions>,
     changed_files: &[String],
-    policy_plan: &PolicyScanPlan,
+    policies: &PolicyScanPlan,
+    mut fingerprints: BTreeMap<&str, String>,
 ) -> Result<BTreeMap<String, Arc<PolicyPartition>>> {
     let mut partitions = BTreeMap::new();
-    let mut pending_policy_scans = Vec::new();
-    for owner in policy_plan.owners() {
-        let changed_paths = changed_paths_in_scopes(changed_files, owner.scopes())
-            .into_iter()
+    let mut pending = Vec::new();
+    for owner in policies.owners() {
+        let matcher = GlobMatcher::from_valid_patterns(owner.scopes());
+        let changed_paths = changed_files
+            .iter()
+            .filter(|path| matcher.is_match(path))
+            .cloned()
             .collect::<BTreeSet<_>>();
-        for policy in owner.policies() {
-            let Some(pattern_id) = policy.state_pattern_id() else {
-                continue;
-            };
-            let input_fingerprint = policy
-                .state_input_fingerprint()
-                .ok_or_else(|| crate::CrivError::new("published policy has no input fingerprint"))?
-                .to_string();
+        for policy in owner
+            .policies()
+            .iter()
+            .filter(|policy| policy.is_registered())
+        {
+            let pattern_id = policy.pattern_id();
+            let fingerprint = fingerprints.remove(pattern_id).ok_or_else(|| {
+                CrivError::new(format!(
+                    "registered policy `{pattern_id}` is declared twice"
+                ))
+            })?;
             let previous_partition =
                 previous.and_then(|previous| previous.policies.get(pattern_id));
-            let definition_unchanged = previous_partition
-                .is_some_and(|partition| partition.meta.input_fingerprint == input_fingerprint);
-            let paths = if definition_unchanged {
-                changed_paths.clone()
-            } else {
-                owner.paths().clone()
-            };
-
-            if definition_unchanged && paths.is_empty() {
-                let Some(previous_partition) = previous_partition else {
-                    return Err(crate::CrivError::new(
-                        "unchanged policy definition has no prior partition",
-                    ));
-                };
-                partitions.insert(pattern_id.to_string(), previous_partition.clone());
+            let unchanged =
+                previous_partition.filter(|partition| partition.fingerprint == fingerprint);
+            if let Some(partition) = unchanged
+                && changed_paths.is_empty()
+            {
+                partitions.insert(pattern_id.to_string(), partition.clone());
                 continue;
             }
-
-            let reused = if definition_unchanged {
-                previous_partition.map_or_else(Vec::new, |partition| {
-                    reusable_matches(&partition.matches, &paths)
-                })
-            } else {
-                Vec::new()
-            };
-            pending_policy_scans.push(PendingPolicyScan {
-                pattern_id: pattern_id.to_string(),
-                input_fingerprint,
+            let (paths, reused) = unchanged.map_or_else(
+                || (owner.paths().clone(), Vec::new()),
+                |partition| {
+                    let reused = partition
+                        .matches
+                        .iter()
+                        .filter(|matched| !changed_paths.contains(&matched.file))
+                        .cloned()
+                        .collect();
+                    (changed_paths.clone(), reused)
+                },
+            );
+            pending.push(PendingPolicyScan {
+                pattern_id,
+                fingerprint,
                 policy: policy.compiled(),
                 paths,
                 reused,
@@ -335,7 +366,7 @@ fn build_policy_partitions(
         }
     }
 
-    let requests = pending_policy_scans
+    let requests = pending
         .iter()
         .enumerate()
         .map(|(key, scan)| structural::PolicyScanRequest {
@@ -346,31 +377,29 @@ fn build_policy_partitions(
         .collect::<Vec<_>>();
     let rescanned =
         structural::find_policies_batch(vault.repository_files(), vault.source_files(), &requests)?;
-    for (key, scan) in pending_policy_scans.into_iter().enumerate() {
+    for (key, scan) in pending.into_iter().enumerate() {
         let mut matches = scan.reused;
         matches.extend(
             rescanned
                 .get(&key)
-                .ok_or_else(|| crate::CrivError::new("policy scan returned no result"))?
+                .ok_or_else(|| CrivError::new("policy scan returned no result"))?
                 .iter()
-                .map(pattern_match_from_structural),
+                .map(pattern_match),
         );
-        sort_and_dedup_pattern_matches(&mut matches);
+        matches.sort_by(|left, right| {
+            (&left.file, &left.range, &left.captures).cmp(&(
+                &right.file,
+                &right.range,
+                &right.captures,
+            ))
+        });
+        matches.dedup();
         #[cfg(test)]
         work::record(Work::PolicyPartitionBuild);
-        let pattern_id = scan.pattern_id;
         partitions.insert(
-            pattern_id.clone(),
+            scan.pattern_id.to_string(),
             Arc::new(PolicyPartition {
-                meta: partition_meta(
-                    PartitionKey::Policy(pattern_id),
-                    scan.input_fingerprint,
-                    PartitionDependencies {
-                        catalog_sensitive: true,
-                        policy_sensitive: true,
-                        ..PartitionDependencies::default()
-                    },
-                ),
+                fingerprint: scan.fingerprint,
                 matches,
             }),
         );
@@ -378,16 +407,75 @@ fn build_policy_partitions(
     Ok(partitions)
 }
 
-fn policy_fingerprints(policy_plan: &PolicyScanPlan) -> BTreeMap<String, String> {
-    policy_plan
-        .owners()
-        .iter()
-        .flat_map(super::super::policy_scan::PlannedOwner::policies)
-        .filter_map(|policy| {
-            Some((
-                policy.state_pattern_id()?.to_string(),
-                policy.state_input_fingerprint()?.to_string(),
-            ))
-        })
-        .collect()
+fn pattern_match(matched: &StructuralMatch) -> PatternMatch {
+    PatternMatch {
+        file: matched.path.clone(),
+        range: Some(matched.range.clone()),
+        captures: matched.captures.clone(),
+    }
+}
+
+/// The inputs of a registered policy that decide its matches.
+fn policy_fingerprint(definition: &PolicyPattern, scopes: &[String]) -> String {
+    let mut hasher = StableHasher::new("policy-partition");
+    hash_policy(&mut hasher, definition);
+    hasher.strs(scopes).finish()
+}
+
+fn hash_policy(hasher: &mut StableHasher, policy: &PolicyPattern) {
+    let language = policy.language.as_ref().map(ToString::to_string);
+    hasher
+        .option_str(language.as_deref())
+        .option_str(policy.pattern.as_deref())
+        .option_str(policy.rule.as_deref());
+}
+
+fn note_fingerprint(note: &Note) -> String {
+    let mut hasher = StableHasher::new("note-partition");
+    hasher
+        .str(note.rel_path())
+        .option_str(note.id())
+        .str(note.kind().as_str())
+        .option_str(note.title())
+        .option_str(note.status().map(DecisionStatus::as_str))
+        .str(note.body())
+        .strs(note.targets_symbols())
+        .strs(note.targets_scope())
+        .usize(note.target_pattern_refs().len());
+    for pattern in note.target_pattern_refs() {
+        hasher.str(&pattern.id).usize(pattern.line);
+    }
+    hasher
+        .strs(note.target_pattern_ids())
+        .usize(note.policy_patterns().len());
+    for policy in note.policy_patterns() {
+        hasher
+            .option_str(policy.id.as_deref())
+            .usize(policy.line)
+            .option_str(policy.message.as_deref());
+        hash_policy(&mut hasher, policy);
+    }
+    hasher
+        .strs(note.governs())
+        .strs(&note.effective_governs())
+        .strs(note.supersedes())
+        .strs(note.superseded_by())
+        .option_str(note.frontmatter_error())
+        .finish()
+}
+
+fn note_catalog_fingerprint(vault: &Vault) -> String {
+    let mut hasher = StableHasher::new("note-catalog");
+    hasher.usize(vault.notes().len());
+    for note in vault.notes() {
+        hasher
+            .str(note.rel_path())
+            .option_str(note.id())
+            .option_str(note.title())
+            .usize(note.headings().len());
+        for heading in note.headings() {
+            hasher.str(&heading.text).usize(heading.level);
+        }
+    }
+    hasher.finish()
 }

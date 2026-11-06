@@ -162,6 +162,19 @@ pub(crate) fn inventory(root: &Path) -> SkillInventory {
     inventory_from(&files)
 }
 
+/// The text note that tells a user to refresh outdated agent skills.
+pub fn outdated_skills_advisory(files: &RepositoryFiles) -> Option<String> {
+    let outdated = inventory_from(files).advisory_outdated_paths().len();
+    let subject = match outdated {
+        0 => return None,
+        1 => "skill is",
+        _ => "skills are",
+    };
+    Some(format!(
+        "note: {outdated} agent {subject} out of date; run `criv init --force-skills`"
+    ))
+}
+
 pub fn inventory_from(files: &RepositoryFiles) -> SkillInventory {
     let skills = SKILLS
         .iter()

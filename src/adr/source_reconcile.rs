@@ -13,7 +13,7 @@ use super::reconcile_transaction::Snapshot;
 use crate::git::{self, ChangeStatus, ChangedEntry, ChangedSet};
 use crate::markdown;
 use crate::repository::RepositoryFiles;
-use crate::vault::Vault;
+use crate::vault::{LoadOptions, Vault};
 use crate::{CrivError, Result};
 
 const RECEIPT_SCHEMA: &str = "criv.source-reconcile/1";
@@ -159,7 +159,7 @@ pub fn run(root: &Path, options: &Options) -> Result<()> {
 
 fn build_plan(files: &RepositoryFiles, base_ref: &str, target_sha: &str) -> Result<Plan> {
     let root = files.root();
-    let vault = Vault::load_from(files)?;
+    let vault = Vault::load(files, LoadOptions::default())?;
     let head_sha = git::resolve_commit(root, "HEAD")?;
     let merge_base = git::merge_base(root, target_sha, &head_sha)?;
     let changes = git::changes_between(root, &merge_base, &head_sha)?;
@@ -168,20 +168,24 @@ fn build_plan(files: &RepositoryFiles, base_ref: &str, target_sha: &str) -> Resu
     let mut files = Vec::new();
     if !required.is_empty() {
         for note in vault
-            .notes
+            .notes()
             .iter()
             .filter(|note| vault.is_effective_decision(note))
         {
-            if !note.governs.iter().any(|path| required.contains_key(path)) {
+            if !note
+                .governs()
+                .iter()
+                .any(|path| required.contains_key(path))
+            {
                 continue;
             }
             let before = vault
                 .repository_files()
-                .read_string(Path::new(&note.rel_path))?;
+                .read_string(Path::new(note.rel_path()))?;
             let after = rewrite_governs(&before, &required)?;
             if before != after {
                 files.push(PlannedFile {
-                    path: note.rel_path.clone(),
+                    path: note.rel_path().to_string(),
                     before,
                     after,
                 });
@@ -249,12 +253,12 @@ fn required_reconciliations(
         .collect::<BTreeSet<_>>();
     let mut required = BTreeMap::new();
     for note in vault
-        .notes
+        .notes()
         .iter()
         .filter(|note| vault.is_effective_decision(note))
     {
-        let matches = vault.source_globs_have_matches(&note.governs);
-        for (governs, has_match) in note.governs.iter().zip(matches) {
+        let matches = vault.source_globs_have_matches(note.governs());
+        for (governs, has_match) in note.governs().iter().zip(matches) {
             if has_match {
                 continue;
             }

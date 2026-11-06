@@ -446,10 +446,7 @@ fn refresh_snapshot(root: &Path, result: &RefreshResult) -> RefreshSnapshot {
         state_hash: result.state().hash().unwrap(),
         latest,
         snapshot_json,
-        diagnostics: check::validate_vault(
-            result.vault(),
-            &crate::policy_scan::PolicyScanPlan::new(result.vault()),
-        ),
+        diagnostics: check::validate_vault(result.vault()).diagnostics,
     }
 }
 

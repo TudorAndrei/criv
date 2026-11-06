@@ -1,12 +1,157 @@
-use super::{
-    DirectiveKind, EdgeKind, EdgeOrigin, GraphBuilder, ModuleRelationshipRole, NodeKind, Note,
-    NoteKind, PartitionDependencies, PartitionKey, Relationship, RelationshipKind,
-    RelationshipTarget, ResolvedLink, RowPartition, SourceFile, SourcePartition,
-    SourceTargetResolution, Symbol, Vault, directive_node_id, graph_rows, hashed_node,
-    note_input_fingerprint, partition_meta, symbol_label,
+//! The graph rows that one Source file or one note contributes to State.
+
+use std::collections::BTreeSet;
+
+use criv_state_wire::{Edge, EdgeKind, Graph, Node, NodeKind, node_id};
+
+use crate::markdown::LinkTarget;
+use crate::source::{
+    DirectiveKind, EdgeOrigin, Import, ModuleRelationshipRole, Relationship, RelationshipKind,
+    RelationshipTarget, SourceFile, Symbol, SymbolId, SymbolKind,
 };
-use crate::source::{SymbolId, SymbolKind};
-use criv_state_wire::node_id;
+use crate::stable_hash::StableHasher;
+use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
+
+/// The facts outside its own input that a projection read, so a later
+/// refresh knows when to rebuild it.
+#[derive(Debug, Clone, Default)]
+pub(super) struct PartitionDependencies {
+    pub(super) source_content_paths: BTreeSet<String>,
+    pub(super) call_targets: BTreeSet<String>,
+    pub(super) defined_symbols: BTreeSet<String>,
+    pub(super) catalog_sensitive: bool,
+    pub(super) note_catalog_sensitive: bool,
+    pub(super) policy_sensitive: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct GraphRows {
+    pub(super) nodes: Vec<Node>,
+    pub(super) edges: Vec<Edge>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct SourceRows {
+    pub(super) code_node: Node,
+    pub(super) rows: GraphRows,
+    pub(super) dependencies: PartitionDependencies,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct NoteRows {
+    pub(super) rows: GraphRows,
+    pub(super) dependencies: PartitionDependencies,
+}
+
+/// A graph whose node ids and edges are unique, in first-insertion order.
+#[derive(Default)]
+pub(super) struct GraphBuilder {
+    graph: Graph,
+    seen_nodes: BTreeSet<String>,
+    seen_edges: BTreeSet<(String, String, EdgeKind)>,
+}
+
+impl GraphBuilder {
+    fn node(&mut self, id: String, kind: NodeKind, label: String, path: Option<String>) {
+        if !self.seen_nodes.contains(&id) {
+            self.push_node(hashed_node(id, kind, label, path));
+        }
+    }
+
+    pub(super) fn push_node(&mut self, node: Node) {
+        if self.seen_nodes.insert(node.id.clone()) {
+            self.graph.nodes.push(node);
+        }
+    }
+
+    fn edge(&mut self, from: &str, to: &str, kind: EdgeKind) {
+        if self
+            .seen_edges
+            .insert((from.to_owned(), to.to_owned(), kind))
+        {
+            let hash = StableHasher::new("edge")
+                .str(from)
+                .str(kind.as_str())
+                .str(to)
+                .finish();
+            self.graph.edges.push(Edge {
+                from: from.into(),
+                to: to.into(),
+                kind,
+                hash,
+            });
+        }
+    }
+
+    pub(super) fn append_rows(&mut self, rows: &GraphRows) {
+        for node in &rows.nodes {
+            self.push_node(node.clone());
+        }
+        for edge in &rows.edges {
+            self.edge(&edge.from, &edge.to, edge.kind);
+        }
+    }
+
+    /// The graph with its root hash.
+    pub(super) fn finish(self) -> Graph {
+        let mut graph = self.graph;
+        graph.root = graph_root(&graph);
+        graph
+    }
+
+    fn into_rows(self) -> GraphRows {
+        GraphRows {
+            nodes: self.graph.nodes,
+            edges: self.graph.edges,
+        }
+    }
+}
+
+fn hashed_node(id: String, kind: NodeKind, label: String, path: Option<String>) -> Node {
+    let hash = StableHasher::new("node")
+        .str(&id)
+        .str(kind.as_str())
+        .str(&label)
+        .option_str(path.as_deref())
+        .finish();
+    Node {
+        id,
+        hash,
+        kind,
+        label,
+        path,
+    }
+}
+
+fn graph_root(graph: &Graph) -> String {
+    let mut hashes = graph
+        .nodes
+        .iter()
+        .map(|node| node.hash.as_str())
+        .chain(graph.edges.iter().map(|edge| edge.hash.as_str()))
+        .collect::<Vec<_>>();
+    hashes.sort_unstable();
+    StableHasher::new("graph").strs(&hashes).finish()
+}
+
+fn directive_node_id(path: &str, directive: &Import) -> String {
+    if directive.kind == DirectiveKind::Legacy {
+        return node_id::import(path, &directive.module);
+    }
+    node_id::directive(
+        path,
+        directive.kind.as_str(),
+        &directive.module,
+        directive.site,
+    )
+}
+
+fn symbol_label(symbol: &Symbol) -> String {
+    symbol.arity.map_or_else(
+        || symbol.name.clone(),
+        |arity| format!("{}/{arity}", symbol.name),
+    )
+}
 
 impl From<DirectiveKind> for NodeKind {
     fn from(kind: DirectiveKind) -> Self {
@@ -39,7 +184,7 @@ impl From<SymbolKind> for NodeKind {
     }
 }
 
-pub(super) fn build_source_partition(vault: &Vault, file: &SourceFile) -> SourcePartition {
+pub(super) fn source_rows(vault: &Vault, file: &SourceFile) -> SourceRows {
     let mut graph = GraphBuilder::default();
     let mut dependencies = PartitionDependencies::default();
     let file_id = node_id::code(&file.path);
@@ -124,23 +269,15 @@ pub(super) fn build_source_partition(vault: &Vault, file: &SourceFile) -> Source
         }
     }
 
-    SourcePartition {
-        meta: partition_meta(
-            PartitionKey::Source(file.path.clone()),
-            vault
-                .source_graph()
-                .file_fingerprint(&file.path)
-                .unwrap_or_default()
-                .to_string(),
-            dependencies,
-        ),
+    SourceRows {
         code_node: hashed_node(
             file_id,
             NodeKind::Code,
             format!("{} ({})", file.path, file.language.as_str()),
             Some(file.path.clone()),
         ),
-        rows: graph_rows(graph.finish()),
+        rows: graph.into_rows(),
+        dependencies,
     }
 }
 
@@ -226,14 +363,14 @@ const fn relationship_edge_kind(relationship: &Relationship) -> EdgeKind {
     }
 }
 
-pub(super) fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
+pub(super) fn note_rows(vault: &Vault, note: &Note) -> NoteRows {
     let mut graph = GraphBuilder::default();
     let mut dependencies = PartitionDependencies {
-        note_catalog_sensitive: !note.wiki_links.is_empty(),
-        policy_sensitive: note.kind == NoteKind::Decision,
+        note_catalog_sensitive: !note.wiki_links().is_empty(),
+        policy_sensitive: note.kind() == NoteKind::Decision,
         ..PartitionDependencies::default()
     };
-    let kind = match note.kind {
+    let kind = match note.kind() {
         NoteKind::Decision => NodeKind::Decision,
         NoteKind::Doc | NoteKind::Unknown => NodeKind::Doc,
     };
@@ -241,13 +378,13 @@ pub(super) fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
     graph.node(
         note_id.clone(),
         kind,
-        note.title
-            .clone()
-            .unwrap_or_else(|| note.display_id().to_string()),
-        Some(note.rel_path.clone()),
+        note.title()
+            .unwrap_or_else(|| note.display_id())
+            .to_string(),
+        Some(note.rel_path().to_string()),
     );
 
-    for target in &note.targets_symbols {
+    for target in note.targets_symbols() {
         dependencies.catalog_sensitive = true;
         match vault.resolve_source_target(target) {
             SourceTargetResolution::Resolved { path, .. } => {
@@ -261,14 +398,14 @@ pub(super) fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
         }
     }
 
-    for heading in &note.headings {
+    for heading in note.headings() {
         let heading_id = node_id::note_heading(&note_id, &crate::identity::slug(&heading.text));
         graph.node(
             heading_id.clone(),
             NodeKind::DocHeading,
             heading.text.clone(),
             Some(node_id::heading_location(
-                &note.rel_path,
+                note.rel_path(),
                 heading.line,
                 heading.level,
             )),
@@ -276,29 +413,25 @@ pub(super) fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
         graph.edge(&note_id, &heading_id, EdgeKind::Contains);
     }
 
-    let governs = Vault::effective_governs(note);
-    if !governs.is_empty() {
+    if !note.effective_governs().is_empty() {
         dependencies.catalog_sensitive = true;
     }
-    for source_file in vault.source_files_matching_globs(&governs) {
+    for source_file in vault.governed_files(note) {
         graph.edge(&note_id, &node_id::code(&source_file), EdgeKind::Governs);
     }
 
-    for superseded in &note.supersedes {
+    for superseded in note.supersedes() {
         graph.edge(&note_id, &node_id::note(superseded), EdgeKind::Supersedes);
     }
 
-    for link in &note.wiki_links {
+    for link in note.wiki_links() {
         match vault.resolve_link(&link.target) {
             ResolvedLink::Note { id } => {
                 graph.edge(&note_id, &node_id::note(&id), EdgeKind::Cites);
             }
             ResolvedLink::Source { path, .. } => {
                 dependencies.catalog_sensitive = true;
-                if crate::markdown::LinkTarget::parse(&link.target)
-                    .symbol()
-                    .is_some()
-                {
+                if LinkTarget::parse(&link.target).symbol().is_some() {
                     dependencies.source_content_paths.insert(path.clone());
                 }
                 graph.edge(&note_id, &node_id::code(&path), EdgeKind::References);
@@ -320,12 +453,8 @@ pub(super) fn build_note_partition(vault: &Vault, note: &Note) -> RowPartition {
         }
     }
 
-    RowPartition {
-        meta: partition_meta(
-            PartitionKey::Note(note.rel_path.clone()),
-            note_input_fingerprint(note),
-            dependencies,
-        ),
-        rows: graph_rows(graph.finish()),
+    NoteRows {
+        rows: graph.into_rows(),
+        dependencies,
     }
 }

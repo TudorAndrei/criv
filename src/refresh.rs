@@ -4,11 +4,10 @@ use std::path::Path;
 use crate::check;
 use crate::config::Config;
 use crate::diagnostic::Diagnostic;
-use crate::policy_scan::PolicyScanPlan;
 use crate::repository::RepositoryFiles;
 use crate::source::SourceState;
 use crate::state::{self, State};
-use crate::vault::Vault;
+use crate::vault::{LoadOptions, SourceLoad, Vault};
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -143,7 +142,13 @@ fn execute(
     source: SourceState,
     precommit_check: impl FnOnce() -> Result<()>,
 ) -> Result<RefreshResult> {
-    let vault = Vault::load_incremental_with_config_and_source_state(files, config, source)?;
+    let vault = Vault::load(
+        files,
+        LoadOptions {
+            config: Some(config.clone()),
+            source: SourceLoad::Observed(source),
+        },
+    )?;
     let blockers = check::publication_blocking_diagnostics(&vault);
     if !blockers.is_empty() {
         return Err(CrivError::new(format!(
@@ -157,20 +162,15 @@ fn execute(
     }
     let changed_files = vault.source_state().changed_files().to_vec();
 
-    let policy_plan = PolicyScanPlan::new(&vault);
-    let diagnostics = check::validate_vault(&vault, &policy_plan);
-    let (snapshot, state) = match previous_state {
-        Some(previous_state) => state::write_state_incremental_with_policy_plan_and_check(
-            &vault,
-            Some(previous_state),
-            &changed_files,
-            &policy_plan,
-            precommit_check,
-        )?,
-        None => {
-            state::write_state_with_policy_plan_and_check(&vault, &policy_plan, precommit_check)?
-        }
-    };
+    let validation = check::validate_vault(&vault);
+    let (snapshot, state) = state::write_state(
+        &vault,
+        previous_state,
+        &changed_files,
+        &validation.policies,
+        precommit_check,
+    )?;
+    let diagnostics = validation.diagnostics;
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();
 

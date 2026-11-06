@@ -20,7 +20,7 @@ use crate::identity::{adr_filename, is_adr_id, parse_adr_id, parse_adr_stem, pat
 use crate::markdown::LinkTarget;
 use crate::policy_scan::PolicyScanPlan;
 use crate::repository::RepositoryFiles;
-use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
+use crate::vault::{LoadOptions, Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -87,21 +87,10 @@ pub fn run(root: &Path, options: &CheckOptions) -> Result<()> {
     match options.format {
         Format::Text => {
             print_text(&diagnostics);
-            let stale_skills = if options.changed {
-                Vec::new()
-            } else {
-                crate::install::skill_inventory_from(&files).advisory_outdated_paths()
-            };
-            if !stale_skills.is_empty() {
-                let subject = if stale_skills.len() == 1 {
-                    "skill is"
-                } else {
-                    "skills are"
-                };
-                println!(
-                    "note: {} agent {subject} out of date; run `criv init --force-skills`",
-                    stale_skills.len()
-                );
+            if !options.changed
+                && let Some(advisory) = crate::install::outdated_skills_advisory(&files)
+            {
+                println!("{advisory}");
             }
         }
         Format::Json => print_json(&diagnostics)?,
@@ -122,11 +111,15 @@ pub fn run(root: &Path, options: &CheckOptions) -> Result<()> {
 }
 
 pub fn validate_all_from(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
-    let mut diagnostics = Vec::new();
-    let vault = Vault::load_from(files)?;
-    let policy_plan = PolicyScanPlan::new(&vault);
-    diagnostics.extend(validate_vault(&vault, &policy_plan));
-    diagnostics.extend(policy_plan.scan(&vault, None)?);
+    validate_all(&Vault::load(files, LoadOptions::default())?)
+}
+
+fn validate_all(vault: &Vault) -> Result<Vec<Diagnostic>> {
+    let Validation {
+        mut diagnostics,
+        policies,
+    } = validate_vault(vault);
+    diagnostics.extend(policies.scan(vault, None)?);
     Ok(diagnostics)
 }
 
@@ -138,19 +131,27 @@ fn validate_changed(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
     }
 
     let config = crate::config::Config::load_from(files)?;
-    if changed_scope_requires_full_check(&changes, &config.adr_prefix()) {
-        return validate_all_from(files);
+    let full_check = changed_scope_requires_full_check(&changes, &config.adr_prefix());
+    let vault = Vault::load(
+        files,
+        LoadOptions {
+            config: Some(config),
+            ..LoadOptions::default()
+        },
+    )?;
+    if full_check {
+        return validate_all(&vault);
     }
 
     let changed_paths = changes
         .affected_paths()
         .into_iter()
         .collect::<BTreeSet<_>>();
-    let mut diagnostics = Vec::new();
-    let vault = Vault::load_from(files)?;
-    let policy_plan = PolicyScanPlan::new(&vault);
-    diagnostics.extend(validate_changed_vault(&vault, &policy_plan, &changed_paths));
-    diagnostics.extend(policy_plan.scan(&vault, Some(&changed_paths))?);
+    let Validation {
+        mut diagnostics,
+        policies,
+    } = validate_changed_vault(&vault, &changed_paths);
+    diagnostics.extend(policies.scan(&vault, Some(&changed_paths))?);
     diagnostic::sort(&mut diagnostics);
     Ok(diagnostics)
 }
@@ -169,53 +170,58 @@ fn changed_scope_requires_full_check(changes: &ChangedSet, adr_prefix: &str) -> 
     })
 }
 
-#[cfg(test)]
-fn validate(vault: &Vault) -> Vec<Diagnostic> {
-    let policy_plan = PolicyScanPlan::new(vault);
-    validate_vault(vault, &policy_plan)
+/// The vault diagnostics and the policy plan they were checked with, which
+/// the caller reuses to scan for violations or to publish State.
+pub struct Validation {
+    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) policies: PolicyScanPlan,
 }
 
-pub fn validate_vault(vault: &Vault, policy_plan: &PolicyScanPlan) -> Vec<Diagnostic> {
+pub fn validate_vault(vault: &Vault) -> Validation {
+    let policies = PolicyScanPlan::new(vault);
     let mut diagnostics = Vec::new();
     validate_notes(vault, &mut diagnostics);
-    diagnostics.extend_from_slice(policy_plan.definition_diagnostics());
+    diagnostics.extend_from_slice(policies.definition_diagnostics());
     validate_pattern_collisions(vault, &mut diagnostics);
     validate_links(vault, &mut diagnostics);
     validate_supersession(vault, &mut diagnostics);
     diagnostic::sort(&mut diagnostics);
-    diagnostics
+    Validation {
+        diagnostics,
+        policies,
+    }
 }
 
-fn validate_changed_vault(
-    vault: &Vault,
-    policy_plan: &PolicyScanPlan,
-    changed_paths: &BTreeSet<String>,
-) -> Vec<Diagnostic> {
+fn validate_changed_vault(vault: &Vault, changed_paths: &BTreeSet<String>) -> Validation {
+    let policies = PolicyScanPlan::new(vault);
     let mut diagnostics = Vec::new();
     for note in vault
-        .notes
+        .notes()
         .iter()
-        .filter(|note| changed_paths.contains(&note.rel_path))
+        .filter(|note| changed_paths.contains(note.rel_path()))
     {
         validate_note_local(vault, note, &mut diagnostics);
         validate_note_links(vault, note, &mut diagnostics);
     }
     diagnostics.extend(
-        policy_plan
+        policies
             .definition_diagnostics()
             .iter()
             .filter(|diagnostic| changed_paths.contains(diagnostic.path()))
             .cloned(),
     );
     diagnostic::sort(&mut diagnostics);
-    diagnostics
+    Validation {
+        diagnostics,
+        policies,
+    }
 }
 
 fn validate_notes(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
     let mut ids: BTreeMap<&str, Vec<&Note>> = BTreeMap::new();
-    for note in &vault.notes {
+    for note in vault.notes() {
         validate_note_local(vault, note, diagnostics);
-        if let Some(id) = &note.id {
+        if let Some(id) = note.id() {
             ids.entry(id).or_default().push(note);
         }
     }
@@ -225,7 +231,7 @@ fn validate_notes(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
             for note in notes {
                 diagnostics.push(Diagnostic::error(
                     DiagnosticCode::DuplicateId,
-                    &note.rel_path,
+                    note.rel_path(),
                     None,
                     format!("duplicate note id `{id}`"),
                 ));
@@ -235,43 +241,43 @@ fn validate_notes(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
 }
 
 fn validate_note_local(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
-    if let Some(err) = &note.frontmatter_error {
+    if let Some(err) = note.frontmatter_error() {
         diagnostics.push(
             Diagnostic::error(
                 DiagnosticCode::InvalidFrontmatter,
-                &note.rel_path,
+                note.rel_path(),
                 None,
-                err.clone(),
+                err,
             )
-            .at(note.frontmatter_error_location.clone()),
+            .at(note.frontmatter_error_location().cloned()),
         );
     }
 
-    if note.id.as_deref().is_none_or(|id| id.trim().is_empty()) {
+    if note.id().is_none_or(|id| id.trim().is_empty()) {
         diagnostics.push(Diagnostic::error(
             DiagnosticCode::MissingId,
-            &note.rel_path,
+            note.rel_path(),
             None,
             "note is missing required frontmatter `id`",
         ));
     }
 
-    match note.kind {
+    match note.kind() {
         NoteKind::Doc | NoteKind::Decision => {}
         NoteKind::Unknown => diagnostics.push(Diagnostic::error(
             DiagnosticCode::InvalidKind,
-            &note.rel_path,
+            note.rel_path(),
             None,
             "note frontmatter `kind` must be `doc` or `decision`",
         )),
     }
 
-    if note.kind == NoteKind::Decision {
+    if note.kind() == NoteKind::Decision {
         validate_decision_note(vault, note, diagnostics);
-    } else if vault.config.is_adr_path(&note.rel_path) {
+    } else if vault.config().is_adr_path(note.rel_path()) {
         diagnostics.push(Diagnostic::error(
             DiagnosticCode::AdrDirNonDecision,
-            &note.rel_path,
+            note.rel_path(),
             None,
             "ADR directory may contain only `kind: decision` notes plus README.md",
         ));
@@ -282,33 +288,34 @@ fn validate_note_local(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnos
 }
 
 fn validate_decision_note(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
-    let adr_id = note.id.as_deref().filter(|id| is_adr_id(id));
+    let adr_id = note.id().filter(|id| is_adr_id(id));
     if adr_id.is_none() {
         diagnostics.push(Diagnostic::error(
             DiagnosticCode::InvalidAdrId,
-            &note.rel_path,
+            note.rel_path(),
             None,
             "decision id must match ADR-NNNN",
         ));
     }
 
-    if !note.rel_path.starts_with(&vault.config.adr_prefix()) {
+    let config = vault.config();
+    if !note.rel_path().starts_with(&config.adr_prefix()) {
         diagnostics.push(Diagnostic::error(
             DiagnosticCode::DecisionLocation,
-            &note.rel_path,
+            note.rel_path(),
             None,
             format!(
                 "decision notes must live under {}/{}",
-                vault.config.docs_dir, vault.config.adr_dir
+                config.docs_dir, config.adr_dir
             ),
         ));
     }
 
-    let title_slug = note.title.as_deref().map(slug).unwrap_or_default();
+    let title_slug = note.title().map(slug).unwrap_or_default();
     if let Some(number) = adr_id.and_then(parse_adr_id)
         && !title_slug.is_empty()
         && !note
-            .path
+            .path()
             .file_stem()
             .and_then(|stem| stem.to_str())
             .and_then(parse_adr_stem)
@@ -316,7 +323,7 @@ fn validate_decision_note(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diag
     {
         diagnostics.push(Diagnostic::error(
             DiagnosticCode::AdrFilename,
-            &note.rel_path,
+            note.rel_path(),
             None,
             format!(
                 "ADR filename should follow NNNN-kebab-case-title.md, as in `{}`",
@@ -328,13 +335,13 @@ fn validate_decision_note(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diag
 
 fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
     if !vault.is_historical_decision(note) {
-        for target in &note.targets_symbols {
+        for target in note.targets_symbols() {
             match vault.resolve_source_target(target) {
                 SourceTargetResolution::Resolved { .. } => {
                     warn_legacy_source_target(
                         vault,
                         diagnostics,
-                        &note.rel_path,
+                        note.rel_path(),
                         None,
                         target,
                         "target symbol",
@@ -343,7 +350,7 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
                 SourceTargetResolution::MissingFile => {
                     diagnostics.push(Diagnostic::error(
                         DiagnosticCode::UnresolvedTarget,
-                        &note.rel_path,
+                        note.rel_path(),
                         None,
                         format!("target symbol `{target}` does not resolve to a source file"),
                     ));
@@ -351,7 +358,7 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
                 SourceTargetResolution::MissingFragment { path } => {
                     diagnostics.push(Diagnostic::error(
                         DiagnosticCode::UnresolvedTarget,
-                        &note.rel_path,
+                        note.rel_path(),
                         None,
                         format!(
                             "target symbol `{target}` resolves to `{path}` but does not resolve to a source symbol"
@@ -362,11 +369,11 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
         }
     }
 
-    for pattern in &note.target_pattern_refs {
+    for pattern in note.target_pattern_refs() {
         if vault.resolve_policy_pattern(&pattern.id).is_none() {
             diagnostics.push(Diagnostic::error(
                 DiagnosticCode::UnresolvedPattern,
-                &note.rel_path,
+                note.rel_path(),
                 Some(pattern.line),
                 format!("pattern reference `{}` does not resolve", pattern.id),
             ));
@@ -374,11 +381,11 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
     }
 
     let mut doc_local_patterns = BTreeSet::new();
-    for pattern in &note.target_pattern_ids {
+    for pattern in note.target_pattern_ids() {
         if !doc_local_patterns.insert(pattern) {
             diagnostics.push(Diagnostic::error(
                 DiagnosticCode::DuplicateDocPattern,
-                &note.rel_path,
+                note.rel_path(),
                 None,
                 format!("doc-local pattern id `{pattern}` is declared more than once"),
             ));
@@ -387,56 +394,47 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
 
     if !vault.is_historical_decision(note) {
         for (scope, has_match) in note
-            .targets_scope
+            .targets_scope()
             .iter()
-            .zip(vault.source_globs_have_matches(&note.targets_scope))
+            .zip(vault.source_globs_have_matches(note.targets_scope()))
         {
             if !has_match {
                 diagnostics.push(Diagnostic::warning(
                     DiagnosticCode::EmptyTargetScope,
-                    &note.rel_path,
+                    note.rel_path(),
                     None,
                     format!("target scope `{scope}` matches no source files"),
                 ));
             }
         }
 
-        for governs in unresolved_governs(vault, note) {
-            diagnostics.push(Diagnostic::error(
-                DiagnosticCode::UnresolvedGoverns,
-                &note.rel_path,
-                None,
-                format!("governs glob `{governs}` matches no source files"),
-            ));
-        }
+        diagnostics.extend(unresolved_governs(vault, note));
     }
 }
 
-fn unresolved_governs(vault: &Vault, note: &Note) -> Vec<String> {
-    let governs = Vault::effective_governs(note);
+fn unresolved_governs(vault: &Vault, note: &Note) -> Vec<Diagnostic> {
+    let governs = note.effective_governs();
     governs
         .iter()
         .zip(vault.source_globs_have_matches(&governs))
         .filter(|(_, has_match)| !has_match)
-        .map(|(governs, _)| governs.clone())
+        .map(|(governs, _)| {
+            Diagnostic::error(
+                DiagnosticCode::UnresolvedGoverns,
+                note.rel_path(),
+                None,
+                format!("governs glob `{governs}` matches no source files"),
+            )
+        })
         .collect()
 }
 
 pub fn publication_blocking_diagnostics(vault: &Vault) -> Vec<Diagnostic> {
     let mut diagnostics = vault
-        .notes
+        .notes()
         .iter()
         .filter(|note| vault.is_effective_decision(note))
-        .flat_map(|note| {
-            unresolved_governs(vault, note).into_iter().map(|governs| {
-                Diagnostic::error(
-                    DiagnosticCode::UnresolvedGoverns,
-                    &note.rel_path,
-                    None,
-                    format!("governs glob `{governs}` matches no source files"),
-                )
-            })
-        })
+        .flat_map(|note| unresolved_governs(vault, note))
         .collect::<Vec<_>>();
     diagnostic::sort(&mut diagnostics);
     diagnostics
@@ -444,20 +442,20 @@ pub fn publication_blocking_diagnostics(vault: &Vault) -> Vec<Diagnostic> {
 
 fn validate_pattern_collisions(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
     let mut declarations: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for note in &vault.notes {
-        for pattern in &note.target_pattern_ids {
+    for note in vault.notes() {
+        for pattern in note.target_pattern_ids() {
             declarations
                 .entry(pattern.clone())
                 .or_default()
-                .push(note.rel_path.clone());
+                .push(note.rel_path().to_string());
         }
-        if let Some(id) = &note.id {
-            for pattern in &note.policy_patterns {
+        if let Some(id) = note.id() {
+            for pattern in note.policy_patterns() {
                 if let Some(local_id) = pattern.id.as_deref() {
                     declarations
                         .entry(pattern_id(id, local_id))
                         .or_default()
-                        .push(note.rel_path.clone());
+                        .push(note.rel_path().to_string());
                 }
             }
         }
@@ -482,18 +480,18 @@ fn validate_pattern_collisions(vault: &Vault, diagnostics: &mut Vec<Diagnostic>)
 }
 
 fn validate_links(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
-    for note in &vault.notes {
+    for note in vault.notes() {
         validate_note_links(vault, note, diagnostics);
     }
 }
 
 fn validate_note_links(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
-    for link in &note.wiki_links {
+    for link in note.wiki_links() {
         match vault.resolve_link(&link.target) {
             ResolvedLink::Broken => diagnostics.push(
                 Diagnostic::error(
                     DiagnosticCode::BrokenLink,
-                    &note.rel_path,
+                    note.rel_path(),
                     Some(link.line),
                     format!("wiki-link `[[{}]]` does not resolve", link.raw),
                 )
@@ -509,7 +507,7 @@ fn validate_note_links(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnos
                 diagnostics.push(
                     Diagnostic::warning(
                         DiagnosticCode::SourceWikilink,
-                        &note.rel_path,
+                        note.rel_path(),
                         Some(link.line),
                         format!(
                             "wiki-link `[[{}]]` targets source `{path}`; Wikilinks are reserved for document references{suggestion}",
@@ -522,7 +520,7 @@ fn validate_note_links(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnos
                     diagnostics.push(
                         Diagnostic::warning(
                             DiagnosticCode::AmbiguousSourceLink,
-                            &note.rel_path,
+                            note.rel_path(),
                             Some(link.line),
                             format!(
                                 "wiki-link `[[{}]]` resolves ambiguously; first match is `{path}`",
@@ -543,7 +541,7 @@ fn validate_note_links(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnos
                     diagnostics.push(
                         Diagnostic::error(
                             DiagnosticCode::NonPortableNoteLink,
-                            &note.rel_path,
+                            note.rel_path(),
                             Some(link.line),
                             format!(
                                 "wiki-link `[[{}]]` resolves through note metadata but does not target an existing markdown file{suggestion}",
@@ -583,38 +581,31 @@ fn warn_legacy_source_target(
 }
 
 fn validate_supersession(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
-    let decisions = vault
-        .notes
-        .iter()
-        .filter(|note| note.kind == NoteKind::Decision)
-        .filter_map(|note| note.id.as_deref().map(|id| (id, note)))
-        .collect::<BTreeMap<_, _>>();
-
-    for (id, note) in &decisions {
-        for old_id in &note.supersedes {
-            if !decisions.contains_key(old_id.as_str()) {
+    for (id, note) in vault.decisions() {
+        for old_id in note.supersedes() {
+            if vault.decision(old_id).is_none() {
                 diagnostics.push(Diagnostic::error(
                     DiagnosticCode::UnknownSupersedes,
-                    &note.rel_path,
+                    note.rel_path(),
                     None,
                     format!("supersedes references unknown decision `{old_id}`"),
                 ));
             }
         }
 
-        for new_id in &note.superseded_by {
-            match decisions.get(new_id.as_str()) {
+        for new_id in note.superseded_by() {
+            match vault.decision(new_id) {
                 None => diagnostics.push(Diagnostic::error(
                     DiagnosticCode::UnknownSupersededBy,
-                    &note.rel_path,
+                    note.rel_path(),
                     None,
                     format!("superseded_by references unknown decision `{new_id}`"),
                 )),
                 Some(new_note) => {
-                    if !new_note.supersedes.iter().any(|value| value == id) {
+                    if !new_note.supersedes().iter().any(|value| value == id) {
                         diagnostics.push(Diagnostic::error(
                             DiagnosticCode::InconsistentSupersession,
-                            &note.rel_path,
+                            note.rel_path(),
                             None,
                             format!("`{new_id}` must list `{id}` in supersedes"),
                         ));
@@ -624,24 +615,25 @@ fn validate_supersession(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
         }
     }
 
-    for cycle in supersession_cycles(&decisions) {
+    for cycle in supersession_cycles(vault) {
         diagnostics.push(Diagnostic::error(
             DiagnosticCode::SupersessionCycle,
-            decisions
-                .get(cycle.first().map_or("", String::as_str))
-                .map_or("docs", |note| note.rel_path.as_str()),
+            cycle
+                .first()
+                .and_then(|id| vault.decision(id))
+                .map_or_else(|| vault.config().docs_dir.as_str(), Note::rel_path),
             None,
             format!("supersession chain is cyclic: {}", cycle.join(" -> ")),
         ));
     }
 }
 
-fn supersession_cycles(decisions: &BTreeMap<&str, &Note>) -> Vec<Vec<String>> {
+fn supersession_cycles(vault: &Vault) -> Vec<Vec<String>> {
     let mut cycles = Vec::new();
-    for id in decisions.keys() {
+    for (id, _) in vault.decisions() {
         let mut seen = BTreeSet::new();
         let mut stack = Vec::new();
-        visit_supersession(id, decisions, &mut seen, &mut stack, &mut cycles);
+        visit_supersession(id, vault, &mut seen, &mut stack, &mut cycles);
     }
     cycles.sort();
     cycles.dedup();
@@ -650,7 +642,7 @@ fn supersession_cycles(decisions: &BTreeMap<&str, &Note>) -> Vec<Vec<String>> {
 
 fn visit_supersession(
     id: &str,
-    decisions: &BTreeMap<&str, &Note>,
+    vault: &Vault,
     seen: &mut BTreeSet<String>,
     stack: &mut Vec<String>,
     cycles: &mut Vec<Vec<String>>,
@@ -666,9 +658,9 @@ fn visit_supersession(
     }
 
     stack.push(id.to_string());
-    if let Some(note) = decisions.get(id) {
-        for next in &note.supersedes {
-            visit_supersession(next, decisions, seen, stack, cycles);
+    if let Some(note) = vault.decision(id) {
+        for next in note.supersedes() {
+            visit_supersession(next, vault, seen, stack, cycles);
         }
     }
     stack.pop();
@@ -764,7 +756,6 @@ fn escape_github_property(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::vault::WikiLink;
 
     #[test]
     fn next_command_names_the_repair_criv_can_run() {
@@ -954,31 +945,51 @@ mod tests {
     }
 
     #[test]
-    fn cycles_are_detected() {
-        let mut a = empty_decision("ADR-0001");
-        let mut b = empty_decision("ADR-0002");
-        a.supersedes.push("ADR-0002".into());
-        b.supersedes.push("ADR-0001".into());
-        let decisions = BTreeMap::from([("ADR-0001", &a), ("ADR-0002", &b)]);
-        assert!(!supersession_cycles(&decisions).is_empty());
+    fn cycles_are_detected_at_the_first_decision_of_the_cycle() {
+        let (_root, vault) = decisions_vault(&[
+            (
+                "0001-a.md",
+                &decision("ADR-0001", "supersedes: [ADR-0002]", ""),
+            ),
+            (
+                "0002-b.md",
+                &decision("ADR-0002", "supersedes: [ADR-0001]", ""),
+            ),
+        ]);
+
+        let cycles = validate(&vault)
+            .into_iter()
+            .filter(|diag| diag.code() == DiagnosticCode::SupersessionCycle)
+            .collect::<Vec<_>>();
+
+        assert!(!cycles.is_empty());
+        assert!(
+            cycles
+                .iter()
+                .all(|diag| diag.path().starts_with("docs/adr/"))
+        );
     }
 
     #[test]
     fn supersedes_does_not_require_old_adr_backlink() {
-        let mut old = empty_decision("ADR-0001");
-        let mut new = empty_decision("ADR-0002");
-        new.supersedes.push("ADR-0001".into());
-        let vault = test_vault(vec![old.clone(), new]);
-
-        let diagnostics = validate(&vault);
+        let old = decision("ADR-0001", "", "");
+        let (_root, vault) = decisions_vault(&[
+            ("0001-old.md", &old),
+            (
+                "0002-new.md",
+                &decision("ADR-0002", "supersedes: [ADR-0001]", ""),
+            ),
+        ]);
 
         assert!(
-            diagnostics
+            validate(&vault)
                 .iter()
                 .all(|diag| diag.code() != DiagnosticCode::InconsistentSupersession)
         );
-        old.superseded_by.push("ADR-0003".into());
-        let vault = test_vault(vec![old]);
+        let (_root, vault) = decisions_vault(&[(
+            "0001-old.md",
+            &decision("ADR-0001", "superseded_by: [ADR-0003]", ""),
+        )]);
         assert!(
             validate(&vault)
                 .iter()
@@ -988,15 +999,16 @@ mod tests {
 
     #[test]
     fn metadata_only_note_links_are_non_portable() {
-        let target = decision_note("ADR-0001", "docs/adr/0001-local-cli-vault-architecture.md");
-        let mut source = decision_note("ADR-0002", "docs/adr/0002-context.md");
-        source.wiki_links.push(wiki_link("ADR-0001"));
-        let vault = test_vault(vec![target, source]);
-
-        let diagnostics = validate(&vault);
+        let (_root, vault) = decisions_vault(&[
+            (
+                "0001-local-cli-vault-architecture.md",
+                &decision("ADR-0001", "", ""),
+            ),
+            ("0002-context.md", &decision("ADR-0002", "", "[[ADR-0001]]")),
+        ]);
 
         assert!(
-            diagnostics
+            validate(&vault)
                 .iter()
                 .any(|diag| diag.code() == DiagnosticCode::NonPortableNoteLink)
         );
@@ -1004,17 +1016,23 @@ mod tests {
 
     #[test]
     fn file_backed_note_links_are_portable() {
-        let target = decision_note("ADR-0001", "docs/adr/0001-local-cli-vault-architecture.md");
-        let mut source = decision_note("ADR-0002", "docs/adr/0002-context.md");
-        source
-            .wiki_links
-            .push(wiki_link("0001-local-cli-vault-architecture|ADR-0001"));
-        let vault = test_vault(vec![target, source]);
-
-        let diagnostics = validate(&vault);
+        let (_root, vault) = decisions_vault(&[
+            (
+                "0001-local-cli-vault-architecture.md",
+                &decision("ADR-0001", "", ""),
+            ),
+            (
+                "0002-context.md",
+                &decision(
+                    "ADR-0002",
+                    "",
+                    "[[0001-local-cli-vault-architecture|ADR-0001]]",
+                ),
+            ),
+        ]);
 
         assert!(
-            diagnostics
+            validate(&vault)
                 .iter()
                 .all(|diag| diag.code() != DiagnosticCode::NonPortableNoteLink)
         );
@@ -1158,7 +1176,7 @@ governs:
 "#,
         )
         .unwrap();
-        let vault = Vault::load(&root).unwrap();
+        let vault = load(&root);
 
         let diagnostics = validate(&vault);
 
@@ -1219,7 +1237,7 @@ governs:
 "#,
         )
         .unwrap();
-        let vault = Vault::load(&root).unwrap();
+        let vault = load(&root);
 
         let diagnostics = validate(&vault);
 
@@ -1276,7 +1294,7 @@ governs:
 "#,
         )
         .unwrap();
-        let vault = Vault::load(&root).unwrap();
+        let vault = load(&root);
 
         let blockers = publication_blocking_diagnostics(&vault);
 
@@ -1330,7 +1348,7 @@ See [[does-not-exist]].
 "#;
         fs::write(root.join("criv.toml"), "[source]\nindex = false\n").unwrap();
         fs::write(root.join("docs/line-check.md"), note).unwrap();
-        let vault = Vault::load(&root).unwrap();
+        let vault = load(&root);
 
         let diagnostics = validate(&vault);
 
@@ -1365,48 +1383,38 @@ See [[does-not-exist]].
         ))
     }
 
-    fn empty_decision(id: &str) -> Note {
-        Note {
-            path: id.into(),
-            rel_path: format!("adr/{id}.md"),
-            id: Some(id.into()),
-            kind: NoteKind::Decision,
-            title: None,
-            status: None,
-            body: String::new(),
-            headings: Vec::new(),
-            targets_symbols: Vec::new(),
-            targets_scope: Vec::new(),
-            target_pattern_refs: Vec::new(),
-            target_pattern_ids: Vec::new(),
-            policy_patterns: Vec::new(),
-            governs: Vec::new(),
-            supersedes: Vec::new(),
-            superseded_by: Vec::new(),
-            wiki_links: Vec::new(),
-            frontmatter_error: None,
-            frontmatter_error_location: None,
+    fn validate(vault: &Vault) -> Vec<Diagnostic> {
+        validate_vault(vault).diagnostics
+    }
+
+    fn load(root: &Path) -> Vault {
+        Vault::load(
+            &RepositoryFiles::open(root).unwrap(),
+            LoadOptions::default(),
+        )
+        .unwrap()
+    }
+
+    fn decision(id: &str, frontmatter: &str, body: &str) -> String {
+        format!("---\nid: {id}\nkind: decision\nstatus: draft\n{frontmatter}\n---\n\n{body}\n")
+    }
+
+    /// A documents-only vault with each `(file name, contents)` under `docs/adr`.
+    fn decisions_vault(notes: &[(&str, &str)]) -> (tempfile::TempDir, Vault) {
+        let root = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("docs/adr")).unwrap();
+        for (name, contents) in notes {
+            fs::write(root.path().join("docs/adr").join(name), contents).unwrap();
         }
-    }
-
-    fn decision_note(id: &str, rel_path: &str) -> Note {
-        let mut note = empty_decision(id);
-        note.path = rel_path.into();
-        note.rel_path = rel_path.into();
-        note
-    }
-
-    fn wiki_link(target: &str) -> WikiLink {
-        WikiLink {
-            raw: target.into(),
-            target: target.into(),
-            line: 1,
-            location: None,
-        }
-    }
-
-    fn test_vault(notes: Vec<Note>) -> Vault {
-        Vault::from_parts_for_test(notes)
+        let vault = Vault::load(
+            &RepositoryFiles::open(root.path()).unwrap(),
+            LoadOptions {
+                source: crate::vault::SourceLoad::Skip,
+                ..LoadOptions::default()
+            },
+        )
+        .unwrap();
+        (root, vault)
     }
 
     fn source_note_vault(body: &str, target_symbols: &[&str]) -> Vault {
@@ -1454,6 +1462,6 @@ title: Source Note
             ),
         )
         .unwrap();
-        Vault::load(&root).unwrap()
+        load(&root)
     }
 }

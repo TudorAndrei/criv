@@ -22,7 +22,6 @@ pub enum Work {
     SourcePartitionBuild,
     NotePartitionBuild,
     PolicyPartitionBuild,
-    SourceIndexPartitionBuild,
     StateSerialization,
     StateBytes,
 }

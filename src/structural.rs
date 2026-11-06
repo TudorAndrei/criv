@@ -44,6 +44,15 @@ impl From<&str> for PolicyLanguage {
     }
 }
 
+impl fmt::Display for PolicyLanguage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Supported(language) => language.fmt(formatter),
+            Self::Unsupported { name, .. } => formatter.write_str(name),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum PatternSource<'a> {
     Pattern(&'a str),

@@ -13,7 +13,7 @@ use usage_rs::{Args as UsageArgs, Subcommands};
 use crate::config::{CONFIG_FILE, Config, Stage};
 use crate::git::{self, ChangeStatus, ChangedEntry, ChangedSet};
 use crate::repository::RepositoryFiles;
-use crate::vault::Vault;
+use crate::vault::{LoadOptions, Vault};
 use crate::{CrivError, Result};
 use crate::{identity, markdown};
 
@@ -648,8 +648,8 @@ fn build_plan_from(
     target_sha: &str,
 ) -> Result<ReconcilePlan> {
     let root = files.root();
-    let vault = Vault::load_from(files)?;
-    let current_config = &vault.config;
+    let vault = Vault::load(files, LoadOptions::default())?;
+    let current_config = vault.config();
     let target_config = if git::tree_paths(root, target_sha, CONFIG_FILE)?
         .iter()
         .any(|path| path == CONFIG_FILE)
@@ -666,7 +666,7 @@ fn build_plan_from(
             "refusing ADR reconciliation because vault.docs or vault.adr differs from the target; cannot prove ADR ownership",
         ));
     }
-    let adr_prefix = vault.config.adr_prefix();
+    let adr_prefix = vault.config().adr_prefix();
     let merge_base = git::merge_base(root, target_sha, "HEAD")?;
     let target_paths = git::tree_paths(root, target_sha, &adr_prefix)?;
     let merge_paths = git::tree_paths(root, &merge_base, &adr_prefix)?
@@ -674,7 +674,7 @@ fn build_plan_from(
         .collect::<BTreeSet<_>>();
     let target = target_paths
         .iter()
-        .filter(|path| vault.config.is_adr_path(path))
+        .filter(|path| vault.config().is_adr_path(path))
         .map(|path| {
             git::blob(root, target_sha, path).and_then(|contents| parse_adr(path, contents))
         })
@@ -723,14 +723,14 @@ fn build_plan_from(
         .entries
         .iter()
         .filter(|entry| entry.status == git::ChangeStatus::Added)
-        .filter(|entry| vault.config.is_adr_path(&entry.path))
+        .filter(|entry| vault.config().is_adr_path(&entry.path))
         .map(|entry| entry.path.clone())
         .collect::<Vec<_>>();
     let mut receipt_sources = Vec::new();
     let mut branch_adrs = changes
         .entries
         .iter()
-        .filter(|entry| vault.config.is_adr_path(&entry.path))
+        .filter(|entry| vault.config().is_adr_path(&entry.path))
         .filter(|entry| {
             !source_reconcile::allows_history_change(root, &history_changes, entry)
         })
@@ -782,7 +782,7 @@ fn build_plan_from(
         .map(|adr| adr.path.clone())
         .collect::<BTreeSet<_>>();
     for entry in &worktree_changes.entries {
-        if !vault.config.is_adr_path(&entry.path) {
+        if !vault.config().is_adr_path(&entry.path) {
             continue;
         }
         match entry.status {
