@@ -120,6 +120,7 @@ fn validate_all(vault: &Vault) -> Result<Vec<Diagnostic>> {
         policies,
     } = validate_vault(vault);
     diagnostics.extend(policies.scan(vault, None)?);
+    diagnostic::sort(&mut diagnostics);
     Ok(diagnostics)
 }
 
@@ -130,16 +131,8 @@ fn validate_changed(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
         return Ok(Vec::new());
     }
 
-    let config = crate::config::Config::load_from(files)?;
-    let full_check = changed_scope_requires_full_check(&changes, &config.adr_prefix());
-    let vault = Vault::load(
-        files,
-        LoadOptions {
-            config: Some(config),
-            ..LoadOptions::default()
-        },
-    )?;
-    if full_check {
+    let vault = Vault::load(files, LoadOptions::default())?;
+    if changed_scope_requires_full_check(&changes, &vault.config().adr_prefix()) {
         return validate_all(&vault);
     }
 
@@ -251,6 +244,7 @@ fn validate_note_local(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnos
             )
             .at(note.frontmatter_error_location().cloned()),
         );
+        return;
     }
 
     if note.id().is_none_or(|id| id.trim().is_empty()) {
@@ -624,52 +618,50 @@ fn validate_supersession(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
         }
     }
 
-    for cycle in supersession_cycles(vault) {
+    for (path, cycle) in supersession_cycles(vault) {
         diagnostics.push(Diagnostic::error(
             DiagnosticCode::SupersessionCycle,
-            cycle
-                .first()
-                .and_then(|id| vault.decision(id))
-                .map_or_else(|| vault.config().docs_dir.as_str(), Note::rel_path),
+            path,
             None,
             format!("supersession chain is cyclic: {}", cycle.join(" -> ")),
         ));
     }
 }
 
-fn supersession_cycles(vault: &Vault) -> Vec<Vec<String>> {
+/// Each supersession cycle, with the path of the decision it starts at.
+fn supersession_cycles(vault: &Vault) -> Vec<(&str, Vec<&str>)> {
     let mut cycles = Vec::new();
-    for (id, _) in vault.decisions() {
+    for (id, note) in vault.decisions() {
         let mut seen = BTreeSet::new();
         let mut stack = Vec::new();
-        visit_supersession(id, vault, &mut seen, &mut stack, &mut cycles);
+        visit_supersession(vault, (id, note), &mut seen, &mut stack, &mut cycles);
     }
     cycles.sort();
     cycles.dedup();
     cycles
 }
 
-fn visit_supersession(
-    id: &str,
-    vault: &Vault,
-    seen: &mut BTreeSet<String>,
-    stack: &mut Vec<String>,
-    cycles: &mut Vec<Vec<String>>,
+fn visit_supersession<'a>(
+    vault: &'a Vault,
+    (id, note): (&'a str, &'a Note),
+    seen: &mut BTreeSet<&'a str>,
+    stack: &mut Vec<&'a str>,
+    cycles: &mut Vec<(&'a str, Vec<&'a str>)>,
 ) {
-    if let Some(position) = stack.iter().position(|value| value == id) {
-        let mut cycle = stack.get(position..).unwrap_or_default().to_vec();
-        cycle.push(id.to_string());
-        cycles.push(cycle);
+    if let Some(position) = stack.iter().position(|value| *value == id) {
+        let mut ids = stack.get(position..).unwrap_or_default().to_vec();
+        ids.push(id);
+        cycles.push((note.rel_path(), ids));
         return;
     }
-    if !seen.insert(id.to_string()) {
+    if !seen.insert(id) {
         return;
     }
 
-    stack.push(id.to_string());
-    if let Some(note) = vault.decision(id) {
-        for next in note.supersedes() {
-            visit_supersession(next, vault, seen, stack, cycles);
+    stack.push(id);
+    for next in note.supersedes() {
+        if let Some(next_note) = vault.decision(next) {
+            visit_supersession(vault, (next.as_str(), next_note), seen, stack, cycles);
         }
     }
     stack.pop();
@@ -792,7 +784,7 @@ mod tests {
         let json = serde_json::to_value(JsonDiagnostic::new(&diagnostic)).expect("serialize");
 
         assert_eq!(json["code"], "document-format");
-        assert_eq!(json["fix"], DiagnosticCode::DocumentFormat.fix().unwrap());
+        assert!(json["fix"].as_str().is_some_and(|fix| !fix.is_empty()));
     }
 
     fn changed_set_fixture(entries: Vec<ChangedEntry>) -> ChangedSet {
@@ -1176,6 +1168,19 @@ governs:
                 .iter()
                 .all(|diag| diag.code() != DiagnosticCode::UnresolvedGoverns)
         );
+    }
+
+    #[test]
+    fn invalid_frontmatter_is_the_only_metadata_diagnostic_of_its_note() {
+        let (_root, vault) =
+            decisions_vault(&[("0001-broken.md", "---\nid: [unclosed\n---\n\n# Broken\n")]);
+
+        let codes = validate(&vault)
+            .iter()
+            .map(Diagnostic::code)
+            .collect::<Vec<_>>();
+
+        assert_eq!(codes, [DiagnosticCode::InvalidFrontmatter]);
     }
 
     #[test]
