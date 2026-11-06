@@ -5,17 +5,21 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./packaged": "./src/packaged.ts",
+    "./esbuild": "./esbuild.mjs"
   },
   "scripts": {
-    "check-types": "tsc --noEmit",
-    "format": "oxfmt --write src test",
-    "format:check": "oxfmt --check src test",
-    "lint": "oxlint src test",
-    "test": "node --test \"test/**/*.test.ts\""
+    "build:wasm": "mise exec -- wasm-pack build --target web --out-dir ../../packages/criv-editor-state/pkg ../../crates/criv-wasm -- --locked",
+    "check-types": "tsc --noEmit -p .",
+    "format": "oxfmt --write src test esbuild.mjs",
+    "format:check": "oxfmt --check src test esbuild.mjs",
+    "lint": "oxlint src test esbuild.mjs",
+    "test": "npm run build:wasm && node --test \"test/**/*.test.ts\""
   },
   "devDependencies": {
     "@types/node": "26.6.6",
+    "esbuild": "0.28.2",
     "oxfmt": "0.75.0",
     "oxlint": "1.90.0",
     "typescript": "7.0.2"

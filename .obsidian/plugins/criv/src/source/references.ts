@@ -1,11 +1,9 @@
 import {
   EditorSuggest,
-  Notice,
   type Editor,
   type EditorPosition,
   type EditorSuggestContext,
   type EditorSuggestTriggerInfo,
-  type MarkdownPostProcessorContext,
 } from "obsidian";
 import type { App } from "obsidian";
 import { RangeSetBuilder } from "@codemirror/state";
@@ -18,28 +16,28 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import {
-  addTarget,
-  addTextTargets,
+  ambiguousSourceTargetMessage,
+  safeVaultPath,
+  type CrivInitialProjections,
+  type CrivSelectorSuggestion,
+} from "@criv/editor-state";
+import {
   crivLinkRanges,
-  decodeSourceLinkTarget,
   looksLikeSourceOrPattern,
   patternTooltip,
   resolvePattern,
   resolveSourceResult,
-  safeVaultPath,
   sourceTooltip,
-  type CrivState,
   type LinkedSource,
-  type SourceResolver,
+  type SourceResolution,
 } from "./model";
-import type { StatePort } from "../ports";
+import type { SourceResolver, StatePort } from "../ports";
 import {
   positionHoverPreview,
   readSourcePreview,
   renderPreview,
   renderPreviewError,
 } from "./preview";
-import type { CrivSelectorSuggestion } from "../state/wasm";
 
 const LINK_TARGET_SELECTOR = [
   "[data-href]",
@@ -67,7 +65,6 @@ export class ObsidianSourceReferencesOwner {
   constructor(
     private readonly app: App,
     private readonly state: StatePort,
-    private readonly openExternal: (path: string) => void,
   ) {}
 
   createSuggest(): EditorSuggest<SourceSuggestionItem> {
@@ -80,8 +77,8 @@ export class ObsidianSourceReferencesOwner {
     }).of(this.state);
   }
 
-  async decorateLinks(el: HTMLElement, _ctx: MarkdownPostProcessorContext): Promise<void> {
-    const state = await this.state.getState();
+  async decorateLinks(el: HTMLElement): Promise<void> {
+    const state = await this.state.load();
     if (!state) {
       return;
     }
@@ -96,7 +93,7 @@ export class ObsidianSourceReferencesOwner {
         continue;
       }
       const sourceResult = resolveSourceResultFromTargets(
-        this.state.cachedSourceResolver(),
+        this.state.sourceResolver(),
         parsedTargets.targets,
       );
       const pattern = resolvePatternFromElement(state, anchor);
@@ -109,7 +106,7 @@ export class ObsidianSourceReferencesOwner {
         anchor.addClass("criv-warning");
         anchor.setAttribute(
           "title",
-          ambiguousSourceMessage(
+          ambiguousSourceTargetMessage(
             parsedTargets.targets[0] ?? "",
             sourceResult.candidates,
             sourceResult.totalCandidateCount,
@@ -136,10 +133,10 @@ export class ObsidianSourceReferencesOwner {
     if (!link || link.closest(".criv-hover-preview")) {
       return;
     }
-    if (!(await this.state.getState())) {
+    if (!(await this.state.load())) {
       return;
     }
-    const source = resolveSourceFromElement(this.state.cachedSourceResolver(), link);
+    const source = resolveSourceFromElement(this.state.sourceResolver(), link);
     if (!source) {
       return;
     }
@@ -161,21 +158,12 @@ export class ObsidianSourceReferencesOwner {
     this.hideHoverPreview();
   }
 
-  openValidatedSource(target: string): void {
-    const result = resolveSourceResult(this.state.cachedSourceResolver(), target);
-    if (result.kind === "resolved") {
-      this.openExternal(result.source.entry.path);
-      return;
-    }
-    new Notice(`Could not resolve criv source target ${target}.`);
-  }
-
   dispose(): void {
     this.hideHoverPreview();
   }
 
   private async showHoverPreview(event: MouseEvent, source: LinkedSource): Promise<void> {
-    const sourceKey = `${source.entry.path}#${source.fragment ?? ""}`;
+    const sourceKey = `${source.entry.path}#${source.lines?.start}-${source.lines?.end}`;
     if (this.hoverEl && this.hoverSourceKey === sourceKey) {
       positionHoverPreview(this.hoverEl, event);
       return;
@@ -238,15 +226,10 @@ class CrivSourceSuggest extends EditorSuggest<SourceSuggestionItem> {
   }
 
   async getSuggestions(context: EditorSuggestContext): Promise<SourceSuggestionItem[]> {
-    if (!(await this.state.getState())) {
+    if (!(await this.state.load())) {
       return [];
     }
-    try {
-      return sourceSuggestionItemsFromWasm(this.state.suggestSourceSelectors(context.query, 20));
-    } catch (error) {
-      this.state.recordWasmFailure(error);
-      return [];
-    }
+    return sourceSuggestionItems(this.state.suggestSelectors(context.query, 20));
   }
 
   renderSuggestion(value: SourceSuggestionItem, el: HTMLElement): void {
@@ -280,27 +263,25 @@ class CrivEditorDriftPlugin implements PluginValue {
   }
 
   private buildDecorations(view: EditorView): DecorationSet {
-    const state = this.state.cachedState();
+    const state = this.state.current();
     if (!state) {
       return Decoration.none;
     }
     const builder = new RangeSetBuilder<Decoration>();
     for (const { from, to } of view.visibleRanges) {
       const text = view.state.sliceDoc(from, to);
-      for (const range of crivLinkRanges(text, state, this.state.cachedSourceResolver())) {
+      for (const range of crivLinkRanges(text, state, this.state.sourceResolver())) {
         if (range.status === "resolved") {
           continue;
         }
         const title =
           range.status === "ambiguous"
-            ? ambiguousSourceMessage(
+            ? ambiguousSourceTargetMessage(
                 range.target,
                 range.candidates ?? [],
                 range.totalCandidateCount ?? 0,
               )
-            : range.status === "malformed"
-              ? "Malformed criv source target"
-              : "Unresolved criv reference";
+            : "Unresolved criv reference";
         builder.add(
           from + range.from,
           from + range.to,
@@ -315,7 +296,7 @@ class CrivEditorDriftPlugin implements PluginValue {
   }
 }
 
-function sourceSuggestionItemsFromWasm(items: CrivSelectorSuggestion[]): SourceSuggestionItem[] {
+function sourceSuggestionItems(items: CrivSelectorSuggestion[]): SourceSuggestionItem[] {
   const suggestions: SourceSuggestionItem[] = [];
   for (const item of items) {
     const path = safeVaultPath(item.path);
@@ -347,7 +328,7 @@ function resolveSourceFromElement(
 function resolveSourceResultFromTargets(
   resolver: SourceResolver,
   targets: string[],
-): ReturnType<typeof resolveSourceResult> {
+): SourceResolution {
   for (const target of targets) {
     const result = resolveSourceResult(resolver, target);
     if (result.kind !== "unresolved") {
@@ -357,7 +338,10 @@ function resolveSourceResultFromTargets(
   return { kind: "unresolved" };
 }
 
-function resolvePatternFromElement(state: CrivState, element: HTMLElement): string | null {
+function resolvePatternFromElement(
+  state: CrivInitialProjections,
+  element: HTMLElement,
+): string | null {
   for (const target of linkTargets(element).targets) {
     const pattern = resolvePattern(state, target);
     if (pattern) {
@@ -367,22 +351,14 @@ function resolvePatternFromElement(state: CrivState, element: HTMLElement): stri
   return null;
 }
 
+/** Candidate link targets for a rendered link, from its attributes and text. */
 function linkTargets(element: HTMLElement): { targets: string[]; malformed: boolean } {
   const targets: string[] = [];
-  const dataHref = element.getAttribute("data-href");
-  if (dataHref) {
-    addTarget(targets, dataHref);
-  }
-  const ariaLabel = element.getAttribute("aria-label");
-  if (ariaLabel) {
-    const match = ariaLabel.match(/(?:open|link|to)\s+(.+)$/i);
-    if (match?.[1]) {
-      addTarget(targets, match[1]);
-    }
-  }
+  addTarget(targets, element.getAttribute("data-href"));
+  addTarget(targets, element.getAttribute("aria-label")?.match(/(?:open|link|to)\s+(.+)$/i)?.[1]);
   const href = element.getAttribute("href");
   if (href && !href.includes("://")) {
-    const decoded = decodeSourceLinkTarget(href.replace(/^#/, ""));
+    const decoded = decodeLinkTarget(href.replace(/^#/, ""));
     if (decoded === null) {
       return { targets: [], malformed: true };
     }
@@ -393,19 +369,27 @@ function linkTargets(element: HTMLElement): { targets: string[]; malformed: bool
   return { targets: Array.from(new Set(targets)), malformed: false };
 }
 
-function ambiguousSourceMessage(
-  target: string,
-  candidates: { canonical_target: string; kind: string; label: string; node_id: string }[],
-  totalCandidateCount: number,
-): string {
-  const details = candidates.map((candidate) => {
-    const base = `${candidate.canonical_target} (${candidate.kind}: ${candidate.label})`;
-    const sameTargetCount = candidates.filter(
-      (other) => other.canonical_target === candidate.canonical_target,
-    ).length;
-    return sameTargetCount > 1 ? `${base} [${candidate.node_id}]` : base;
-  });
-  const remaining = totalCandidateCount - candidates.length;
-  const suffix = remaining > 0 ? `; ${remaining} more` : "";
-  return `Ambiguous criv source target ${target}: ${details.join("; ")}${suffix}`;
+function addTextTargets(targets: string[], value: string | null | undefined): void {
+  if (!value) {
+    return;
+  }
+  addTarget(targets, value);
+  for (const match of value.matchAll(/\[\[([^\]]+)\]\]/g)) {
+    addTarget(targets, match[1]);
+  }
+}
+
+function addTarget(targets: string[], value: string | null | undefined): void {
+  const target = value?.trim();
+  if (target) {
+    targets.push(target);
+  }
+}
+
+function decodeLinkTarget(target: string): string | null {
+  try {
+    return decodeURIComponent(target);
+  } catch {
+    return null;
+  }
 }

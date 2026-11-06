@@ -170,7 +170,7 @@ jobs:
           npm --prefix .obsidian/plugins/criv run format:check
           npm --prefix .obsidian/plugins/criv run lint
           npm --prefix .obsidian/plugins/criv test
-          npm --prefix .obsidian/plugins/criv run build:plugin
+          npm --prefix .obsidian/plugins/criv run build
 
       - name: Check VS Code companion
         run: |

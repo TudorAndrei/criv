@@ -26,22 +26,17 @@
   "publisher": "criv",
   "main": "./dist/extension.js",
   "scripts": {
-    "build": "npm run build:wasm && npm run build:host && npm run smoke:wasm",
-    "build:host": "npm run check-types && node esbuild.config.mjs --production",
-    "build:wasm": "mise exec cargo:wasm-pack@0.15.1 rust@1.99.1 -- wasm-pack build --target nodejs --out-dir ../../extensions/vscode-criv/pkg ../../crates/criv-wasm -- --locked",
-    "check-types": "tsc --noEmit",
-    "compile": "npm run check-types && node esbuild.config.mjs",
-    "compile:integration-tests": "esbuild test/integration/runner.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --outfile=dist-test/integration/runner.js",
-    "compile:unit-tests": "node scripts/compile-unit-tests.mjs",
+    "build": "npm run build:wasm && npm run check-types && node esbuild.config.mjs --production",
+    "build:wasm": "npm --prefix ../../packages/criv-editor-state run build:wasm",
+    "check-types": "tsc --noEmit -p .",
+    "dev": "node esbuild.config.mjs --watch",
     "format": "oxfmt --write src test scripts esbuild.config.mjs",
     "format:check": "oxfmt --check src test scripts esbuild.config.mjs",
     "lint": "oxlint src test scripts esbuild.config.mjs",
     "package": "vsce package --no-dependencies --out vscode-criv.vsix",
-    "smoke:wasm": "node scripts/wasm-smoke.mjs",
-    "test": "npm run build:wasm && npm run compile && npm run compile:unit-tests && node --test \"dist-test/unit/**/*.test.js\"",
-    "test:integration": "npm run compile && npm run compile:integration-tests && node test/run-integration.mjs",
-    "vscode:prepublish": "npm run build",
-    "watch": "node esbuild.config.mjs --watch"
+    "test": "npm run build:wasm && npm run check-types && node scripts/build-tests.mjs && node --test \"dist-test/unit/**/*.test.js\"",
+    "test:integration": "npm run build && node scripts/build-tests.mjs --integration && node test/run-integration.mjs",
+    "vscode:prepublish": "npm run build"
   },
   "dependencies": {
     "@criv/editor-state": "0.1.0"

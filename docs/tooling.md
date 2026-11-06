@@ -317,24 +317,23 @@ npm audit --workspace criv-obsidian-plugin --audit-level=high
 npm --prefix .obsidian/plugins/criv run format:check
 npm --prefix .obsidian/plugins/criv run lint
 npm --prefix .obsidian/plugins/criv test
-npm --prefix .obsidian/plugins/criv run build:wasm
-npm --prefix .obsidian/plugins/criv run build:plugin
 npm --prefix .obsidian/plugins/criv run build
 ```
 
-The combined build preserves the release and manual entry point by running the
-Wasm build followed by the plugin build. The Wasm command invokes `wasm-pack`
-through `mise exec cargo:wasm-pack@0.15.1`, so the repository's pinned tools are
-used rather than whichever Rust or `wasm-pack` appears first in the shell.
-It writes `criv_wasm.js`, `criv_wasm_bg.js`, and `criv_wasm_bg.wasm` under
-`.obsidian/plugins/criv/pkg/`. The plugin bundle keeps that runtime import
-external, so a distributable plugin must carry the generated `pkg/` directory
-beside `main.js`.
+Both companions use the same script names: `build:wasm`, `build`,
+`check-types`, `dev`, `test`, `lint`, `format`, and `format:check`.
+`build:wasm` builds the `web` Wasm target once into
+`packages/criv-editor-state/pkg/`. It runs `wasm-pack` through `mise exec`, so
+the tool versions pinned in `mise.toml` are used rather than whichever Rust or
+`wasm-pack` appears first in the shell. `build` and `test` run it first. The
+bundles embed the Wasm bytes, so `main.js` and `dist/extension.js` need no
+`pkg/` directory beside them
+([[0170-share-editor-state-behaviour-and-embed-the-wasm-runtime|ADR-0170]]).
 
-If Obsidian reports that the criv Wasm runtime is unavailable, run the combined
-build, confirm those three runtime files exist, and reload the plugin. A state
-schema or parse error is separate: regenerate `.criv/state.json` with `criv
-watch --once` instead of rebuilding Wasm.
+If an editor reports that the criv Wasm runtime is unavailable, run its
+`build` and reload the plugin or window. A state schema or parse error is
+separate: regenerate `.criv/state.json` with `criv watch --once` instead of
+rebuilding Wasm.
 
 The VS Code-compatible extension lives in `extensions/vscode-criv`. Its local
 tasks are exposed through mise and npm:
@@ -364,13 +363,9 @@ architecture documentation; neither watch nor check compiles them.
 vscode-package` build a local `vscode-criv.vsix` without publishing. `mise run
 vscode-install` builds that VSIX and installs it into the local editor; reload
 the window afterwards. The
-prepublish hook builds the Node.js Wasm target into
-`extensions/vscode-criv/pkg/`; the VSIX includes `criv_wasm.js` and
-`criv_wasm_bg.wasm` from that directory. If the extension reports an unavailable
-Wasm runtime, rebuild `build:wasm`, recreate the VSIX, confirm those files are
-present in the package, and reload the editor window. Regenerate invalid state
-with `criv watch --once`; do not treat a state-validation error as a runtime
-packaging failure.
+prepublish hook runs `build`, which embeds the Wasm runtime in
+`dist/extension.js`. Regenerate invalid state with `criv watch --once`; do not
+treat a state-validation error as a runtime packaging failure.
 
 The optional viewer is local-only under
 [[0087-keep-editor-setup-out-of-init|ADR-0087]]. The project does not

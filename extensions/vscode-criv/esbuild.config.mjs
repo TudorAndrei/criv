@@ -1,10 +1,11 @@
-import esbuild from "esbuild";
-import process from "node:process";
 import { builtinModules } from "node:module";
+import process from "node:process";
+
+import { crivWasmBytesPlugin } from "@criv/editor-state/esbuild";
+import esbuild from "esbuild";
 
 const args = new Set(process.argv.slice(2));
 const production = args.has("--production");
-const watch = args.has("--watch");
 
 const context = await esbuild.context({
   entryPoints: ["src/extension.ts"],
@@ -12,12 +13,8 @@ const context = await esbuild.context({
   format: "cjs",
   platform: "node",
   target: "node18",
-  external: [
-    "vscode",
-    "../../pkg/criv_wasm.js",
-    ...builtinModules,
-    ...builtinModules.map((name) => `node:${name}`),
-  ],
+  external: ["vscode", ...builtinModules, ...builtinModules.map((name) => `node:${name}`)],
+  plugins: [crivWasmBytesPlugin],
   outfile: "dist/extension.js",
   sourcemap: production ? false : "inline",
   sourcesContent: !production,
@@ -25,7 +22,7 @@ const context = await esbuild.context({
   logLevel: "info",
 });
 
-if (watch) {
+if (args.has("--watch")) {
   await context.watch();
 } else {
   await context.rebuild();

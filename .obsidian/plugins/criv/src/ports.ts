@@ -1,28 +1,21 @@
-import type { AssetIndexEntry, CrivState, SourceIndexEntry, SourceResolver } from "./source/model";
-import type { CrivSelectorSuggestion, CrivStateSummary } from "./state/wasm";
+import type {
+  CrivInitialProjections,
+  CrivSelectorSuggestion,
+  CrivSourceEntry,
+  CrivSourceTargetLookupResult,
+} from "@criv/editor-state";
 
-export type ObsidianStateStatus =
-  | { generation: number; kind: "loading" }
-  | { generation: number; kind: "ready"; state: CrivState }
-  | { generation: number; kind: "missing"; message: string }
-  | { generation: number; kind: "invalid"; message: string }
-  | { generation: number; kind: "unavailable"; message: string };
-
-export interface DisposableSubscription {
-  dispose(): void;
+export interface SourceResolver {
+  lookupSourceTarget(target: string): CrivSourceTargetLookupResult;
+  sourceEntry(path: string): CrivSourceEntry | undefined;
 }
 
+/** The State queries that source features receive from the composition module. */
 export interface StatePort {
-  currentStateStatus(): ObsidianStateStatus;
-  onStateStatusChange(listener: (status: ObsidianStateStatus) => void): DisposableSubscription;
-  getState(): Promise<CrivState | null>;
-  stateStatus(): string;
-  cachedState(): CrivState | null;
-  cachedSourceResolver(): SourceResolver;
-  suggestSourceSelectors(query: string, limit: number): CrivSelectorSuggestion[];
-  recordWasmFailure(error: unknown): void;
-  sourceEntries(): Promise<SourceIndexEntry[]>;
-  assetEntries(): Promise<AssetIndexEntry[]>;
-  patternIds(): Promise<string[]>;
-  readState(): Promise<CrivStateSummary | null>;
+  /** The loaded projections, loading State first when nothing has loaded yet. */
+  load(): Promise<CrivInitialProjections | null>;
+  current(): CrivInitialProjections | null;
+  statusMessage(): string;
+  sourceResolver(): SourceResolver;
+  suggestSelectors(query: string, limit: number): CrivSelectorSuggestion[];
 }

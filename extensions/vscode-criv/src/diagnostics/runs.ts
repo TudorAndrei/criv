@@ -10,8 +10,8 @@ export class CheckRunOwner {
 
   async run<T>(
     work: (signal: AbortSignal) => Promise<T>,
-    publish?: (value: T, signal: AbortSignal) => void | Promise<void>,
-    publishFailure?: (error: unknown, signal: AbortSignal) => void | Promise<void>,
+    publish: (value: T, signal: AbortSignal) => void | Promise<void>,
+    publishFailure: (error: unknown, signal: AbortSignal) => void | Promise<void>,
   ): Promise<CheckRunResult<T>> {
     if (this.disposed) {
       return { kind: "stale" };
@@ -27,7 +27,7 @@ export class CheckRunOwner {
       if (!this.isCurrent(generation, controller)) {
         return { kind: "stale" };
       }
-      await publish?.(value, controller.signal);
+      await publish(value, controller.signal);
       return this.isCurrent(generation, controller)
         ? { kind: "current", value }
         : { kind: "stale" };
@@ -35,7 +35,7 @@ export class CheckRunOwner {
       if (!this.isCurrent(generation, controller)) {
         return { kind: "stale" };
       }
-      await publishFailure?.(error, controller.signal);
+      await publishFailure(error, controller.signal);
       return this.isCurrent(generation, controller) ? { kind: "failed", error } : { kind: "stale" };
     } finally {
       if (this.isCurrent(generation, controller)) {

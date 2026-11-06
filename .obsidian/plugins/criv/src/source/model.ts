@@ -1,79 +1,41 @@
-export interface CrivNode {
-  id: string;
-  kind: string;
-  label: string;
-  path?: string;
-  source_target?: string;
-  line_range?: string;
-}
+import {
+  isRecord,
+  parseLineFragment,
+  patternTargetId,
+  resolveSourceTarget,
+  sourceTargetParts,
+  type CrivGraphNode,
+  type CrivInitialProjections,
+  type CrivPatternMatch,
+  type CrivSourceEntry,
+  type CrivSourceTargetCandidate,
+  type SourceLines,
+} from "@criv/editor-state";
 
-export interface PatternMatch {
-  file: string;
-  range?: string;
-  captures: Record<string, string>;
-}
-
-export interface SourceIndexEntry {
-  path: string;
-  mime?: string;
-}
-
-export interface AssetIndexEntry {
-  path: string;
-  mime: string;
-  bytes: number;
-  hash: string;
-}
+import type { SourceResolver } from "../ports";
 
 export interface LinkedSource {
   target: string;
   canonicalTarget: string;
-  fragment: string | null;
-  entry: SourceIndexEntry;
-  node: CrivNode;
+  lines?: SourceLines;
+  entry: CrivSourceEntry;
+  node: CrivGraphNode;
 }
-
-export interface CrivSourceTargetCandidate {
-  canonical_target: string;
-  node_id: string;
-  kind: string;
-  label: string;
-}
-
-export type CrivSourceTargetLookupResult =
-  | { kind: "resolved"; canonical_target: string; node: CrivNode }
-  | { kind: "unresolved" }
-  | {
-      kind: "ambiguous";
-      candidates: CrivSourceTargetCandidate[];
-      total_candidate_count: number;
-    };
 
 export type SourceResolution =
   | { kind: "resolved"; source: LinkedSource }
   | { kind: "unresolved" }
-  | { kind: "malformed" }
   | {
       kind: "ambiguous";
       candidates: CrivSourceTargetCandidate[];
       totalCandidateCount: number;
     };
 
-export interface SourceResolver {
-  lookupSourceTarget(target: string): CrivSourceTargetLookupResult;
-  sourceEntry(path: string): SourceIndexEntry | undefined;
-}
-
-export interface CrivState {
-  registeredPatterns: string[];
-  patternMatches: Record<string, PatternMatch[]>;
-}
-
 export interface FrontmatterPatternTarget {
   id: string;
   source: "targets" | "policy";
   status: "resolved" | "local" | "unresolved";
-  matches: PatternMatch[];
+  matches: CrivPatternMatch[];
 }
 
 export interface CrivLinkRange {
@@ -81,97 +43,25 @@ export interface CrivLinkRange {
   to: number;
   target: string;
   kind: "source" | "pattern" | "unknown";
-  status: "resolved" | "unresolved" | "ambiguous" | "malformed";
+  status: "resolved" | "unresolved" | "ambiguous";
   candidates?: CrivSourceTargetCandidate[];
   totalCandidateCount?: number;
 }
+
+const WIKILINK = /\[\[([^\]]+)\]\]/g;
 
 export function linkedSourcesFromMarkdown(
   markdown: string,
   resolver: SourceResolver,
 ): LinkedSource[] {
-  const links = Array.from(markdown.matchAll(/\[\[([^\]]+)\]\]/g))
-    .map((match) => match[1] ?? "")
-    .map((target) => resolveSource(resolver, target))
-    .filter((source): source is LinkedSource => source !== null);
-  const seen = new Set<string>();
-  return links.filter((source) => {
-    if (seen.has(source.entry.path)) {
-      return false;
+  const sources = new Map<string, LinkedSource>();
+  for (const match of markdown.matchAll(WIKILINK)) {
+    const source = resolveSource(resolver, match[1] ?? "");
+    if (source && !sources.has(source.entry.path)) {
+      sources.set(source.entry.path, source);
     }
-    seen.add(source.entry.path);
-    return true;
-  });
-}
-
-export function safeVaultPath(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
   }
-  const path = value.trim().replace(/\\/g, "/");
-  if (
-    !path ||
-    path.startsWith("/") ||
-    path.startsWith("//") ||
-    /^[A-Za-z]:/.test(path) ||
-    path.includes("\0")
-  ) {
-    return null;
-  }
-  const segments = path.split("/");
-  const normalized: string[] = [];
-  for (const segment of segments) {
-    if (!segment || segment === ".") {
-      continue;
-    }
-    if (segment === "..") {
-      return null;
-    }
-    normalized.push(segment);
-  }
-  return normalized.length > 0 ? normalized.join("/") : null;
-}
-
-export function parseLineRange(fragment: string | null): { start: number; end: number } | null {
-  const match = fragment?.match(/^L(\d+)(?:-L?(\d+))?$/i);
-  if (!match) {
-    return null;
-  }
-  const start = Number(match[1]);
-  const end = Number(match[2] ?? match[1]);
-  if (!Number.isFinite(start) || !Number.isFinite(end)) {
-    return null;
-  }
-  return { start: Math.max(1, start), end: Math.max(start, end) };
-}
-
-export function addTextTargets(targets: string[], value: string | null | undefined): void {
-  if (!value) {
-    return;
-  }
-  addTarget(targets, value);
-  for (const match of value.matchAll(/\[\[([^\]]+)\]\]/g)) {
-    addTarget(targets, match[1]);
-  }
-  const stripped = value.replace(/^\[\[/, "").replace(/\]\]$/, "");
-  if (stripped !== value) {
-    addTarget(targets, stripped);
-  }
-}
-
-export function addTarget(targets: string[], value: string | null | undefined): void {
-  const target = value?.trim();
-  if (target) {
-    targets.push(target);
-  }
-}
-
-export function decodeSourceLinkTarget(target: string): string | null {
-  try {
-    return decodeURIComponent(target);
-  } catch {
-    return null;
-  }
+  return [...sources.values()];
 }
 
 export function resolveSource(resolver: SourceResolver, target: string): LinkedSource | null {
@@ -179,33 +69,9 @@ export function resolveSource(resolver: SourceResolver, target: string): LinkedS
   return result.kind === "resolved" ? result.source : null;
 }
 
+/** Resolve a link to a source file that the loaded State indexes. */
 export function resolveSourceResult(resolver: SourceResolver, target: string): SourceResolution {
-  const clean = cleanTarget(target);
-  const [targetPath, fragment] = clean.split("#", 2);
-  if (!targetPath || targetPath.startsWith("match:")) {
-    return { kind: "unresolved" };
-  }
-  const sourcePath = targetPath.startsWith("source:")
-    ? targetPath.slice("source:".length)
-    : targetPath;
-  if (!sourcePath) {
-    return { kind: "malformed" };
-  }
-  let lookupTarget = sourcePath;
-  if (fragment) {
-    if (parseLineRange(fragment)) {
-      lookupTarget = sourcePath;
-    } else if (/^l/i.test(fragment)) {
-      return { kind: "malformed" };
-    } else {
-      lookupTarget = `${sourcePath}#${fragment}`;
-    }
-  }
-
-  const result = resolver.lookupSourceTarget(lookupTarget);
-  if (result.kind === "unresolved") {
-    return { kind: "unresolved" };
-  }
+  const result = resolveSourceTarget((lookup) => resolver.lookupSourceTarget(lookup), target);
   if (result.kind === "ambiguous") {
     return {
       kind: "ambiguous",
@@ -213,15 +79,11 @@ export function resolveSourceResult(resolver: SourceResolver, target: string): S
       totalCandidateCount: result.total_candidate_count,
     };
   }
-  if (result.kind === "resolved") {
-    // Continue with the canonical source below.
-  } else {
-    return { kind: "unresolved" };
-  }
-
-  const canonicalPath = result.canonical_target.split("#", 1)[0];
-  const entry = canonicalPath ? resolver.sourceEntry(canonicalPath) : undefined;
-  if (!entry) {
+  const entry =
+    result.kind === "resolved"
+      ? resolver.sourceEntry(sourceTargetParts(result.canonical_target).path)
+      : undefined;
+  if (result.kind !== "resolved" || !entry) {
     return { kind: "unresolved" };
   }
   return {
@@ -229,113 +91,90 @@ export function resolveSourceResult(resolver: SourceResolver, target: string): S
     source: {
       target,
       canonicalTarget: result.canonical_target,
-      fragment: fragment ?? null,
+      lines: result.lines ?? parseLineFragment(result.node.line_range),
       entry,
       node: result.node,
     },
   };
 }
 
-export function resolvePattern(state: CrivState, target: string): string | null {
-  const clean = cleanTarget(target);
-  const id = clean.startsWith("match:") ? clean.slice("match:".length) : clean.split("#match:")[1];
-  if (!id) {
-    return null;
-  }
-  const ids = state.registeredPatterns;
-  return ids.includes(id) ? id : null;
+export function resolvePattern(state: CrivInitialProjections, target: string): string | null {
+  const id = patternTargetId(target);
+  return id !== undefined && state.registeredPatterns.includes(id) ? id : null;
 }
 
 export function sourceTooltip(source: LinkedSource): string {
   return `${source.node.kind}: ${source.node.label}`;
 }
 
-export function patternTooltip(state: CrivState, id: string): string {
+export function patternTooltip(state: CrivInitialProjections, id: string): string {
   const count = state.patternMatches[id]?.length ?? 0;
   return `${id}: ${count} match${count === 1 ? "" : "es"}`;
 }
 
 export function frontmatterPatternTargets(
   frontmatter: Record<string, unknown> | undefined,
-  state: CrivState,
+  state: CrivInitialProjections,
 ): FrontmatterPatternTarget[] {
-  const targets: FrontmatterPatternTarget[] = [];
   const noteId = stringValue(frontmatter?.id);
-  const targetObject = objectValue(frontmatter?.targets);
-  for (const pattern of patternList(targetObject?.patterns)) {
-    const target = frontmatterPatternTarget(pattern, "targets", noteId, state);
-    if (target) {
-      targets.push(target);
-    }
-  }
-
-  const policyObject = objectValue(frontmatter?.policy);
-  for (const pattern of patternList(policyObject?.patterns)) {
-    const target = frontmatterPatternTarget(pattern, "policy", noteId, state);
-    if (target) {
-      targets.push(target);
-    }
-  }
-  return targets;
+  const fromSection = (section: unknown, source: FrontmatterPatternTarget["source"]) =>
+    patternList(isRecord(section) ? section.patterns : undefined).flatMap((pattern) => {
+      const target = frontmatterPatternTarget(pattern, source, noteId, state);
+      return target ? [target] : [];
+    });
+  return [
+    ...fromSection(frontmatter?.targets, "targets"),
+    ...fromSection(frontmatter?.policy, "policy"),
+  ];
 }
 
 export function crivLinkRanges(
   text: string,
-  state: CrivState,
+  state: CrivInitialProjections,
   resolver: SourceResolver,
 ): CrivLinkRange[] {
   const ranges: CrivLinkRange[] = [];
-  for (const match of text.matchAll(/\[\[([^\]]+)\]\]/g)) {
-    const rawTarget = match[1] ?? "";
-    const from = match.index ?? 0;
+  for (const match of text.matchAll(WIKILINK)) {
+    const target = match[1] ?? "";
+    const from = match.index;
     const to = from + match[0].length;
-    const source = resolveSourceResult(resolver, rawTarget);
+    const source = resolveSourceResult(resolver, target);
     if (source.kind === "resolved") {
-      ranges.push({ from, to, target: rawTarget, kind: "source", status: "resolved" });
-      continue;
-    }
-    if (source.kind === "ambiguous" || source.kind === "malformed") {
+      ranges.push({ from, to, target, kind: "source", status: "resolved" });
+    } else if (source.kind === "ambiguous") {
       ranges.push({
         from,
         to,
-        target: rawTarget,
+        target,
         kind: "source",
-        status: source.kind,
-        candidates: source.kind === "ambiguous" ? source.candidates : undefined,
-        totalCandidateCount: source.kind === "ambiguous" ? source.totalCandidateCount : undefined,
+        status: "ambiguous",
+        candidates: source.candidates,
+        totalCandidateCount: source.totalCandidateCount,
       });
-      continue;
-    }
-    const pattern = resolvePattern(state, rawTarget);
-    if (pattern) {
-      ranges.push({ from, to, target: rawTarget, kind: "pattern", status: "resolved" });
-      continue;
-    }
-    if (looksLikeSourceOrPattern(rawTarget)) {
-      ranges.push({ from, to, target: rawTarget, kind: "unknown", status: "unresolved" });
+    } else if (resolvePattern(state, target)) {
+      ranges.push({ from, to, target, kind: "pattern", status: "resolved" });
+    } else if (looksLikeSourceOrPattern(target)) {
+      ranges.push({ from, to, target, kind: "unknown", status: "unresolved" });
     }
   }
   return ranges;
 }
 
 export function looksLikeSourceOrPattern(target: string): boolean {
-  const clean = cleanTarget(target);
-  return clean.startsWith("match:") || /\.[a-z0-9]+(#.*)?$/i.test(clean);
-}
-
-export function cleanTarget(target: string): string {
-  return target.split("|")[0]?.trim() ?? "";
+  return (
+    patternTargetId(target) !== undefined ||
+    /\.[a-z0-9]+(#.*)?$/i.test((target.split("|", 1)[0] ?? "").trim())
+  );
 }
 
 function frontmatterPatternTarget(
   pattern: unknown,
   source: FrontmatterPatternTarget["source"],
   noteId: string | null,
-  state: CrivState,
+  state: CrivInitialProjections,
 ): FrontmatterPatternTarget | null {
-  const object = objectValue(pattern);
-  const rawRef = object ? stringValue(object.ref) : null;
-  const rawId = object ? stringValue(object.id) : stringValue(pattern);
+  const rawRef = isRecord(pattern) ? stringValue(pattern.ref) : null;
+  const rawId = isRecord(pattern) ? stringValue(pattern.id) : stringValue(pattern);
   const id = rawRef ?? (source === "policy" && rawId && noteId ? `${noteId}/${rawId}` : rawId);
   if (!id) {
     return null;
@@ -343,14 +182,12 @@ function frontmatterPatternTarget(
   if (source === "targets" && !rawRef) {
     return { id, source, status: "local", matches: [] };
   }
-
-  const matches = state.patternMatches[id] ?? [];
-  const ids = state.registeredPatterns;
+  const matches = state.patternMatches[id];
   return {
     id,
     source,
-    status: ids.includes(id) || state.patternMatches[id] ? "resolved" : "unresolved",
-    matches,
+    status: state.registeredPatterns.includes(id) || matches ? "resolved" : "unresolved",
+    matches: matches ?? [],
   };
 }
 
@@ -359,12 +196,6 @@ function patternList(value: unknown): unknown[] {
     return value;
   }
   return value ? [value] : [];
-}
-
-function objectValue(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function stringValue(value: unknown): string | null {
