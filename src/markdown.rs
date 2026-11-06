@@ -150,6 +150,11 @@ impl<'a> LinkTarget<'a> {
             .filter(|fragment| !is_line_fragment(fragment))
     }
 
+    /// The path part is a `match:` pattern reference, not a file.
+    pub fn path_is_pattern(self) -> bool {
+        self.path().starts_with("match:")
+    }
+
     /// The policy pattern id of a `match:` target.
     pub fn pattern_id(self) -> Option<&'a str> {
         self.target.strip_prefix("match:").or_else(|| {

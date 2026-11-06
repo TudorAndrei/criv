@@ -330,16 +330,21 @@ fn validate_decision_note(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diag
 fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
     if !vault.is_historical_decision(note) {
         for target in note.targets_symbols() {
-            match vault.resolve_source_target(target) {
-                SourceTargetResolution::Resolved { .. } => {
-                    warn_legacy_source_target(
-                        vault,
-                        diagnostics,
-                        note.rel_path(),
-                        None,
-                        target,
-                        "target symbol",
-                    );
+            let link = LinkTarget::parse(target);
+            match vault.resolve_source_target(link) {
+                SourceTargetResolution::Resolved { path, .. } => {
+                    if let Some(canonical) = vault.canonical_source_target(link, &path)
+                        && (link.is_source() || link.source_body() != canonical)
+                    {
+                        diagnostics.push(Diagnostic::warning(
+                            DiagnosticCode::LegacySourceTarget,
+                            note.rel_path(),
+                            None,
+                            format!(
+                                "target symbol `{target}` is a legacy source target; use AST-aware source selector `{canonical}`"
+                            ),
+                        ));
+                    }
                 }
                 SourceTargetResolution::MissingFile => {
                     diagnostics.push(Diagnostic::error(
@@ -490,7 +495,7 @@ fn validate_links(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
 
 fn validate_note_links(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
     for link in note.wiki_links() {
-        match vault.resolve_link(&link.target) {
+        match vault.resolve_link(link.target()) {
             ResolvedLink::Broken => diagnostics.push(
                 Diagnostic::error(
                     DiagnosticCode::BrokenLink,
@@ -502,7 +507,7 @@ fn validate_note_links(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnos
             ),
             ResolvedLink::Source { path, ambiguous } => {
                 let suggestion = vault
-                    .canonical_source_target_for_path(&link.target, &path)
+                    .canonical_source_target(link.target(), &path)
                     .map(|target| {
                         format!("; use AST-aware source selector `{target}` for code references")
                     })
@@ -535,10 +540,13 @@ fn validate_note_links(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnos
                 }
             }
             ResolvedLink::Pattern { .. } => {}
-            ResolvedLink::Note { .. } => {
-                if !vault.is_file_backed_note_target(&link.target) {
-                    let suggestion = vault
-                        .portable_note_target(&link.target)
+            ResolvedLink::Note {
+                file_backed,
+                portable,
+                ..
+            } => {
+                if !file_backed {
+                    let suggestion = portable
                         .map(|target| format!("; use `[[{target}]]` instead"))
                         .unwrap_or_default();
                     diagnostics.push(
@@ -556,30 +564,6 @@ fn validate_note_links(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnos
                 }
             }
         }
-    }
-}
-
-fn warn_legacy_source_target(
-    vault: &Vault,
-    diagnostics: &mut Vec<Diagnostic>,
-    path: &str,
-    line: Option<usize>,
-    target: &str,
-    label: &str,
-) {
-    let Some(canonical) = vault.canonical_source_target(target) else {
-        return;
-    };
-    let written = LinkTarget::parse(target);
-    if written.is_source() || written.source_body() != canonical {
-        diagnostics.push(Diagnostic::warning(
-            DiagnosticCode::LegacySourceTarget,
-            path,
-            line,
-            format!(
-                "{label} `{target}` is a legacy source target; use AST-aware source selector `{canonical}`"
-            ),
-        ));
     }
 }
 

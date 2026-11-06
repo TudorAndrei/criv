@@ -131,9 +131,14 @@ struct DeclarationIndex {
 #[derive(Debug, Clone)]
 pub struct WikiLink {
     pub(crate) raw: String,
-    pub(crate) target: String,
     pub(crate) line: usize,
     pub(crate) location: Option<SourceLocation>,
+}
+
+impl WikiLink {
+    pub(crate) fn target(&self) -> LinkTarget<'_> {
+        LinkTarget::parse(&self.raw)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -305,9 +310,20 @@ pub struct DocumentationAsset {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolvedLink {
-    Source { path: String, ambiguous: bool },
-    Pattern { id: String },
-    Note { id: String },
+    Source {
+        path: String,
+        ambiguous: bool,
+    },
+    Pattern {
+        id: String,
+    },
+    /// A note link; `portable` is the file-stem form of a link that names
+    /// the note only through its metadata.
+    Note {
+        id: String,
+        file_backed: bool,
+        portable: Option<String>,
+    },
     Broken,
 }
 
@@ -429,52 +445,43 @@ impl Vault {
         &self.files
     }
 
-    pub(crate) fn is_file_backed_note_target(&self, target: &str) -> bool {
-        let target_without_heading = LinkTarget::parse(target).path();
-        let key = target_without_heading.to_lowercase();
-        let Some(note) = self.resolve_note(target_without_heading) else {
-            return false;
-        };
-
+    /// The link names the note's Markdown file: its stem or its path.
+    fn is_file_backed(note: &Note, link: LinkTarget<'_>) -> bool {
+        let key = link.path().to_lowercase();
         if note
             .filename_stem()
             .is_some_and(|stem| stem.eq_ignore_ascii_case(&key))
         {
             return true;
         }
-
         let rel_path = note.rel_path.to_lowercase();
         key == rel_path || rel_path.strip_suffix(".md") == Some(key.as_str())
     }
 
-    pub(crate) fn portable_note_target(&self, target: &str) -> Option<String> {
-        let link = LinkTarget::parse(target);
-        let target = link.as_str();
-        let note = self.resolve_note(link.path())?;
+    /// The link written with the note's file stem, keeping its text as alias.
+    fn portable_target(note: &Note, link: LinkTarget<'_>) -> Option<String> {
         let mut portable = note.filename_stem()?;
         if let Some(heading) = link.fragment() {
             portable.push('#');
             portable.push_str(heading);
         }
-        if portable == target {
+        if portable == link.as_str() {
             Some(portable)
         } else {
-            Some(format!("{portable}|{target}"))
+            Some(format!("{portable}|{}", link.as_str()))
         }
     }
 
-    pub(crate) fn resolve_link(&self, target: &str) -> ResolvedLink {
-        let target = LinkTarget::parse(target).as_str();
+    pub(crate) fn resolve_link(&self, link: LinkTarget<'_>) -> ResolvedLink {
         self.link_resolutions
-            .get(target)
+            .get(link.as_str())
             .cloned()
-            .unwrap_or_else(|| self.resolve_link_uncached(target))
+            .unwrap_or_else(|| self.resolve_link_uncached(link))
     }
 
-    fn resolve_link_uncached(&self, target: &str) -> ResolvedLink {
-        let link = LinkTarget::parse(target);
+    fn resolve_link_uncached(&self, link: LinkTarget<'_>) -> ResolvedLink {
         if link.is_source() {
-            return self.resolve_source_link(target);
+            return self.resolve_source_link(link);
         }
 
         if let Some(pattern_id) = link.pattern_id() {
@@ -492,19 +499,24 @@ impl Vault {
             {
                 return ResolvedLink::Broken;
             }
+            let file_backed = Self::is_file_backed(note, link);
             return ResolvedLink::Note {
                 id: note.display_id().to_string(),
+                file_backed,
+                portable: (!file_backed)
+                    .then(|| Self::portable_target(note, link))
+                    .flatten(),
             };
         }
 
-        self.resolve_source_link(target)
+        self.resolve_source_link(link)
     }
 
-    fn resolve_source_link(&self, target: &str) -> ResolvedLink {
+    fn resolve_source_link(&self, link: LinkTarget<'_>) -> ResolvedLink {
         #[cfg(test)]
         work::record(Work::LinkSourceResolution);
 
-        match self.resolve_source_target(target) {
+        match self.resolve_source_target(link) {
             SourceTargetResolution::Resolved { path, ambiguous } => {
                 ResolvedLink::Source { path, ambiguous }
             }
@@ -514,34 +526,33 @@ impl Vault {
     }
 
     fn index_link_resolutions(&mut self) {
-        let targets = self
-            .notes
-            .iter()
-            .flat_map(|note| note.wiki_links.iter())
-            .map(|link| LinkTarget::parse(&link.target).as_str().to_string())
-            .collect::<BTreeSet<_>>();
-        self.link_resolutions = targets
-            .into_iter()
-            .map(|target| {
-                let resolution = self.resolve_link_uncached(&target);
-                (target, resolution)
-            })
-            .collect();
+        let mut resolutions = BTreeMap::new();
+        for link in self.notes.iter().flat_map(|note| note.wiki_links.iter()) {
+            let target = link.target();
+            if !resolutions.contains_key(target.as_str()) {
+                resolutions.insert(
+                    target.as_str().to_string(),
+                    self.resolve_link_uncached(target),
+                );
+            }
+        }
+        self.link_resolutions = resolutions;
     }
 
-    pub(crate) fn resolve_source_path(&self, path: &str) -> Option<(String, bool)> {
-        if LinkTarget::parse(path).pattern_id().is_some() {
+    /// The Source file a target's path part names, and whether it is
+    /// ambiguous; a `match:` path names no file.
+    pub(crate) fn resolve_source_path(&self, link: LinkTarget<'_>) -> Option<(String, bool)> {
+        if link.path_is_pattern() {
             return None;
         }
-        self.source.resolve_partial_path(path)
+        self.source.resolve_partial_path(link.path())
     }
 
-    pub(crate) fn resolve_source_target(&self, target: &str) -> SourceTargetResolution {
+    pub(crate) fn resolve_source_target(&self, link: LinkTarget<'_>) -> SourceTargetResolution {
         #[cfg(test)]
         work::record(Work::SourceTargetResolution);
 
-        let link = LinkTarget::parse(target);
-        let Some((path, ambiguous)) = self.resolve_source_path(link.path()) else {
+        let Some((path, ambiguous)) = self.resolve_source_path(link) else {
             return SourceTargetResolution::MissingFile;
         };
         let Some(fragment) = link.symbol() else {
@@ -560,17 +571,13 @@ impl Vault {
         }
     }
 
-    pub(crate) fn canonical_source_target(&self, target: &str) -> Option<String> {
-        let (path, _) = self.resolve_source_path(LinkTarget::parse(target).path())?;
-        self.canonical_source_target_for_path(target, &path)
-    }
-
-    pub(crate) fn canonical_source_target_for_path(
+    /// The AST-aware selector for a target whose path part resolves to `path`.
+    pub(crate) fn canonical_source_target(
         &self,
-        target: &str,
+        link: LinkTarget<'_>,
         path: &str,
     ) -> Option<String> {
-        let Some(fragment) = LinkTarget::parse(target).symbol() else {
+        let Some(fragment) = link.symbol() else {
             return Some(path.to_string());
         };
         self.source
@@ -606,7 +613,7 @@ impl Vault {
                 if !files.is_empty() {
                     return Ok(files);
                 }
-                match self.resolve_source_target(pattern) {
+                match self.resolve_source_target(LinkTarget::parse(pattern)) {
                     SourceTargetResolution::Resolved { path, .. } => Ok(vec![path]),
                     _ => error.map_or(Ok(Vec::new()), Err),
                 }
@@ -813,7 +820,6 @@ fn parse_note(files: &RepositoryFiles, path: &Path) -> Result<Note> {
     note.wiki_links = find_wiki_links_with_lines(&note.body)
         .into_iter()
         .map(|(line, raw, span)| WikiLink {
-            target: LinkTarget::parse(&raw).as_str().to_string(),
             raw,
             line: line.saturating_add(line_offset),
             location: SourceLocation::new(
@@ -1266,7 +1272,7 @@ policy:
         );
         assert!(vault.resolve_policy_pattern("ADR-0002/draft").is_some());
         assert_eq!(
-            vault.resolve_link("match:ADR-0002/draft"),
+            vault.resolve_link(LinkTarget::parse("match:ADR-0002/draft")),
             ResolvedLink::Pattern {
                 id: "ADR-0002/draft".into()
             }
@@ -1412,21 +1418,21 @@ See [[lib.rs]], [[match:ADR-0001/no-block-on]], [[helper.rs#help]],
 
         work::reset();
         for link in vault.notes().iter().flat_map(Note::wiki_links) {
-            vault.resolve_link(&link.target);
+            vault.resolve_link(link.target());
         }
         assert!(matches!(
-            vault.resolve_link("collision-note"),
+            vault.resolve_link(LinkTarget::parse("collision-note")),
             ResolvedLink::Note { .. }
         ));
         assert!(matches!(
-            vault.resolve_link("ADR-0001#match:ADR-0001/no-block-on"),
+            vault.resolve_link(LinkTarget::parse("ADR-0001#match:ADR-0001/no-block-on")),
             ResolvedLink::Pattern { .. }
         ));
         assert_eq!(work::count(Work::LinkSourceResolution), 0);
 
         for case in fixture.cases {
             match (
-                vault.resolve_link(&case.target),
+                vault.resolve_link(LinkTarget::parse(&case.target)),
                 case.source,
                 case.ambiguous,
                 case.pattern,
@@ -1445,7 +1451,7 @@ See [[lib.rs]], [[match:ADR-0001/no-block-on]], [[helper.rs#help]],
                 (ResolvedLink::Pattern { id }, None, None, Some(expected), None) => {
                     assert_eq!(id, expected, "{}", case.target);
                 }
-                (ResolvedLink::Note { id }, None, None, None, Some(expected)) => {
+                (ResolvedLink::Note { id, .. }, None, None, None, Some(expected)) => {
                     assert_eq!(id, expected, "{}", case.target);
                     assert!(vault.resolve_note(&expected).is_some(), "{}", case.target);
                 }
@@ -1491,7 +1497,7 @@ roots = ["src"]
         assert_eq!(vault.source_files(), expected);
         assert!(vault.source_graph().file("src/lib.rs").is_some());
         assert_eq!(
-            vault.resolve_source_target("src/lib.rs#run"),
+            vault.resolve_source_target(LinkTarget::parse("src/lib.rs#run")),
             SourceTargetResolution::Resolved {
                 path: "src/lib.rs".into(),
                 ambiguous: false,

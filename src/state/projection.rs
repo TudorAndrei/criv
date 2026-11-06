@@ -386,7 +386,7 @@ pub(super) fn note_rows(vault: &Vault, note: &Note) -> NoteRows {
 
     for target in note.targets_symbols() {
         dependencies.catalog_sensitive = true;
-        match vault.resolve_source_target(target) {
+        match vault.resolve_source_target(LinkTarget::parse(target)) {
             SourceTargetResolution::Resolved { path, .. } => {
                 dependencies.source_content_paths.insert(path.clone());
                 graph.edge(&note_id, &node_id::code(&path), EdgeKind::References);
@@ -425,13 +425,13 @@ pub(super) fn note_rows(vault: &Vault, note: &Note) -> NoteRows {
     }
 
     for link in note.wiki_links() {
-        match vault.resolve_link(&link.target) {
-            ResolvedLink::Note { id } => {
+        match vault.resolve_link(link.target()) {
+            ResolvedLink::Note { id, .. } => {
                 graph.edge(&note_id, &node_id::note(&id), EdgeKind::Cites);
             }
             ResolvedLink::Source { path, .. } => {
                 dependencies.catalog_sensitive = true;
-                if LinkTarget::parse(&link.target).symbol().is_some() {
+                if link.target().symbol().is_some() {
                     dependencies.source_content_paths.insert(path.clone());
                 }
                 graph.edge(&note_id, &node_id::code(&path), EdgeKind::References);
@@ -445,7 +445,7 @@ pub(super) fn note_rows(vault: &Vault, note: &Note) -> NoteRows {
             ResolvedLink::Broken => {
                 dependencies.catalog_sensitive = true;
                 if let SourceTargetResolution::MissingFragment { path } =
-                    vault.resolve_source_target(&link.target)
+                    vault.resolve_source_target(link.target())
                 {
                     dependencies.source_content_paths.insert(path);
                 }

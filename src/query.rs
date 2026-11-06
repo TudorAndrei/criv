@@ -172,7 +172,8 @@ impl QueryReverseIndex {
             let mut source_keys = BTreeSet::new();
 
             for link in note.wiki_links() {
-                if include_notes && let ResolvedLink::Note { id } = vault.resolve_link(&link.target)
+                if include_notes
+                    && let ResolvedLink::Note { id, .. } = vault.resolve_link(link.target())
                 {
                     if let Some(has_outgoing) = notes_with_outgoing_citations.get_mut(note_index) {
                         *has_outgoing = true;
@@ -182,12 +183,16 @@ impl QueryReverseIndex {
                     }
                 }
                 if include_sources {
-                    collect_source_reference_keys(vault, &link.target, &mut source_keys);
+                    collect_source_reference_keys(vault, link.target(), &mut source_keys);
                 }
             }
             if include_sources {
                 for target in note.targets_symbols() {
-                    collect_source_reference_keys(vault, target, &mut source_keys);
+                    collect_source_reference_keys(
+                        vault,
+                        LinkTarget::parse(target),
+                        &mut source_keys,
+                    );
                 }
             }
 
@@ -213,7 +218,7 @@ impl QueryReverseIndex {
     fn references(&self, vault: &Vault, symbol: &str) -> Vec<String> {
         let link = LinkTarget::parse(symbol);
         let requested_fragment = link.symbol();
-        let Some((path, _)) = vault.resolve_source_path(link.path()) else {
+        let Some((path, _)) = vault.resolve_source_path(link) else {
             return Vec::new();
         };
         let key = match requested_fragment {
@@ -229,14 +234,14 @@ impl QueryReverseIndex {
 
 fn collect_source_reference_keys(
     vault: &Vault,
-    target: &str,
+    target: LinkTarget<'_>,
     keys: &mut BTreeSet<SourceReferenceKey>,
 ) {
     let SourceTargetResolution::Resolved { path, .. } = vault.resolve_source_target(target) else {
         return;
     };
     keys.insert(SourceReferenceKey::Path(path.clone()));
-    if let Some(fragment) = LinkTarget::parse(target).symbol() {
+    if let Some(fragment) = target.symbol() {
         keys.insert(SourceReferenceKey::Symbol {
             path,
             fragment: fragment.to_string(),
@@ -414,7 +419,7 @@ fn targets(vault: &Vault, id: &str) -> Result<Vec<String>> {
         .ok_or_else(|| CrivError::new(format!("note `{id}` does not resolve")))?;
     let mut rows = note.targets_symbols().to_vec();
     for link in note.wiki_links() {
-        match vault.resolve_link(&link.target) {
+        match vault.resolve_link(link.target()) {
             ResolvedLink::Source { path, .. } => rows.push(path),
             ResolvedLink::Pattern { id } => rows.push(format!("match:{id}")),
             _ => {}
@@ -431,8 +436,8 @@ fn cites(vault: &Vault, id: &str) -> Result<Vec<String>> {
         .ok_or_else(|| CrivError::new(format!("note `{id}` does not resolve")))?;
     let mut rows = Vec::new();
     for link in note.wiki_links() {
-        match vault.resolve_link(&link.target) {
-            ResolvedLink::Note { id } => rows.push(id),
+        match vault.resolve_link(link.target()) {
+            ResolvedLink::Note { id, .. } => rows.push(id),
             ResolvedLink::Source { path, .. } => rows.push(path),
             ResolvedLink::Pattern { id } => rows.push(format!("match:{id}")),
             ResolvedLink::Broken => {}
@@ -483,7 +488,7 @@ fn governs(vault: &Vault, adr_id: &str) -> Result<Vec<String>> {
 }
 
 fn governing(vault: &Vault, symbol: &str) -> Vec<String> {
-    let Some((path, _)) = vault.resolve_source_path(LinkTarget::parse(symbol).path()) else {
+    let Some((path, _)) = vault.resolve_source_path(LinkTarget::parse(symbol)) else {
         return Vec::new();
     };
     let mut rows = Vec::new();
