@@ -12,8 +12,6 @@
 
 use std::collections::BTreeMap;
 
-#[cfg(test)]
-use criv_state_wire::Node;
 use criv_state_wire::source_identity::SourceIdentity;
 use criv_state_wire::{AssetIndexEntry, NodeKind, PatternMatch, SourceIndexEntry, StateDocument};
 use serde::Serialize;
@@ -223,6 +221,7 @@ impl Serialize for SuggestionKind {
 mod tests {
     use super::source::{take_editor_graph_nodes, take_unique_source_entries};
     use super::*;
+    use criv_state_wire::Node;
 
     fn source_selector_suggestions(
         state: StateDocument,

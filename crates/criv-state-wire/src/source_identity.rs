@@ -139,14 +139,6 @@ impl ElixirSelector {
     }
 
     #[must_use]
-    pub const fn callable_kind(&self) -> Option<ElixirCallableKind> {
-        match self {
-            Self::Owner(_) => None,
-            Self::Callable { kind, .. } => Some(*kind),
-        }
-    }
-
-    #[must_use]
     pub fn callable_name(&self) -> Option<&str> {
         match self {
             Self::Owner(_) => None,
@@ -206,14 +198,6 @@ impl ElixirOwner {
         match self {
             Self::Module { name } => Some(name),
             Self::Implementation { .. } => None,
-        }
-    }
-
-    #[cfg(test)]
-    fn implementation_parts(&self) -> Option<(&str, &str)> {
-        match self {
-            Self::Module { .. } => None,
-            Self::Implementation { protocol, for_type } => Some((protocol, for_type)),
         }
     }
 }
@@ -535,11 +519,14 @@ mod tests {
         let identity =
             SourceIdentity::parse("lib/sample.ex#impl:Enumerable/for:My.App/fn:reduce/3");
         let selector = identity.selector().unwrap().as_elixir().unwrap();
-        assert_eq!(
-            selector.owner_identity().implementation_parts(),
-            Some(("Enumerable", "My.App"))
-        );
-        assert_eq!(selector.callable_kind(), Some(ElixirCallableKind::Function));
+        assert!(matches!(
+            selector,
+            ElixirSelector::Callable {
+                owner: ElixirOwner::Implementation { protocol, for_type },
+                kind: ElixirCallableKind::Function,
+                ..
+            } if protocol == "Enumerable" && for_type == "My.App"
+        ));
         assert_eq!(selector.callable_name(), Some("reduce"));
         assert_eq!(selector.callable_arity(), Some(3));
     }
