@@ -9,7 +9,7 @@ use usage_rs::{Args as UsageArgs, ValueEnum};
 use crate::check;
 use crate::config::{CONFIG_FILE, ImportPolicyConfig, Stage};
 use crate::diagnostic::{Diagnostic, DiagnosticCode};
-use crate::git::{ChangedSet, Comparison, GitRepository, is_zero_oid};
+use crate::git::{ChangedSet, Comparison, GitRepository, is_object_id, is_zero_oid};
 use crate::glob::GlobMatcher;
 use crate::vault::{LoadOptions, Vault};
 use crate::{CrivError, Result};
@@ -143,10 +143,12 @@ impl EnforceReport<'_> {
             basis,
             ..
         } = self;
-        let files = stage
-            .changed_files_noun()
-            .map(|noun| format!(", {changed_files} {noun}"))
-            .unwrap_or_default();
+        // CI validates the whole vault and reports no count.
+        let files = match stage {
+            Stage::Commit => format!(", {changed_files} staged files"),
+            Stage::Push => format!(", {changed_files} changed files"),
+            Stage::Ci => String::new(),
+        };
         println!(
             "{} enforcement: {errors} validation errors, {warnings} warnings{files} ({basis})",
             self.stage
@@ -496,7 +498,7 @@ fn parse_pre_push_updates(input: &str) -> Result<Vec<PrePushUpdate>> {
                 )));
             };
             for oid in [*local_oid, *remote_oid] {
-                if oid.len() != 40 || !oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                if !is_object_id(oid) {
                     return Err(CrivError::new(format!(
                         "invalid pre-push object ID `{oid}`"
                     )));
@@ -590,6 +592,9 @@ mod tests {
         assert_eq!(updates.len(), 2);
         assert_eq!(updates[1].remote_oid, "3".repeat(40));
         assert!(parse_pre_push_updates("broken\n").is_err());
+        assert!(
+            parse_pre_push_updates("refs/heads/main 1111111 refs/heads/main 2222222\n").is_err()
+        );
     }
 
     #[test]

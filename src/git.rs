@@ -751,6 +751,11 @@ fn parse_oid(value: &str, context: &str) -> Result<git2::Oid> {
         .map_err(|error| CrivError::new(format!("invalid {context} `{value}`: {error}")))
 }
 
+/// Whether `value` is a complete object ID rather than an abbreviation.
+pub fn is_object_id(value: &str) -> bool {
+    git2::Oid::from_str(value).is_ok_and(|oid| oid.to_string().eq_ignore_ascii_case(value))
+}
+
 pub fn is_zero_oid(oid: &str) -> bool {
     oid.bytes().all(|byte| byte == b'0')
 }

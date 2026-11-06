@@ -64,16 +64,6 @@ impl Stage {
             Self::Ci => "ci",
         }
     }
-
-    /// What an enforcement report calls the files this stage compares; CI
-    /// validates the whole vault and reports no count.
-    pub const fn changed_files_noun(self) -> Option<&'static str> {
-        match self {
-            Self::Commit => Some("staged files"),
-            Self::Push => Some("changed files"),
-            Self::Ci => None,
-        }
-    }
 }
 
 /// One `[[enforce.imports]]` entry as configured.
