@@ -732,9 +732,10 @@ fn parse_module(
         body.fields.clone(),
         module_relationships,
     );
+    let module_id = symbol.id.clone();
 
-    emit_callables(path, &display_name, &owner, &body, file);
-    emit_callbacks(path, &display_name, &owner, &body, file);
+    emit_callables(path, &display_name, &owner, &module_id, &body, file);
+    emit_callbacks(path, &display_name, &owner, &module_id, &body, file);
 }
 
 struct ModuleBodyWalk<'a> {
@@ -1613,6 +1614,7 @@ fn emit_callables(
     path: &str,
     module_name: &str,
     owner: &ElixirOwner,
+    module_id: &SymbolId,
     body: &ModuleBody,
     file: &mut SourceFile,
 ) {
@@ -1730,6 +1732,7 @@ fn emit_callables(
             continue;
         };
         file.symbols.push(Symbol {
+            parent_id: Some(module_id.clone()),
             owner: Some(owner.clone()),
             arity: Some(arity),
             exported,
@@ -1772,6 +1775,7 @@ fn emit_callbacks(
     path: &str,
     module_name: &str,
     owner: &ElixirOwner,
+    module_id: &SymbolId,
     body: &ModuleBody,
     file: &mut SourceFile,
 ) {
@@ -1785,6 +1789,7 @@ fn emit_callbacks(
             .optional_callbacks
             .contains(&(callback.name.clone(), callback.arity));
         file.symbols.push(Symbol {
+            parent_id: Some(module_id.clone()),
             owner: Some(owner.clone()),
             arity: Some(callback.arity),
             exported: true,
@@ -2148,6 +2153,37 @@ mod tests {
             .unwrap();
         let tree = parser.parse(source, None).unwrap();
         parse_file(path, source, tree.root_node())
+    }
+
+    #[test]
+    fn callables_and_callbacks_record_their_module_as_parent() {
+        let file = parse(
+            "lib/sample.ex",
+            "defmodule Outer do\n  @callback run(term) :: term\n  def call(value), do: value\n  defmodule Inner do\n    def call(value), do: value\n  end\nend\n",
+        );
+        let id_of = |selector: &str| {
+            file.symbols
+                .iter()
+                .find(|symbol| symbol.id.selector == selector)
+                .map(|symbol| symbol.id.clone())
+                .unwrap()
+        };
+        let parent_of = |selector: &str| {
+            file.symbols
+                .iter()
+                .find(|symbol| symbol.id.selector == selector)
+                .and_then(|symbol| symbol.parent_id.clone())
+        };
+        let outer = id_of("module:Outer");
+        let inner = id_of("module:Outer.Inner");
+
+        assert_eq!(
+            parent_of("module:Outer/callback:run/1"),
+            Some(outer.clone())
+        );
+        assert_eq!(parent_of("module:Outer/fn:call/1"), Some(outer));
+        assert_eq!(parent_of("module:Outer.Inner/fn:call/1"), Some(inner));
+        assert_eq!(parent_of("module:Outer"), None);
     }
 
     #[test]

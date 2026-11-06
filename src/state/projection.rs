@@ -201,19 +201,6 @@ pub(super) fn source_rows(vault: &Vault, file: &SourceFile) -> SourceRows {
                 EdgeKind::Contains,
             );
         }
-        if let Some(owner) = &symbol.owner
-            && let Some(parent) = file.symbols.iter().find(|candidate| {
-                candidate.id != symbol.id
-                    && candidate.arity.is_none()
-                    && candidate.owner.as_ref() == Some(owner)
-            })
-        {
-            graph.edge(
-                &node_id::symbol(&parent.id.display()),
-                &symbol_id,
-                EdgeKind::Contains,
-            );
-        }
         for edge in vault.source_graph().resolved_edges(symbol) {
             match edge.origin {
                 EdgeOrigin::Call(call) => {

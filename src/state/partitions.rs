@@ -67,10 +67,10 @@ impl InvalidationFacts {
     fn collect(
         vault: &Vault,
         previous: Option<&StatePartitions>,
-        changed_files: &[String],
         policy_fingerprints: &BTreeMap<&str, String>,
         note_catalog_fingerprint: &str,
     ) -> Self {
+        let changed_files = vault.source_graph().changed_files();
         let Some(previous) = previous else {
             return Self {
                 changed_source_paths: changed_files.iter().cloned().collect(),
@@ -188,7 +188,6 @@ impl StatePartitions {
     pub(super) fn build(
         vault: &Vault,
         previous: Option<&Self>,
-        changed_files: &[String],
         policies: &PolicyScanPlan,
     ) -> Result<Self> {
         let registered = policies
@@ -209,17 +208,13 @@ impl StatePartitions {
         let invalidation = InvalidationFacts::collect(
             vault,
             previous,
-            changed_files,
             &policy_fingerprints,
             &note_catalog_fingerprint,
         );
         let mut partitions = Self::default();
 
         for file in vault.source_graph().files() {
-            let fingerprint = vault
-                .source_graph()
-                .file_fingerprint(&file.path)
-                .unwrap_or_default();
+            let fingerprint = file.fingerprint();
             let partition = previous
                 .and_then(|previous| previous.sources.get(&file.path))
                 .filter(|partition| {
@@ -261,7 +256,7 @@ impl StatePartitions {
                 .insert(note.rel_path().to_string(), partition);
         }
 
-        partitions.policies = build_policy_partitions(vault, previous, changed_files, registered)?;
+        partitions.policies = build_policy_partitions(vault, previous, registered)?;
         partitions.reverse_dependencies = ReverseDependencies::index(&partitions);
         partitions.note_catalog_fingerprint = note_catalog_fingerprint;
         Ok(partitions)
@@ -303,13 +298,14 @@ type RegisteredPolicy<'a> = (&'a PlannedOwner, &'a PlannedPolicy, String);
 fn build_policy_partitions(
     vault: &Vault,
     previous: Option<&StatePartitions>,
-    changed_files: &[String],
     registered: Vec<RegisteredPolicy<'_>>,
 ) -> Result<BTreeMap<String, Arc<PolicyPartition>>> {
     let mut partitions = BTreeMap::new();
     let mut pending = Vec::new();
     for (owner, policy, fingerprint) in registered {
-        let changed_paths = changed_files
+        let changed_paths = vault
+            .source_graph()
+            .changed_files()
             .iter()
             .filter(|path| owner.paths().contains(*path))
             .cloned()

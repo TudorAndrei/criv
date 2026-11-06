@@ -18,7 +18,7 @@ mod extract;
 mod syntax;
 
 // Bump when parsed source graph semantics or serialized graph types change.
-const GRAPH_CACHE_SCHEMA: &str = "criv.source-graph/5";
+const GRAPH_CACHE_SCHEMA: &str = "criv.source-graph/6";
 const MAX_SOURCE_WORKERS: usize = 16;
 const MIN_FILES_PER_SOURCE_WORKER: usize = 1_024;
 
@@ -26,7 +26,6 @@ const MIN_FILES_PER_SOURCE_WORKER: usize = 1_024;
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SourceGraph {
     files: BTreeMap<String, SourceFile>,
-    file_fingerprints: BTreeMap<String, String>,
     changed_files: Vec<String>,
     symbol_index: BTreeMap<String, Vec<SymbolId>>,
     elixir_relationships: elixir::ElixirRelationships,
@@ -35,6 +34,8 @@ pub struct SourceGraph {
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceFile {
     pub(crate) path: String,
+    /// The BLAKE3 hash of the bytes the file was parsed from.
+    fingerprint: String,
     pub(crate) language: Language,
     pub(crate) imports: Vec<Import>,
     modules: Vec<ModuleDecl>,
@@ -45,11 +46,16 @@ impl SourceFile {
     fn new(path: &str, language: Language) -> Self {
         Self {
             path: path.into(),
+            fingerprint: String::new(),
             language,
             imports: Vec::new(),
             modules: Vec::new(),
             symbols: Vec::new(),
         }
+    }
+
+    pub(crate) fn fingerprint(&self) -> &str {
+        &self.fingerprint
     }
 }
 
@@ -384,14 +390,12 @@ pub struct VariantSignature {
 struct GraphCacheFile {
     schema: String,
     files: BTreeMap<String, SourceFile>,
-    file_fingerprints: BTreeMap<String, String>,
 }
 
 #[derive(Serialize)]
 struct BorrowedGraphCacheFile<'a> {
     schema: &'static str,
     files: &'a BTreeMap<String, SourceFile>,
-    file_fingerprints: &'a BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -486,7 +490,7 @@ pub(super) fn load_cached(files: &RepositoryFiles) -> Result<Option<SourceGraphB
         return Ok(None);
     }
     Ok(Some(SourceGraphBuild {
-        graph: SourceGraph::from_files(cache.files, cache.file_fingerprints, Vec::new()),
+        graph: SourceGraph::from_files(cache.files, Vec::new()),
         cache: CacheDisposition::Clean,
     }))
 }
@@ -495,7 +499,6 @@ fn store_cached(files: &RepositoryFiles, graph: &SourceGraph) -> Result<()> {
     let cache = BorrowedGraphCacheFile {
         schema: GRAPH_CACHE_SCHEMA,
         files: &graph.files,
-        file_fingerprints: &graph.file_fingerprints,
     };
     #[cfg(test)]
     work::record(Work::GraphCacheSerialization);
@@ -521,7 +524,6 @@ impl SourceGraph {
         workers: usize,
     ) -> Result<Self> {
         let mut parsed_files = BTreeMap::new();
-        let mut file_fingerprints = BTreeMap::new();
         let mut changed_files = Vec::new();
         for processed in process_source_files(files, source_files, previous, workers)? {
             #[cfg(test)]
@@ -537,32 +539,23 @@ impl SourceGraph {
                 work::record(Work::SourceParse);
                 changed_files.push(processed.parsed.path.clone());
             }
-            file_fingerprints.insert(processed.parsed.path.clone(), processed.fingerprint);
             parsed_files.insert(processed.parsed.path.clone(), processed.parsed);
         }
         if let Some(previous) = previous {
-            for previous_file in previous.file_fingerprints.keys() {
-                if !file_fingerprints.contains_key(previous_file) {
+            for previous_file in previous.files.keys() {
+                if !parsed_files.contains_key(previous_file) {
                     changed_files.push(previous_file.clone());
                 }
             }
             changed_files.sort();
             changed_files.dedup();
         }
-        Ok(Self::from_files(
-            parsed_files,
-            file_fingerprints,
-            changed_files,
-        ))
+        Ok(Self::from_files(parsed_files, changed_files))
     }
 
     /// The graph of `files`, with its symbols indexed by selector and alias
     /// and its Elixir relationships resolved.
-    fn from_files(
-        files: BTreeMap<String, SourceFile>,
-        file_fingerprints: BTreeMap<String, String>,
-        changed_files: Vec<String>,
-    ) -> Self {
+    fn from_files(files: BTreeMap<String, SourceFile>, changed_files: Vec<String>) -> Self {
         let mut symbol_index = BTreeMap::<String, Vec<SymbolId>>::new();
         for symbol in files.values().flat_map(|file| &file.symbols) {
             for key in symbol
@@ -576,7 +569,6 @@ impl SourceGraph {
         let elixir_relationships = elixir::ElixirRelationships::build(&files);
         Self {
             files,
-            file_fingerprints,
             changed_files,
             symbol_index,
             elixir_relationships,
@@ -589,11 +581,6 @@ impl SourceGraph {
 
     pub(crate) fn file(&self, path: &str) -> Option<&SourceFile> {
         self.files.get(path)
-    }
-
-    /// The BLAKE3 hash of the bytes the file was parsed from.
-    pub(crate) fn file_fingerprint(&self, path: &str) -> Option<&str> {
-        self.file_fingerprints.get(path).map(String::as_str)
     }
 
     /// Resolves `path#selector` inside that file, and a bare selector across
@@ -789,7 +776,6 @@ fn symbol_in<'a>(files: &'a BTreeMap<String, SourceFile>, id: &SymbolId) -> Opti
 
 #[derive(Debug)]
 struct ProcessedSource {
-    fingerprint: String,
     parsed: SourceFile,
     reused: bool,
 }
@@ -854,19 +840,20 @@ fn process_source_file(
     }
     let fingerprint = content_hash::of_bytes(&bytes);
     let reused = previous
-        .filter(|previous| previous.file_fingerprints.get(source_file) == Some(&fingerprint))
-        .and_then(|previous| previous.files.get(source_file).cloned());
+        .and_then(|previous| previous.files.get(source_file))
+        .filter(|file| file.fingerprint == fingerprint)
+        .cloned();
     let (parsed, reused) = if let Some(parsed) = reused {
         (parsed, true)
     } else {
         let contents = String::from_utf8_lossy(&bytes);
-        (extract::parse_source_file(source_file, &contents)?, false)
+        let parsed = SourceFile {
+            fingerprint,
+            ..extract::parse_source_file(source_file, &contents)?
+        };
+        (parsed, false)
     };
-    Ok(Some(ProcessedSource {
-        fingerprint,
-        parsed,
-        reused,
-    }))
+    Ok(Some(ProcessedSource { parsed, reused }))
 }
 
 fn symbol_resolution(mut matches: Vec<SymbolId>) -> SymbolResolution {
@@ -940,11 +927,7 @@ mod tests {
             .into_iter()
             .map(|file| (file.path.clone(), file))
             .collect::<BTreeMap<_, _>>();
-        let file_fingerprints = files
-            .keys()
-            .map(|path| (path.clone(), String::new()))
-            .collect();
-        SourceGraph::from_files(files, file_fingerprints, Vec::new())
+        SourceGraph::from_files(files, Vec::new())
     }
 
     #[test]

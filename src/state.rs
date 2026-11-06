@@ -41,12 +41,8 @@ impl State {
                     .join("\n"),
             ));
         }
-        let partitions = StatePartitions::build(
-            vault,
-            previous.map(|state| &state.partitions),
-            vault.source_graph().changed_files(),
-            policies,
-        )?;
+        let partitions =
+            StatePartitions::build(vault, previous.map(|state| &state.partitions), policies)?;
         let patterns = partitions.patterns();
         let registered_patterns = patterns.keys().cloned().collect();
         let source_index = vault
