@@ -5,21 +5,16 @@ mod graph;
 mod paths;
 
 #[cfg(test)]
-use std::path::Path;
-
-#[cfg(test)]
 use std::cell::Cell;
-#[cfg(test)]
-use std::sync::{Mutex, MutexGuard};
 
 use crate::Result;
 use crate::config::Config;
-use crate::discovery::discover_source_candidates;
+use crate::discovery::{SourceScope, discover_source_candidates};
 use crate::repository::RepositoryFiles;
 
 pub use graph::{
-    DirectiveKind, Import, Language, ModuleRelationshipRole, Relationship, RelationshipKind,
-    RelationshipTarget, SourceFile, SourceGraph, Symbol, SymbolKind,
+    DirectiveKind, EdgeOrigin, Import, Language, ModuleRelationshipRole, Relationship,
+    RelationshipKind, RelationshipTarget, SourceFile, SourceGraph, Symbol, SymbolId, SymbolKind,
 };
 #[cfg(test)]
 pub(crate) use graph::{
@@ -27,11 +22,6 @@ pub(crate) use graph::{
     work_counts as graph_work_counts,
 };
 pub use paths::read_source_to_string_from;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IndexedSource {
-    pub(crate) path: String,
-}
 
 /// One complete Source observation and its graph-cache lifecycle.
 #[derive(Debug, Clone)]
@@ -41,40 +31,33 @@ pub struct SourceState {
 }
 
 impl SourceState {
-    #[cfg(test)]
-    pub(crate) fn refresh(root: &Path, config: &Config, previous: Option<&Self>) -> Result<Self> {
-        let files = RepositoryFiles::open(root)?;
-        Self::refresh_from(&files, config, previous)
-    }
-
-    pub(crate) fn refresh_from(
+    pub(crate) fn refresh(
         files: &RepositoryFiles,
         config: &Config,
         previous: Option<&Self>,
     ) -> Result<Self> {
-        if !config.source_index {
+        let scope = SourceScope::new(config)?;
+        if !scope.is_enabled() {
             return Ok(Self::disabled());
         }
 
-        let root = files.root();
         #[cfg(test)]
         record_scan();
-        let candidates = discover_source_candidates(root, config)?;
-        let cached = previous
-            .is_none()
-            .then(|| graph::load_cached_from(files))
-            .flatten();
+        let candidates = discover_source_candidates(files, &scope)?;
+        let cached = match previous {
+            Some(_) => None,
+            None => graph::load_cached(files)?,
+        };
         let previous_graph = previous.map(|state| &state.graph).or(cached.as_ref());
         let graph =
-            graph::SourceGraphBuild::build_incremental_from(files, &candidates, previous_graph)?
-                .publish_from(files)?;
-        let catalog = catalog::SourceCatalog::enabled(graph.paths());
+            graph::SourceGraphBuild::build(files, &candidates, previous_graph)?.publish(files)?;
+        let catalog = catalog::SourceCatalog::new(graph.paths());
         Ok(Self { catalog, graph })
     }
 
     pub(crate) fn disabled() -> Self {
         Self {
-            catalog: catalog::SourceCatalog::disabled(),
+            catalog: catalog::SourceCatalog::new(Vec::new()),
             graph: graph::SourceGraphBuild::disabled(),
         }
     }
@@ -88,10 +71,6 @@ impl SourceState {
 
     pub(crate) fn paths(&self) -> &[String] {
         self.catalog.paths()
-    }
-
-    pub(crate) fn entries(&self) -> &[IndexedSource] {
-        self.catalog.entries()
     }
 
     pub(crate) const fn graph(&self) -> &SourceGraph {
@@ -121,16 +100,6 @@ thread_local! {
 }
 
 #[cfg(test)]
-static LIVE_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-#[cfg(test)]
-pub(crate) fn lock_live_test() -> MutexGuard<'static, ()> {
-    LIVE_TEST_LOCK
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-#[cfg(test)]
 pub(crate) fn reset_index_work_counts() {
     WORK_COUNTS.with(|counts| counts.set(IndexWorkCounts::default()));
 }
@@ -152,6 +121,7 @@ fn record_scan() {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
 
     use tempfile::TempDir;
 
@@ -176,31 +146,20 @@ mod tests {
         )
     }
 
-    #[test]
-    fn state_resolves_exact_suffix_basename_and_stable_ambiguity() {
-        let (temp, config) = fixture();
-        let state = SourceState::refresh(temp.path(), &config, None).unwrap();
-
-        assert_eq!(
-            state.resolve_partial_path("src/lib.rs"),
-            Some(("src/lib.rs".into(), false))
-        );
-        assert_eq!(
-            state.resolve_partial_path("nested/lib.rs"),
-            Some(("src/nested/lib.rs".into(), false))
-        );
-        assert_eq!(
-            state.resolve_partial_path("lib.rs"),
-            Some(("src/lib.rs".into(), true))
-        );
+    fn refresh(
+        root: &Path,
+        config: &Config,
+        previous: Option<&SourceState>,
+    ) -> Result<SourceState> {
+        SourceState::refresh(&RepositoryFiles::open(root)?, config, previous)
     }
 
     #[test]
     fn repeated_refresh_observes_new_paths() {
         let (temp, config) = fixture();
-        let first = SourceState::refresh(temp.path(), &config, None).unwrap();
+        let first = refresh(temp.path(), &config, None).unwrap();
         fs::write(temp.path().join("src/new.rs"), "pub fn new() {}\n").unwrap();
-        let second = SourceState::refresh(temp.path(), &config, Some(&first)).unwrap();
+        let second = refresh(temp.path(), &config, Some(&first)).unwrap();
 
         assert_ne!(first.paths(), second.paths());
     }
@@ -211,7 +170,7 @@ mod tests {
         fs::write(temp.path().join("src/binary.rs"), b"\0binary").unwrap();
         graph::reset_work_counts();
 
-        let state = SourceState::refresh(temp.path(), &config, None).unwrap();
+        let state = refresh(temp.path(), &config, None).unwrap();
 
         assert_eq!(graph::work_counts().source_reads, 3);
         assert_eq!(
@@ -220,14 +179,51 @@ mod tests {
         );
         assert_eq!(
             state.paths(),
-            state.graph().files.keys().cloned().collect::<Vec<_>>()
+            state
+                .graph()
+                .files()
+                .map(|file| file.path.clone())
+                .collect::<Vec<_>>()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn selected_read_errors_fail_and_pruned_read_errors_have_no_effect() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("src/pruned")).unwrap();
+        fs::write(root.join("src/selected.rs"), b"pub fn selected() {}\n").unwrap();
+        fs::write(root.join("src/pruned/hidden.rs"), b"pub fn hidden() {}\n").unwrap();
+        let selected = root.join("src/selected.rs");
+        let pruned = root.join("src/pruned");
+        fs::set_permissions(&selected, fs::Permissions::from_mode(0o000)).unwrap();
+        fs::set_permissions(&pruned, fs::Permissions::from_mode(0o000)).unwrap();
+        let config = Config {
+            source_roots: vec!["src".into()],
+            source_exclude: vec!["src/pruned/**".into()],
+            ..Config::default()
+        };
+
+        let can_read_without_permission = fs::File::open(&selected).is_ok();
+        let result = refresh(root, &config, None);
+        fs::set_permissions(&selected, fs::Permissions::from_mode(0o600)).unwrap();
+        fs::set_permissions(&pruned, fs::Permissions::from_mode(0o700)).unwrap();
+        if can_read_without_permission {
+            return;
+        }
+
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("failed to read selected file `src/selected.rs`"));
+        assert!(!error.contains("src/pruned"));
     }
 
     #[test]
     fn docs_reuse_clears_changes_without_source_work() {
         let (temp, config) = fixture();
-        let state = SourceState::refresh(temp.path(), &config, None).unwrap();
+        let state = refresh(temp.path(), &config, None).unwrap();
         assert!(!state.changed_files().is_empty());
         reset_index_work_counts();
         graph::reset_work_counts();
@@ -247,11 +243,10 @@ mod tests {
         reset_index_work_counts();
         graph::reset_work_counts();
 
-        let state = SourceState::refresh(temp.path(), &config, None).unwrap();
+        let state = refresh(temp.path(), &config, None).unwrap();
 
         assert!(state.paths().is_empty());
-        assert!(state.entries().is_empty());
-        assert!(state.graph().files.is_empty());
+        assert!(state.graph().files().next().is_none());
         assert_eq!(index_work_counts(), IndexWorkCounts::default());
         assert_eq!(graph::work_counts(), graph::WorkCounts::default());
     }

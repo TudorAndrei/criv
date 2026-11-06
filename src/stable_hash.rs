@@ -42,14 +42,6 @@ impl StableHasher {
         self
     }
 
-    pub fn option_usize(&mut self, value: Option<usize>) -> &mut Self {
-        self.bool(value.is_some());
-        if let Some(value) = value {
-            self.usize(value);
-        }
-        self
-    }
-
     pub fn bool(&mut self, value: bool) -> &mut Self {
         self.0.update(&[u8::from(value)]);
         self
@@ -78,14 +70,6 @@ mod tests {
             }),
             hash(|hasher| {
                 hasher.option_str(Some(""));
-            })
-        );
-        assert_ne!(
-            hash(|hasher| {
-                hasher.option_usize(None);
-            }),
-            hash(|hasher| {
-                hasher.option_usize(Some(0));
             })
         );
     }

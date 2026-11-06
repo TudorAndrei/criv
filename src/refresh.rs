@@ -108,7 +108,7 @@ impl RefreshSession {
         let previous_state = self.previous.as_ref().map(|previous| &previous.state);
         let source = match (cause, previous_source, self.source_refresh_pending) {
             (RefreshCause::DocsChanged, Some(source), false) => source.reuse_for_docs(),
-            _ => SourceState::refresh_from(&self.files, &self.config, previous_source)?,
+            _ => SourceState::refresh(&self.files, &self.config, previous_source)?,
         };
         #[cfg(test)]
         let checkpoint = self.precommit_checkpoint.take();

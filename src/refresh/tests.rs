@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::Path;
+use std::sync::{Mutex, MutexGuard};
 
 use serde_json::Value;
 use tempfile::TempDir;
@@ -7,6 +8,14 @@ use tempfile::TempDir;
 use super::*;
 use crate::identity::copy_fixture_tree;
 use crate::{policy_scan, source, structural, vault as vault_module};
+
+static LIVE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_live_test() -> MutexGuard<'static, ()> {
+    LIVE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 struct RefreshWork {
@@ -68,7 +77,7 @@ fn warm_one_shot_reuses_the_cached_source_graph() {
 
 #[test]
 fn live_refresh_reuses_source_catalog_for_docs_refresh() {
-    let _live_test = source::lock_live_test();
+    let _live_test = lock_live_test();
     let fixture = incremental_fixture("one-live-adapter");
     source::reset_index_work_counts();
     let mut session = live_session(fixture.path());
@@ -93,7 +102,7 @@ fn one_shot_refresh_uses_one_full_source_observation() {
 
 #[test]
 fn live_refresh_rescans_source_after_a_content_event() {
-    let _live_test = source::lock_live_test();
+    let _live_test = lock_live_test();
     let fixture = incremental_fixture("one-live-source-catalog");
     let root = fixture.path();
     let mut session = live_session(root);
@@ -150,7 +159,7 @@ fn one_shot_refresh_reuses_one_compiled_policy_plan_for_state() {
 
 #[test]
 fn live_refresh_reuses_one_policy_plan_for_no_op_and_changed_sources() {
-    let _live_test = source::lock_live_test();
+    let _live_test = lock_live_test();
     let fixture = incremental_fixture("shared-live-policy-plan");
     let root = fixture.path();
     fs::write(
@@ -212,7 +221,7 @@ fn invalid_graph_cache_schema_converges_with_a_cache_free_build() {
     let cache = fs::read_to_string(&cache_path).unwrap();
     fs::write(
         &cache_path,
-        cache.replacen("criv.source-graph/3", "criv.source-graph/invalid", 1),
+        cache.replacen("criv.source-graph/4", "criv.source-graph/invalid", 1),
     )
     .unwrap();
 
@@ -236,7 +245,7 @@ fn invalid_graph_cache_schema_converges_with_a_cache_free_build() {
 
 #[test]
 fn failed_source_refresh_forces_the_next_docs_refresh_to_rescan_source() {
-    let _live_test = source::lock_live_test();
+    let _live_test = lock_live_test();
     let incremental = incremental_fixture("failed-refresh-incremental");
     let full = incremental_fixture("failed-refresh-full");
     let mut session = live_session(incremental.path());
@@ -285,7 +294,7 @@ fn failed_source_refresh_forces_the_next_docs_refresh_to_rescan_source() {
 
 #[test]
 fn unresolved_effective_governance_keeps_last_good_state_and_recovers() {
-    let _live_test = source::lock_live_test();
+    let _live_test = lock_live_test();
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     fs::create_dir_all(root.join("src")).unwrap();

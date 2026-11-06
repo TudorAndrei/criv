@@ -40,9 +40,8 @@ impl InvalidationFacts {
 
         let current_paths = vault
             .source_graph()
-            .files
-            .keys()
-            .cloned()
+            .files()
+            .map(|file| file.path.clone())
             .collect::<BTreeSet<_>>();
         let previous_paths = previous.sources.keys().cloned().collect::<BTreeSet<_>>();
         let mut changed_source_paths = changed_files.iter().cloned().collect::<BTreeSet<_>>();
@@ -50,7 +49,7 @@ impl InvalidationFacts {
 
         let mut changed_symbol_names = BTreeSet::new();
         for path in &changed_source_paths {
-            if let Some(file) = vault.source_graph().files.get(path) {
+            if let Some(file) = vault.source_graph().file(path) {
                 changed_symbol_names.extend(file.symbols.iter().map(|symbol| symbol.name.clone()));
             }
             if let Some(partition) = previous.sources.get(path) {
@@ -169,7 +168,7 @@ pub(super) fn build(
     );
     let mut partitions = StatePartitions::default();
 
-    for file in vault.source_graph().files.values() {
+    for file in vault.source_graph().files() {
         let key = PartitionKey::Source(file.path.clone());
         let partition = previous
             .and_then(|previous| previous.sources.get(&file.path))
@@ -201,30 +200,28 @@ pub(super) fn build(
         partitions.notes.insert(note.rel_path.clone(), partition);
     }
 
-    for entry in vault.source_entries() {
+    for path in vault.source_files() {
         let state_entry = SourceIndexEntry {
-            mime: source_mime(&entry.path),
-            path: entry.path.clone(),
+            mime: source_mime(path),
+            path: path.clone(),
         };
         let fingerprint = source_index_input_fingerprint(&state_entry);
         let partition = previous
-            .and_then(|previous| previous.source_index.get(&entry.path))
+            .and_then(|previous| previous.source_index.get(path))
             .filter(|partition| partition.meta.input_fingerprint == fingerprint)
             .cloned()
             .unwrap_or_else(|| {
                 record_partition_rebuilt(PartitionKind::SourceIndex);
                 Arc::new(SourceIndexPartition {
                     meta: PartitionMeta {
-                        key: PartitionKey::SourceIndex(entry.path.clone()),
+                        key: PartitionKey::SourceIndex(path.clone()),
                         input_fingerprint: fingerprint,
                         dependencies: PartitionDependencies::default(),
                     },
                     entry: state_entry,
                 })
             });
-        partitions
-            .source_index
-            .insert(entry.path.clone(), partition);
+        partitions.source_index.insert(path.clone(), partition);
     }
 
     partitions.policies = build_policy_partitions(vault, previous, changed_files, policy_plan)?;

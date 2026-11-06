@@ -430,7 +430,8 @@ impl ActiveWatchGeneration {
             .map_err(CandidateFailure::candidate)?
             .text_summary();
         println!("{summary}");
-        let source_filter = SourceEventFilter::new(root, &config);
+        let source_filter =
+            SourceEventFilter::new(root, &config).map_err(CandidateFailure::candidate)?;
         Ok(Self {
             config,
             config_source,

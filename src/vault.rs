@@ -18,7 +18,7 @@ use crate::markdown::{
     markdown_headings as parse_markdown_headings, split_frontmatter,
 };
 use crate::repository::RepositoryFiles;
-use crate::source::{IndexedSource, SourceGraph, SourceState};
+use crate::source::{SourceGraph, SourceState};
 use crate::structural::PolicyLanguage;
 use criv_state_wire::{asset, content_hash};
 
@@ -255,7 +255,7 @@ impl Vault {
         let source = if load_sources {
             match source {
                 Some(source) => source,
-                None => SourceState::refresh_from(files, &config, None)?,
+                None => SourceState::refresh(files, &config, None)?,
             }
         } else {
             SourceState::disabled()
@@ -394,6 +394,9 @@ impl Vault {
     }
 
     pub(crate) fn resolve_source_path(&self, path: &str) -> Option<(String, bool)> {
+        if LinkTarget::parse(path).pattern_id().is_some() {
+            return None;
+        }
         self.source.resolve_partial_path(path)
     }
 
@@ -501,10 +504,6 @@ impl Vault {
 
     pub(crate) const fn source_state(&self) -> &SourceState {
         &self.source
-    }
-
-    pub(crate) fn source_entries(&self) -> &[IndexedSource] {
-        self.source.entries()
     }
 
     pub(crate) fn documentation_assets(&self) -> &[DocumentationAsset] {
@@ -996,7 +995,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["docs/assets/a.png", "docs/assets/b.png"]
         );
-        assert!(vault.source_entries().is_empty());
+        assert!(vault.source_files().is_empty());
     }
 
     #[test]
@@ -1482,8 +1481,7 @@ source = false
         let vault = Vault::load(&root).unwrap();
 
         assert!(vault.source_files().is_empty());
-        assert!(vault.source_graph().files.is_empty());
-        assert!(vault.source_entries().is_empty());
+        assert!(vault.source_graph().files().next().is_none());
 
         let _ = std::fs::remove_dir_all(root);
     }
@@ -1503,12 +1501,13 @@ roots = ["src"]
         std::fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
 
         let config = Config::load(&root).unwrap();
-        let source = SourceState::refresh(&root, &config, None).unwrap();
+        let files = crate::repository::RepositoryFiles::open(&root).unwrap();
+        let source = SourceState::refresh(&files, &config, None).unwrap();
         let expected = source.paths().to_vec();
         let vault = Vault::load_incremental_with_source_state(&root, source).unwrap();
 
         assert_eq!(vault.source_files(), expected);
-        assert!(vault.source_graph().files.contains_key("src/lib.rs"));
+        assert!(vault.source_graph().file("src/lib.rs").is_some());
         reset_work_counts();
         assert_eq!(
             vault.resolve_source_target("src/lib.rs#run"),

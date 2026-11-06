@@ -211,7 +211,7 @@ fn enforce_failure(
 fn import_policy_violations(vault: &Vault, changed_files: Option<&Vec<String>>) -> Vec<String> {
     let mut violations = Vec::new();
     for policy in &vault.config.import_policies {
-        for file in vault.source_graph().files.values() {
+        for file in vault.source_graph().files() {
             if changed_files.is_some_and(|files| !files.contains(&file.path)) {
                 continue;
             }

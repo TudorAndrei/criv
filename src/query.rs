@@ -900,7 +900,7 @@ mod tests {
         for command in &commands {
             let vault = load_query_vault(temp.path(), command).unwrap();
             assert!(vault.source_files().is_empty());
-            assert!(vault.source_graph().files.is_empty());
+            assert!(vault.source_graph().files().next().is_none());
         }
 
         let source_index = crate::source::index_work_counts();

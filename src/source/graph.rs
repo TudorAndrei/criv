@@ -6,23 +6,21 @@ use std::thread;
 use std::{cell::Cell, thread_local};
 
 use serde::{Deserialize, Serialize};
-use tree_sitter::Node;
 
 use criv_state_wire::layout;
 use criv_state_wire::source_identity::{self, SourceIdentity, SourceSelector};
 
-use super::paths::read_source_bytes;
 use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
 mod elixir;
 mod extract;
+mod syntax;
 
 // Bump when parsed source graph semantics or serialized graph types change.
-const GRAPH_CACHE_SCHEMA: &str = "criv.source-graph/3";
+const GRAPH_CACHE_SCHEMA: &str = "criv.source-graph/4";
 const MAX_SOURCE_WORKERS: usize = 16;
 const MIN_FILES_PER_SOURCE_WORKER: usize = 1_024;
-const MAX_AST_DEPTH: usize = 512;
 
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
@@ -70,7 +68,7 @@ pub(crate) fn work_counts() -> WorkCounts {
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceGraph {
-    pub(crate) files: BTreeMap<String, SourceFile>,
+    files: BTreeMap<String, SourceFile>,
     file_fingerprints: BTreeMap<String, String>,
     #[serde(skip)]
     changed_files: Vec<String>,
@@ -84,9 +82,20 @@ pub struct SourceFile {
     pub(crate) path: String,
     pub(crate) language: Language,
     pub(crate) imports: Vec<Import>,
-    #[serde(default)]
     modules: Vec<ModuleDecl>,
     pub(crate) symbols: Vec<Symbol>,
+}
+
+impl SourceFile {
+    fn new(path: &str, language: Language) -> Self {
+        Self {
+            path: path.into(),
+            language,
+            imports: Vec::new(),
+            modules: Vec::new(),
+            symbols: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,21 +108,13 @@ pub struct ModuleDecl {
 pub struct Import {
     pub(crate) module: String,
     pub(crate) line: usize,
-    #[serde(default)]
     pub(crate) site: usize,
-    #[serde(default)]
     pub(crate) kind: DirectiveKind,
-    #[serde(default)]
     pub(crate) owner: Option<SymbolOwner>,
-    #[serde(default)]
     pub(crate) scope: Option<LexicalScope>,
-    #[serde(default)]
     pub(crate) alias: Option<String>,
-    #[serde(default)]
     pub(crate) only: Option<DirectiveFilter>,
-    #[serde(default)]
     pub(crate) except: Vec<CallableFilter>,
-    #[serde(default)]
     pub(crate) absolute: bool,
 }
 
@@ -181,21 +182,45 @@ pub struct Symbol {
     pub(crate) name: String,
     pub(crate) kind: SymbolKind,
     pub(crate) parent: Option<String>,
-    #[serde(default)]
     pub(crate) owner: Option<SymbolOwner>,
-    #[serde(default)]
     pub(crate) arity: Option<usize>,
     exported: bool,
     interface_signature: Option<InterfaceSignature>,
     pub(crate) range: SymbolRange,
-    #[serde(default)]
     clause_ranges: Vec<SymbolRange>,
     pub(crate) calls: Vec<Call>,
-    #[serde(default)]
     pub(crate) relationships: Vec<Relationship>,
 }
 
 impl Symbol {
+    /// A private, unowned symbol with one clause at `range` and no edges.
+    fn new(
+        path: &str,
+        name: String,
+        kind: SymbolKind,
+        selector: String,
+        range: SymbolRange,
+    ) -> Self {
+        Self {
+            id: SymbolId {
+                path: path.into(),
+                name: name.clone(),
+                selector,
+            },
+            name,
+            kind,
+            parent: None,
+            owner: None,
+            arity: None,
+            exported: false,
+            interface_signature: None,
+            range,
+            clause_ranges: vec![range],
+            calls: Vec::new(),
+            relationships: Vec::new(),
+        }
+    }
+
     fn compatibility_aliases(&self) -> Vec<String> {
         let module = match &self.owner {
             Some(SymbolOwner::Module { name }) => Some(name.as_str()),
@@ -249,24 +274,11 @@ pub enum RelationshipKind {
     BehaviourImplementation,
 }
 
-impl RelationshipKind {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Call => "calls",
-            Self::Capture => "captures",
-            Self::Delegate => "delegates",
-            Self::ProtocolImplementation => "protocol-implementation",
-            Self::BehaviourImplementation => "behaviour-implementation",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Relationship {
     pub(crate) kind: RelationshipKind,
     pub(crate) target: RelationshipTarget,
     pub(crate) line: usize,
-    #[serde(default)]
     pub(crate) site: usize,
 }
 
@@ -293,6 +305,32 @@ pub enum RelationshipTarget {
         label: String,
         arity: usize,
     },
+}
+
+/// A call or relationship of one symbol.
+#[derive(Debug, Clone, Copy)]
+pub enum EdgeOrigin<'a> {
+    Call(&'a Call),
+    Relationship(&'a Relationship),
+}
+
+/// One outgoing edge of a symbol and the graph symbol it resolves to.
+#[derive(Debug, Clone)]
+pub struct ResolvedEdge<'a> {
+    pub(crate) origin: EdgeOrigin<'a>,
+    pub(crate) target: Option<SymbolId>,
+}
+
+impl ResolvedEdge<'_> {
+    /// Callers, callees, and the attack surface follow only executable edges.
+    const fn is_executable(&self) -> bool {
+        match self.origin {
+            EdgeOrigin::Call(_) => true,
+            EdgeOrigin::Relationship(relationship) => {
+                elixir::is_executable_query_edge(relationship.kind)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -351,27 +389,6 @@ pub enum Language {
     Unknown,
 }
 
-impl Language {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Rust => "rust",
-            Self::TypeScript => "typescript",
-            Self::JavaScript => "javascript",
-            Self::Python => "python",
-            Self::Go => "go",
-            Self::Elixir => "elixir",
-            Self::Unknown => "unknown",
-        }
-    }
-
-    pub(crate) const fn mime(self) -> Option<&'static str> {
-        match self {
-            Self::Elixir => Some("text/x-elixir"),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct InterfaceSignature {
     language: Language,
@@ -382,13 +399,9 @@ pub struct InterfaceSignature {
     output: Option<String>,
     fields: Vec<FieldSignature>,
     variants: Vec<VariantSignature>,
-    #[serde(default)]
     arity: Option<usize>,
-    #[serde(default)]
     guards: Vec<String>,
-    #[serde(default)]
     defaults: Vec<String>,
-    #[serde(default)]
     specifications: Vec<String>,
 }
 
@@ -429,22 +442,12 @@ pub(super) struct SourceGraphBuild {
 }
 
 impl SourceGraphBuild {
-    #[cfg(test)]
-    fn build_incremental(
-        root: &Path,
-        source_files: &[String],
-        previous: Option<&Self>,
-    ) -> Result<Self> {
-        let files = RepositoryFiles::open(root)?;
-        Self::build_incremental_from(&files, source_files, previous)
-    }
-
-    pub(super) fn build_incremental_from(
+    pub(super) fn build(
         files: &RepositoryFiles,
         source_files: &[String],
         previous: Option<&Self>,
     ) -> Result<Self> {
-        Self::build_incremental_with_workers_inner(
+        Self::build_with_workers(
             files,
             source_files,
             previous,
@@ -452,32 +455,13 @@ impl SourceGraphBuild {
         )
     }
 
-    #[cfg(test)]
-    fn build_incremental_with_workers(
-        root: &Path,
-        source_files: &[String],
-        previous: Option<&Self>,
-        workers: usize,
-    ) -> Result<Self> {
-        let files = RepositoryFiles::open(root)?;
-        if workers == 0 {
-            return Err(CrivError::new("Source test worker count must be positive"));
-        }
-        Self::build_incremental_with_workers_inner(&files, source_files, previous, workers)
-    }
-
-    fn build_incremental_with_workers_inner(
+    fn build_with_workers(
         files: &RepositoryFiles,
         source_files: &[String],
         previous: Option<&Self>,
         workers: usize,
     ) -> Result<Self> {
-        let graph = SourceGraph::build_incremental_with_workers(
-            files,
-            source_files,
-            previous.map(Self::graph),
-            workers,
-        )?;
+        let graph = SourceGraph::build(files, source_files, previous.map(Self::graph), workers)?;
         let can_reuse = previous.is_some_and(|previous| {
             previous.cache == CacheDisposition::Clean && graph.changed_files().is_empty()
         });
@@ -510,13 +494,7 @@ impl SourceGraphBuild {
         self.graph.files.keys().cloned().collect()
     }
 
-    #[cfg(test)]
-    fn publish(self, root: &Path) -> Result<Self> {
-        let files = RepositoryFiles::open(root)?;
-        self.publish_from(&files)
-    }
-
-    pub(super) fn publish_from(mut self, files: &RepositoryFiles) -> Result<Self> {
+    pub(super) fn publish(mut self, files: &RepositoryFiles) -> Result<Self> {
         if self.cache == CacheDisposition::Dirty {
             store_cached(files, &self.graph)?;
             self.cache = CacheDisposition::Clean;
@@ -525,26 +503,29 @@ impl SourceGraphBuild {
     }
 }
 
-#[cfg(test)]
-fn load_cached(root: &Path) -> Option<SourceGraphBuild> {
-    let files = RepositoryFiles::open(root).ok()?;
-    load_cached_from(&files)
-}
-
-pub(super) fn load_cached_from(files: &RepositoryFiles) -> Option<SourceGraphBuild> {
+/// The published graph cache, or `None` when it is missing, unreadable as a
+/// cache, or from another schema.
+pub(super) fn load_cached(files: &RepositoryFiles) -> Result<Option<SourceGraphBuild>> {
     #[cfg(test)]
     record_work(|counts| counts.cache_loads = counts.cache_loads.saturating_add(1));
 
-    let contents = files
-        .read_optional_string(Path::new(layout::SOURCE_GRAPH))
-        .ok()
-        .flatten()?;
-    let mut cache = serde_json::from_str::<GraphCacheFile>(&contents).ok()?;
-    cache.graph.rebuild_elixir_relationships();
-    (cache.schema == GRAPH_CACHE_SCHEMA).then_some(SourceGraphBuild {
-        graph: cache.graph,
+    let Some((contents, _)) =
+        files.read_optional_with_permissions(Path::new(layout::SOURCE_GRAPH))?
+    else {
+        return Ok(None);
+    };
+    let Ok(cache) = serde_json::from_slice::<GraphCacheFile>(&contents) else {
+        return Ok(None);
+    };
+    if cache.schema != GRAPH_CACHE_SCHEMA {
+        return Ok(None);
+    }
+    let mut graph = cache.graph;
+    graph.rebuild_elixir_relationships();
+    Ok(Some(SourceGraphBuild {
+        graph,
         cache: CacheDisposition::Clean,
-    })
+    }))
 }
 
 fn store_cached(files: &RepositoryFiles, graph: &SourceGraph) -> Result<()> {
@@ -570,28 +551,8 @@ fn store_cached(files: &RepositoryFiles, graph: &SourceGraph) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-fn graph_cache_path(root: &Path) -> std::path::PathBuf {
-    root.join(layout::SOURCE_GRAPH)
-}
-
 impl SourceGraph {
-    #[cfg(test)]
-    fn build_incremental(
-        root: &Path,
-        source_files: &[String],
-        previous: Option<&Self>,
-    ) -> Result<Self> {
-        let files = RepositoryFiles::open(root)?;
-        Self::build_incremental_with_workers(
-            &files,
-            source_files,
-            previous,
-            source_worker_count(source_files.len()),
-        )
-    }
-
-    fn build_incremental_with_workers(
+    fn build(
         files: &RepositoryFiles,
         source_files: &[String],
         previous: Option<&Self>,
@@ -610,33 +571,9 @@ impl SourceGraph {
             } else {
                 #[cfg(test)]
                 record_work(|counts| counts.parsed_files = counts.parsed_files.saturating_add(1));
-                graph.changed_files.push(processed.path.clone());
+                graph.changed_files.push(processed.parsed.path.clone());
             }
-            for symbol in &processed.parsed.symbols {
-                if let Some(owner) = &symbol.owner {
-                    debug_assert_eq!(
-                        elixir::symbol_selector(symbol.kind, owner, &symbol.name, symbol.arity)
-                            .as_deref(),
-                        Some(symbol.id.selector.as_str()),
-                        "structured Source owner and selector must agree"
-                    );
-                }
-                for key in symbol
-                    .compatibility_aliases()
-                    .into_iter()
-                    .chain(std::iter::once(symbol.id.selector.clone()))
-                {
-                    graph
-                        .symbol_index
-                        .entry(key)
-                        .or_default()
-                        .push(symbol.id.clone());
-                }
-            }
-            graph
-                .file_fingerprints
-                .insert(processed.path.clone(), processed.fingerprint);
-            graph.files.insert(processed.path, processed.parsed);
+            graph.insert(processed.parsed, processed.fingerprint);
         }
         if let Some(previous) = previous {
             for previous_file in previous.file_fingerprints.keys() {
@@ -651,8 +588,40 @@ impl SourceGraph {
         Ok(graph)
     }
 
+    /// Adds a parsed file and indexes its symbols by selector and alias.
+    fn insert(&mut self, file: SourceFile, fingerprint: String) {
+        for symbol in &file.symbols {
+            for key in symbol
+                .compatibility_aliases()
+                .into_iter()
+                .chain(std::iter::once(symbol.id.selector.clone()))
+            {
+                self.symbol_index
+                    .entry(key)
+                    .or_default()
+                    .push(symbol.id.clone());
+            }
+        }
+        self.file_fingerprints
+            .insert(file.path.clone(), fingerprint);
+        self.files.insert(file.path.clone(), file);
+    }
+
     fn rebuild_elixir_relationships(&mut self) {
         self.elixir_relationships = elixir::ElixirRelationships::build(&self.files);
+    }
+
+    pub(crate) fn files(&self) -> impl Iterator<Item = &SourceFile> {
+        self.files.values()
+    }
+
+    pub(crate) fn file(&self, path: &str) -> Option<&SourceFile> {
+        self.files.get(path)
+    }
+
+    /// The BLAKE3 hash of the bytes the file was parsed from.
+    pub(crate) fn file_fingerprint(&self, path: &str) -> Option<&str> {
+        self.file_fingerprints.get(path).map(String::as_str)
     }
 
     fn resolve_symbol_result(&self, query: &str) -> SymbolResolution {
@@ -694,98 +663,94 @@ impl SourceGraph {
         }
     }
 
+    /// Every call and relationship of `symbol`, calls first, each with the
+    /// graph symbol it resolves to.
+    pub(crate) fn resolved_edges<'a>(
+        &'a self,
+        symbol: &'a Symbol,
+    ) -> impl Iterator<Item = ResolvedEdge<'a>> + 'a {
+        let calls = symbol.calls.iter().map(|call| ResolvedEdge {
+            origin: EdgeOrigin::Call(call),
+            target: self.resolve_call(&symbol.id, &call.target),
+        });
+        let relationships = symbol
+            .relationships
+            .iter()
+            .map(|relationship| ResolvedEdge {
+                origin: EdgeOrigin::Relationship(relationship),
+                target: self.resolve_relationship(&symbol.id, relationship),
+            });
+        calls.chain(relationships)
+    }
+
     pub(crate) fn callees(&self, query: &str) -> Vec<String> {
-        let Some(symbol_id) = self.resolve_symbol(query) else {
+        let Some(symbol) = self
+            .resolve_symbol(query)
+            .and_then(|symbol_id| self.symbol(&symbol_id))
+        else {
             return Vec::new();
         };
         let mut rows = self
-            .symbol(&symbol_id)
-            .map(|symbol| {
-                let mut rows = symbol
-                    .calls
-                    .iter()
-                    .map(|call| {
-                        self.resolve_call(&symbol.id, &call.target)
-                            .map_or_else(|| call.target.clone(), |id| id.display())
-                    })
-                    .collect::<Vec<_>>();
-                rows.extend(
-                    symbol
-                        .relationships
-                        .iter()
-                        .filter(|relationship| elixir::is_executable_query_edge(relationship.kind))
-                        .map(|relationship| {
-                            self.resolve_relationship(&symbol.id, relationship)
-                                .map_or_else(
-                                    || self.relationship_target_label(&symbol.id, relationship),
-                                    |id| id.display(),
-                                )
-                        }),
-                );
-                rows
+            .resolved_edges(symbol)
+            .filter(ResolvedEdge::is_executable)
+            .map(|edge| match (edge.target, edge.origin) {
+                (Some(target), _) => target.display(),
+                (None, EdgeOrigin::Call(call)) => call.target.clone(),
+                (None, EdgeOrigin::Relationship(relationship)) => {
+                    self.relationship_target_label(&symbol.id, relationship)
+                }
             })
-            .unwrap_or_default();
+            .collect::<Vec<_>>();
         rows.sort();
         rows.dedup();
         rows
     }
 
+    /// Symbols with an executable edge to the queried symbol. An unresolved
+    /// call counts when its name matches, so an ambiguous name lists every
+    /// possible caller; a call resolved to another symbol does not count.
     pub(crate) fn callers(&self, query: &str) -> Vec<String> {
         let Some(symbol_id) = self.resolve_symbol(query) else {
             return Vec::new();
         };
-        let mut rows = Vec::new();
-        for file in self.files.values() {
-            for symbol in &file.symbols {
-                if symbol.calls.iter().any(|call| {
-                    self.resolve_call(&symbol.id, &call.target)
-                        .is_some_and(|target| target == symbol_id)
-                        || call.target == symbol_id.name
-                }) || symbol.relationships.iter().any(|relationship| {
-                    elixir::is_executable_query_edge(relationship.kind)
-                        && self.resolve_relationship(&symbol.id, relationship).as_ref()
-                            == Some(&symbol_id)
-                }) {
-                    rows.push(symbol.id.display());
-                }
-            }
-        }
+        let mut rows = self
+            .symbols()
+            .filter(|caller| {
+                self.resolved_edges(caller)
+                    .filter(ResolvedEdge::is_executable)
+                    .any(|edge| match (&edge.target, edge.origin) {
+                        (Some(target), _) => *target == symbol_id,
+                        (None, EdgeOrigin::Call(call)) => call.target == symbol_id.name,
+                        (None, EdgeOrigin::Relationship(_)) => false,
+                    })
+            })
+            .map(|caller| caller.id.display())
+            .collect::<Vec<_>>();
         rows.sort();
         rows.dedup();
         rows
     }
 
     pub(crate) fn attack_surface(&self) -> Vec<String> {
-        let mut called = BTreeSet::new();
-        for file in self.files.values() {
-            for symbol in &file.symbols {
-                for call in &symbol.calls {
-                    if let Some(target) = self.resolve_call(&symbol.id, &call.target) {
-                        called.insert(target);
-                    }
-                }
-                for relationship in &symbol.relationships {
-                    if elixir::is_executable_query_edge(relationship.kind)
-                        && let Some(target) = self.resolve_relationship(&symbol.id, relationship)
-                    {
-                        called.insert(target);
-                    }
-                }
-            }
-        }
+        let called = self
+            .symbols()
+            .flat_map(|symbol| self.resolved_edges(symbol))
+            .filter(ResolvedEdge::is_executable)
+            .filter_map(|edge| edge.target)
+            .collect::<BTreeSet<_>>();
+        let called = &called;
 
         let mut rows = self
             .files
             .values()
-            .flat_map(|file| &file.symbols)
-            .filter(|symbol| {
-                if symbol.owner.is_some() {
+            .flat_map(|file| {
+                let implicit = file.language.has_implicit_entry_points();
+                file.symbols.iter().filter(move |symbol| {
                     symbol.exported
-                } else {
-                    symbol.exported
-                        || symbol.name == "main"
-                        || (symbol.parent.is_none() && !called.contains(&symbol.id))
-                }
+                        || (implicit
+                            && (symbol.name == "main"
+                                || (symbol.parent.is_none() && !called.contains(&symbol.id))))
+                })
             })
             .map(|symbol| symbol.id.display())
             .collect::<Vec<_>>();
@@ -808,7 +773,7 @@ impl SourceGraph {
         graph
     }
 
-    pub(crate) fn resolve_call(&self, caller: &SymbolId, target: &str) -> Option<SymbolId> {
+    fn resolve_call(&self, caller: &SymbolId, target: &str) -> Option<SymbolId> {
         self.files
             .get(&caller.path)
             .and_then(|file| file.symbols.iter().find(|symbol| symbol.name == target))
@@ -816,7 +781,7 @@ impl SourceGraph {
             .or_else(|| self.resolve_symbol(target))
     }
 
-    pub(crate) fn resolve_relationship(
+    fn resolve_relationship(
         &self,
         caller: &SymbolId,
         relationship: &Relationship,
@@ -838,9 +803,7 @@ impl SourceGraph {
     }
 
     fn symbol(&self, id: &SymbolId) -> Option<&Symbol> {
-        self.files
-            .get(&id.path)
-            .and_then(|file| file.symbols.iter().find(|symbol| &symbol.id == id))
+        symbol_in(&self.files, id)
     }
 
     pub(crate) fn symbol_name(&self, id: &SymbolId) -> Option<&str> {
@@ -848,9 +811,14 @@ impl SourceGraph {
     }
 }
 
+fn symbol_in<'a>(files: &'a BTreeMap<String, SourceFile>, id: &SymbolId) -> Option<&'a Symbol> {
+    files
+        .get(&id.path)
+        .and_then(|file| file.symbols.iter().find(|symbol| &symbol.id == id))
+}
+
 #[derive(Debug)]
 struct ProcessedSource {
-    path: String,
     fingerprint: String,
     parsed: SourceFile,
     reused: bool,
@@ -865,7 +833,7 @@ fn process_source_files(
     if source_files.is_empty() {
         return Ok(Vec::new());
     }
-    if workers == 1 {
+    if workers <= 1 {
         return source_files
             .iter()
             .map(|source_file| process_source_file(files, source_file, previous))
@@ -910,7 +878,7 @@ fn process_source_file(
     source_file: &str,
     previous: Option<&SourceGraph>,
 ) -> Result<Option<ProcessedSource>> {
-    let bytes = read_source_bytes(files, source_file).map_err(|error| {
+    let bytes = files.read(Path::new(source_file)).map_err(|error| {
         CrivError::new(format!(
             "failed to read selected file `{source_file}`: {error}"
         ))
@@ -930,16 +898,10 @@ fn process_source_file(
         |parsed| (parsed, true),
     );
     Ok(Some(ProcessedSource {
-        path: source_file.to_string(),
         fingerprint,
         parsed,
         reused,
     }))
-}
-
-#[cfg(test)]
-fn parse_source_file(path: &str, contents: &str) -> SourceFile {
-    extract::parse_source_file(path, contents)
 }
 
 fn symbol_resolution(mut matches: Vec<SymbolId>) -> SymbolResolution {
@@ -954,636 +916,65 @@ fn symbol_resolution(mut matches: Vec<SymbolId>) -> SymbolResolution {
     }
 }
 
-fn symbol_selector(kind: SymbolKind, parent: Option<&str>, name: &str) -> String {
-    match (kind, parent) {
-        (SymbolKind::Function, _) => format!("fn:{name}"),
-        (SymbolKind::Method, Some(parent)) => format!("type:{parent}/member:{name}"),
-        (SymbolKind::Method, None) => format!("member:{name}"),
-        (SymbolKind::Class, _) => format!("type:{name}"),
-        _ => format!("{}:{name}", kind.as_str()),
-    }
-}
-
-fn visibility_text(language: Language, source: &str) -> String {
-    let trimmed = source.trim_start();
-    match language {
-        Language::Rust if trimmed.starts_with("pub(") => trimmed
-            .split_whitespace()
-            .next()
-            .unwrap_or("pub")
-            .trim_end_matches('{')
-            .to_string(),
-        Language::Rust => "pub".into(),
-        Language::TypeScript | Language::JavaScript => "export".into(),
-        Language::Python | Language::Go | Language::Elixir | Language::Unknown => "public".into(),
-    }
-}
-
-fn function_signature(language: Language, source: &str) -> (Vec<String>, Option<String>) {
-    match language {
-        Language::Rust => rust_function_signature(source),
-        Language::TypeScript | Language::JavaScript => typescript_function_signature(source),
-        _ => generic_function_signature(source),
-    }
-}
-
-fn rust_function_signature(source: &str) -> (Vec<String>, Option<String>) {
-    let header = source
-        .split_once('{')
-        .map_or(source, |(head, _)| head)
-        .trim();
-    let inputs = paren_contents(header)
-        .map(split_signature_list)
-        .unwrap_or_default();
-    let output = header
-        .rsplit_once(')')
-        .map(|(_, tail)| tail.trim())
-        .and_then(|tail| tail.strip_prefix("->"))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(normalize_signature_text);
-    (inputs, output)
-}
-
-fn typescript_function_signature(source: &str) -> (Vec<String>, Option<String>) {
-    let header = source
-        .split_once("=>")
-        .map(|(head, _)| head)
-        .or_else(|| source.split_once('{').map(|(head, _)| head))
-        .unwrap_or(source)
-        .trim();
-    let inputs = paren_contents(header)
-        .map(split_signature_list)
-        .unwrap_or_default();
-    let output = header
-        .rsplit_once(')')
-        .map(|(_, tail)| tail.trim())
-        .and_then(|tail| tail.strip_prefix(':'))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(normalize_signature_text);
-    (inputs, output)
-}
-
-fn generic_function_signature(source: &str) -> (Vec<String>, Option<String>) {
-    let header = source
-        .split_once('{')
-        .map_or(source, |(head, _)| head)
-        .trim();
-    let inputs = paren_contents(header)
-        .map(split_signature_list)
-        .unwrap_or_default();
-    (inputs, None)
-}
-
-fn aggregate_signature(
-    language: Language,
-    source: &str,
-) -> (Vec<FieldSignature>, Vec<VariantSignature>) {
-    match language {
-        Language::Rust if source.trim_start().starts_with("enum ") || source.contains(" enum ") => {
-            (Vec::new(), rust_enum_variants(source))
-        }
-        Language::Rust => (rust_fields(source), Vec::new()),
-        Language::TypeScript | Language::JavaScript => (typescript_members(source), Vec::new()),
-        _ => (Vec::new(), Vec::new()),
-    }
-}
-
-fn rust_fields(source: &str) -> Vec<FieldSignature> {
-    brace_contents(source)
-        .map(|body| {
-            body.lines()
-                .filter_map(|line| {
-                    let line = line
-                        .trim()
-                        .trim_start_matches("pub ")
-                        .trim_end_matches(',')
-                        .trim();
-                    let (name, ty) = line.split_once(':')?;
-                    Some(FieldSignature {
-                        name: name.trim().to_string(),
-                        ty: Some(normalize_signature_text(ty)),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn rust_enum_variants(source: &str) -> Vec<VariantSignature> {
-    brace_contents(source)
-        .map(|body| {
-            body.lines()
-                .filter_map(|line| {
-                    let line = line.trim().trim_end_matches(',').trim();
-                    if line.is_empty() || line.starts_with("//") {
-                        return None;
-                    }
-                    let name = line
-                        .split(['(', '{', '='])
-                        .next()
-                        .unwrap_or(line)
-                        .trim()
-                        .to_string();
-                    (!name.is_empty()).then_some(VariantSignature {
-                        name,
-                        fields: Vec::new(),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn typescript_members(source: &str) -> Vec<FieldSignature> {
-    brace_contents(source)
-        .map(|body| {
-            body.lines()
-                .filter_map(|line| {
-                    let line = line
-                        .trim()
-                        .trim_start_matches("public ")
-                        .trim_start_matches("readonly ")
-                        .trim_end_matches(';')
-                        .trim_end_matches(',')
-                        .trim();
-                    if line.is_empty() || line.starts_with("//") || line.starts_with("constructor")
-                    {
-                        return None;
-                    }
-                    if let Some((name, _)) = line.split_once('(') {
-                        let output = line
-                            .rsplit_once(')')
-                            .and_then(|(_, tail)| tail.trim().strip_prefix(':'))
-                            .map(normalize_signature_text);
-                        return Some(FieldSignature {
-                            name: name.trim().to_string(),
-                            ty: output,
-                        });
-                    }
-                    let (name, ty) = line.split_once(':')?;
-                    Some(FieldSignature {
-                        name: name.trim().trim_end_matches('?').to_string(),
-                        ty: Some(normalize_signature_text(ty)),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn paren_contents(source: &str) -> Option<&str> {
-    let start = source.find('(')?;
-    let end = source.rfind(')')?;
-    (end > start)
-        .then(|| start.checked_add(1))
-        .flatten()
-        .and_then(|body_start| source.get(body_start..end))
-}
-
-fn brace_contents(source: &str) -> Option<&str> {
-    let start = source.find('{')?;
-    let end = source.rfind('}')?;
-    (end > start)
-        .then(|| start.checked_add(1))
-        .flatten()
-        .and_then(|body_start| source.get(body_start..end))
-}
-
-fn split_signature_list(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .map(normalize_signature_text)
-        .filter(|value| !value.is_empty())
-        .collect()
-}
-
-fn normalize_signature_text(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn field_text(node: Node<'_>, contents: &str, field: &str) -> Option<String> {
-    node.child_by_field_name(field)
-        .and_then(|child| node_text(child, contents))
-}
-
-fn node_text(node: Node<'_>, contents: &str) -> Option<String> {
-    node.utf8_text(contents.as_bytes()).ok().map(str::to_string)
-}
-
-fn first_named_child(node: Node<'_>) -> Option<Node<'_>> {
-    (0..node.named_child_count()).find_map(|index| {
-        u32::try_from(index)
-            .ok()
-            .and_then(|index| node.named_child(index))
-    })
-}
-
-fn descendant_of_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
-    if node.kind() == kind {
-        return Some(node);
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if let Some(found) = descendant_of_kind(child, kind) {
-            return Some(found);
-        }
-    }
-    None
-}
-
-fn has_descendant_kind(node: Node<'_>, kinds: &[&str]) -> bool {
-    kinds
-        .iter()
-        .any(|kind| descendant_of_kind(node, kind).is_some())
-}
-
-fn fallback_module_decl(line: &str, language: Language) -> Option<String> {
-    let prefix = match language {
-        Language::Rust => "mod ",
-        Language::TypeScript | Language::JavaScript => line
-            .strip_prefix("export ")
-            .map_or("namespace ", |_| "namespace "),
-        Language::Go => "package ",
-        _ => return None,
-    };
-    let rest = if matches!(language, Language::TypeScript | Language::JavaScript) {
-        line.strip_prefix("export ")
-            .unwrap_or(line)
-            .strip_prefix(prefix)?
-    } else {
-        line.strip_prefix(prefix)?
-    };
-    let name = rest
-        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
-        .next()?
-        .trim();
-    (!name.is_empty()).then(|| name.to_string())
-}
-
-fn parse_import(line: &str, language: Language) -> Option<String> {
-    parse_imports(line, language).into_iter().next()
-}
-
-fn parse_imports(line: &str, language: Language) -> Vec<String> {
-    match language {
-        Language::Rust => line
-            .strip_prefix("use ")
-            .or_else(|| line.strip_prefix("pub use "))
-            .map(parse_rust_import_body)
-            .or_else(|| {
-                line.strip_prefix("mod ")
-                    .map(|value| vec![value.trim_end_matches(';').trim().to_string()])
-            })
-            .unwrap_or_default(),
-        Language::TypeScript | Language::JavaScript => {
-            if let Some((_, module)) = line.split_once(" from ") {
-                vec![clean_js_module(module)]
-            } else {
-                line.strip_prefix("import ")
-                    .map(clean_js_module)
-                    .into_iter()
-                    .collect()
-            }
-        }
-        Language::Python => line
-            .strip_prefix("import ")
-            .map(|value| value.split_whitespace().next().unwrap_or(value).to_string())
-            .or_else(|| {
-                line.strip_prefix("from ")
-                    .and_then(|value| value.split_once(" import "))
-                    .map(|(module, _)| module.to_string())
-            })
-            .into_iter()
-            .collect(),
-        Language::Go => line
-            .strip_prefix("import ")
-            .map(|value| {
-                value
-                    .trim()
-                    .trim_matches('"')
-                    .trim_matches('(')
-                    .trim_matches(')')
-                    .to_string()
-            })
-            .into_iter()
-            .collect(),
-        Language::Elixir | Language::Unknown => Vec::new(),
-    }
-}
-
-fn parse_rust_imports(line: &str) -> Vec<String> {
-    line.trim()
-        .strip_prefix("use ")
-        .or_else(|| line.trim().strip_prefix("pub use "))
-        .map(parse_rust_import_body)
-        .unwrap_or_default()
-}
-
-fn parse_rust_import_body(body: &str) -> Vec<String> {
-    let body = body.trim().trim_end_matches(';').trim();
-    let mut rows = expand_rust_import("", body);
-    rows.sort();
-    rows.dedup();
-    rows
-}
-
-fn expand_rust_import(prefix: &str, body: &str) -> Vec<String> {
-    let body = body.trim();
-    if body.is_empty() {
-        return Vec::new();
-    }
-
-    if let Some((open, close)) = rust_group_bounds(body) {
-        let Some(head) = body.get(..open).map(str::trim) else {
-            return Vec::new();
-        };
-        let head = head.trim_end_matches("::");
-        let base = join_rust_import(prefix, head);
-        let Some(body_start) = open.checked_add(1) else {
-            return Vec::new();
-        };
-        let Some(children) = body.get(body_start..close) else {
-            return Vec::new();
-        };
-        return split_top_level_commas(children)
-            .into_iter()
-            .flat_map(|part| expand_rust_import(&base, part))
-            .collect();
-    }
-
-    let leaf = body
-        .split_once(" as ")
-        .map_or(body, |(module, _)| module)
-        .trim();
-    let module = join_rust_import(prefix, leaf);
-    if module.is_empty() {
-        Vec::new()
-    } else {
-        vec![module]
-    }
-}
-
-fn rust_group_bounds(value: &str) -> Option<(usize, usize)> {
-    let mut depth = 0usize;
-    let mut open = None;
-    for (index, ch) in value.char_indices() {
-        match ch {
-            '{' => {
-                if depth == 0 {
-                    open = Some(index);
-                }
-                depth = depth.saturating_add(1);
-            }
-            '}' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    return open.map(|open| (open, index));
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn split_top_level_commas(value: &str) -> Vec<&str> {
-    let mut rows = Vec::new();
-    let mut depth = 0usize;
-    let mut start = 0usize;
-    for (index, ch) in value.char_indices() {
-        match ch {
-            '{' => depth = depth.saturating_add(1),
-            '}' => depth = depth.saturating_sub(1),
-            ',' if depth == 0 => {
-                if let Some(row) = value.get(start..index) {
-                    rows.push(row.trim());
-                }
-                start = index.saturating_add(1);
-            }
-            _ => {}
-        }
-    }
-    if let Some(row) = value.get(start..) {
-        rows.push(row.trim());
-    }
-    rows.into_iter().filter(|row| !row.is_empty()).collect()
-}
-
-fn join_rust_import(prefix: &str, leaf: &str) -> String {
-    let leaf = leaf.trim().trim_matches(':');
-    if leaf.is_empty() || leaf == "self" {
-        return prefix.to_string();
-    }
-    let leaf = leaf.strip_prefix("self::").unwrap_or(leaf);
-    if prefix.is_empty() {
-        leaf.to_string()
-    } else {
-        format!("{}::{}", prefix.trim_end_matches("::"), leaf)
-    }
-}
-
-fn parse_symbol(
-    line: &str,
-    language: Language,
-    in_rust_impl: bool,
-) -> Option<(String, SymbolKind)> {
-    match language {
-        Language::Rust => after_keyword(line, "fn ")
-            .map(|name| {
-                (
-                    name,
-                    if in_rust_impl {
-                        SymbolKind::Method
-                    } else {
-                        SymbolKind::Function
-                    },
-                )
-            })
-            .or_else(|| {
-                (line.starts_with("struct ") || line.starts_with("pub struct "))
-                    .then(|| after_keyword(line, "struct ").map(|name| (name, SymbolKind::Class)))
-                    .flatten()
-            })
-            .or_else(|| {
-                (line.starts_with("enum ") || line.starts_with("pub enum "))
-                    .then(|| after_keyword(line, "enum ").map(|name| (name, SymbolKind::Class)))
-                    .flatten()
-            }),
-        Language::TypeScript | Language::JavaScript => after_keyword(line, "function ")
-            .map(|name| (name, SymbolKind::Function))
-            .or_else(|| const_function_name(line).map(|name| (name, SymbolKind::Function)))
-            .or_else(|| after_keyword(line, "class ").map(|name| (name, SymbolKind::Class))),
-        Language::Python => after_keyword(line, "def ")
-            .map(|name| (name, SymbolKind::Function))
-            .or_else(|| after_keyword(line, "class ").map(|name| (name, SymbolKind::Class))),
-        Language::Go => {
-            if let Some(name) = after_keyword(line, "func ") {
-                let name = if name.starts_with('(') {
-                    line.split(')')
-                        .nth(1)
-                        .and_then(|rest| identifier_before(rest, '('))?
-                } else {
-                    name
-                };
-                Some((name, SymbolKind::Function))
-            } else if let Some(rest) = line.strip_prefix("type ") {
-                identifier_before(rest, ' ').map(|name| (name, SymbolKind::Class))
-            } else {
-                None
-            }
-        }
-        Language::Elixir | Language::Unknown => None,
-    }
-}
-
-fn parse_calls(line: &str, language: Language) -> Vec<String> {
-    let mut calls = Vec::new();
-    let mut token = String::new();
-    let mut chars = line.chars();
-    while let Some(ch) = chars.next() {
-        if ch.is_ascii_alphanumeric() || ch == '_' {
-            token.push(ch);
-            continue;
-        }
-        if ch == '(' && !token.is_empty() && !is_call_keyword(&token, language) {
-            calls.push(token.clone());
-        }
-        token.clear();
-        if ch == '"' || ch == '\'' {
-            for next in chars.by_ref() {
-                if next == ch {
-                    break;
-                }
-            }
-        }
-    }
-    calls
-}
-
-fn parse_rust_impl_target(line: &str) -> Option<String> {
-    let rest = line.strip_prefix("impl ")?.trim();
-    let rest = rest
-        .strip_prefix('<')
-        .and_then(|value| value.split_once('>').map(|(_, after)| after.trim()))
-        .unwrap_or(rest);
-    let target = if let Some((_, target)) = rest.split_once(" for ") {
-        target
-    } else {
-        rest
-    };
-    target
-        .split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '_'))
-        .find(|part| !part.is_empty())
-        .map(str::to_string)
-}
-
-fn after_keyword(line: &str, keyword: &str) -> Option<String> {
-    let start = line.find(keyword)?.checked_add(keyword.len())?;
-    let rest = line.get(start..)?;
-    identifier_before(rest, '(')
-        .or_else(|| identifier_before(rest, '<'))
-        .or_else(|| identifier_before(rest, '{'))
-        .or_else(|| identifier_before(rest, ':'))
-        .or_else(|| identifier_before(rest, ' '))
-}
-
-fn identifier_before(rest: &str, delimiter: char) -> Option<String> {
-    let candidate = rest.split(delimiter).next()?.trim();
-    let ident = candidate
-        .chars()
-        .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
-        .collect::<String>();
-    (!ident.is_empty()).then_some(ident)
-}
-
-fn const_function_name(line: &str) -> Option<String> {
-    let rest = line
-        .strip_prefix("const ")
-        .or_else(|| line.strip_prefix("let "))
-        .or_else(|| line.strip_prefix("var "))?;
-    let (name, rhs) = rest.split_once('=')?;
-    if rhs.contains("=>") || rhs.trim_start().starts_with("function") {
-        Some(name.trim().to_string())
-    } else {
-        None
-    }
-}
-
-fn clean_js_module(value: &str) -> String {
-    value
-        .trim()
-        .trim_end_matches(';')
-        .trim_matches('"')
-        .trim_matches('\'')
-        .to_string()
-}
-
-fn is_comment(line: &str, language: Language) -> bool {
-    match language {
-        Language::Python => line.starts_with('#'),
-        _ => line.starts_with("//") || line.starts_with("/*") || line.starts_with('*'),
-    }
-}
-
-fn is_call_keyword(token: &str, language: Language) -> bool {
-    matches!(
-        token,
-        "if" | "for"
-            | "while"
-            | "match"
-            | "switch"
-            | "return"
-            | "sizeof"
-            | "Some"
-            | "Ok"
-            | "Err"
-            | "vec"
-            | "println"
-            | "format"
-    ) || (language == Language::Python && matches!(token, "print" | "len" | "str" | "int"))
-}
-
-fn is_exported_symbol(line: &str, language: Language) -> bool {
-    match language {
-        Language::Rust => line.starts_with("pub "),
-        Language::TypeScript | Language::JavaScript => line.starts_with("export "),
-        Language::Go => parse_symbol(line, language, false)
-            .is_some_and(|(name, _)| name.chars().next().is_some_and(char::is_uppercase)),
-        Language::Python => {
-            parse_symbol(line, language, false).is_some_and(|(name, _)| !name.starts_with('_'))
-        }
-        Language::Elixir | Language::Unknown => false,
-    }
-}
-
-impl Language {
-    pub(crate) fn from_path(path: impl AsRef<Path>) -> Self {
-        path.as_ref()
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .map_or(Self::Unknown, Self::from_extension)
-    }
-
-    fn from_extension(extension: &str) -> Self {
-        match extension {
-            "rs" => Self::Rust,
-            "ts" | "tsx" => Self::TypeScript,
-            "js" | "jsx" | "mjs" | "cjs" => Self::JavaScript,
-            "py" => Self::Python,
-            "go" => Self::Go,
-            "ex" | "exs" => Self::Elixir,
-            _ => Self::Unknown,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use extract::parse_source_file;
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::TempDir;
+
+    fn files(root: &Path) -> RepositoryFiles {
+        RepositoryFiles::open(root).unwrap()
+    }
+
+    fn build(
+        root: &Path,
+        paths: &[String],
+        previous: Option<&SourceGraphBuild>,
+    ) -> Result<SourceGraphBuild> {
+        SourceGraphBuild::build(&files(root), paths, previous)
+    }
+
+    fn build_with_workers(
+        root: &Path,
+        paths: &[String],
+        previous: Option<&SourceGraphBuild>,
+        workers: usize,
+    ) -> Result<SourceGraphBuild> {
+        SourceGraphBuild::build_with_workers(&files(root), paths, previous, workers)
+    }
+
+    fn graph_build(
+        root: &Path,
+        paths: &[String],
+        previous: Option<&SourceGraph>,
+    ) -> Result<SourceGraph> {
+        SourceGraph::build(&files(root), paths, previous, 1)
+    }
+
+    impl SourceGraphBuild {
+        fn publish_at(self, root: &Path) -> Result<Self> {
+            self.publish(&files(root))
+        }
+    }
+
+    fn cached(root: &Path) -> Option<SourceGraphBuild> {
+        load_cached(&files(root)).unwrap()
+    }
+
+    fn graph_cache_path(root: &Path) -> PathBuf {
+        root.join(layout::SOURCE_GRAPH)
+    }
+
+    fn graph_with_files(files: impl IntoIterator<Item = SourceFile>) -> SourceGraph {
+        let mut graph = SourceGraph::default();
+        for file in files {
+            graph.insert(file, String::new());
+        }
+        graph.rebuild_elixir_relationships();
+        graph
+    }
 
     #[test]
     fn language_detection_uses_the_file_extension() {
@@ -1602,26 +993,6 @@ mod tests {
         }
     }
 
-    fn graph_with_file(file: SourceFile) -> SourceGraph {
-        let mut graph = SourceGraph::default();
-        for symbol in &file.symbols {
-            for key in symbol
-                .compatibility_aliases()
-                .into_iter()
-                .chain(std::iter::once(symbol.id.selector.clone()))
-            {
-                graph
-                    .symbol_index
-                    .entry(key)
-                    .or_default()
-                    .push(symbol.id.clone());
-            }
-        }
-        graph.files.insert(file.path.clone(), file);
-        graph.rebuild_elixir_relationships();
-        graph
-    }
-
     fn elixir_symbol(
         path: &str,
         owner: SymbolOwner,
@@ -1632,22 +1003,11 @@ mod tests {
     ) -> Symbol {
         let selector = elixir::symbol_selector(kind, &owner, name, arity).unwrap();
         Symbol {
-            id: SymbolId {
-                path: path.into(),
-                name: name.into(),
-                selector,
-            },
-            name: name.into(),
-            kind,
-            parent: None,
             owner: Some(owner),
             arity,
             exported: true,
-            interface_signature: None,
-            range: ranges[0],
-            clause_ranges: ranges,
-            calls: Vec::new(),
-            relationships: Vec::new(),
+            clause_ranges: ranges.clone(),
+            ..Symbol::new(path, name.into(), kind, selector, ranges[0])
         }
     }
 
@@ -1664,7 +1024,7 @@ mod tests {
         fs::write(outside.join("secret.rs"), "pub fn secret() {}\n").unwrap();
         symlink(outside.join("secret.rs"), root.join("src/secret.rs")).unwrap();
 
-        let error = SourceGraph::build_incremental(&root, &["src/secret.rs".into()], None)
+        let error = graph_build(&root, &["src/secret.rs".into()], None)
             .expect_err("source graph should reject a linked source file");
 
         assert!(
@@ -1709,16 +1069,15 @@ mod tests {
         .map(str::to_string)
         .collect::<Vec<_>>();
 
-        let serial = SourceGraphBuild::build_incremental_with_workers(root.path(), &paths, None, 1)
+        let serial = build_with_workers(root.path(), &paths, None, 1)
             .unwrap()
-            .publish(root.path())
+            .publish_at(root.path())
             .unwrap();
         let serial_cache = fs::read(graph_cache_path(root.path())).unwrap();
-        let parallel =
-            SourceGraphBuild::build_incremental_with_workers(root.path(), &paths, None, 4)
-                .unwrap()
-                .publish(root.path())
-                .unwrap();
+        let parallel = build_with_workers(root.path(), &paths, None, 4)
+            .unwrap()
+            .publish_at(root.path())
+            .unwrap();
         let parallel_cache = fs::read(graph_cache_path(root.path())).unwrap();
 
         assert_eq!(parallel.graph(), serial.graph());
@@ -1749,20 +1108,14 @@ mod tests {
         );
         assert_eq!(parallel_cache, serial_cache);
 
-        let serial_cached =
-            SourceGraphBuild::build_incremental_with_workers(root.path(), &paths, Some(&serial), 1)
-                .unwrap()
-                .publish(root.path())
-                .unwrap();
-        let parallel_cached = SourceGraphBuild::build_incremental_with_workers(
-            root.path(),
-            &paths,
-            Some(&parallel),
-            4,
-        )
-        .unwrap()
-        .publish(root.path())
-        .unwrap();
+        let serial_cached = build_with_workers(root.path(), &paths, Some(&serial), 1)
+            .unwrap()
+            .publish_at(root.path())
+            .unwrap();
+        let parallel_cached = build_with_workers(root.path(), &paths, Some(&parallel), 4)
+            .unwrap()
+            .publish_at(root.path())
+            .unwrap();
         assert_eq!(parallel_cached.graph(), serial_cached.graph());
         assert!(parallel_cached.graph().changed_files().is_empty());
         assert_eq!(
@@ -1783,11 +1136,8 @@ mod tests {
             "src/c.ex".into(),
         ];
 
-        let serial = SourceGraphBuild::build_incremental_with_workers(root.path(), &paths, None, 1)
-            .unwrap_err();
-        let parallel =
-            SourceGraphBuild::build_incremental_with_workers(root.path(), &paths, None, 3)
-                .unwrap_err();
+        let serial = build_with_workers(root.path(), &paths, None, 1).unwrap_err();
+        let parallel = build_with_workers(root.path(), &paths, None, 3).unwrap_err();
 
         assert_eq!(parallel.to_string(), serial.to_string());
         assert!(
@@ -1803,13 +1153,12 @@ mod tests {
         let root = temp.path();
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
-        let mut build =
-            SourceGraphBuild::build_incremental(root, &["src/lib.rs".into()], None).unwrap();
+        let mut build = build(root, &["src/lib.rs".into()], None).unwrap();
         assert_eq!(build.graph.changed_files(), &["src/lib.rs".to_string()]);
         build.graph.changed_files.push("scratch.rs".to_string());
 
-        let build = build.publish(root).unwrap();
-        let loaded = load_cached(root).unwrap();
+        let build = build.publish_at(root).unwrap();
+        let loaded = cached(root).unwrap();
 
         let mut expected = build.graph.clone();
         expected.changed_files.clear();
@@ -1823,9 +1172,9 @@ mod tests {
         let root = temp.path();
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
-        let first = SourceGraphBuild::build_incremental(root, &["src/lib.rs".into()], None)
+        let first = build(root, &["src/lib.rs".into()], None)
             .unwrap()
-            .publish(root)
+            .publish_at(root)
             .unwrap();
         let path = graph_cache_path(root);
         let before = fs::read_to_string(&path).unwrap();
@@ -1837,9 +1186,9 @@ mod tests {
             .set_times(fs::FileTimes::new().set_modified(modified))
             .unwrap();
         reset_work_counts();
-        SourceGraphBuild::build_incremental(root, &["src/lib.rs".into()], Some(&first))
+        build(root, &["src/lib.rs".into()], Some(&first))
             .unwrap()
-            .publish(root)
+            .publish_at(root)
             .unwrap();
 
         assert_eq!(fs::read_to_string(&path).unwrap(), before);
@@ -1856,13 +1205,13 @@ mod tests {
         fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
         reset_work_counts();
 
-        let first = SourceGraphBuild::build_incremental(root, &["src/lib.rs".into()], None)
+        let first = build(root, &["src/lib.rs".into()], None)
             .unwrap()
-            .publish(root)
+            .publish_at(root)
             .unwrap();
-        SourceGraphBuild::build_incremental(root, &["src/lib.rs".into()], Some(&first))
+        build(root, &["src/lib.rs".into()], Some(&first))
             .unwrap()
-            .publish(root)
+            .publish_at(root)
             .unwrap();
 
         let counts = work_counts();
@@ -1893,7 +1242,7 @@ mod tests {
         let paths = vec!["lib/sample.ex".into(), "test/sample_test.exs".into()];
 
         reset_work_counts();
-        let first = SourceGraphBuild::build_incremental(root, &paths, None).unwrap();
+        let first = build(root, &paths, None).unwrap();
         assert_eq!(work_counts().source_reads, 2);
         assert_eq!(work_counts().parsed_files, 2);
         assert_eq!(
@@ -1924,7 +1273,7 @@ mod tests {
         );
 
         reset_work_counts();
-        let second = SourceGraphBuild::build_incremental(root, &paths, Some(&first)).unwrap();
+        let second = build(root, &paths, Some(&first)).unwrap();
         assert_eq!(work_counts().source_reads, 2);
         assert_eq!(work_counts().reused_files, 2);
         assert_eq!(work_counts().parsed_files, 0);
@@ -1935,7 +1284,7 @@ mod tests {
         )
         .unwrap();
         reset_work_counts();
-        let third = SourceGraphBuild::build_incremental(root, &paths, Some(&second)).unwrap();
+        let third = build(root, &paths, Some(&second)).unwrap();
         assert_eq!(work_counts().source_reads, 2);
         assert_eq!(work_counts().reused_files, 1);
         assert_eq!(work_counts().parsed_files, 1);
@@ -1953,11 +1302,10 @@ mod tests {
             let temp = TempDir::new().unwrap();
             fs::create_dir_all(temp.path().join("src")).unwrap();
             fs::write(temp.path().join("src/lib.rs"), "pub fn run() {}\n").unwrap();
-            let build =
-                SourceGraphBuild::build_incremental(temp.path(), &["src/lib.rs".into()], None)
-                    .unwrap()
-                    .publish(temp.path())
-                    .unwrap();
+            let build = build(temp.path(), &["src/lib.rs".into()], None)
+                .unwrap()
+                .publish_at(temp.path())
+                .unwrap();
             (temp, build)
         }
 
@@ -1967,9 +1315,9 @@ mod tests {
             previous: Option<&SourceGraphBuild>,
         ) -> SourceGraphBuild {
             reset_work_counts();
-            let build = SourceGraphBuild::build_incremental(root, source_files, previous)
+            let build = build(root, source_files, previous)
                 .unwrap()
-                .publish(root)
+                .publish_at(root)
                 .unwrap();
             let counts = work_counts();
             assert_eq!(counts.cache_serializations, 1);
@@ -1983,7 +1331,7 @@ mod tests {
 
         let (garbage, _) = baseline();
         fs::write(graph_cache_path(garbage.path()), "garbage\n").unwrap();
-        let loaded = load_cached(garbage.path());
+        let loaded = cached(garbage.path());
         assert!(loaded.is_none());
         publish_and_assert(garbage.path(), &["src/lib.rs".into()], loaded.as_ref());
 
@@ -1995,7 +1343,7 @@ mod tests {
             1,
         );
         fs::write(&cache_path, cache).unwrap();
-        let loaded = load_cached(wrong_schema.path());
+        let loaded = cached(wrong_schema.path());
         assert!(loaded.is_none());
         publish_and_assert(wrong_schema.path(), &["src/lib.rs".into()], loaded.as_ref());
 
@@ -2048,10 +1396,9 @@ mod tests {
         fs::create_dir_all(&outside).unwrap();
         fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").unwrap();
         symlink(&outside, root.join(".criv")).unwrap();
-        let build =
-            SourceGraphBuild::build_incremental(&root, &["src/lib.rs".into()], None).unwrap();
+        let build = build(&root, &["src/lib.rs".into()], None).unwrap();
 
-        let error = build.publish(&root).unwrap_err();
+        let error = build.publish_at(&root).unwrap_err();
 
         assert!(error.to_string().contains("symlinked vault path component"));
         assert!(!outside.join("source-graph.json").exists());
@@ -2064,7 +1411,7 @@ mod tests {
         let path = root.join("src/lib.rs");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "pub fn one() {}\n").unwrap();
-        let before = SourceGraph::build_incremental(root, &["src/lib.rs".into()], None).unwrap();
+        let before = graph_build(root, &["src/lib.rs".into()], None).unwrap();
         let modified = fs::metadata(&path).unwrap().modified().unwrap();
 
         fs::write(&path, "pub fn two() {}\n").unwrap();
@@ -2074,8 +1421,7 @@ mod tests {
             .unwrap()
             .set_times(fs::FileTimes::new().set_modified(modified))
             .unwrap();
-        let after =
-            SourceGraph::build_incremental(root, &["src/lib.rs".into()], Some(&before)).unwrap();
+        let after = graph_build(root, &["src/lib.rs".into()], Some(&before)).unwrap();
 
         assert!(after.resolve_symbol("two").is_some());
         assert!(after.resolve_symbol("one").is_none());
@@ -2089,14 +1435,14 @@ mod tests {
         fs::create_dir_all(cache_path.parent().unwrap()).unwrap();
 
         fs::write(&cache_path, "garbage\n").unwrap();
-        assert!(load_cached(temp.path()).is_none());
+        assert!(cached(temp.path()).is_none());
 
         fs::write(
             &cache_path,
             r#"{"schema":"criv.source-graph/2","graph":{}}"#,
         )
         .unwrap();
-        assert!(load_cached(temp.path()).is_none());
+        assert!(cached(temp.path()).is_none());
     }
 
     #[test]
@@ -2105,10 +1451,6 @@ mod tests {
             name: "My.App".into(),
         };
         let mut file = SourceFile {
-            path: "lib/my_app.ex".into(),
-            language: Language::Unknown,
-            imports: Vec::new(),
-            modules: Vec::new(),
             symbols: vec![
                 elixir_symbol(
                     "lib/my_app.ex",
@@ -2139,32 +1481,19 @@ mod tests {
                     ],
                 ),
             ],
+            ..SourceFile::new("lib/my_app.ex", Language::Unknown)
         };
-        file.symbols.push(Symbol {
-            id: SymbolId {
-                path: file.path.clone(),
-                name: "module:My.App/fn:run/1".into(),
-                selector: "fn:literal".into(),
-            },
-            name: "module:My.App/fn:run/1".into(),
-            kind: SymbolKind::Function,
-            parent: None,
-            owner: None,
-            arity: None,
-            exported: false,
-            interface_signature: None,
-            range: SymbolRange {
+        file.symbols.push(Symbol::new(
+            "lib/my_app.ex",
+            "module:My.App/fn:run/1".into(),
+            SymbolKind::Function,
+            "fn:literal".into(),
+            SymbolRange {
                 start_line: 11,
                 end_line: 11,
             },
-            clause_ranges: vec![SymbolRange {
-                start_line: 11,
-                end_line: 11,
-            }],
-            calls: Vec::new(),
-            relationships: Vec::new(),
-        });
-        let graph = graph_with_file(file);
+        ));
+        let graph = graph_with_files([file]);
 
         assert!(matches!(
             graph.resolve_symbol_result("lib/my_app.ex#run"),
@@ -2436,20 +1765,7 @@ fn caller() {
 fn helper() {}
 "#,
         );
-        let mut graph = SourceGraph::default();
-        for symbol in &file.symbols {
-            graph
-                .symbol_index
-                .entry(symbol.name.clone())
-                .or_default()
-                .push(symbol.id.clone());
-            graph
-                .symbol_index
-                .entry(symbol.id.selector.clone())
-                .or_default()
-                .push(symbol.id.clone());
-        }
-        graph.files.insert(file.path.clone(), file);
+        let graph = graph_with_files([file]);
 
         let rows = graph.attack_surface();
         assert!(rows.contains(&"src/lib.rs#fn:api".to_string()));
@@ -2469,27 +1785,109 @@ fn target() {}
 "#,
         );
         let other = parse_source_file("src/other.rs", "fn target() {}\n");
-        let mut graph = SourceGraph::default();
-        for file in [local, other] {
-            for symbol in &file.symbols {
-                graph
-                    .symbol_index
-                    .entry(symbol.name.clone())
-                    .or_default()
-                    .push(symbol.id.clone());
-                graph
-                    .symbol_index
-                    .entry(symbol.id.selector.clone())
-                    .or_default()
-                    .push(symbol.id.clone());
-            }
-            graph.files.insert(file.path.clone(), file);
-        }
+        let graph = graph_with_files([local, other]);
 
         assert_eq!(
             graph.callees("src/local.rs#caller"),
             vec!["src/local.rs#fn:target"]
         );
+        assert_eq!(
+            graph.callers("src/local.rs#fn:target"),
+            vec!["src/local.rs#fn:caller"]
+        );
+        assert!(graph.callers("src/other.rs#fn:target").is_empty());
+    }
+
+    #[test]
+    fn an_unresolved_call_lists_every_symbol_with_its_name_as_a_callee() {
+        let caller = parse_source_file("src/caller.rs", "fn caller() {\n  target();\n}\n");
+        let first = parse_source_file("src/first.rs", "fn target() {}\n");
+        let second = parse_source_file("src/second.rs", "fn target() {}\n");
+        let graph = graph_with_files([caller, first, second]);
+
+        assert_eq!(
+            graph.callers("src/first.rs#fn:target"),
+            vec!["src/caller.rs#fn:caller"]
+        );
+        assert_eq!(
+            graph.callers("src/second.rs#fn:target"),
+            vec!["src/caller.rs#fn:caller"]
+        );
+    }
+
+    #[test]
+    fn source_build_skips_binary_content_by_one_contract() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join("src")).unwrap();
+        let cases = vec![
+            ("empty", Vec::new(), true),
+            ("ascii", b"plain text\n".to_vec(), true),
+            ("utf8", "hello é\n".as_bytes().to_vec(), true),
+            ("invalid-utf8", vec![0x80, 0x81, b'x'], true),
+            ("embedded-nul", vec![b'a', 0, b'b'], false),
+            ("utf8-bom", vec![0xEF, 0xBB, 0xBF, b'x'], true),
+            ("utf16-le-bom", vec![0xFF, 0xFE, b'x', 0], true),
+            ("utf16-be-bom", vec![0xFE, 0xFF, 0, b'x'], true),
+            ("utf32-le-bom", vec![0xFF, 0xFE, 0, 0, b'x', 0, 0, 0], true),
+            ("utf32-be-bom", vec![0, 0, 0xFE, 0xFF, 0, 0, 0, b'x'], true),
+            ("utf16-no-bom", vec![b'x', 0, b'y', 0], false),
+            ("pdf", b"%PDF-1.7".to_vec(), false),
+            ("png", vec![0x89, b'P', b'N', b'G', b'x'], false),
+            ("binary-pgm", b"P5\n1 1\n255\n\xff".to_vec(), true),
+            ("small-protobuf", vec![0x08, 0x96, 0x01], true),
+            (
+                "generated-text",
+                b"(()=>{const map={version:3,sources:[]};return map})()\n".to_vec(),
+                true,
+            ),
+            (
+                "nul-at-1023",
+                {
+                    let mut bytes = vec![b'x'; 1024];
+                    bytes[1023] = 0;
+                    bytes
+                },
+                false,
+            ),
+            (
+                "nul-at-1024",
+                {
+                    let mut bytes = vec![b'x'; 1025];
+                    bytes[1024] = 0;
+                    bytes
+                },
+                true,
+            ),
+        ];
+        let mut paths = Vec::new();
+        let mut expected = Vec::new();
+        for (name, bytes, is_text) in cases {
+            let path = format!("src/{name}.bin");
+            fs::write(temp.path().join(&path), bytes).unwrap();
+            if is_text {
+                expected.push(path.clone());
+            }
+            paths.push(path);
+        }
+        expected.sort();
+
+        assert_eq!(build(temp.path(), &paths, None).unwrap().paths(), expected);
+    }
+
+    #[test]
+    fn a_file_with_a_syntax_error_keeps_its_valid_declarations() {
+        let file = parse_source_file(
+            "src/lib.rs",
+            "pub fn valid() {\n  helper();\n}\nfn broken( {\n",
+        );
+
+        let valid = file
+            .symbols
+            .iter()
+            .find(|symbol| symbol.name == "valid")
+            .unwrap();
+        assert!(valid.exported);
+        assert_eq!(valid.calls[0].target, "helper");
     }
 
     #[test]
@@ -2599,7 +1997,7 @@ defimpl Root.Proto, for: My.App do
 end
 "#,
         );
-        let graph = graph_with_file(file);
+        let graph = graph_with_files([file]);
 
         let run = graph.callees("lib/relationships.ex#My.App.run/1");
         for target in [
@@ -2724,14 +2122,14 @@ end
         )
         .unwrap();
         let paths = vec!["lib/caller.ex".into(), "lib/target.ex".into()];
-        let built = SourceGraphBuild::build_incremental(root.path(), &paths, None).unwrap();
+        let built = build(root.path(), &paths, None).unwrap();
         assert_eq!(
             resolved_target(built.graph()),
             Some("lib/target.ex#module:Target/fn:run/0".into())
         );
 
-        built.publish(root.path()).unwrap();
-        let loaded = load_cached(root.path()).unwrap();
+        built.publish_at(root.path()).unwrap();
+        let loaded = cached(root.path()).unwrap();
         assert_eq!(
             resolved_target(loaded.graph()),
             Some("lib/target.ex#module:Target/fn:run/0".into())
@@ -2747,8 +2145,7 @@ end
             "lib/duplicate.ex".into(),
             "lib/target.ex".into(),
         ];
-        let ambiguous =
-            SourceGraphBuild::build_incremental(root.path(), &paths, Some(&loaded)).unwrap();
+        let ambiguous = build(root.path(), &paths, Some(&loaded)).unwrap();
         assert_eq!(resolved_target(ambiguous.graph()), None);
     }
 

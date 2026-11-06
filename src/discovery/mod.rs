@@ -76,17 +76,58 @@ impl Profile {
     }
 }
 
-pub fn discover_source_candidates(root: &Path, config: &Config) -> Result<Vec<String>> {
-    if !config.source_index {
-        return Ok(Vec::new());
+/// The configured Source selection: whether Source indexing runs, its
+/// normalized roots, and its exclusion rules. The candidate walk and the
+/// watch event filter read the same scope.
+#[derive(Debug, Clone)]
+pub struct SourceScope {
+    rules: Option<SourceRules>,
+}
+
+#[derive(Debug, Clone)]
+struct SourceRules {
+    roots: Vec<String>,
+    profile: Arc<Profile>,
+}
+
+impl SourceScope {
+    pub(crate) fn new(config: &Config) -> Result<Self> {
+        if !config.source_index {
+            return Ok(Self { rules: None });
+        }
+        let roots = config
+            .source_roots
+            .iter()
+            .map(|value| relative_path("source.roots", value))
+            .collect::<Result<BTreeSet<_>>>()?
+            .into_iter()
+            .collect();
+        let profile = Profile::Source {
+            exclude: GlobMatcher::new(&config.source_exclude)?,
+            prune: subtree_prune_matcher(&config.source_exclude)?,
+        };
+        Ok(Self {
+            rules: Some(SourceRules {
+                roots,
+                profile: Arc::new(profile),
+            }),
+        })
     }
 
-    let exclude = GlobMatcher::new(&config.source_exclude)?;
-    let profile = Arc::new(Profile::Source {
-        prune: subtree_prune_matcher(&config.source_exclude)?,
-        exclude,
-    });
-    let plan = SourcePlan::new(root, &config.source_roots, profile.as_ref())?;
+    pub(crate) const fn is_enabled(&self) -> bool {
+        self.rules.is_some()
+    }
+}
+
+pub fn discover_source_candidates(
+    files: &RepositoryFiles,
+    scope: &SourceScope,
+) -> Result<Vec<String>> {
+    let Some(rules) = &scope.rules else {
+        return Ok(Vec::new());
+    };
+    let root = files.root();
+    let plan = SourcePlan::new(root, &rules.roots, &rules.profile)?;
     let mut collected = if plan.directories.is_empty() {
         Collected::default()
     } else {
@@ -95,11 +136,11 @@ pub fn discover_source_candidates(root: &Path, config: &Config) -> Result<Vec<St
             builder.add(root.join(directory));
         }
         builder.standard_filters(false).follow_links(false);
-        walk(root, &mut builder, profile.clone())
+        walk(root, &mut builder, rules.profile.clone())
     };
 
     for file in plan.files {
-        collect_explicit_source(root, &file, profile.as_ref(), &mut collected);
+        collect_explicit_source(root, &file, &rules.profile, &mut collected);
     }
     finish(collected).map(|selections| {
         selections
@@ -112,76 +153,43 @@ pub fn discover_source_candidates(root: &Path, config: &Config) -> Result<Vec<St
 #[derive(Debug)]
 pub struct SourceEventFilter {
     root: PathBuf,
-    enabled: bool,
-    scope: Option<SourceEventScope>,
-}
-
-#[derive(Debug)]
-struct SourceEventScope {
-    roots: Vec<String>,
-    profile: Profile,
+    scope: SourceScope,
 }
 
 impl SourceEventFilter {
-    pub(crate) fn new(root: &Path, config: &Config) -> Self {
-        let scope = source_event_scope(config);
-        Self {
+    pub(crate) fn new(root: &Path, config: &Config) -> Result<Self> {
+        Ok(Self {
             root: root.to_path_buf(),
-            enabled: config.source_index,
-            scope,
-        }
+            scope: SourceScope::new(config)?,
+        })
     }
 
+    /// Whether a change at `event` can change the Source selection or a
+    /// selected file. A path that is not valid UTF-8 is judged by its lossy
+    /// form, so one under a root still refreshes and reports the bad path.
     pub(crate) fn relevant(&self, event: &Path) -> bool {
-        if !self.enabled {
+        let Some(rules) = &self.scope.rules else {
             return false;
-        }
+        };
         let Ok(relative) = event.strip_prefix(&self.root) else {
             return false;
         };
-        let Ok(relative) = relative_utf8(&self.root, &self.root.join(relative)) else {
-            return true;
-        };
-        if relative
-            .split('/')
-            .any(|component| matches!(component, ".git" | layout::DIR))
-        {
-            return false;
+        let mut parts = Vec::new();
+        for component in relative.components() {
+            match component {
+                Component::Normal(part) => parts.push(part.to_string_lossy()),
+                Component::CurDir => {}
+                Component::ParentDir | Component::RootDir | Component::Prefix(_) => return true,
+            }
         }
-        let Some(scope) = &self.scope else {
-            return true;
-        };
-        let intersects_root = scope.roots.iter().any(|source_root| {
+        let relative = parts.join("/");
+        let intersects_root = rules.roots.iter().any(|source_root| {
             path_contains(source_root, &relative) || path_contains(&relative, source_root)
         });
-        if !intersects_root {
-            return false;
-        }
-        if profile_prunes_path(&scope.profile, &relative) {
-            return false;
-        }
-        scope.profile.selects(&relative)
+        intersects_root
+            && !profile_prunes_path(&rules.profile, &relative)
+            && rules.profile.selects(&relative)
     }
-}
-
-fn source_event_scope(config: &Config) -> Option<SourceEventScope> {
-    let roots = config
-        .source_roots
-        .iter()
-        .map(|value| relative_path("source.roots", value))
-        .collect::<Result<Vec<_>>>()
-        .ok()?;
-    let exclude = GlobMatcher::new(&config.source_exclude).ok()?;
-    let prune = subtree_prune_matcher(&config.source_exclude).ok()?;
-    Some(SourceEventScope {
-        roots,
-        profile: Profile::Source { exclude, prune },
-    })
-}
-
-#[cfg(test)]
-fn source_event_relevant(root: &Path, config: &Config, event: &Path) -> bool {
-    SourceEventFilter::new(root, config).relevant(event)
 }
 
 pub fn discover_vault(root: &Path, docs_dir: &str) -> Result<VaultPaths> {
@@ -229,14 +237,6 @@ fn vault_selection_kind(path: &Path) -> Option<SelectionKind> {
         return Some(SelectionKind::VaultMarkdown);
     }
     asset::mime_for_path(path.to_str()?).map(|_| SelectionKind::VaultAsset)
-}
-
-#[cfg(test)]
-fn read_selected_text(root: &Path, path: &Path) -> Result<String> {
-    let relative = relative_utf8(root, path)?;
-    let files = RepositoryFiles::open(root)?;
-    let canonical_path = files.root().join(relative);
-    read_selected_text_from(&files, &canonical_path)
 }
 
 pub fn read_selected_text_from(files: &RepositoryFiles, path: &Path) -> Result<String> {
@@ -478,19 +478,15 @@ struct SourcePlan {
 
 impl SourcePlan {
     fn new(root: &Path, roots: &[String], profile: &Profile) -> Result<Self> {
-        let normalized = roots
-            .iter()
-            .map(|value| relative_path("source.roots", value))
-            .collect::<Result<BTreeSet<_>>>()?;
         let mut directories = Vec::new();
         let mut files = Vec::new();
-        for relative in normalized {
-            if profile_prunes_path(profile, &relative) {
+        for relative in roots {
+            if profile_prunes_path(profile, relative) {
                 continue;
             }
-            match validate_root(root, &relative)? {
-                Some(RootKind::Directory) => directories.push(relative),
-                Some(RootKind::File) => files.push(relative),
+            match validate_root(root, relative)? {
+                Some(RootKind::Directory) => directories.push(relative.clone()),
+                Some(RootKind::File) => files.push(relative.clone()),
                 None => {}
             }
         }
@@ -666,7 +662,6 @@ const fn is_junction(_path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::source::SourceState;
     use tempfile::TempDir;
 
     fn write(path: &Path, contents: &[u8]) {
@@ -675,11 +670,17 @@ mod tests {
     }
 
     fn discover_source(root: &Path, config: &Config) -> Result<Vec<String>> {
-        Ok(SourceState::refresh(root, config, None)?.paths().to_vec())
+        discover_source_candidates(&RepositoryFiles::open(root)?, &SourceScope::new(config)?)
+    }
+
+    fn event_relevant(root: &Path, config: &Config, event: &Path) -> bool {
+        SourceEventFilter::new(root, config)
+            .unwrap()
+            .relevant(event)
     }
 
     #[test]
-    fn source_uses_roots_excludes_hidden_and_binary_rules() {
+    fn source_uses_roots_excludes_and_hidden_rules_without_reading_contents() {
         let temp = TempDir::new().unwrap();
         let root = temp.path();
         write(&root.join("src/lib.rs"), b"pub fn lib() {}\n");
@@ -700,10 +701,24 @@ mod tests {
             vec![
                 "src/.gitignore".to_string(),
                 "src/.hidden.rs".to_string(),
+                "src/binary.rs".to_string(),
                 "src/ignored.rs".to_string(),
                 "src/lib.rs".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn an_invalid_exclude_glob_fails_the_walk_and_the_event_filter() {
+        let temp = TempDir::new().unwrap();
+        let config = Config {
+            source_roots: vec!["src".into()],
+            source_exclude: vec!["src/[".into()],
+            ..Config::default()
+        };
+
+        assert!(discover_source(temp.path(), &config).is_err());
+        assert!(SourceEventFilter::new(temp.path(), &config).is_err());
     }
 
     #[test]
@@ -724,12 +739,8 @@ mod tests {
             discover_source(root, &config).unwrap(),
             vec!["lib/sample.ex".to_string(), "scripts/check.exs".to_string()]
         );
-        assert!(source_event_relevant(
-            root,
-            &config,
-            &root.join("lib/sample.ex")
-        ));
-        assert!(source_event_relevant(
+        assert!(event_relevant(root, &config, &root.join("lib/sample.ex")));
+        assert!(event_relevant(
             root,
             &config,
             &root.join("scripts/check.exs")
@@ -773,93 +784,15 @@ mod tests {
             ..Config::default()
         };
 
-        assert!(source_event_relevant(root, &config, &root.join("src")));
-        assert!(source_event_relevant(
-            root,
-            &config,
-            &root.join("src/lib.rs")
-        ));
-        assert!(!source_event_relevant(
-            root,
-            &config,
-            &root.join("src/generated")
-        ));
-        assert!(!source_event_relevant(
+        assert!(event_relevant(root, &config, &root.join("src")));
+        assert!(event_relevant(root, &config, &root.join("src/lib.rs")));
+        assert!(!event_relevant(root, &config, &root.join("src/generated")));
+        assert!(!event_relevant(
             root,
             &config,
             &root.join("src/generated/output.rs")
         ));
-        assert!(!source_event_relevant(
-            root,
-            &config,
-            &root.join("docs/note.md")
-        ));
-    }
-
-    #[test]
-    fn source_uses_one_binary_contract_for_directory_and_explicit_roots() {
-        let temp = TempDir::new().unwrap();
-        let root = temp.path();
-        let cases = vec![
-            ("empty", Vec::new(), true),
-            ("ascii", b"plain text\n".to_vec(), true),
-            ("utf8", "hello é\n".as_bytes().to_vec(), true),
-            ("invalid-utf8", vec![0x80, 0x81, b'x'], true),
-            ("embedded-nul", vec![b'a', 0, b'b'], false),
-            ("utf8-bom", vec![0xEF, 0xBB, 0xBF, b'x'], true),
-            ("utf16-le-bom", vec![0xFF, 0xFE, b'x', 0], true),
-            ("utf16-be-bom", vec![0xFE, 0xFF, 0, b'x'], true),
-            ("utf32-le-bom", vec![0xFF, 0xFE, 0, 0, b'x', 0, 0, 0], true),
-            ("utf32-be-bom", vec![0, 0, 0xFE, 0xFF, 0, 0, 0, b'x'], true),
-            ("utf16-no-bom", vec![b'x', 0, b'y', 0], false),
-            ("pdf", b"%PDF-1.7".to_vec(), false),
-            ("png", vec![0x89, b'P', b'N', b'G', b'x'], false),
-            ("binary-pgm", b"P5\n1 1\n255\n\xff".to_vec(), true),
-            ("small-protobuf", vec![0x08, 0x96, 0x01], true),
-            (
-                "generated-text",
-                b"(()=>{const map={version:3,sources:[]};return map})()\n".to_vec(),
-                true,
-            ),
-            (
-                "nul-at-1023",
-                {
-                    let mut bytes = vec![b'x'; 1024];
-                    bytes[1023] = 0;
-                    bytes
-                },
-                false,
-            ),
-            (
-                "nul-at-1024",
-                {
-                    let mut bytes = vec![b'x'; 1025];
-                    bytes[1024] = 0;
-                    bytes
-                },
-                true,
-            ),
-        ];
-        let mut roots = vec!["directory".to_string()];
-        let mut expected = Vec::new();
-        for (name, bytes, is_text) in cases {
-            let directory = format!("directory/{name}.rs");
-            let explicit = format!("explicit/{name}.bin");
-            write(&root.join(&directory), &bytes);
-            write(&root.join(&explicit), &bytes);
-            roots.push(explicit.clone());
-            if is_text {
-                expected.push(directory);
-                expected.push(explicit);
-            }
-        }
-        expected.sort();
-        let config = Config {
-            source_roots: roots,
-            ..Config::default()
-        };
-
-        assert_eq!(discover_source(root, &config).unwrap(), expected);
+        assert!(!event_relevant(root, &config, &root.join("docs/note.md")));
     }
 
     #[test]
@@ -977,46 +910,14 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn selected_read_errors_fail_and_pruned_read_errors_have_no_effect() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let temp = TempDir::new().unwrap();
-        let root = temp.path();
-        write(&root.join("src/selected.rs"), b"pub fn selected() {}\n");
-        write(&root.join("src/pruned/hidden.rs"), b"pub fn hidden() {}\n");
-        let selected = root.join("src/selected.rs");
-        let pruned = root.join("src/pruned");
-        fs::set_permissions(&selected, fs::Permissions::from_mode(0o000)).unwrap();
-        fs::set_permissions(&pruned, fs::Permissions::from_mode(0o000)).unwrap();
-        let config = Config {
-            source_roots: vec!["src".into()],
-            source_exclude: vec!["src/pruned/**".into()],
-            ..Config::default()
-        };
-
-        let can_read_without_permission = fs::File::open(&selected).is_ok();
-        let result = discover_source(root, &config);
-        fs::set_permissions(&selected, fs::Permissions::from_mode(0o600)).unwrap();
-        fs::set_permissions(&pruned, fs::Permissions::from_mode(0o700)).unwrap();
-        if can_read_without_permission {
-            return;
-        }
-
-        let error = result.unwrap_err().to_string();
-        assert!(error.contains("failed to read selected file `src/selected.rs`"));
-        assert!(!error.contains("src/pruned"));
-    }
-
     #[test]
     fn selected_text_read_errors_report_the_repository_path() {
         let temp = TempDir::new().unwrap();
-        let root = temp.path();
-        write(&root.join("docs/invalid.md"), &[0xFF]);
+        write(&temp.path().join("docs/invalid.md"), &[0xFF]);
+        let files = RepositoryFiles::open(temp.path()).unwrap();
 
         assert!(
-            read_selected_text(root, &root.join("docs/invalid.md"))
+            read_selected_text_from(&files, &files.root().join("docs/invalid.md"))
                 .unwrap_err()
                 .to_string()
                 .contains("failed to read selected file `docs/invalid.md`")

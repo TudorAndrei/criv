@@ -14,8 +14,8 @@ use serde::{Serialize, Serializer};
 
 use crate::policy_scan::PolicyScanPlan;
 use crate::source::{
-    DirectiveKind, Import, Language, ModuleRelationshipRole, Relationship, RelationshipKind,
-    RelationshipTarget, SourceFile, Symbol,
+    DirectiveKind, EdgeOrigin, Import, Language, ModuleRelationshipRole, Relationship,
+    RelationshipKind, RelationshipTarget, SourceFile, Symbol,
 };
 use crate::stable_hash::StableHasher;
 use crate::structural;
@@ -302,52 +302,6 @@ const fn partition_meta(
     }
 }
 
-fn source_input_fingerprint(file: &SourceFile) -> String {
-    let mut hasher = StableHasher::new("source-partition");
-    hasher
-        .str(&file.path)
-        .str(file.language.as_str())
-        .usize(file.imports.len());
-    for import in &file.imports {
-        hasher
-            .str(&import.module)
-            .usize(import.line)
-            .usize(import.site)
-            .str(import.kind.as_str())
-            .str(&format!("{:?}", import.owner))
-            .str(&format!("{:?}", import.scope))
-            .option_str(import.alias.as_deref())
-            .str(&format!("{:?}", import.only))
-            .str(&format!("{:?}", import.except))
-            .bool(import.absolute);
-    }
-    hasher.usize(file.symbols.len());
-    for symbol in &file.symbols {
-        hasher
-            .str(&symbol.id.display())
-            .str(&symbol.name)
-            .str(symbol.kind.as_str())
-            .option_str(symbol.parent.as_deref())
-            .str(&format!("{:?}", symbol.owner))
-            .option_usize(symbol.arity)
-            .usize(symbol.range.start_line)
-            .usize(symbol.range.end_line)
-            .usize(symbol.calls.len());
-        for call in &symbol.calls {
-            hasher.str(&call.target).usize(call.line);
-        }
-        hasher.usize(symbol.relationships.len());
-        for relationship in &symbol.relationships {
-            hasher
-                .str(relationship.kind.as_str())
-                .str(&format!("{:?}", relationship.target))
-                .usize(relationship.line)
-                .usize(relationship.site);
-        }
-    }
-    hasher.finish()
-}
-
 fn note_input_fingerprint(note: &Note) -> String {
     StableHasher::new("note-partition")
         .str(&note.rel_path)
@@ -606,12 +560,12 @@ fn graph_root(graph: &Graph) -> String {
     StableHasher::new("graph").strs(&hashes).finish()
 }
 
-fn directive_node_id(file: &SourceFile, directive: &Import) -> String {
-    if file.language != Language::Elixir || directive.kind == DirectiveKind::Legacy {
-        return node_id::import(&file.path, &directive.module);
+fn directive_node_id(path: &str, directive: &Import) -> String {
+    if directive.kind == DirectiveKind::Legacy {
+        return node_id::import(path, &directive.module);
     }
     node_id::directive(
-        &file.path,
+        path,
         directive.kind.as_str(),
         &directive.module,
         directive.site,
@@ -693,7 +647,7 @@ source = false
     }
 
     #[test]
-    fn elixir_state_projects_kinds_relationships_labels_mime_and_fingerprints() {
+    fn elixir_state_projects_kinds_relationships_labels_mime_and_rebuilds() {
         let root = unique_temp_dir("criv-elixir-state");
         std::fs::create_dir_all(root.join("lib")).unwrap();
         std::fs::write(root.join("criv.toml"), "[source]\nroots = [\"lib\"]\n").unwrap();
@@ -747,8 +701,6 @@ end
         std::fs::write(root.join("lib/sample.ex"), source).unwrap();
 
         let vault = Vault::load(&root).unwrap();
-        let file = vault.source_graph().files.get("lib/sample.ex").unwrap();
-        let first_fingerprint = source_input_fingerprint(file);
         let first = State::build(&vault).unwrap();
         let decoded: StateDocument = serde_json::from_str(&first.to_json().unwrap()).unwrap();
         assert_eq!(decoded.schema, STATE_SCHEMA);
@@ -861,12 +813,6 @@ end
         )
         .unwrap();
         let changed_vault = Vault::load(&root).unwrap();
-        let changed_file = changed_vault
-            .source_graph()
-            .files
-            .get("lib/sample.ex")
-            .unwrap();
-        assert_ne!(first_fingerprint, source_input_fingerprint(changed_file));
 
         reset_work_counts();
         let changed =

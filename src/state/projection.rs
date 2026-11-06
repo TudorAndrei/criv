@@ -1,11 +1,11 @@
 use super::{
-    DirectiveKind, EdgeKind, GraphBuilder, ModuleRelationshipRole, NodeKind, Note, NoteKind,
-    PartitionDependencies, PartitionKey, Relationship, RelationshipKind, RelationshipTarget,
-    ResolvedLink, RowPartition, SourceFile, SourcePartition, SourceTargetResolution, Symbol, Vault,
-    directive_node_id, graph_rows, hashed_node, note_input_fingerprint, partition_meta,
-    source_input_fingerprint, symbol_label,
+    DirectiveKind, EdgeKind, EdgeOrigin, GraphBuilder, ModuleRelationshipRole, NodeKind, Note,
+    NoteKind, PartitionDependencies, PartitionKey, Relationship, RelationshipKind,
+    RelationshipTarget, ResolvedLink, RowPartition, SourceFile, SourcePartition,
+    SourceTargetResolution, Symbol, Vault, directive_node_id, graph_rows, hashed_node,
+    note_input_fingerprint, partition_meta, symbol_label,
 };
-use crate::source::SymbolKind;
+use crate::source::{SymbolId, SymbolKind};
 use criv_state_wire::node_id;
 
 impl From<DirectiveKind> for NodeKind {
@@ -45,7 +45,7 @@ pub(super) fn build_source_partition(vault: &Vault, file: &SourceFile) -> Source
     let file_id = node_id::code(&file.path);
 
     for import in &file.imports {
-        let import_id = directive_node_id(file, import);
+        let import_id = directive_node_id(&file.path, import);
         graph.node(
             import_id.clone(),
             import.kind.into(),
@@ -93,33 +93,45 @@ pub(super) fn build_source_partition(vault: &Vault, file: &SourceFile) -> Source
                 EdgeKind::Contains,
             );
         }
-        for call in &symbol.calls {
-            dependencies.call_targets.insert(call.target.clone());
-            let target =
-                if let Some(target) = vault.source_graph().resolve_call(&symbol.id, &call.target) {
-                    node_id::symbol(&target.display())
-                } else {
-                    dependencies.catalog_sensitive = true;
-                    let target = node_id::external_call(&call.target);
-                    graph.node(
-                        target.clone(),
-                        NodeKind::ExternalCall,
-                        call.target.clone(),
-                        Some(node_id::line_location(&symbol.id.path, call.line)),
-                    );
-                    target
-                };
-            graph.edge(&symbol_id, &target, EdgeKind::Calls);
-        }
-        for relationship in &symbol.relationships {
-            project_relationship(vault, &mut graph, &mut dependencies, symbol, relationship);
+        for edge in vault.source_graph().resolved_edges(symbol) {
+            match edge.origin {
+                EdgeOrigin::Call(call) => {
+                    dependencies.call_targets.insert(call.target.clone());
+                    let target = if let Some(target) = edge.target {
+                        node_id::symbol(&target.display())
+                    } else {
+                        dependencies.catalog_sensitive = true;
+                        let target = node_id::external_call(&call.target);
+                        graph.node(
+                            target.clone(),
+                            NodeKind::ExternalCall,
+                            call.target.clone(),
+                            Some(node_id::line_location(&symbol.id.path, call.line)),
+                        );
+                        target
+                    };
+                    graph.edge(&symbol_id, &target, EdgeKind::Calls);
+                }
+                EdgeOrigin::Relationship(relationship) => project_relationship(
+                    vault,
+                    &mut graph,
+                    &mut dependencies,
+                    symbol,
+                    relationship,
+                    edge.target.as_ref(),
+                ),
+            }
         }
     }
 
     SourcePartition {
         meta: partition_meta(
             PartitionKey::Source(file.path.clone()),
-            source_input_fingerprint(file),
+            vault
+                .source_graph()
+                .file_fingerprint(&file.path)
+                .unwrap_or_default()
+                .to_string(),
             dependencies,
         ),
         code_node: hashed_node(
@@ -138,17 +150,14 @@ fn project_relationship(
     dependencies: &mut PartitionDependencies,
     symbol: &Symbol,
     relationship: &Relationship,
+    resolved: Option<&SymbolId>,
 ) {
     let source_graph = vault.source_graph();
     let label = match &relationship.target {
         RelationshipTarget::Dynamic { label, .. } => label.clone(),
         _ => source_graph.relationship_target_label(&symbol.id, relationship),
     };
-    let resolved = source_graph.resolve_relationship(&symbol.id, relationship);
-    if let Some(target) = resolved
-        .as_ref()
-        .and_then(|target| source_graph.symbol_name(target))
-    {
+    if let Some(target) = resolved.and_then(|target| source_graph.symbol_name(target)) {
         dependencies.call_targets.insert(target.to_string());
     } else if let RelationshipTarget::Callable { name, .. } = &relationship.target {
         dependencies.call_targets.insert(name.clone());
@@ -158,7 +167,7 @@ fn project_relationship(
     if resolved.is_none() && !matches!(relationship.target, RelationshipTarget::Dynamic { .. }) {
         dependencies.catalog_sensitive = true;
     }
-    let target = resolved.as_ref().map_or_else(
+    let target = resolved.map_or_else(
         || relationship_target_node_id(relationship, &label),
         |target| node_id::symbol(&target.display()),
     );
