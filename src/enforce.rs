@@ -9,7 +9,7 @@ use usage_rs::{Args as UsageArgs, ValueEnum};
 use crate::check;
 use crate::config::{CONFIG_FILE, Stage};
 use crate::diagnostic::{Diagnostic, DiagnosticCode};
-use crate::git::{ChangedSet, ChangedSetComparison, GitRepository, is_zero_oid};
+use crate::git::{ChangedSet, Comparison, GitRepository, is_zero_oid};
 use crate::vault::{LoadOptions, Vault};
 use crate::{CrivError, Result};
 
@@ -31,8 +31,6 @@ pub struct EnforceOptions {
     pre_push: bool,
     #[usage(long, hide, requires = "pre_push")]
     remote_name: Option<String>,
-    #[usage(long, hide, requires = "pre_push")]
-    remote_url: Option<String>,
 }
 
 /// Validate the selected Git transaction and report stage-specific failures.
@@ -51,10 +49,10 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
         )));
     }
     let ci_base_ref = (options.stage == Stage::Ci)
-        .then(|| env_string("CRIV_BASE_REF"))
+        .then(|| env::var("CRIV_BASE_REF").ok())
         .flatten();
     if let Some(base_ref) = &ci_base_ref {
-        crate::adr::check_base(root, base_ref)?;
+        crate::adr::reconcile_identities(&files, base_ref, crate::adr::Mode::Check)?;
     }
 
     let check::Validation {
@@ -64,29 +62,27 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();
 
-    let changed_entries = changed_entries(root, options, ci_base_ref.as_deref())?;
-    let changed_files = if options.stage == Stage::Ci {
-        None
-    } else {
-        changed_entries.as_ref().map(ChangedSet::affected_paths)
-    };
-    let changed_policy_files = changed_files
+    let changes = changed_entries(root, options, ci_base_ref.as_deref())?;
+    let changed_files = changes.as_ref().map(ChangedSet::affected_paths);
+    // CI scans the whole vault; the other stages scan only what changed.
+    let scanned_files = changed_files
         .as_ref()
-        .map(|paths| paths.iter().cloned().collect::<BTreeSet<_>>());
+        .filter(|_| options.stage != Stage::Ci);
     let violations = policies
-        .scan(&vault, changed_policy_files.as_ref())?
+        .scan(
+            &vault,
+            scanned_files
+                .map(|paths| paths.iter().cloned().collect::<BTreeSet<_>>())
+                .as_ref(),
+        )?
         .iter()
         .map(Diagnostic::describe)
         .collect::<Vec<_>>();
-    let import_violations = import_policy_violations(&vault, changed_files.as_ref());
-    let adr_violations = crate::adr::change_violations(
-        &files,
-        vault.config(),
-        changed_entries.as_ref(),
-        options.stage,
-    );
+    let import_violations = import_policy_violations(&vault, scanned_files);
+    let adr_violations =
+        crate::adr::change_violations(&files, vault.config(), changes.as_ref(), options.stage);
     let changed_count = changed_files.as_ref().map_or(0, Vec::len);
-    let basis = changed_entries
+    let basis = changes
         .as_ref()
         .map_or("no comparison", |changes| changes.basis.as_str());
     let failure = enforce_failure(violations, import_violations, adr_violations, errors);
@@ -243,7 +239,7 @@ fn changed_entries(
     match options.stage {
         Stage::Commit => repository
             .as_ref()
-            .map(|repo| repo.changed_set(&ChangedSetComparison::Staged))
+            .map(|repo| repo.changed_set(&Comparison::Staged, &[]))
             .transpose(),
         Stage::Push if options.pre_push => pre_push_changed_entries(
             required_repository(repository.as_ref())?,
@@ -251,33 +247,45 @@ fn changed_entries(
                 .remote_name
                 .as_deref()
                 .ok_or_else(|| CrivError::new("pre-push enforcement requires a remote name"))?,
-            read_pre_push_updates()?,
+            &read_pre_push_updates()?,
         )
         .map(Some),
-        // Manual invocations retain the documented best-effort upstream/last
-        // commit fallback. Generated hooks always use the complete stdin mode.
-        Stage::Push => repository
-            .as_ref()
-            .map(|repo| {
-                repo.changed_set(&ChangedSetComparison::ThreeDot {
-                    upstream_ref: "@{upstream}",
-                    head_ref: "HEAD",
-                })
-                .or_else(|_| {
-                    repo.changed_set(&ChangedSetComparison::Trees {
-                        old_ref: "HEAD~1",
-                        new_ref: "HEAD",
-                    })
-                })
-            })
-            .transpose(),
+        Stage::Push => repository.as_ref().map(manual_push_changed_set).transpose(),
         Stage::Ci => ci_changed_entries(
             repository.as_ref(),
             ci_base_ref,
-            env_string("GITHUB_BASE_REF"),
+            env::var("GITHUB_BASE_REF").ok(),
             is_ci_environment(),
         ),
     }
+}
+
+/// A manual push compares with the upstream branch. Without one it falls
+/// back to the last commit and names the reason in its basis; generated
+/// hooks use the complete pre-push input instead.
+#[expect(
+    clippy::literal_string_with_formatting_args,
+    reason = "`@{upstream}` is Git revision syntax"
+)]
+fn manual_push_changed_set(repository: &GitRepository) -> Result<ChangedSet> {
+    let upstream = match repository.changed_set(
+        &Comparison::SinceMergeBase {
+            upstream_ref: "@{upstream}",
+        },
+        &[],
+    ) {
+        Ok(changes) => return Ok(changes),
+        Err(error) => error,
+    };
+    let mut changes = repository.changed_set(
+        &Comparison::Trees {
+            old_ref: "HEAD~1",
+            new_ref: "HEAD",
+        },
+        &[],
+    )?;
+    changes.basis = format!("{}; no upstream comparison: {upstream}", changes.basis);
+    Ok(changes)
 }
 
 fn ci_changed_entries(
@@ -288,41 +296,51 @@ fn ci_changed_entries(
 ) -> Result<Option<ChangedSet>> {
     if let Some(base_ref) = criv_base_ref {
         return required_repository(repository)?
-            .changed_set(&ChangedSetComparison::Trees {
-                old_ref: base_ref,
-                new_ref: "HEAD",
-            })
+            .changed_set(
+                &Comparison::Trees {
+                    old_ref: base_ref,
+                    new_ref: "HEAD",
+                },
+                &[],
+            )
             .map(Some);
     }
 
-    if let Some(base_ref) = github_base_ref {
-        let origin_ref = format!("origin/{base_ref}");
-        if let Some(repository) = repository
-            && let Ok(changes) = repository.changed_set(&ChangedSetComparison::Trees {
-                old_ref: &origin_ref,
-                new_ref: "HEAD",
-            })
-        {
-            return Ok(Some(changes));
-        }
-        if let Some(repository) = repository
-            && let Ok(changes) = repository.changed_set(&ChangedSetComparison::Trees {
-                old_ref: &base_ref,
-                new_ref: "HEAD",
-            })
-        {
-            return Ok(Some(changes));
+    let mut failures = Vec::new();
+    if let Some(base_ref) = github_base_ref
+        && let Some(repository) = repository
+    {
+        for old_ref in [format!("origin/{base_ref}"), base_ref] {
+            match repository.changed_set(
+                &Comparison::Trees {
+                    old_ref: &old_ref,
+                    new_ref: "HEAD",
+                },
+                &[],
+            ) {
+                Ok(changes) => return Ok(Some(changes)),
+                Err(error) => failures.push(error.to_string()),
+            }
         }
     }
+    let causes = if failures.is_empty() {
+        String::new()
+    } else {
+        format!("; {}", failures.join("; "))
+    };
 
     if ci_environment {
-        return Err(CrivError::new(
-            "ci enforcement requires CRIV_BASE_REF or a fetchable GITHUB_BASE_REF",
-        ));
+        return Err(CrivError::new(format!(
+            "ci enforcement requires CRIV_BASE_REF or a fetchable GITHUB_BASE_REF{causes}"
+        )));
     }
 
     repository
-        .map(|repo| repo.changed_set(&ChangedSetComparison::TreeToWorktree { old_ref: "HEAD" }))
+        .map(|repo| {
+            let mut changes = repo.changed_set(&Comparison::Worktree { old_ref: "HEAD" }, &[])?;
+            changes.basis.push_str(&causes);
+            Ok(changes)
+        })
         .transpose()
 }
 
@@ -330,20 +348,15 @@ fn required_repository(repository: Option<&GitRepository>) -> Result<&GitReposit
     repository.ok_or_else(|| CrivError::new("git diff failed: not inside a Git worktree"))
 }
 
-fn env_string(name: &str) -> Option<String> {
-    env::var(name).ok()
-}
-
 fn is_ci_environment() -> bool {
     env::var("CI").is_ok_and(|value| value == "true")
         || env::var("GITHUB_ACTIONS").is_ok_and(|value| value == "true")
 }
 
+/// One record of Git's pre-push input: the local and remote object IDs.
 #[derive(Debug, Clone, Eq, PartialEq)]
 struct PrePushUpdate {
-    local_ref: String,
     local_oid: String,
-    remote_ref: String,
     remote_oid: String,
 }
 
@@ -361,7 +374,7 @@ fn parse_pre_push_updates(input: &str) -> Result<Vec<PrePushUpdate>> {
         .filter(|line| !line.trim().is_empty())
         .map(|line| {
             let fields = line.split_whitespace().collect::<Vec<_>>();
-            let [local_ref, local_oid, remote_ref, remote_oid] = fields.as_slice() else {
+            let [_local_ref, local_oid, _remote_ref, remote_oid] = fields.as_slice() else {
                 return Err(CrivError::new(format!(
                     "invalid pre-push ref update `{line}`; expected local-ref local-oid remote-ref remote-oid"
                 )));
@@ -374,9 +387,7 @@ fn parse_pre_push_updates(input: &str) -> Result<Vec<PrePushUpdate>> {
                 }
             }
             Ok(PrePushUpdate {
-                local_ref: (*local_ref).to_string(),
                 local_oid: (*local_oid).to_string(),
-                remote_ref: (*remote_ref).to_string(),
                 remote_oid: (*remote_oid).to_string(),
             })
         })
@@ -386,7 +397,7 @@ fn parse_pre_push_updates(input: &str) -> Result<Vec<PrePushUpdate>> {
 fn pre_push_changed_entries(
     repository: &GitRepository,
     remote_name: &str,
-    updates: Vec<PrePushUpdate>,
+    updates: &[PrePushUpdate],
 ) -> Result<ChangedSet> {
     let mut entries = Vec::new();
     for update in updates {
@@ -402,7 +413,7 @@ fn pre_push_changed_entries(
     Ok(ChangedSet {
         entries,
         old_ref: None,
-        new_ref: None,
+        new: None,
         basis: format!("pre-push ref updates for remote {remote_name}"),
     })
 }
@@ -411,54 +422,18 @@ fn pre_push_changed_entries(
 mod tests {
     use super::*;
     use crate::git::ChangeStatus;
-    use std::process::Command;
+    use crate::git::fixture::git;
 
-    #[test]
-    fn working_tree_migration_requires_regular_readable_content() {
+    fn two_commit_repository() -> tempfile::TempDir {
         let root = tempfile::TempDir::new().unwrap();
         git(root.path(), &["init"]);
-        git(root.path(), &["config", "user.email", "criv@example.com"]);
-        git(root.path(), &["config", "user.name", "criv"]);
-        let path = "docs/adr/0001-test.md";
-        std::fs::create_dir_all(root.path().join("docs/adr")).unwrap();
-        std::fs::write(root.path().join(path), "See [[ADR-0010]].\n").unwrap();
-        git(root.path(), &["add", "."]);
-        git(root.path(), &["commit", "-m", "add adr"]);
-        let entry = crate::git::ChangedEntry {
-            path: path.into(),
-            previous_path: None,
-            status: ChangeStatus::Modified,
-            old_ref: Some("HEAD".into()),
-            new_ref: None,
-        };
-        let files = crate::repository::RepositoryFiles::open(root.path()).unwrap();
-        let changes = ChangedSet {
-            entries: vec![entry],
-            old_ref: Some("HEAD".into()),
-            new_ref: None,
-            basis: "test".into(),
-        };
-        let permitted = || {
-            crate::adr::change_violations(
-                &files,
-                &crate::config::Config::default(),
-                Some(&changes),
-                Stage::Commit,
-            )
-            .is_empty()
-        };
-        let migrated = "See [[0010-example|ADR-0010]].\n";
-        std::fs::write(root.path().join(path), migrated).unwrap();
-        assert!(permitted());
-        std::fs::remove_file(root.path().join(path)).unwrap();
-        assert!(!permitted());
-        #[cfg(unix)]
-        {
-            let external = tempfile::NamedTempFile::new().unwrap();
-            std::fs::write(external.path(), migrated).unwrap();
-            std::os::unix::fs::symlink(external.path(), root.path().join(path)).unwrap();
-            assert!(!permitted());
-        }
+        std::fs::write(root.path().join("tracked.txt"), "before\n").unwrap();
+        git(root.path(), &["add", "tracked.txt"]);
+        git(root.path(), &["commit", "-m", "initial"]);
+        std::fs::write(root.path().join("tracked.txt"), "after\n").unwrap();
+        git(root.path(), &["add", "tracked.txt"]);
+        git(root.path(), &["commit", "-m", "change"]);
+        root
     }
 
     #[test]
@@ -468,7 +443,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(updates.len(), 2);
-        assert_eq!(updates[1].remote_ref, "refs/heads/topic");
+        assert_eq!(updates[1].remote_oid, "3".repeat(40));
         assert!(parse_pre_push_updates("broken\n").is_err());
     }
 
@@ -476,8 +451,6 @@ mod tests {
     fn pre_push_checks_each_outgoing_commit_on_a_new_branch() {
         let root = tempfile::TempDir::new().unwrap();
         git(root.path(), &["init"]);
-        git(root.path(), &["config", "user.email", "criv@example.com"]);
-        git(root.path(), &["config", "user.name", "criv"]);
         std::fs::create_dir_all(root.path().join("docs/adr")).unwrap();
         std::fs::write(root.path().join("docs/adr/0001-test.md"), "first\n").unwrap();
         git(root.path(), &["add", "."]);
@@ -485,30 +458,28 @@ mod tests {
         std::fs::write(root.path().join("docs/adr/0001-test.md"), "changed\n").unwrap();
         git(root.path(), &["add", "."]);
         git(root.path(), &["commit", "-m", "modify adr"]);
-        let head = git_stdout(root.path(), &["rev-parse", "HEAD"]);
 
-        let repository = GitRepository::discover(root.path()).unwrap();
         let changes = pre_push_changed_entries(
-            repository.as_ref().unwrap(),
+            &GitRepository::open(root.path()).unwrap(),
             "origin",
-            vec![PrePushUpdate {
-                local_ref: "refs/heads/main".into(),
-                local_oid: head,
-                remote_ref: "refs/heads/main".into(),
-                remote_oid: "0000000000000000000000000000000000000000".into(),
+            &[PrePushUpdate {
+                local_oid: git(root.path(), &["rev-parse", "HEAD"]),
+                remote_oid: "0".repeat(40),
             }],
         )
         .unwrap();
-        let files = crate::repository::RepositoryFiles::open(root.path()).unwrap();
-        let violations = crate::adr::change_violations(
-            &files,
-            &crate::config::Config::default(),
-            Some(&changes),
-            Stage::Push,
-        );
 
-        assert_eq!(violations.len(), 1);
-        assert!(violations[0].contains("0001-test.md"));
+        assert_eq!(
+            changes
+                .entries
+                .iter()
+                .map(|entry| (entry.status, entry.path.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                (ChangeStatus::Added, "docs/adr/0001-test.md"),
+                (ChangeStatus::Modified, "docs/adr/0001-test.md"),
+            ]
+        );
     }
 
     #[test]
@@ -520,26 +491,32 @@ mod tests {
     }
 
     #[test]
-    fn ci_changed_entries_uses_explicit_base_ref() {
-        let root = tempfile::TempDir::new().unwrap();
-        git(root.path(), &["init"]);
-        git(root.path(), &["config", "user.email", "criv@example.com"]);
-        git(root.path(), &["config", "user.name", "criv"]);
-        std::fs::write(root.path().join("tracked.txt"), "before\n").unwrap();
-        git(root.path(), &["add", "tracked.txt"]);
-        git(root.path(), &["commit", "-m", "initial"]);
-        let base = git_stdout(root.path(), &["rev-parse", "HEAD"]);
-        std::fs::write(root.path().join("tracked.txt"), "after\n").unwrap();
-        git(root.path(), &["add", "tracked.txt"]);
-        git(root.path(), &["commit", "-m", "change"]);
+    fn ci_changed_entries_reports_why_github_base_ref_is_unusable() {
+        let root = two_commit_repository();
+        let repository = GitRepository::open(root.path()).unwrap();
+        let error = ci_changed_entries(Some(&repository), None, Some("missing".into()), true)
+            .unwrap_err()
+            .to_string();
 
-        let repository = GitRepository::discover(root.path()).unwrap();
-        let changes = ci_changed_entries(repository.as_ref(), Some(&base), None, true)
+        assert!(error.contains("origin/missing"), "{error}");
+        assert!(error.contains("git diff missing HEAD failed"), "{error}");
+    }
+
+    #[test]
+    fn ci_changed_entries_uses_explicit_base_ref() {
+        let root = two_commit_repository();
+        let base = git(root.path(), &["rev-parse", "HEAD~1"]);
+
+        let repository = GitRepository::open(root.path()).unwrap();
+        let changes = ci_changed_entries(Some(&repository), Some(&base), None, true)
             .unwrap()
             .expect("changes from explicit base ref");
 
         assert_eq!(changes.old_ref.as_deref(), Some(base.as_str()));
-        assert_eq!(changes.new_ref.as_deref(), Some("HEAD"));
+        assert_eq!(
+            changes.new,
+            Some(crate::git::Revision::Commit("HEAD".into()))
+        );
         assert_eq!(changes.entries[0].status, ChangeStatus::Modified);
         assert_eq!(changes.entries[0].path, "tracked.txt");
     }
@@ -548,9 +525,9 @@ mod tests {
     fn ci_changed_entries_reports_the_failed_explicit_comparison() {
         let root = tempfile::TempDir::new().unwrap();
         git(root.path(), &["init"]);
-        let repository = GitRepository::discover(root.path()).unwrap();
+        let repository = GitRepository::open(root.path()).unwrap();
         let error =
-            ci_changed_entries(repository.as_ref(), Some("missing-base"), None, true).unwrap_err();
+            ci_changed_entries(Some(&repository), Some("missing-base"), None, true).unwrap_err();
 
         assert!(error.to_string().contains("missing-base"));
         assert!(error.to_string().contains("git diff"));
@@ -558,71 +535,12 @@ mod tests {
 
     #[test]
     fn manual_push_falls_back_to_the_last_commit_with_a_reported_basis() {
-        let root = tempfile::TempDir::new().unwrap();
-        git(root.path(), &["init"]);
-        git(root.path(), &["config", "user.email", "criv@example.com"]);
-        git(root.path(), &["config", "user.name", "criv"]);
-        std::fs::write(root.path().join("tracked.txt"), "before\n").unwrap();
-        git(root.path(), &["add", "tracked.txt"]);
-        git(root.path(), &["commit", "-m", "initial"]);
-        std::fs::write(root.path().join("tracked.txt"), "after\n").unwrap();
-        git(root.path(), &["add", "tracked.txt"]);
-        git(root.path(), &["commit", "-m", "change"]);
+        let root = two_commit_repository();
 
-        let options = EnforceOptions {
-            stage: Stage::Push,
-            format: Format::Text,
-            pre_push: false,
-            remote_name: None,
-            remote_url: None,
-        };
-        let changes = changed_entries(root.path(), &options, None)
-            .unwrap()
-            .unwrap();
+        let changes = manual_push_changed_set(&GitRepository::open(root.path()).unwrap()).unwrap();
 
         assert_eq!(changes.entries[0].path, "tracked.txt");
         assert!(changes.basis.contains("HEAD~1..HEAD"));
-    }
-
-    fn git(root: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .current_dir(root)
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
-            .env_remove("GIT_COMMON_DIR")
-            .env_remove("GIT_PREFIX")
-            .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
-            .args(args)
-            .output()
-            .expect("git command should run");
-        assert!(
-            output.status.success(),
-            "git {:?} failed: {}{}",
-            args,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    fn git_stdout(root: &Path, args: &[&str]) -> String {
-        let output = Command::new("git")
-            .current_dir(root)
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
-            .env_remove("GIT_COMMON_DIR")
-            .env_remove("GIT_PREFIX")
-            .args(args)
-            .output()
-            .expect("git command should run");
-        assert!(
-            output.status.success(),
-            "git {:?} failed: {}{}",
-            args,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout).unwrap().trim().to_string()
+        assert!(changes.basis.contains("@{upstream}"), "{}", changes.basis);
     }
 }

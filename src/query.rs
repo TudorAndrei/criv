@@ -733,13 +733,24 @@ fn load_snapshot(root: &Path, id: &str) -> Result<GraphRowsView> {
 }
 
 fn load_git_state(root: &Path, id: &str) -> Result<String> {
-    let bytes =
-        crate::git::read_file_at_ref(root, id, Path::new(layout::STATE)).map_err(|error| {
+    let file = crate::git::GitRepository::open(root)
+        .and_then(|repository| {
+            repository.file(&crate::git::Revision::Commit(id.to_owned()), layout::STATE)
+        })
+        .and_then(|file| {
+            file.ok_or_else(|| {
+                CrivError::new(format!(
+                    "git ref `{id}` does not contain `{}`",
+                    layout::STATE
+                ))
+            })
+        })
+        .map_err(|error| {
             CrivError::new(format!(
                 "snapshot or git ref `{id}` does not resolve: {error}"
             ))
         })?;
-    String::from_utf8(bytes).map_err(|err| {
+    String::from_utf8(file.bytes).map_err(|err| {
         CrivError::new(format!(
             "git ref `{id}` produced non-UTF-8 {}: {err}",
             layout::STATE

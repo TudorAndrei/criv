@@ -3383,8 +3383,6 @@ fn source_reconcile_checks_commits_and_passes_receipt_free_ci_enforcement() {
             "--pre-push",
             "--remote-name",
             "origin",
-            "--remote-url",
-            "unused",
         ])
         .write_stdin(format!(
             "refs/heads/topic {} refs/heads/topic {}\n",
@@ -3751,8 +3749,6 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
             "--pre-push",
             "--remote-name",
             "origin",
-            "--remote-url",
-            "https://example.invalid/criv.git",
         ])
         .write_stdin(format!(
             "refs/heads/topic {reconciliation_commit} refs/heads/topic {reconciliation_parent}\n"
@@ -3775,8 +3771,6 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
             "--pre-push",
             "--remote-name",
             "origin",
-            "--remote-url",
-            "https://example.invalid/criv.git",
         ])
         .write_stdin(format!(
             "refs/heads/topic {reconciliation_commit} refs/heads/topic {reconciliation_parent}\n"
@@ -3838,8 +3832,6 @@ fn adr_reconcile_renumbers_a_branch_local_collision_and_rewrites_references() {
             "--pre-push",
             "--remote-name",
             "origin",
-            "--remote-url",
-            "https://example.invalid/criv.git",
         ])
         .write_stdin(format!(
             "refs/heads/topic {reconciliation_commit} refs/heads/topic {reconciliation_parent}\n"
@@ -4196,8 +4188,6 @@ fn adr_reconcile_normalizes_git_modes_and_snapshots_overlapping_permissions() {
             "--pre-push",
             "--remote-name",
             "origin",
-            "--remote-url",
-            "https://example.invalid/criv.git",
         ])
         .write_stdin(format!(
             "refs/heads/topic {reconciliation_commit} refs/heads/topic {reconciliation_parent}\n"
@@ -4498,8 +4488,6 @@ fn adr_reconcile_receipt_rejects_a_later_mutation_in_the_push_range() {
             "--pre-push",
             "--remote-name",
             "origin",
-            "--remote-url",
-            "https://example.invalid/criv.git",
         ])
         .write_stdin(format!(
             "refs/heads/topic {mutated_commit} refs/heads/topic {reconciliation_parent}\n"
@@ -4674,34 +4662,27 @@ fn adr_collision_fixture(root: &Path) {
 }
 
 fn git(root: &Path, args: &[&str]) {
-    let output = std::process::Command::new("git")
-        .current_dir(root)
-        .args(["-c", "commit.gpgsign=false"])
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_PREFIX")
-        .args(args)
-        .output()
-        .expect("git command should run");
-    assert!(
-        output.status.success(),
-        "git {:?} failed: {}{}",
-        args,
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+    git_stdout(root, args);
 }
 
+/// Runs the Git CLI in `root`, isolated from any repository the test process
+/// itself runs in, and returns its standard output.
 fn git_stdout(root: &Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
-        .current_dir(root)
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .env_remove("GIT_COMMON_DIR")
-        .env_remove("GIT_PREFIX")
+    let mut command = std::process::Command::new("git");
+    command.current_dir(root);
+    for variable in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_PREFIX",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ] {
+        command.env_remove(variable);
+    }
+    let output = command
+        .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
         .args(args)
         .output()
         .expect("git command should run");

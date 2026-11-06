@@ -1,249 +1,186 @@
+//! `criv adr reconcile-sources`: follow exact Git renames in the `governs:`
+//! paths of accepted decisions.
+
 use std::collections::{BTreeMap, BTreeSet};
-use std::ops::Range;
 use std::path::Path;
 
-#[cfg(test)]
-use std::fs;
-
-use criv_state_wire::layout;
-use serde::{Deserialize, Serialize};
-use usage_rs::Args as UsageArgs;
-
-use super::reconcile_transaction::Snapshot;
-use crate::git::{self, ChangeStatus, ChangedEntry, ChangedSet};
-use crate::markdown;
-use crate::repository::RepositoryFiles;
+use super::governs;
+use super::receipt::{self, Receipt, SourceFile, SourceMapping, SourceReceipt};
+use super::reconcile_transaction::{Context, FileWrite, Reconciliation, Writes};
+use crate::git::{ChangeStatus, ChangedEntry, Comparison, GitRepository};
 use crate::vault::{LoadOptions, Vault};
 use crate::{CrivError, Result};
 
-const RECEIPT_SCHEMA: &str = "criv.source-reconcile/1";
-const COMMIT_MESSAGE: &str = "docs(adr): reconcile renamed source scopes";
+pub(super) struct SourceReconciliation;
 
-#[derive(Debug, UsageArgs)]
-pub struct Options {
-    #[usage(long, help = "Target branch or commit to compare with")]
-    base: String,
-    #[usage(
-        long,
-        help = "Report a required reconciliation without modifying the worktree"
-    )]
-    check: bool,
+pub(super) struct Plan {
+    mappings: Vec<SourceMapping>,
+    files: Vec<PlannedFile>,
 }
 
-#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-struct Mapping {
-    old_path: String,
-    new_path: String,
-}
-
-#[derive(Debug, Clone)]
 struct PlannedFile {
     path: String,
     before: String,
     after: String,
 }
 
-#[derive(Debug)]
-struct Plan {
-    base_ref: String,
-    target_sha: String,
-    head_sha: String,
-    merge_base: String,
-    mappings: Vec<Mapping>,
-    files: Vec<PlannedFile>,
-}
+impl Reconciliation for SourceReconciliation {
+    type Plan = Plan;
+    type Receipt = SourceReceipt;
+    const COMMAND: &'static str = "criv adr reconcile-sources";
+    const COMMIT_MESSAGE: &'static str = "docs(adr): reconcile renamed source scopes";
+    const CURRENT: &'static str =
+        "governed source paths are current; no reconciliation is required";
 
-#[derive(Debug, Serialize, Deserialize)]
-struct Receipt {
-    schema: String,
-    base_ref: String,
-    target_sha: String,
-    head_sha: String,
-    merge_base: String,
-    mappings: Vec<Mapping>,
-    files: Vec<ReceiptFile>,
-}
+    fn plan(context: &Context<'_>) -> Result<Plan> {
+        let vault = Vault::load(context.files, LoadOptions::default())?;
+        let changes = context.git.changed_set(
+            &Comparison::Trees {
+                old_ref: context.merge_base,
+                new_ref: context.head_sha,
+            },
+            &[],
+        )?;
+        let required = required_reconciliations(&vault, &changes.entries)?;
 
-#[derive(Debug, Serialize, Deserialize)]
-struct ReceiptFile {
-    path: String,
-    before_hash: String,
-    after_hash: String,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum ScalarStyle {
-    Plain,
-    SingleQuoted,
-    DoubleQuoted,
-}
-
-#[derive(Debug)]
-struct ScalarSpan {
-    value: String,
-    range: Range<usize>,
-    style: ScalarStyle,
-}
-
-pub fn run(root: &Path, options: &Options) -> Result<()> {
-    let files = RepositoryFiles::open(root)?;
-    if !git::is_repository(root)? {
-        return Err(CrivError::new(
-            "`criv adr reconcile-sources` requires a Git worktree",
-        ));
-    }
-    let target_sha = git::resolve_commit(root, &options.base)?;
-    let plan = build_plan(&files, &options.base, &target_sha)?;
-    println!("source reconciliation target: {}", plan.target_sha);
-    if plan.files.is_empty() {
-        println!("governed source paths are current; no reconciliation is required");
-        return Ok(());
-    }
-    print_plan(&plan);
-    if options.check {
-        return Err(CrivError::new(format!(
-            "governed source paths require reconciliation; run `criv adr reconcile-sources --base {}`",
-            options.base
-        )));
-    }
-    let dirty = git::dirty_paths(root)?;
-    if !dirty.is_empty() {
-        return Err(CrivError::new(format!(
-            "refusing to reconcile a dirty worktree; commit or stash: {}",
-            dirty.join(", ")
-        )));
-    }
-    git::preflight_commit_identity(root)?;
-    ensure_stable_base(root, &plan, "before source reconciliation")?;
-    let paths = plan
-        .files
-        .iter()
-        .map(|file| file.path.clone())
-        .collect::<Vec<_>>();
-    let rollback_paths = paths
-        .iter()
-        .cloned()
-        .chain(std::iter::once(layout::SOURCE_RECEIPT.to_string()))
-        .collect::<Vec<_>>();
-    let snapshot = Snapshot::capture_from(&files, &rollback_paths)?;
-    let result = (|| {
-        apply_plan(&files, &plan)?;
-        ensure_stable_base(root, &plan, "during source reconciliation")?;
-        git::stage_paths(root, &paths)?;
-        let staged = git::staged_changes(root)?;
-        if !receipt_allows_transaction_from(&files, &staged.entries) {
-            return Err(CrivError::new(
-                "source reconciliation receipt does not prove the complete staged transaction",
-            ));
-        }
-        ensure_stable_base(root, &plan, "before the source reconciliation commit")?;
-        git::commit_staged(root, COMMIT_MESSAGE)
-    })();
-    let commit = match result {
-        Ok(commit) => commit,
-        Err(error) => {
-            let rollback_errors = snapshot.rollback();
-            return Err(if rollback_errors.is_empty() {
-                error
-            } else {
-                CrivError::new(format!(
-                    "{error}\nsource reconciliation rollback also failed:\n{}",
-                    rollback_errors.join("\n")
-                ))
-            });
-        }
-    };
-    println!("source reconciliation committed: {commit}");
-    Ok(())
-}
-
-fn build_plan(files: &RepositoryFiles, base_ref: &str, target_sha: &str) -> Result<Plan> {
-    let root = files.root();
-    let vault = Vault::load(files, LoadOptions::default())?;
-    let head_sha = git::resolve_commit(root, "HEAD")?;
-    let merge_base = git::merge_base(root, target_sha, &head_sha)?;
-    let changes = git::changes_between(root, &merge_base, &head_sha)?;
-    let required = required_reconciliations(&vault, &changes)?;
-
-    let mut files = Vec::new();
-    if !required.is_empty() {
-        for note in vault
-            .notes()
-            .iter()
-            .filter(|note| vault.is_effective_decision(note))
-        {
-            if !note
-                .governs()
+        let mut files = Vec::new();
+        if !required.is_empty() {
+            for note in vault
+                .notes()
                 .iter()
-                .any(|path| required.contains_key(path))
+                .filter(|note| vault.is_effective_decision(note))
             {
-                continue;
-            }
-            let before = vault
-                .repository_files()
-                .read_string(Path::new(note.rel_path()))?;
-            let after = rewrite_governs(&before, &required)?;
-            if before != after {
-                files.push(PlannedFile {
-                    path: note.rel_path().to_string(),
-                    before,
-                    after,
-                });
+                if !note
+                    .governs()
+                    .iter()
+                    .any(|path| required.contains_key(path))
+                {
+                    continue;
+                }
+                let before = context.files.read_string(Path::new(note.rel_path()))?;
+                let after = governs::rewrite(&before, &required)?;
+                if before != after {
+                    files.push(PlannedFile {
+                        path: note.rel_path().to_string(),
+                        before,
+                        after,
+                    });
+                }
             }
         }
+        let mut used = BTreeSet::new();
+        for file in &files {
+            used.extend(governs::replaced_values(
+                &file.before,
+                &file.after,
+                &required,
+            )?);
+        }
+        let expected = required.keys().cloned().collect::<BTreeSet<_>>();
+        if used != expected {
+            return Err(CrivError::new(format!(
+                "unsupported `governs:` YAML prevented exact source reconciliation: {}",
+                expected
+                    .difference(&used)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+        Ok(Plan {
+            mappings: required
+                .into_iter()
+                .map(|(old_path, new_path)| SourceMapping { old_path, new_path })
+                .collect(),
+            files,
+        })
     }
-    let mut used = BTreeSet::new();
-    for file in &files {
-        used.extend(changed_governs_values(
-            &file.before,
-            &file.after,
-            &required,
-        )?);
+
+    fn is_current(plan: &Plan) -> bool {
+        plan.files.is_empty()
     }
-    let expected = required.keys().cloned().collect::<BTreeSet<_>>();
-    if used != expected {
-        return Err(CrivError::new(format!(
-            "unsupported `governs:` YAML prevented exact source reconciliation: {}",
-            expected
-                .difference(&used)
-                .cloned()
+
+    fn print(plan: &Plan) {
+        println!("source reconciliation mapping:");
+        for mapping in &plan.mappings {
+            println!("  {} -> {}", mapping.old_path, mapping.new_path);
+        }
+        println!(
+            "ADR files: {}",
+            plan.files
+                .iter()
+                .map(|file| file.path.as_str())
                 .collect::<Vec<_>>()
                 .join(", ")
-        )));
+        );
     }
-    let mappings = required
-        .into_iter()
-        .map(|(old_path, new_path)| Mapping { old_path, new_path })
-        .collect();
-    Ok(Plan {
-        base_ref: base_ref.to_string(),
-        target_sha: target_sha.to_string(),
-        head_sha,
-        merge_base,
-        mappings,
-        files,
-    })
+
+    fn conflict(_context: &Context<'_>, _plan: &Plan) -> String {
+        "governed source paths require reconciliation".into()
+    }
+
+    fn resumes(_plan: &Plan) -> bool {
+        false
+    }
+
+    fn writes(_context: &Context<'_>, plan: &Plan) -> Result<Writes> {
+        Ok(Writes {
+            files: plan
+                .files
+                .iter()
+                .map(|file| {
+                    (
+                        file.path.clone(),
+                        FileWrite {
+                            contents: file.after.clone(),
+                            permissions: None,
+                        },
+                    )
+                })
+                .collect(),
+            deletions: Vec::new(),
+        })
+    }
+
+    fn receipt(context: &Context<'_>, plan: &Plan, _writes: &Writes) -> Result<SourceReceipt> {
+        Ok(SourceReceipt {
+            schema: SourceReceipt::SCHEMA.into(),
+            base_ref: context.base_ref.to_owned(),
+            target_sha: context.target_sha.to_owned(),
+            head_sha: context.head_sha.to_owned(),
+            merge_base: context.merge_base.to_owned(),
+            mappings: plan.mappings.clone(),
+            files: plan
+                .files
+                .iter()
+                .map(|file| SourceFile {
+                    path: file.path.clone(),
+                    before_hash: receipt::hash(file.before.as_bytes()),
+                    after_hash: receipt::hash(file.after.as_bytes()),
+                })
+                .collect(),
+        })
+    }
+
+    fn proves(receipt: &SourceReceipt, git: &GitRepository, staged: &[ChangedEntry]) -> bool {
+        receipt.allows_transaction(git, staged)
+    }
 }
 
 fn required_reconciliations(
     vault: &Vault,
-    changes: &ChangedSet,
+    entries: &[ChangedEntry],
 ) -> Result<BTreeMap<String, String>> {
-    let mappings = rename_mappings(changes)?;
+    let mappings = receipt::rename_mappings(entries)?;
     let mapping_by_old = mappings
         .iter()
         .map(|mapping| (mapping.old_path.as_str(), mapping.new_path.as_str()))
         .collect::<BTreeMap<_, _>>();
-    let deleted = changes
-        .entries
-        .iter()
-        .filter(|entry| entry.status == ChangeStatus::Deleted)
+    let with_status = |status| entries.iter().filter(move |entry| entry.status == status);
+    let deleted = with_status(ChangeStatus::Deleted)
         .map(|entry| entry.path.as_str())
         .collect::<BTreeSet<_>>();
-    let copied = changes
-        .entries
-        .iter()
-        .filter(|entry| entry.status == ChangeStatus::Copied)
+    let copied = with_status(ChangeStatus::Copied)
         .filter_map(|entry| entry.previous_path.as_deref())
         .collect::<BTreeSet<_>>();
     let current_sources = vault
@@ -293,563 +230,4 @@ fn successor_required(path: &str, reason: &str) -> CrivError {
     CrivError::new(format!(
         "cannot reconcile governed source `{path}` because it {reason}; add a new accepted ADR with `supersedes:` and the surviving scope"
     ))
-}
-
-fn rename_mappings(changes: &ChangedSet) -> Result<Vec<Mapping>> {
-    let mut by_old = BTreeMap::new();
-    let mut by_new = BTreeMap::new();
-    for entry in &changes.entries {
-        if entry.status != ChangeStatus::Renamed {
-            continue;
-        }
-        let old_path = entry.previous_path.as_ref().ok_or_else(|| {
-            CrivError::new(format!(
-                "Git rename for `{}` has no source path",
-                entry.path
-            ))
-        })?;
-        if by_old
-            .insert(old_path.clone(), entry.path.clone())
-            .is_some()
-            || by_new
-                .insert(entry.path.clone(), old_path.clone())
-                .is_some()
-        {
-            return Err(CrivError::new(format!(
-                "ambiguous Git rename mapping involving `{old_path}` and `{}`",
-                entry.path
-            )));
-        }
-    }
-    Ok(by_old
-        .into_iter()
-        .map(|(old_path, new_path)| Mapping { old_path, new_path })
-        .collect())
-}
-
-fn print_plan(plan: &Plan) {
-    println!("source reconciliation mapping:");
-    for mapping in &plan.mappings {
-        println!("  {} -> {}", mapping.old_path, mapping.new_path);
-    }
-    println!(
-        "ADR files: {}",
-        plan.files
-            .iter()
-            .map(|file| file.path.as_str())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
-}
-
-fn ensure_stable_base(root: &Path, plan: &Plan, moment: &str) -> Result<()> {
-    if git::ref_is_stable(root, &plan.base_ref, &plan.target_sha)? {
-        Ok(())
-    } else {
-        Err(CrivError::new(format!(
-            "target ref `{}` moved {moment}; retry against its new SHA",
-            plan.base_ref
-        )))
-    }
-}
-
-fn apply_plan(files: &RepositoryFiles, plan: &Plan) -> Result<()> {
-    let scope = files.write_scope(Path::new("."))?;
-    for file in &plan.files {
-        scope.write_atomic(Path::new(&file.path), &file.after)?;
-    }
-    let errors = crate::check::validate_all_from(files)?
-        .into_iter()
-        .filter(crate::diagnostic::Diagnostic::is_error)
-        .map(|diagnostic| diagnostic.describe())
-        .collect::<Vec<_>>();
-    if !errors.is_empty() {
-        return Err(CrivError::new(format!(
-            "source reconciliation wrote files but vault validation failed:\n{}",
-            errors.join("\n")
-        )));
-    }
-    let receipt = Receipt {
-        schema: RECEIPT_SCHEMA.into(),
-        base_ref: plan.base_ref.clone(),
-        target_sha: plan.target_sha.clone(),
-        head_sha: plan.head_sha.clone(),
-        merge_base: plan.merge_base.clone(),
-        mappings: plan.mappings.clone(),
-        files: plan
-            .files
-            .iter()
-            .map(|file| ReceiptFile {
-                path: file.path.clone(),
-                before_hash: hash(&file.before),
-                after_hash: hash(&file.after),
-            })
-            .collect(),
-    };
-    let contents = serde_json::to_string_pretty(&receipt).map_err(|error| {
-        CrivError::new(format!(
-            "cannot serialize source reconciliation receipt: {error}"
-        ))
-    })? + "\n";
-    files
-        .write_scope(Path::new(layout::DIR))?
-        .write_atomic(Path::new(layout::SOURCE_RECEIPT), &contents)
-}
-
-pub fn receipt_is_current(root: &Path) -> bool {
-    read_receipt(root).is_ok_and(|receipt| {
-        receipt.schema == RECEIPT_SCHEMA
-            && git::resolve_commit(root, "HEAD").ok().as_deref() == Some(receipt.head_sha.as_str())
-    })
-}
-
-pub fn receipt_allows_transaction(root: &Path, entries: &[ChangedEntry]) -> bool {
-    let Ok(files) = RepositoryFiles::open(root) else {
-        return false;
-    };
-    receipt_allows_transaction_from(&files, entries)
-}
-
-fn receipt_allows_transaction_from(files: &RepositoryFiles, entries: &[ChangedEntry]) -> bool {
-    let root = files.root();
-    let Ok(receipt) = read_receipt_from(files) else {
-        return false;
-    };
-    if receipt.schema != RECEIPT_SCHEMA
-        || git::resolve_commit(root, "HEAD").ok().as_deref() != Some(receipt.head_sha.as_str())
-        || !git::ref_is_stable(root, &receipt.base_ref, &receipt.target_sha).unwrap_or(false)
-        || !mappings_proven(
-            root,
-            &receipt.merge_base,
-            &receipt.head_sha,
-            &receipt.mappings,
-        )
-    {
-        return false;
-    }
-    let expected = receipt
-        .files
-        .iter()
-        .map(|file| file.path.as_str())
-        .collect::<BTreeSet<_>>();
-    let actual = entries
-        .iter()
-        .map(|entry| entry.path.as_str())
-        .collect::<BTreeSet<_>>();
-    expected == actual
-        && entries
-            .iter()
-            .all(|entry| entry.status == ChangeStatus::Modified && entry.previous_path.is_none())
-        && receipt.files.iter().all(|file| {
-            git::blob(root, &receipt.head_sha, &file.path)
-                .is_ok_and(|contents| hash(&contents) == file.before_hash)
-                && git::blob(root, ":", &file.path)
-                    .is_ok_and(|contents| hash(&contents) == file.after_hash)
-                && transition_matches(
-                    &git::blob(root, &receipt.head_sha, &file.path).unwrap_or_default(),
-                    &git::blob(root, ":", &file.path).unwrap_or_default(),
-                    &receipt.mappings,
-                )
-        })
-}
-
-pub fn allows_history_change(root: &Path, changes: &ChangedSet, entry: &ChangedEntry) -> bool {
-    if entry.status != ChangeStatus::Modified || entry.previous_path.is_some() {
-        return false;
-    }
-    let Ok(mappings) = composed_history_mappings(&changes.entries) else {
-        return false;
-    };
-    if mappings.is_empty() {
-        return false;
-    }
-    let Some(old_ref) = entry.old_ref.as_deref().or(changes.old_ref.as_deref()) else {
-        return false;
-    };
-    let new_ref = entry.new_ref.as_deref().or(changes.new_ref.as_deref());
-    let Ok(old) = git::blob(root, old_ref, &entry.path) else {
-        return false;
-    };
-    let new = new_ref.map_or_else(
-        || RepositoryFiles::open(root).and_then(|files| files.read_string(Path::new(&entry.path))),
-        |reference| git::blob(root, reference, &entry.path),
-    );
-    new.is_ok_and(|new| transition_matches(&old, &new, &mappings))
-}
-
-fn composed_history_mappings(entries: &[ChangedEntry]) -> Result<Vec<Mapping>> {
-    let direct = rename_mappings(&ChangedSet {
-        entries: entries.to_vec(),
-        old_ref: None,
-        new_ref: None,
-        basis: String::new(),
-    })?;
-    let by_old = direct
-        .iter()
-        .map(|mapping| (mapping.old_path.as_str(), mapping.new_path.as_str()))
-        .collect::<BTreeMap<_, _>>();
-    let destinations = direct
-        .iter()
-        .map(|mapping| mapping.new_path.as_str())
-        .collect::<BTreeSet<_>>();
-    let mut result = Vec::new();
-    for mapping in direct
-        .iter()
-        .filter(|mapping| !destinations.contains(mapping.old_path.as_str()))
-    {
-        let mut destination = mapping.new_path.as_str();
-        let mut seen = BTreeSet::from([mapping.old_path.as_str()]);
-        while let Some(next) = by_old.get(destination) {
-            if !seen.insert(destination) {
-                return Err(CrivError::new("cyclic Git rename mapping"));
-            }
-            destination = next;
-        }
-        result.push(Mapping {
-            old_path: mapping.old_path.clone(),
-            new_path: destination.to_string(),
-        });
-    }
-    Ok(result)
-}
-
-fn mappings_proven(root: &Path, old_ref: &str, new_ref: &str, expected: &[Mapping]) -> bool {
-    git::changes_between(root, old_ref, new_ref)
-        .and_then(|changes| rename_mappings(&changes))
-        .is_ok_and(|actual| {
-            let actual = actual.into_iter().collect::<BTreeSet<_>>();
-            expected
-                .iter()
-                .cloned()
-                .collect::<BTreeSet<_>>()
-                .is_subset(&actual)
-        })
-}
-
-fn transition_matches(old: &str, new: &str, mappings: &[Mapping]) -> bool {
-    if top_level_scalar(old, "status").as_deref() != Some("accepted")
-        || top_level_scalar(new, "status").as_deref() != Some("accepted")
-    {
-        return false;
-    }
-    let replacements = mappings
-        .iter()
-        .map(|mapping| (mapping.old_path.clone(), mapping.new_path.clone()))
-        .collect::<BTreeMap<_, _>>();
-    rewrite_governs(old, &replacements).is_ok_and(|rewritten| rewritten == new && rewritten != old)
-}
-
-fn rewrite_governs(contents: &str, replacements: &BTreeMap<String, String>) -> Result<String> {
-    let spans = governs_scalars(contents)?;
-    let mut output = contents.to_string();
-    for span in spans.iter().rev() {
-        if let Some(replacement) = replacements.get(&span.value) {
-            output.replace_range(span.range.clone(), &render_scalar(replacement, span.style));
-        }
-    }
-    Ok(output)
-}
-
-fn changed_governs_values(
-    old: &str,
-    new: &str,
-    replacements: &BTreeMap<String, String>,
-) -> Result<BTreeSet<String>> {
-    let spans = governs_scalars(old)?;
-    let mut used = BTreeSet::new();
-    for span in spans {
-        if replacements.contains_key(&span.value) {
-            used.insert(span.value);
-        }
-    }
-    if rewrite_governs(old, replacements)? != new {
-        return Err(CrivError::new(
-            "source reconciliation produced a non-exact `governs:` rewrite",
-        ));
-    }
-    Ok(used)
-}
-
-fn governs_scalars(contents: &str) -> Result<Vec<ScalarSpan>> {
-    let Some(frontmatter) = markdown::split_frontmatter(contents) else {
-        return Err(CrivError::new("ADR has no closed YAML frontmatter"));
-    };
-    let lines = indexed_lines(frontmatter.yaml, frontmatter.yaml_start);
-    let mut field = None;
-    for (index, (_, line)) in lines.iter().enumerate() {
-        let line = *line;
-        if line.starts_with(char::is_whitespace)
-            || line.trim().is_empty()
-            || line.trim_start().starts_with('#')
-        {
-            continue;
-        }
-        if line == "governs:" {
-            if field.replace(index).is_some() {
-                return Err(CrivError::new("ADR has duplicate `governs:` fields"));
-            }
-        } else if line.starts_with("governs:") {
-            return Err(CrivError::new("`governs:` must use a block YAML sequence"));
-        }
-    }
-    let Some(field) = field else {
-        return Ok(Vec::new());
-    };
-    let mut spans = Vec::new();
-    for (line_start, line) in lines.iter().skip(field.saturating_add(1)) {
-        if !line.starts_with(char::is_whitespace) && !line.trim().is_empty() {
-            break;
-        }
-        let trimmed = line.trim_start();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-        let Some(raw) = trimmed.strip_prefix("- ") else {
-            return Err(CrivError::new("`governs:` contains unsupported YAML"));
-        };
-        let raw = raw.trim_end();
-        if raw.is_empty() {
-            return Err(CrivError::new("`governs:` contains an empty scalar"));
-        }
-        let value = parse_scalar(raw)?;
-        let style = if raw.starts_with('\'') {
-            ScalarStyle::SingleQuoted
-        } else if raw.starts_with('"') {
-            ScalarStyle::DoubleQuoted
-        } else {
-            ScalarStyle::Plain
-        };
-        let raw_offset = line
-            .find(raw)
-            .ok_or_else(|| CrivError::new("cannot locate `governs:` scalar"))?;
-        let range_start = line_start
-            .checked_add(raw_offset)
-            .ok_or_else(|| CrivError::new("`governs:` scalar position exceeds address space"))?;
-        let range_end = range_start
-            .checked_add(raw.len())
-            .ok_or_else(|| CrivError::new("`governs:` scalar range exceeds address space"))?;
-        spans.push(ScalarSpan {
-            value,
-            range: range_start..range_end,
-            style,
-        });
-    }
-    Ok(spans)
-}
-
-/// Each line of `text` without its terminator, with its offset in the file
-/// that starts `start` bytes before `text`.
-fn indexed_lines(text: &str, start: usize) -> Vec<(usize, &str)> {
-    let mut offset = start;
-    text.split_inclusive('\n')
-        .map(|line| {
-            let line_start = offset;
-            offset = offset.saturating_add(line.len());
-            (line_start, line.trim_end_matches(['\r', '\n']))
-        })
-        .collect()
-}
-
-fn parse_scalar(raw: &str) -> Result<String> {
-    if !raw.starts_with(['\'', '"'])
-        && (raw.contains(" #") || raw.starts_with(['[', '{', '&', '*', '!', '|', '>', '@', '`']))
-    {
-        return Err(CrivError::new(
-            "`governs:` contains an unsupported YAML scalar",
-        ));
-    }
-    serde_norway::from_str::<String>(raw)
-        .map_err(|error| CrivError::new(format!("cannot parse `governs:` scalar: {error}")))
-}
-
-fn render_scalar(value: &str, style: ScalarStyle) -> String {
-    match style {
-        ScalarStyle::Plain => value.to_string(),
-        ScalarStyle::SingleQuoted => format!("'{}'", value.replace('\'', "''")),
-        ScalarStyle::DoubleQuoted => {
-            format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
-        }
-    }
-}
-
-fn top_level_scalar(contents: &str, key: &str) -> Option<String> {
-    let raw = markdown::split_frontmatter(contents)?.raw_scalar(key)?;
-    serde_norway::from_str::<String>(raw).ok()
-}
-
-fn read_receipt(root: &Path) -> Result<Receipt> {
-    let files = RepositoryFiles::open(root)?;
-    read_receipt_from(&files)
-}
-
-fn read_receipt_from(files: &RepositoryFiles) -> Result<Receipt> {
-    let contents = files
-        .read_string(Path::new(layout::SOURCE_RECEIPT))
-        .map_err(|_| CrivError::new("source reconciliation receipt is unavailable"))?;
-    serde_json::from_str(&contents)
-        .map_err(|_| CrivError::new("source reconciliation receipt is malformed"))
-}
-
-fn hash(contents: &str) -> String {
-    blake3::hash(contents.as_bytes()).to_hex().to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::process::Command;
-
-    #[test]
-    fn rewrites_plain_and_quoted_governs_scalars_only() {
-        let input = "---\nid: ADR-0001\nstatus: accepted\ngoverns:\n  - src/old.rs\n  - 'src/second.rs'\n  - \"src/third.rs\"\n---\n\nsrc/old.rs stays in prose\n";
-        let replacements = BTreeMap::from([
-            ("src/old.rs".into(), "src/new.rs".into()),
-            ("src/second.rs".into(), "src/second-new.rs".into()),
-            ("src/third.rs".into(), "src/third-new.rs".into()),
-        ]);
-        let output = rewrite_governs(input, &replacements).unwrap();
-        assert!(output.contains("  - src/new.rs\n"));
-        assert!(output.contains("  - 'src/second-new.rs'\n"));
-        assert!(output.contains("  - \"src/third-new.rs\"\n"));
-        assert!(output.ends_with("src/old.rs stays in prose\n"));
-    }
-
-    #[test]
-    fn refuses_inline_or_nested_governs_yaml() {
-        let inline = "---\nstatus: accepted\ngoverns: [src/old.rs]\n---\n";
-        assert!(rewrite_governs(inline, &BTreeMap::new()).is_err());
-        let nested = "---\nstatus: accepted\ngoverns:\n  path: src/old.rs\n---\n";
-        assert!(rewrite_governs(nested, &BTreeMap::new()).is_err());
-    }
-
-    #[test]
-    fn history_transition_rejects_any_non_governs_change() {
-        let old =
-            "---\nid: ADR-0001\nstatus: accepted\ngoverns:\n  - src/old.rs\n---\n\nDecision\n";
-        let new = old.replace("src/old.rs", "src/new.rs");
-        let mapping = [Mapping {
-            old_path: "src/old.rs".into(),
-            new_path: "src/new.rs".into(),
-        }];
-        assert!(transition_matches(old, &new, &mapping));
-        assert!(!transition_matches(old, &(new + "changed\n"), &mapping));
-    }
-
-    #[test]
-    fn composes_chained_history_renames() {
-        let entries = [
-            ChangedEntry {
-                status: ChangeStatus::Renamed,
-                path: "src/middle.rs".into(),
-                previous_path: Some("src/old.rs".into()),
-                old_ref: None,
-                new_ref: None,
-            },
-            ChangedEntry {
-                status: ChangeStatus::Renamed,
-                path: "src/new.rs".into(),
-                previous_path: Some("src/middle.rs".into()),
-                old_ref: None,
-                new_ref: None,
-            },
-        ];
-        assert_eq!(
-            composed_history_mappings(&entries).unwrap(),
-            vec![Mapping {
-                old_path: "src/old.rs".into(),
-                new_path: "src/new.rs".into(),
-            }]
-        );
-    }
-
-    #[test]
-    fn excludes_copies_and_rejects_ambiguous_renames() {
-        let copy = ChangedEntry {
-            status: ChangeStatus::Copied,
-            path: "src/copy.rs".into(),
-            previous_path: Some("src/old.rs".into()),
-            old_ref: None,
-            new_ref: None,
-        };
-        let copied = ChangedSet {
-            entries: vec![copy],
-            old_ref: None,
-            new_ref: None,
-            basis: String::new(),
-        };
-        assert!(rename_mappings(&copied).unwrap().is_empty());
-
-        let ambiguous = ChangedSet {
-            entries: vec![
-                ChangedEntry {
-                    status: ChangeStatus::Renamed,
-                    path: "src/one.rs".into(),
-                    previous_path: Some("src/old.rs".into()),
-                    old_ref: None,
-                    new_ref: None,
-                },
-                ChangedEntry {
-                    status: ChangeStatus::Renamed,
-                    path: "src/two.rs".into(),
-                    previous_path: Some("src/old.rs".into()),
-                    old_ref: None,
-                    new_ref: None,
-                },
-            ],
-            old_ref: None,
-            new_ref: None,
-            basis: String::new(),
-        };
-        assert!(rename_mappings(&ambiguous).is_err());
-    }
-
-    #[test]
-    fn preserves_case_sensitive_path_replacements() {
-        let old = "---\nstatus: accepted\ngoverns:\n  - src/name.rs\n---\n";
-        let new = "---\nstatus: accepted\ngoverns:\n  - src/Name.rs\n---\n";
-        let mappings = [Mapping {
-            old_path: "src/name.rs".into(),
-            new_path: "src/Name.rs".into(),
-        }];
-        assert!(transition_matches(old, new, &mappings));
-    }
-
-    #[test]
-    fn rejects_a_base_ref_that_moved_after_planning() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let root = temp.path();
-        run_git(root, &["init", "-b", "main"]);
-        run_git(root, &["config", "user.email", "criv@example.com"]);
-        run_git(root, &["config", "user.name", "criv"]);
-        fs::write(root.join("one"), "one\n").unwrap();
-        run_git(root, &["add", "one"]);
-        run_git(root, &["commit", "-m", "one"]);
-        let target_sha = git::resolve_commit(root, "main").unwrap();
-        let plan = Plan {
-            base_ref: "main".into(),
-            target_sha,
-            head_sha: git::resolve_commit(root, "HEAD").unwrap(),
-            merge_base: git::resolve_commit(root, "HEAD").unwrap(),
-            mappings: Vec::new(),
-            files: Vec::new(),
-        };
-        fs::write(root.join("two"), "two\n").unwrap();
-        run_git(root, &["add", "two"]);
-        run_git(root, &["commit", "-m", "two"]);
-
-        assert!(ensure_stable_base(root, &plan, "during test").is_err());
-    }
-
-    fn run_git(root: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .current_dir(root)
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
-            .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-    }
 }

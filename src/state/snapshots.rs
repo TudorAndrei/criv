@@ -152,7 +152,7 @@ fn publish_preflighted(
     view.latest = Some(hash.to_string());
     let snapshot_path = snapshot_relative_path(hash);
     let scope = files.write_scope(Path::new(layout::DIR))?;
-    scope.write_atomic_if_changed(&snapshot_path, contents)?;
+    scope.write_atomic(&snapshot_path, contents)?;
     scope.write_atomic(Path::new(layout::LATEST), &format!("{hash}\n"))?;
     apply_prune(files, view, keep, false)?;
     Ok(())

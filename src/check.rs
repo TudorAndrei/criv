@@ -124,8 +124,8 @@ fn validate_all(vault: &Vault) -> Result<Vec<Diagnostic>> {
 }
 
 fn validate_changed(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
-    let root = files.root();
-    let changes = crate::git::staged_changes(root)?;
+    let changes = crate::git::GitRepository::open(files.root())?
+        .changed_set(&crate::git::Comparison::Staged, &[])?;
     if changes.entries.is_empty() {
         return Ok(Vec::new());
     }
@@ -790,7 +790,7 @@ mod tests {
         ChangedSet {
             entries,
             old_ref: Some("HEAD".into()),
-            new_ref: Some(":".into()),
+            new: Some(crate::git::Revision::Index),
             basis: "test".into(),
         }
     }
@@ -805,7 +805,7 @@ mod tests {
             path: path.into(),
             previous_path: previous_path.map(str::to_string),
             old_ref: Some("HEAD".into()),
-            new_ref: Some(":".into()),
+            new: crate::git::Revision::Index,
         }
     }
 
