@@ -1,14 +1,13 @@
 import * as vscode from "vscode";
 import {
+  CRIV_STATE_PATH,
   CrivStateMissingError,
   CrivStateStream,
-  errorMessage,
+  readCrivState,
   type CrivStateHost,
   type CrivStateStatus,
 } from "@criv/editor-state";
 import { createPackagedCrivStateModule } from "@criv/editor-state/packaged";
-
-const STATE_PATH = ".criv/state.json";
 
 export interface WorkspaceStateSource {
   root: vscode.Uri;
@@ -29,22 +28,6 @@ export function createWorkspaceState(): WorkspaceState {
   return state;
 }
 
-/** The current status, waiting for the first load when nothing has loaded yet. */
-export async function loadedStatus(state: WorkspaceState): Promise<WorkspaceStateStatus> {
-  return state.status.kind === "loading" ? state.refresh() : state.status;
-}
-
-export function statusMessage(status: WorkspaceStateStatus): string {
-  switch (status.kind) {
-    case "ready":
-      return "criv state is loaded.";
-    case "loading":
-      return "criv state is still loading.";
-    default:
-      return status.message;
-  }
-}
-
 class WorkspaceStateHost implements CrivStateHost<WorkspaceStateSource> {
   private watcher: { root: string; disposable: vscode.Disposable } | undefined;
 
@@ -54,21 +37,17 @@ class WorkspaceStateHost implements CrivStateHost<WorkspaceStateSource> {
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
       if (await exists(vscode.Uri.joinPath(folder.uri, "criv.toml"))) {
         this.watch(folder.uri);
-        return { root: folder.uri, stateUri: vscode.Uri.joinPath(folder.uri, STATE_PATH) };
+        return { root: folder.uri, stateUri: vscode.Uri.joinPath(folder.uri, CRIV_STATE_PATH) };
       }
     }
     this.dispose();
     throw new CrivStateMissingError("Open a workspace containing criv.toml.");
   }
 
-  async read(source: WorkspaceStateSource): Promise<string> {
-    try {
-      return new TextDecoder().decode(await vscode.workspace.fs.readFile(source.stateUri));
-    } catch (error) {
-      throw new CrivStateMissingError(`Could not read ${STATE_PATH}: ${errorMessage(error)}`, {
-        cause: error,
-      });
-    }
+  read(source: WorkspaceStateSource): Promise<string> {
+    return readCrivState(CRIV_STATE_PATH, async () =>
+      new TextDecoder().decode(await vscode.workspace.fs.readFile(source.stateUri)),
+    );
   }
 
   dispose(): void {
@@ -82,7 +61,7 @@ class WorkspaceStateHost implements CrivStateHost<WorkspaceStateSource> {
     }
     this.dispose();
     const watcher = vscode.workspace.createFileSystemWatcher(
-      new vscode.RelativePattern(root, STATE_PATH),
+      new vscode.RelativePattern(root, CRIV_STATE_PATH),
     );
     const refresh = () => this.onChange();
     watcher.onDidCreate(refresh);

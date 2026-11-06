@@ -1,13 +1,12 @@
 import {
-  ambiguousSourceTargetMessage,
-  parseLineFragment,
+  looksLikeSourceTarget,
+  resolvedSourceLocation,
   resolveSourceTarget,
-  safeVaultPath,
   sourceTargetParts,
-  type CrivGraphNode,
-  type CrivSourceTargetCandidate,
+  sourceTargetProblem,
+  wikilinks,
   type CrivSourceTargetLookupResult,
-  type SourceLines,
+  type SourceLocation,
   type SourceTargetResolution,
 } from "@criv/editor-state";
 
@@ -20,11 +19,7 @@ export type SourceReferenceKind =
 export interface SourceReference {
   kind: SourceReferenceKind;
   target: string;
-  canonicalTarget?: string;
-  node?: CrivGraphNode;
-  resolutionKind: SourceTargetResolution["kind"];
-  candidates?: CrivSourceTargetCandidate[];
-  totalCandidateCount?: number;
+  resolution: SourceTargetResolution;
   start: number;
   end: number;
   legacy: boolean;
@@ -34,7 +29,7 @@ export interface SourceReference {
 export type SourceTargetLookup = (target: string) => CrivSourceTargetLookupResult;
 
 export type SourceTargetOpenPlan =
-  | { kind: "resolved"; path: string; lines?: SourceLines }
+  | ({ kind: "resolved" } & SourceLocation)
   | Exclude<SourceTargetResolution, { kind: "resolved" }>;
 
 export interface MarkdownSink {
@@ -43,9 +38,9 @@ export interface MarkdownSink {
 }
 
 const CRIV_SOURCE_DIRECTIVE = /\bcriv:source\s+([^\s"',)]+)/g;
-const SOURCE_WIKILINK = /\[\[(source:)?([^\]|\s]+)(?:\|[^\]]*)?\]\]/g;
 const SELECTOR_CANDIDATE =
   /(^|[^\w./:#-])([A-Za-z0-9_.-][A-Za-z0-9_./-]*\.[A-Za-z0-9_-]+(?:#[A-Za-z0-9_:/.-]+)?)/g;
+const SOURCE_PREFIX = "source:";
 
 export function analyzeSourceReferences(
   text: string,
@@ -62,19 +57,17 @@ export function analyzeSourceReferences(
     }
   }
 
-  for (const match of text.matchAll(SOURCE_WIKILINK)) {
-    const typed = Boolean(match[1]);
-    const target = match[2];
-    if (!target || (!typed && !looksLikeSourceTarget(target))) {
+  for (const link of wikilinks(text)) {
+    const typed = link.target.startsWith(SOURCE_PREFIX);
+    if (!link.target || (!typed && !looksLikeSourceTarget(link.target))) {
       continue;
     }
-    const start = match.index + match[0].indexOf(target);
     references.push(
       referenceFor(
         lookup,
         typed ? "typed-source-wikilink" : "legacy-wikilink",
-        typed ? `source:${target}` : target,
-        start,
+        link.target,
+        text.indexOf(link.target, link.start),
         true,
       ),
     );
@@ -86,13 +79,13 @@ export function analyzeSourceReferences(
       continue;
     }
     const start = match.index + match[0].length - candidate.length;
-    if (
-      resolveSourceTarget(lookup, candidate).kind === "unresolved" ||
-      overlaps(references, start, start + candidate.length)
-    ) {
+    if (overlaps(references, start, start + candidate.length)) {
       continue;
     }
-    references.push(referenceFor(lookup, "selector", candidate, start, false));
+    const reference = referenceFor(lookup, "selector", candidate, start, false);
+    if (reference.resolution.kind !== "unresolved") {
+      references.push(reference);
+    }
   }
 
   return references.sort((left, right) => left.start - right.start);
@@ -105,7 +98,6 @@ export function referenceAtOffset(
   return references.find((reference) => reference.start <= offset && offset <= reference.end);
 }
 
-/** Where to open a source target: the canonical node's file at the requested or node lines. */
 export function planSourceTargetOpen(
   lookup: SourceTargetLookup,
   target: string,
@@ -114,41 +106,28 @@ export function planSourceTargetOpen(
   if (result.kind !== "resolved") {
     return result;
   }
-  const path = safeVaultPath(sourceTargetParts(result.node.path ?? result.canonical_target).path);
-  if (!path) {
-    return { kind: "unresolved" };
-  }
-  return {
-    kind: "resolved",
-    path,
-    lines: result.lines ?? parseLineFragment(result.node.line_range),
-  };
+  const location = resolvedSourceLocation(result);
+  return location ? { kind: "resolved", ...location } : { kind: "unresolved" };
 }
 
 export function sourceReferenceDiagnostic(reference: SourceReference): string | undefined {
-  switch (reference.resolutionKind) {
-    case "ambiguous":
-      return ambiguousSourceTargetMessage(
-        reference.target,
-        reference.candidates ?? [],
-        reference.totalCandidateCount ?? 0,
-      );
-    case "unresolved":
-      return reference.shouldDiagnoseUnresolved
-        ? `Unresolved criv source target: ${reference.target}.`
-        : undefined;
-    case "resolved":
-      if (!reference.legacy) {
-        return undefined;
-      }
-      return reference.canonicalTarget === sourceTargetParts(reference.target).body
-        ? "Legacy source Wikilink; use an AST-aware source selector outside Wikilinks."
-        : `Legacy source target; use AST-aware source selector ${reference.canonicalTarget}.`;
+  const { resolution } = reference;
+  if (resolution.kind === "unresolved" && !reference.shouldDiagnoseUnresolved) {
+    return undefined;
   }
+  if (resolution.kind !== "resolved") {
+    return sourceTargetProblem(reference.target, resolution);
+  }
+  if (!reference.legacy) {
+    return undefined;
+  }
+  return resolution.canonical_target === sourceTargetParts(reference.target).body
+    ? "Legacy source Wikilink; use an AST-aware source selector outside Wikilinks."
+    : `Legacy source target; use AST-aware source selector ${resolution.canonical_target}.`;
 }
 
 export function sourceReferenceDiagnosticCode(reference: SourceReference): string {
-  switch (reference.resolutionKind) {
+  switch (reference.resolution.kind) {
     case "ambiguous":
       return "ambiguous-source-target";
     case "unresolved":
@@ -162,35 +141,24 @@ export function appendSourceHoverContents(
   contents: MarkdownSink,
   reference: SourceReference,
 ): void {
-  if (reference.resolutionKind === "ambiguous") {
-    contents.appendText(
-      ambiguousSourceTargetMessage(
-        reference.target,
-        reference.candidates ?? [],
-        reference.totalCandidateCount ?? 0,
-      ),
-    );
-    return;
-  }
-  if (reference.resolutionKind !== "resolved" || !reference.canonicalTarget) {
-    contents.appendText(`Unresolved criv source target: ${reference.target}.`);
+  const { resolution } = reference;
+  if (resolution.kind !== "resolved") {
+    contents.appendText(sourceTargetProblem(reference.target, resolution));
     return;
   }
 
-  const node = reference.node;
+  const { node } = resolution;
   contents.appendMarkdown("`");
-  contents.appendText(reference.canonicalTarget);
+  contents.appendText(resolution.canonical_target);
   contents.appendMarkdown("`");
-  if (node?.label) {
+  if (node.label) {
     contents.appendMarkdown("\n\n");
     contents.appendText(node.label);
   }
-  if (node?.kind) {
-    contents.appendMarkdown("\n\nKind: `");
-    contents.appendText(node.kind);
-    contents.appendMarkdown("`");
-  }
-  if (node?.line_range) {
+  contents.appendMarkdown("\n\nKind: `");
+  contents.appendText(node.kind);
+  contents.appendMarkdown("`");
+  if (node.line_range) {
     contents.appendMarkdown("\n\nRange: `");
     contents.appendText(node.line_range);
     contents.appendMarkdown("`");
@@ -213,24 +181,15 @@ function referenceFor(
   start: number,
   shouldDiagnoseUnresolved: boolean,
 ): SourceReference {
-  const resolved = resolveSourceTarget(lookup, target);
   return {
     kind,
     target,
-    canonicalTarget: resolved.kind === "resolved" ? resolved.canonical_target : undefined,
-    node: resolved.kind === "resolved" ? resolved.node : undefined,
-    resolutionKind: resolved.kind,
-    candidates: resolved.kind === "ambiguous" ? resolved.candidates : undefined,
-    totalCandidateCount: resolved.kind === "ambiguous" ? resolved.total_candidate_count : undefined,
+    resolution: resolveSourceTarget(lookup, target),
     start,
     end: start + target.length,
     legacy: kind === "legacy-wikilink" || kind === "typed-source-wikilink",
     shouldDiagnoseUnresolved,
   };
-}
-
-function looksLikeSourceTarget(target: string): boolean {
-  return target.includes("/") || target.includes(".");
 }
 
 function overlaps(references: readonly SourceReference[], start: number, end: number): boolean {

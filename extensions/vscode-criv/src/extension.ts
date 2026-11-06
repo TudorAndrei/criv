@@ -70,9 +70,7 @@ async function runWatchOnce(state: WorkspaceState): Promise<void> {
   if (!(await runCrivInReadyRoot(state, ["watch", "--once"], title))) {
     return;
   }
-  if (crivConfiguration().automaticRefresh) {
-    await state.refresh();
-  }
+  await state.refresh();
   await vscode.window.showInformationMessage(`${title} completed.`);
 }
 

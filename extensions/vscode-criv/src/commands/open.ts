@@ -1,14 +1,19 @@
 import * as vscode from "vscode";
-import { ambiguousSourceTargetMessage, errorMessage } from "@criv/editor-state";
+import {
+  CRIV_STATE_PATH,
+  crivStatusMessage,
+  errorMessage,
+  lookupAsset,
+  sourceTargetProblem,
+} from "@criv/editor-state";
 
-import { openActiveAsset } from "../assets";
 import { planSourceTargetOpen } from "../navigation/references";
-import { loadedStatus, statusMessage, type WorkspaceState } from "../state/store";
+import type { WorkspaceState } from "../state/store";
 
 export async function openStateJson(state: WorkspaceState): Promise<void> {
-  const status = await loadedStatus(state);
+  const status = await state.loaded();
   if (status.kind === "loading" || !status.source) {
-    await vscode.window.showWarningMessage(statusMessage(status));
+    await vscode.window.showWarningMessage(crivStatusMessage(status));
     return;
   }
   try {
@@ -16,7 +21,7 @@ export async function openStateJson(state: WorkspaceState): Promise<void> {
     await vscode.window.showTextDocument(document, { preview: false });
   } catch (error) {
     await vscode.window.showWarningMessage(
-      `Could not open .criv/state.json: ${errorMessage(error)}`,
+      `Could not open ${CRIV_STATE_PATH}: ${errorMessage(error)}`,
     );
   }
 }
@@ -26,21 +31,15 @@ export async function openSourceTarget(state: WorkspaceState, target: unknown): 
     await vscode.window.showWarningMessage("Choose a criv source target to open.");
     return;
   }
-  const status = await loadedStatus(state);
+  const status = await state.loaded();
   if (status.kind !== "ready") {
-    await vscode.window.showWarningMessage(statusMessage(status));
+    await vscode.window.showWarningMessage(crivStatusMessage(status));
     return;
   }
 
   const plan = planSourceTargetOpen((lookup) => state.lookupSourceTarget(lookup), target);
-  if (plan.kind === "ambiguous") {
-    await vscode.window.showWarningMessage(
-      ambiguousSourceTargetMessage(target, plan.candidates, plan.total_candidate_count),
-    );
-    return;
-  }
-  if (plan.kind === "unresolved") {
-    await vscode.window.showWarningMessage(`Could not resolve criv source target: ${target}`);
+  if (plan.kind !== "resolved") {
+    await vscode.window.showWarningMessage(sourceTargetProblem(target, plan));
     return;
   }
 
@@ -59,28 +58,27 @@ export async function openSourceTarget(state: WorkspaceState, target: unknown): 
 }
 
 export async function openAsset(state: WorkspaceState, requestedPath: unknown): Promise<void> {
-  const status = await loadedStatus(state);
+  const status = await state.loaded();
   if (status.kind !== "ready") {
-    await vscode.window.showWarningMessage(statusMessage(status));
+    await vscode.window.showWarningMessage(crivStatusMessage(status));
     return;
   }
-  const result = await openActiveAsset(status.projections.assets, requestedPath, async (asset) => {
-    const uri = vscode.Uri.joinPath(status.source.root, ...asset.path.split("/"));
-    await vscode.commands.executeCommand("vscode.open", uri);
-  });
-  switch (result.kind) {
+  const lookup = lookupAsset(status.projections.assets, requestedPath);
+  switch (lookup.kind) {
     case "invalid":
       await vscode.window.showWarningMessage("Choose a valid documentation asset to open.");
       return;
     case "unauthorized":
       await vscode.window.showWarningMessage("The active criv State does not contain this asset.");
       return;
-    case "failed":
-      await vscode.window.showWarningMessage(
-        `Could not open ${result.asset.path}: ${errorMessage(result.error)}`,
-      );
-      return;
-    case "opened":
-      return;
+    case "resolved":
+      break;
+  }
+  const { asset } = lookup;
+  try {
+    const uri = vscode.Uri.joinPath(status.source.root, ...asset.path.split("/"));
+    await vscode.commands.executeCommand("vscode.open", uri);
+  } catch (error) {
+    await vscode.window.showWarningMessage(`Could not open ${asset.path}: ${errorMessage(error)}`);
   }
 }

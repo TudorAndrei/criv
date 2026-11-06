@@ -9,7 +9,6 @@ import { runCriv, trustedReadyRoot, type CrivRun } from "./criv";
 const CHECK_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 
 type CheckAttempt =
-  | { kind: "aborted" }
   | { kind: "blocked"; message: string }
   | { kind: "ran"; root: vscode.Uri; run: CrivRun };
 
@@ -21,7 +20,7 @@ export async function runCheck(
 ): Promise<void> {
   await runs.run(
     (signal) => collectCheck(state, signal),
-    (attempt, signal) => publishCheck(diagnostics, attempt, signal),
+    (attempt) => publishCheck(diagnostics, attempt),
     async (error) => {
       await vscode.window.showWarningMessage(`criv check failed: ${errorMessage(error)}`);
     },
@@ -30,9 +29,7 @@ export async function runCheck(
 
 async function collectCheck(state: WorkspaceState, signal: AbortSignal): Promise<CheckAttempt> {
   const ready = await trustedReadyRoot(state);
-  if (signal.aborted) {
-    return { kind: "aborted" };
-  }
+  signal.throwIfAborted();
   if (ready.kind === "blocked") {
     return ready;
   }
@@ -46,11 +43,7 @@ async function collectCheck(state: WorkspaceState, signal: AbortSignal): Promise
 async function publishCheck(
   diagnostics: CrivCheckDiagnostics,
   attempt: CheckAttempt,
-  signal: AbortSignal,
 ): Promise<void> {
-  if (signal.aborted || attempt.kind === "aborted") {
-    return;
-  }
   if (attempt.kind === "blocked") {
     await vscode.window.showWarningMessage(attempt.message);
     return;

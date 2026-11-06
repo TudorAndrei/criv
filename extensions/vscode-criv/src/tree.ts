@@ -1,7 +1,11 @@
 import * as vscode from "vscode";
-import type { CrivAssetEntry, CrivInitialProjections, CrivSourceEntry } from "@criv/editor-state";
+import {
+  formatBytes,
+  type CrivAssetEntry,
+  type CrivInitialProjections,
+  type CrivSourceEntry,
+} from "@criv/editor-state";
 
-import { assetTreePresentation } from "./assets";
 import { CRIV_COMMANDS } from "./commands/identifiers";
 import type { WorkspaceStateStatus } from "./state/store";
 
@@ -125,13 +129,12 @@ function sourceItem(source: CrivSourceEntry): CrivTreeItem {
 }
 
 function assetItem(asset: CrivAssetEntry): CrivTreeItem {
-  const row = assetTreePresentation(asset);
-  const item = new CrivTreeItem(row.label, "asset");
-  item.description = row.description;
+  const item = new CrivTreeItem(asset.path, "asset");
+  item.description = `${asset.mime} · ${formatBytes(asset.bytes)}`;
   item.command = {
-    command: row.command,
+    command: CRIV_COMMANDS.openAsset,
     title: "Open Documentation Asset",
-    arguments: row.arguments,
+    arguments: [asset.path],
   };
   return item;
 }

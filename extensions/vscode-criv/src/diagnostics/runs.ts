@@ -1,8 +1,4 @@
-export type CheckRunResult<T> =
-  | { kind: "current"; value: T }
-  | { kind: "failed"; error: unknown }
-  | { kind: "stale" };
-
+/** Runs one check at a time: a new run aborts the previous one, and only the current run publishes. */
 export class CheckRunOwner {
   private generation = 0;
   private active: AbortController | undefined;
@@ -10,11 +6,11 @@ export class CheckRunOwner {
 
   async run<T>(
     work: (signal: AbortSignal) => Promise<T>,
-    publish: (value: T, signal: AbortSignal) => void | Promise<void>,
-    publishFailure: (error: unknown, signal: AbortSignal) => void | Promise<void>,
-  ): Promise<CheckRunResult<T>> {
+    publish: (value: T) => void | Promise<void>,
+    publishFailure: (error: unknown) => void | Promise<void>,
+  ): Promise<void> {
     if (this.disposed) {
-      return { kind: "stale" };
+      return;
     }
 
     const generation = ++this.generation;
@@ -24,19 +20,13 @@ export class CheckRunOwner {
 
     try {
       const value = await work(controller.signal);
-      if (!this.isCurrent(generation, controller)) {
-        return { kind: "stale" };
+      if (this.isCurrent(generation, controller)) {
+        await publish(value);
       }
-      await publish(value, controller.signal);
-      return this.isCurrent(generation, controller)
-        ? { kind: "current", value }
-        : { kind: "stale" };
     } catch (error) {
-      if (!this.isCurrent(generation, controller)) {
-        return { kind: "stale" };
+      if (this.isCurrent(generation, controller)) {
+        await publishFailure(error);
       }
-      await publishFailure(error, controller.signal);
-      return this.isCurrent(generation, controller) ? { kind: "failed", error } : { kind: "stale" };
     } finally {
       if (this.isCurrent(generation, controller)) {
         this.active = undefined;
