@@ -1,57 +1,39 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import test from "node:test";
 
 import { diagnosticRange, parseCheckDiagnostics } from "../../../src/diagnostics/model";
 
-test("normalizes criv check JSON diagnostics", () => {
-  assert.deepEqual(
-    parseCheckDiagnostics(
-      JSON.stringify([
-        {
-          severity: "error",
-          code: "broken-link",
-          path: "docs/index.md",
-          line: 12,
-          message: "broken link",
-        },
-      ]),
-    ),
-    [
-      {
-        severity: "error",
-        code: "broken-link",
-        path: "docs/index.md",
-        line: 12,
-        message: "broken link",
-      },
-    ],
+test("reads the criv check JSON that the CLI writes", () => {
+  const output = readFileSync(
+    resolve(__dirname, "../../../../../fixtures/editor/check-diagnostics.v1.json"),
+    "utf8",
   );
-});
 
-test("carries the repair criv reports with a diagnostic", () => {
-  assert.deepEqual(
-    parseCheckDiagnostics(
-      JSON.stringify([
-        {
-          severity: "error",
-          code: "markdown-format",
-          path: "docs/index.md",
-          message: "bad heading",
-          fix: "Run `criv check --fix`.",
-        },
-      ]),
-    ),
-    [
-      {
-        severity: "error",
-        code: "markdown-format",
-        path: "docs/index.md",
-        line: undefined,
-        message: "bad heading",
-        fix: "Run `criv check --fix`.",
+  assert.deepEqual(parseCheckDiagnostics(output), [
+    {
+      severity: "error",
+      code: "broken-link",
+      path: "docs/a.md",
+      line: 3,
+      message: "wiki-link `[[missing]]` does not resolve",
+      range: {
+        start: { line: 2, character: 4 },
+        end: { line: 2, character: 15 },
       },
-    ],
-  );
+      fix: "Correct the link target, or add the note it names.",
+    },
+    {
+      severity: "warning",
+      code: "source-wikilink",
+      path: "docs/b.md",
+      line: undefined,
+      message:
+        "wiki-link `[[src/lib.rs]]` targets source `src/lib.rs`; Wikilinks are reserved for document references",
+      fix: "Rewrite the target as an AST-aware selector, as in `src/main.rs#fn:run`.",
+    },
+  ]);
 });
 
 test("rejects non-array criv check JSON", () => {

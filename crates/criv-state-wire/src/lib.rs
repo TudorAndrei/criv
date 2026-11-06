@@ -328,6 +328,17 @@ mod tests {
     }
 
     #[test]
+    fn node_kinds_match_the_editor_fixture() {
+        use strum::IntoEnumIterator;
+
+        let editor_kinds: Vec<String> =
+            serde_json::from_str(include_str!("../../../fixtures/editor/node-kinds.v1.json"))
+                .unwrap();
+        let wire_kinds: Vec<&str> = NodeKind::iter().map(NodeKind::as_str).collect();
+        assert_eq!(wire_kinds, editor_kinds);
+    }
+
+    #[test]
     fn kinds_sort_like_their_wire_names() {
         use strum::IntoEnumIterator;
 
