@@ -16,7 +16,7 @@ use crate::markdown::{
 };
 use crate::repository::RepositoryFiles;
 use crate::source::{SourceGraph, SourceState};
-use crate::structural::PolicyLanguage;
+use crate::structural::{PolicyLanguage, PolicyPattern};
 #[cfg(test)]
 use crate::work::{self, Work};
 use criv_state_wire::{asset, content_hash};
@@ -32,25 +32,6 @@ pub enum NoteKind {
 pub struct PatternRef {
     pub(crate) id: String,
     pub(crate) line: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PolicyPattern {
-    pub(crate) id: Option<String>,
-    pub(crate) line: usize,
-    pub(crate) language: Option<PolicyLanguage>,
-    pub(crate) pattern: Option<String>,
-    pub(crate) rule: Option<String>,
-    pub(crate) message: Option<String>,
-}
-
-impl PolicyPattern {
-    pub(crate) const fn has_inline_definition(&self) -> bool {
-        self.language.is_some()
-            || self.pattern.is_some()
-            || self.rule.is_some()
-            || self.message.is_some()
-    }
 }
 
 #[derive(Debug, Clone)]

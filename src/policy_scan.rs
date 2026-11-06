@@ -243,7 +243,11 @@ impl PolicyScanPlan {
             }
         }
 
-        let rows_by_key = structural::find_policies_batch(vault, &requests)?;
+        let rows_by_key = structural::find_policies_batch(
+            vault.repository_files(),
+            vault.source_files(),
+            &requests,
+        )?;
         let mut violations = Vec::new();
         for (key, (owner, policy)) in records.into_iter().enumerate() {
             if let Some(rows) = rows_by_key.get(&key) {

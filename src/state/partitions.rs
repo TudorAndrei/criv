@@ -344,7 +344,8 @@ fn build_policy_partitions(
             paths: &scan.paths,
         })
         .collect::<Vec<_>>();
-    let rescanned = structural::find_policies_batch(vault, &requests)?;
+    let rescanned =
+        structural::find_policies_batch(vault.repository_files(), vault.source_files(), &requests)?;
     for (key, scan) in pending_policy_scans.into_iter().enumerate() {
         let mut matches = scan.reused;
         matches.extend(
