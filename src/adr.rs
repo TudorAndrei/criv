@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
+use criv_state_wire::layout;
 use serde::{Deserialize, Serialize};
 use usage_rs::{Args as UsageArgs, Subcommands};
 
@@ -256,7 +257,6 @@ fn config_scope_violations(
 }
 
 const RECEIPT_SCHEMA: &str = "criv.adr-reconcile/3";
-const RECEIPT_PATH: &str = ".criv/adr-reconcile.json";
 const RECONCILIATION_COMMIT_MESSAGE: &str = "docs(adr): reconcile provisional identifiers";
 
 #[derive(Debug, UsageArgs)]
@@ -589,7 +589,7 @@ fn reconcile(root: &Path, options: &ReconcileOptions) -> Result<()> {
     let rollback_paths = transaction_paths
         .iter()
         .cloned()
-        .chain(std::iter::once(RECEIPT_PATH.to_string()))
+        .chain(std::iter::once(layout::ADR_RECEIPT.to_string()))
         .collect::<Vec<_>>();
     let snapshot = Snapshot::capture_from(&files, &rollback_paths)?;
     let commit = (|| {
@@ -1228,8 +1228,8 @@ fn apply_plan(files: &RepositoryFiles, plan: &ReconcilePlan) -> Result<()> {
         CrivError::new(format!("cannot serialize reconciliation receipt: {error}"))
     })? + "\n";
     files
-        .write_scope(Path::new(".criv"))?
-        .write_atomic(Path::new(".criv/adr-reconcile.json"), &contents)
+        .write_scope(Path::new(layout::DIR))?
+        .write_atomic(Path::new(layout::ADR_RECEIPT), &contents)
 }
 
 /// A generated reconcile operation is safe to re-plan before it is staged or
@@ -1295,7 +1295,7 @@ fn materialized_receipt(root: &Path) -> Result<Receipt> {
 /// longer HEAD. A receipt that claims to describe the current HEAD, however,
 /// must be valid rather than silently bypassed.
 fn current_materialized_receipt(root: &Path) -> Result<Option<Receipt>> {
-    let receipt_path = root.join(".criv/adr-reconcile.json");
+    let receipt_path = root.join(layout::ADR_RECEIPT);
     if !receipt_path.exists() {
         return Ok(None);
     }
@@ -1344,7 +1344,7 @@ fn rewrite_candidates(root: &Path, plan: &ReconcilePlan) -> Result<BTreeMap<Stri
     let mut rewrites = BTreeMap::new();
     let mut inherited_references = None;
     for path in paths {
-        if path == ".criv/adr-reconcile.json" || path.starts_with(".git/") {
+        if path == layout::ADR_RECEIPT || path.starts_with(".git/") {
             continue;
         }
         if !files.file_exists(Path::new(&path))? {
@@ -1690,8 +1690,10 @@ fn worktree_file_mode(root: &Path, path: &str) -> Result<String> {
 
 fn read_receipt(root: &Path) -> Result<Receipt> {
     let files = RepositoryFiles::open(root)?;
-    let receipt: Receipt =
-        serde_json::from_str(&files.read_string(Path::new(RECEIPT_PATH))?).map_err(|_| {
+    let receipt: Receipt = serde_json::from_str(
+        &files.read_string(Path::new(layout::ADR_RECEIPT))?,
+    )
+    .map_err(|_| {
         CrivError::new(
             "ADR reconciliation receipt is malformed; remove it only after recovering the worktree",
         )
@@ -1739,7 +1741,7 @@ mod tests {
             "head_sha": head, "merge_base": head, "mappings": [], "sources": [],
             "deletions": [], "files": []
         });
-        fs::write(root.path().join(RECEIPT_PATH), receipt.to_string()).unwrap();
+        fs::write(root.path().join(layout::ADR_RECEIPT), receipt.to_string()).unwrap();
         receipt["schema"] = "criv.source-reconcile/1".into();
         fs::write(
             root.path().join(".criv/source-reconcile.json"),
@@ -1788,7 +1790,7 @@ mod tests {
         let root = decision_repository();
         let files = RepositoryFiles::open(root.path()).unwrap();
         fs::create_dir_all(root.path().join(".criv")).unwrap();
-        fs::write(root.path().join(RECEIPT_PATH), "invalid receipt").unwrap();
+        fs::write(root.path().join(layout::ADR_RECEIPT), "invalid receipt").unwrap();
         for mode in [Stage::Commit, Stage::Push, Stage::Ci] {
             assert!(change_violations(&files, &Config::default(), None, mode).is_empty());
         }

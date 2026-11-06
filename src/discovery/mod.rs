@@ -5,9 +5,10 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use criv_state_wire::{asset, layout};
 use ignore::{DirEntry, Error as WalkError, ParallelVisitor, ParallelVisitorBuilder, WalkBuilder};
 
-use crate::config::Config;
+use crate::config::{Config, relative_path};
 use crate::glob::GlobMatcher;
 use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
@@ -53,10 +54,10 @@ impl Profile {
     fn prunes_directory(&self, relative: &str, name: &str) -> bool {
         match self {
             Self::Source { prune, .. } => {
-                matches!(name, ".git" | ".criv")
+                matches!(name, ".git" | layout::DIR)
                     || prune.as_ref().is_some_and(|set| set.is_match(relative))
             }
-            Self::Vault => matches!(name, ".git" | ".criv" | "target" | "node_modules"),
+            Self::Vault => matches!(name, ".git" | layout::DIR | "target" | "node_modules"),
         }
     }
 
@@ -143,7 +144,7 @@ impl SourceEventFilter {
         };
         if relative
             .split('/')
-            .any(|component| matches!(component, ".git" | ".criv"))
+            .any(|component| matches!(component, ".git" | layout::DIR))
         {
             return false;
         }
@@ -167,7 +168,7 @@ fn source_event_scope(config: &Config) -> Option<SourceEventScope> {
     let roots = config
         .source_roots
         .iter()
-        .map(|value| normalize_relative("source.roots", value))
+        .map(|value| relative_path("source.roots", value))
         .collect::<Result<Vec<_>>>()
         .ok()?;
     let exclude = GlobMatcher::new(&config.source_exclude).ok()?;
@@ -184,7 +185,7 @@ fn source_event_relevant(root: &Path, config: &Config, event: &Path) -> bool {
 }
 
 pub fn discover_vault(root: &Path, docs_dir: &str) -> Result<VaultPaths> {
-    let docs_relative = normalize_relative("vault.docs", docs_dir)?;
+    let docs_relative = relative_path("vault.docs", docs_dir)?;
     let profile = Arc::new(Profile::Vault);
     if profile_prunes_path(profile.as_ref(), &docs_relative) {
         return Ok(VaultPaths {
@@ -227,8 +228,7 @@ fn vault_selection_kind(path: &Path) -> Option<SelectionKind> {
     if extension == "md" {
         return Some(SelectionKind::VaultMarkdown);
     }
-    matches!(extension, "png" | "jpg" | "jpeg" | "gif" | "webp" | "pdf")
-        .then_some(SelectionKind::VaultAsset)
+    asset::mime_for_path(path.to_str()?).map(|_| SelectionKind::VaultAsset)
 }
 
 #[cfg(test)]
@@ -480,7 +480,7 @@ impl SourcePlan {
     fn new(root: &Path, roots: &[String], profile: &Profile) -> Result<Self> {
         let normalized = roots
             .iter()
-            .map(|value| normalize_relative("source.roots", value))
+            .map(|value| relative_path("source.roots", value))
             .collect::<Result<BTreeSet<_>>>()?;
         let mut directories = Vec::new();
         let mut files = Vec::new();
@@ -573,48 +573,6 @@ fn validate_root(root: &Path, relative: &str) -> Result<Option<RootKind>> {
         }
     }
     Ok(Some(RootKind::Directory))
-}
-
-fn normalize_relative(field: &str, value: &str) -> Result<String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return Err(CrivError::new(format!("{field} must not be empty")));
-    }
-    let path = Path::new(value);
-    if path.is_absolute() {
-        return Err(CrivError::new(format!(
-            "{field} `{value}` must be relative to the criv vault root"
-        )));
-    }
-    let mut parts = Vec::new();
-    for component in path.components() {
-        match component {
-            Component::Normal(part) => {
-                let part = part.to_str().ok_or_else(|| {
-                    CrivError::new(format!("{field} `{value}` is not valid UTF-8"))
-                })?;
-                parts.push(part.to_string());
-            }
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if parts.pop().is_none() {
-                    return Err(CrivError::new(format!(
-                        "{field} `{value}` escapes the criv vault root"
-                    )));
-                }
-            }
-            Component::RootDir | Component::Prefix(_) => {
-                return Err(CrivError::new(format!(
-                    "{field} `{value}` must be relative to the criv vault root"
-                )));
-            }
-        }
-    }
-    Ok(if parts.is_empty() {
-        ".".to_string()
-    } else {
-        parts.join("/")
-    })
 }
 
 fn relative_utf8(root: &Path, path: &Path) -> Result<String> {
@@ -732,7 +690,7 @@ mod tests {
         write(&root.join("src/binary.rs"), b"\0binary");
         write(&root.join(".git/private.rs"), b"private\n");
         let config = Config {
-            source_roots: vec!["src".into(), "src/./nested/..".into()],
+            source_roots: vec!["src".into(), "./src/.".into()],
             source_exclude: vec!["src/excluded.rs".into()],
             ..Config::default()
         };

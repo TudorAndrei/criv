@@ -5,6 +5,7 @@ mod tests;
 
 use std::path::Path;
 
+use criv_state_wire::layout;
 use usage_rs::Args as UsageArgs;
 
 use crate::Result;
@@ -46,11 +47,11 @@ pub fn run(root: &Path, options: &InitOptions) -> Result<()> {
     )?;
 
     scope.create_dir(Path::new("docs/adr"))?;
-    scope.create_dir(Path::new(".criv/snapshots"))?;
+    scope.create_dir(Path::new(layout::SNAPSHOTS))?;
 
     write_template(
         &scope,
-        ".criv/state.json",
+        layout::STATE,
         &templates::default_state()?,
         &mut created,
     )?;
@@ -68,7 +69,7 @@ pub fn run(root: &Path, options: &InitOptions) -> Result<()> {
             .push(install::describe_claude_publication(report.claude_publication()).to_string());
     }
 
-    scope.append_line_if_missing(Path::new(".gitignore"), ".criv/")?;
+    scope.append_line_if_missing(Path::new(".gitignore"), &format!("{}/", layout::DIR))?;
 
     print_init_result(created, refreshed, link_messages);
 

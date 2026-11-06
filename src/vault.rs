@@ -20,9 +20,7 @@ use crate::markdown::{
 use crate::repository::RepositoryFiles;
 use crate::source::{IndexedSource, SourceGraph, SourceState};
 use crate::structural::PolicyLanguage;
-
-const MAX_ASSET_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_ASSET_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
+use criv_state_wire::{asset, content_hash};
 
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
@@ -603,7 +601,7 @@ fn load_documentation_assets(
     files: &RepositoryFiles,
     paths: Vec<String>,
 ) -> Result<Vec<DocumentationAsset>> {
-    load_documentation_assets_with_limits(files, paths, MAX_ASSET_BYTES, MAX_ASSET_TOTAL_BYTES)
+    load_documentation_assets_with_limits(files, paths, asset::MAX_BYTES, asset::MAX_TOTAL_BYTES)
 }
 
 fn load_documentation_assets_with_limits(
@@ -625,7 +623,7 @@ fn load_documentation_assets_with_limits(
         if total_bytes.saturating_add(bytes) > max_total_bytes {
             break;
         }
-        let Some(expected_mime) = asset_mime_for_path(&path) else {
+        let Some(expected_mime) = asset::mime_for_path(&path) else {
             continue;
         };
         let Some(detected) = infer::get(&contents) else {
@@ -639,24 +637,10 @@ fn load_documentation_assets_with_limits(
             path,
             mime: expected_mime.to_string(),
             bytes,
-            hash: blake3::hash(&contents).to_hex().to_string(),
+            hash: content_hash::of_bytes(&contents),
         });
     }
     Ok(assets)
-}
-
-fn asset_mime_for_path(path: &str) -> Option<&'static str> {
-    match Path::new(path)
-        .extension()
-        .and_then(|extension| extension.to_str())?
-    {
-        "png" => Some("image/png"),
-        "jpg" | "jpeg" => Some("image/jpeg"),
-        "gif" => Some("image/gif"),
-        "webp" => Some("image/webp"),
-        "pdf" => Some("application/pdf"),
-        _ => None,
-    }
 }
 
 fn registered_policy_patterns(

@@ -243,19 +243,6 @@ pub(super) const fn is_executable_query_edge(kind: RelationshipKind) -> bool {
     matches!(kind, RelationshipKind::Call | RelationshipKind::Delegate)
 }
 
-pub(super) fn compatibility_aliases(symbol: &Symbol) -> Vec<String> {
-    let mut aliases = vec![symbol.name.clone()];
-    if let Some(arity) = symbol.arity {
-        aliases.push(format!("{}/{arity}", symbol.name));
-        if let Some(SymbolOwner::Module { name: module }) = symbol.owner.as_ref() {
-            aliases.push(format!("{module}.{}/{arity}", symbol.name));
-        }
-    }
-    aliases.sort();
-    aliases.dedup();
-    aliases
-}
-
 pub(super) fn symbol_selector(
     kind: SymbolKind,
     owner: &SymbolOwner,

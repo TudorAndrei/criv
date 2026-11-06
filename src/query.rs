@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use serde::Deserialize;
+use criv_state_wire::{GraphRowsView, layout};
 use usage_rs::{Args as UsageArgs, Subcommands, ValueEnum};
 
 use crate::diagnostic::DiagnosticCode;
@@ -672,8 +672,8 @@ fn nodes(
 }
 
 fn diff(root: &Path, left: &str, right: &str) -> Result<Vec<String>> {
-    let left = load_snapshot(root, left)?.graph;
-    let right = load_snapshot(root, right)?.graph;
+    let left = load_snapshot(root, left)?;
+    let right = load_snapshot(root, right)?;
     let left_nodes = left.node_ids();
     let right_nodes = right.node_ids();
     let left_edges = left.edge_rows();
@@ -704,46 +704,7 @@ fn diff(root: &Path, left: &str, right: &str) -> Result<Vec<String>> {
     Ok(rows)
 }
 
-#[derive(Deserialize)]
-struct SnapshotDocument {
-    #[serde(default)]
-    graph: SnapshotGraph,
-}
-
-#[derive(Default, Deserialize)]
-struct SnapshotGraph {
-    #[serde(default)]
-    nodes: Vec<SnapshotNode>,
-    #[serde(default)]
-    edges: Vec<SnapshotEdge>,
-}
-
-#[derive(Deserialize)]
-struct SnapshotNode {
-    id: String,
-}
-
-#[derive(Deserialize)]
-struct SnapshotEdge {
-    from: String,
-    kind: String,
-    to: String,
-}
-
-impl SnapshotGraph {
-    fn node_ids(&self) -> BTreeSet<&str> {
-        self.nodes.iter().map(|node| node.id.as_str()).collect()
-    }
-
-    fn edge_rows(&self) -> BTreeSet<String> {
-        self.edges
-            .iter()
-            .map(|edge| format!("{}:{}:{}", edge.from, edge.kind, edge.to))
-            .collect()
-    }
-}
-
-fn load_snapshot(root: &Path, id: &str) -> Result<SnapshotDocument> {
+fn load_snapshot(root: &Path, id: &str) -> Result<GraphRowsView> {
     let local = match id.parse::<SnapshotId>() {
         Ok(snapshot) => crate::state::load_snapshot(root, &snapshot)?,
         Err(()) => None,
@@ -759,14 +720,15 @@ fn load_snapshot(root: &Path, id: &str) -> Result<SnapshotDocument> {
 
 fn load_git_state(root: &Path, id: &str) -> Result<String> {
     let bytes =
-        crate::git::read_file_at_ref(root, id, Path::new(".criv/state.json")).map_err(|error| {
+        crate::git::read_file_at_ref(root, id, Path::new(layout::STATE)).map_err(|error| {
             CrivError::new(format!(
                 "snapshot or git ref `{id}` does not resolve: {error}"
             ))
         })?;
     String::from_utf8(bytes).map_err(|err| {
         CrivError::new(format!(
-            "git ref `{id}` produced non-UTF-8 .criv/state.json: {err}"
+            "git ref `{id}` produced non-UTF-8 {}: {err}",
+            layout::STATE
         ))
     })
 }

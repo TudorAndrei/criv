@@ -285,6 +285,26 @@ impl ElixirCallableKind {
     }
 }
 
+/// The selector aliases that also name a symbol inside its file: `name`,
+/// `name/arity`, and, for a symbol owned by a module, `Module.name/arity`.
+#[must_use]
+pub fn compatibility_aliases(
+    name: &str,
+    arity: Option<usize>,
+    module: Option<&str>,
+) -> Vec<String> {
+    let mut aliases = vec![name.to_string()];
+    if let Some(arity) = arity {
+        aliases.push(format!("{name}/{arity}"));
+        if let Some(module) = module {
+            aliases.push(format!("{module}.{name}/{arity}"));
+        }
+    }
+    aliases.sort();
+    aliases.dedup();
+    aliases
+}
+
 fn parse_elixir_selector(text: &str) -> Option<ElixirSelector> {
     if let Some(rest) = text.strip_prefix("module:") {
         let (name, callable) = split_owner_and_callable(rest);

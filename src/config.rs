@@ -215,7 +215,7 @@ impl RawConfig {
 
 /// Normalize a configured path to `/`-separated segments below the vault
 /// root, or `.` for the root itself.
-fn relative_path(field: &str, value: &str) -> Result<String> {
+pub fn relative_path(field: &str, value: &str) -> Result<String> {
     let value = value.trim();
     if value.is_empty() {
         return Err(CrivError::new(format!("{field} must not be empty")));

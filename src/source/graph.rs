@@ -8,7 +8,8 @@ use std::{cell::Cell, thread_local};
 use serde::{Deserialize, Serialize};
 use tree_sitter::Node;
 
-use criv_state_wire::source_identity::{SourceIdentity, SourceSelector};
+use criv_state_wire::layout;
+use criv_state_wire::source_identity::{self, SourceIdentity, SourceSelector};
 
 use super::paths::read_source_bytes;
 use crate::repository::RepositoryFiles;
@@ -192,6 +193,16 @@ pub struct Symbol {
     pub(crate) calls: Vec<Call>,
     #[serde(default)]
     pub(crate) relationships: Vec<Relationship>,
+}
+
+impl Symbol {
+    fn compatibility_aliases(&self) -> Vec<String> {
+        let module = match &self.owner {
+            Some(SymbolOwner::Module { name }) => Some(name.as_str()),
+            Some(SymbolOwner::Implementation { .. }) | None => None,
+        };
+        source_identity::compatibility_aliases(&self.name, self.arity, module)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
@@ -470,7 +481,7 @@ impl SourceGraphBuild {
         let can_reuse = previous.is_some_and(|previous| {
             previous.cache == CacheDisposition::Clean && graph.changed_files().is_empty()
         });
-        let cache = if can_reuse && files.file_exists(Path::new(".criv/source-graph.json"))? {
+        let cache = if can_reuse && files.file_exists(Path::new(layout::SOURCE_GRAPH))? {
             CacheDisposition::Clean
         } else {
             CacheDisposition::Dirty
@@ -525,7 +536,7 @@ pub(super) fn load_cached_from(files: &RepositoryFiles) -> Option<SourceGraphBui
     record_work(|counts| counts.cache_loads = counts.cache_loads.saturating_add(1));
 
     let contents = files
-        .read_optional_string(Path::new(".criv/source-graph.json"))
+        .read_optional_string(Path::new(layout::SOURCE_GRAPH))
         .ok()
         .flatten()?;
     let mut cache = serde_json::from_str::<GraphCacheFile>(&contents).ok()?;
@@ -549,8 +560,8 @@ fn store_cached(files: &RepositoryFiles, graph: &SourceGraph) -> Result<()> {
         .map_err(|err| CrivError::new(format!("failed to serialize source graph cache: {err}")))?;
     let contents = format!("{contents}\n");
     files
-        .write_scope(Path::new(".criv"))?
-        .write_atomic(Path::new(".criv/source-graph.json"), &contents)?;
+        .write_scope(Path::new(layout::DIR))?
+        .write_atomic(Path::new(layout::SOURCE_GRAPH), &contents)?;
     #[cfg(test)]
     record_work(|counts| {
         counts.cache_publications = counts.cache_publications.saturating_add(1);
@@ -561,7 +572,7 @@ fn store_cached(files: &RepositoryFiles, graph: &SourceGraph) -> Result<()> {
 
 #[cfg(test)]
 fn graph_cache_path(root: &Path) -> std::path::PathBuf {
-    root.join(".criv/source-graph.json")
+    root.join(layout::SOURCE_GRAPH)
 }
 
 impl SourceGraph {
@@ -610,7 +621,8 @@ impl SourceGraph {
                         "structured Source owner and selector must agree"
                     );
                 }
-                for key in elixir::compatibility_aliases(symbol)
+                for key in symbol
+                    .compatibility_aliases()
                     .into_iter()
                     .chain(std::iter::once(symbol.id.selector.clone()))
                 {
@@ -662,7 +674,8 @@ impl SourceGraph {
                 .symbols
                 .iter()
                 .filter(|symbol| {
-                    elixir::compatibility_aliases(symbol)
+                    symbol
+                        .compatibility_aliases()
                         .iter()
                         .any(|alias| alias == selector)
                 })
@@ -1592,7 +1605,8 @@ mod tests {
     fn graph_with_file(file: SourceFile) -> SourceGraph {
         let mut graph = SourceGraph::default();
         for symbol in &file.symbols {
-            for key in elixir::compatibility_aliases(symbol)
+            for key in symbol
+                .compatibility_aliases()
                 .into_iter()
                 .chain(std::iter::once(symbol.id.selector.clone()))
             {

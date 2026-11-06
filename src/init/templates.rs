@@ -1,4 +1,4 @@
-use criv_state_wire::StateDocument;
+use criv_state_wire::{StateDocument, layout};
 use serde::Serialize;
 
 use crate::{CrivError, Result};
@@ -8,7 +8,7 @@ pub fn default_config() -> String {
 }
 
 pub fn default_state() -> Result<String> {
-    json_pretty(&StateDocument::default(), ".criv/state.json")
+    json_pretty(&StateDocument::default(), layout::STATE)
 }
 
 pub fn adr_readme() -> Result<String> {

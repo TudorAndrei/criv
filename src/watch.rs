@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
+use criv_state_wire::layout;
 use notify_debouncer_mini::{
     DebounceEventResult, Debouncer, new_debouncer,
     notify::{RecommendedWatcher, RecursiveMode},
@@ -760,10 +761,10 @@ impl WatchSessionLock {
     }
 
     fn acquire_from(files: &RepositoryFiles, mode: WatchMode) -> Result<Self> {
-        let requested_path = files.root().join(".criv/watch.lock");
+        let requested_path = files.root().join(layout::WATCH_LOCK);
         let (_, mut file) = files
-            .write_scope(Path::new(".criv"))?
-            .open_regular_file(Path::new(".criv/watch.lock"))
+            .write_scope(Path::new(layout::DIR))?
+            .open_regular_file(Path::new(layout::WATCH_LOCK))
             .map_err(|err| {
                 CrivError::new(format!(
                     "unsafe watch lock path {}: {err}",

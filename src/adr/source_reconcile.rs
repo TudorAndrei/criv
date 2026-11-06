@@ -5,6 +5,7 @@ use std::path::Path;
 #[cfg(test)]
 use std::fs;
 
+use criv_state_wire::layout;
 use serde::{Deserialize, Serialize};
 use usage_rs::Args as UsageArgs;
 
@@ -16,7 +17,6 @@ use crate::vault::Vault;
 use crate::{CrivError, Result};
 
 const RECEIPT_SCHEMA: &str = "criv.source-reconcile/1";
-const RECEIPT_PATH: &str = ".criv/source-reconcile.json";
 const COMMIT_MESSAGE: &str = "docs(adr): reconcile renamed source scopes";
 
 #[derive(Debug, UsageArgs)]
@@ -123,7 +123,7 @@ pub fn run(root: &Path, options: &Options) -> Result<()> {
     let rollback_paths = paths
         .iter()
         .cloned()
-        .chain(std::iter::once(RECEIPT_PATH.to_string()))
+        .chain(std::iter::once(layout::SOURCE_RECEIPT.to_string()))
         .collect::<Vec<_>>();
     let snapshot = Snapshot::capture_from(&files, &rollback_paths)?;
     let result = (|| {
@@ -388,8 +388,8 @@ fn apply_plan(files: &RepositoryFiles, plan: &Plan) -> Result<()> {
         ))
     })? + "\n";
     files
-        .write_scope(Path::new(".criv"))?
-        .write_atomic(Path::new(RECEIPT_PATH), &contents)
+        .write_scope(Path::new(layout::DIR))?
+        .write_atomic(Path::new(layout::SOURCE_RECEIPT), &contents)
 }
 
 pub fn receipt_is_current(root: &Path) -> bool {
@@ -680,7 +680,7 @@ fn read_receipt(root: &Path) -> Result<Receipt> {
 
 fn read_receipt_from(files: &RepositoryFiles) -> Result<Receipt> {
     let contents = files
-        .read_string(Path::new(RECEIPT_PATH))
+        .read_string(Path::new(layout::SOURCE_RECEIPT))
         .map_err(|_| CrivError::new("source reconciliation receipt is unavailable"))?;
     serde_json::from_str(&contents)
         .map_err(|_| CrivError::new("source reconciliation receipt is malformed"))

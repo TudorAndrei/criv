@@ -7,18 +7,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(test)]
 use std::path::PathBuf;
 
-use criv_state_wire::STATE_SCHEMA;
+use criv_state_wire::{STATE_SCHEMA, content_hash, layout};
 use serde::{Deserialize, Serialize};
 
 use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
-#[cfg(test)]
-const STORE_DIR: &str = ".criv/snapshots";
-#[cfg(test)]
-const INDEX_PATH: &str = ".criv/snapshots/index.json";
-#[cfg(test)]
-const LATEST_PATH: &str = ".criv/latest";
 const INDEX_SCHEMA: &str = "criv.snapshot-index.v0";
 
 #[cfg(test)]
@@ -157,9 +151,9 @@ fn publish_preflighted(
     );
     view.latest = Some(hash.to_string());
     let snapshot_path = snapshot_relative_path(hash);
-    let scope = files.write_scope(Path::new(".criv"))?;
+    let scope = files.write_scope(Path::new(layout::DIR))?;
     scope.write_atomic_if_changed(&snapshot_path, contents)?;
-    scope.write_atomic(Path::new(LATEST_PATH), &format!("{hash}\n"))?;
+    scope.write_atomic(Path::new(layout::LATEST), &format!("{hash}\n"))?;
     apply_prune(files, view, keep, false)?;
     Ok(())
 }
@@ -176,7 +170,7 @@ pub fn load_unlocked(files: &RepositoryFiles, id: &SnapshotId) -> Result<Option<
         }
         return Ok(None);
     };
-    let path = format!(".criv/snapshots/{hash}.json");
+    let path = layout::snapshot(&hash);
     let Some(contents) = files.read_optional_string(Path::new(&path))? else {
         if *id == SnapshotId::Latest {
             return Err(CrivError::new(format!(
@@ -262,7 +256,7 @@ fn apply_prune(
     if !dry_run {
         for hash in &removed_hashes {
             files
-                .write_scope(Path::new(STORE_DIR))?
+                .write_scope(Path::new(layout::SNAPSHOTS))?
                 .remove_file(&snapshot_relative_path(hash))?;
             view.files.remove(hash);
         }
@@ -293,17 +287,17 @@ fn reconcile(files: &RepositoryFiles) -> Result<StoreView> {
 
     let mut snapshot_files = BTreeMap::new();
     let names = files
-        .read_dir_names(Path::new(".criv/snapshots"))?
+        .read_dir_names(Path::new(layout::SNAPSHOTS))?
         .unwrap_or_default();
     for name in names {
         let name = name.to_string_lossy().to_string();
         let Some(hash) = name
             .strip_suffix(".json")
-            .filter(|hash| is_managed_hash(hash))
+            .filter(|hash| content_hash::is_valid(hash))
         else {
             continue;
         };
-        let relative = format!(".criv/snapshots/{name}");
+        let relative = layout::snapshot(hash);
         let (contents, metadata) =
             files
                 .read_with_metadata(Path::new(&relative))
@@ -355,15 +349,14 @@ fn reconcile(files: &RepositoryFiles) -> Result<StoreView> {
 }
 
 fn read_index(files: &RepositoryFiles) -> Result<Option<Vec<String>>> {
-    let Some(contents) = files.read_optional_string(Path::new(".criv/snapshots/index.json"))?
-    else {
+    let Some(contents) = files.read_optional_string(Path::new(layout::SNAPSHOT_INDEX))? else {
         return Ok(None);
     };
     let Ok(index) = serde_json::from_str::<SnapshotIndex>(&contents) else {
         return Ok(None);
     };
     if index.schema != INDEX_SCHEMA
-        || index.order.iter().any(|hash| !is_managed_hash(hash))
+        || index.order.iter().any(|hash| !content_hash::is_valid(hash))
         || index.order.iter().collect::<BTreeSet<_>>().len() != index.order.len()
     {
         return Ok(None);
@@ -372,11 +365,11 @@ fn read_index(files: &RepositoryFiles) -> Result<Option<Vec<String>>> {
 }
 
 fn read_latest(files: &RepositoryFiles) -> Result<Option<String>> {
-    let Some(contents) = files.read_optional_string(Path::new(".criv/latest"))? else {
+    let Some(contents) = files.read_optional_string(Path::new(layout::LATEST))? else {
         return Ok(None);
     };
     let hash = contents.trim();
-    if !is_managed_hash(hash) {
+    if !content_hash::is_valid(hash) {
         return Err(CrivError::new(format!(
             "latest snapshot pointer contains invalid hash `{hash}`"
         )));
@@ -387,8 +380,8 @@ fn read_latest(files: &RepositoryFiles) -> Result<Option<String>> {
 #[cfg(test)]
 fn write_index(files: &RepositoryFiles, order: &[String]) -> Result<()> {
     files
-        .write_scope(Path::new(STORE_DIR))?
-        .write_atomic(Path::new(INDEX_PATH), &index_contents(order)?)
+        .write_scope(Path::new(layout::SNAPSHOTS))?
+        .write_atomic(Path::new(layout::SNAPSHOT_INDEX), &index_contents(order)?)
 }
 
 fn index_contents(order: &[String]) -> Result<String> {
@@ -423,12 +416,12 @@ fn records_newest_first(view: &StoreView) -> Result<Vec<SnapshotRecord>> {
 
 fn existing_store_dir(files: &RepositoryFiles) -> Result<Option<()>> {
     files
-        .directory_exists(Path::new(".criv/snapshots"))
+        .directory_exists(Path::new(layout::SNAPSHOTS))
         .map(|exists| exists.then_some(()))
 }
 
 fn validate_snapshot(hash: &str, contents: &str) -> Result<()> {
-    if !is_managed_hash(hash) {
+    if !content_hash::is_valid(hash) {
         return Err(CrivError::new(format!("invalid snapshot hash `{hash}`")));
     }
     let value = serde_json::from_str::<serde_json::Value>(contents)
@@ -438,8 +431,7 @@ fn validate_snapshot(hash: &str, contents: &str) -> Result<()> {
             "snapshot `{hash}` is corrupt: expected schema {STATE_SCHEMA}"
         )));
     }
-    let published = contents.strip_suffix('\n').unwrap_or(contents);
-    let actual = blake3::hash(published.as_bytes()).to_hex().to_string();
+    let actual = content_hash::of_document(contents);
     if actual != hash {
         return Err(CrivError::new(format!(
             "snapshot `{hash}` is corrupt: content hash is {actual}"
@@ -457,14 +449,7 @@ fn validate_keep(keep: usize) -> Result<()> {
 
 #[cfg(test)]
 fn snapshot_relative_path(hash: &str) -> PathBuf {
-    Path::new(STORE_DIR).join(format!("{hash}.json"))
-}
-
-fn is_managed_hash(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .chars()
-            .all(|ch| ch.is_ascii_digit() || ('a'..='f').contains(&ch))
+    PathBuf::from(layout::snapshot(hash))
 }
 
 fn is_hash_reference(value: &str) -> bool {
@@ -497,10 +482,7 @@ mod tests {
     fn state(seed: &str) -> (String, String) {
         let contents =
             format!("{{\n  \"schema\": \"criv.state.v1\",\n  \"seed\": \"{seed}\"\n}}\n");
-        let hash = blake3::hash(contents.trim_end_matches('\n').as_bytes())
-            .to_hex()
-            .to_string();
-        (hash, contents)
+        (content_hash::of_document(&contents), contents)
     }
 
     #[test]
@@ -534,7 +516,7 @@ mod tests {
         for item in [&second, &first] {
             write_fixture(
                 root.path(),
-                Path::new(".criv"),
+                Path::new(layout::DIR),
                 &snapshot_relative_path(&item.0),
                 &item.1,
             )
@@ -548,8 +530,8 @@ mod tests {
         }
         write_fixture(
             root.path(),
-            Path::new(STORE_DIR),
-            Path::new(INDEX_PATH),
+            Path::new(layout::SNAPSHOTS),
+            Path::new(layout::SNAPSHOT_INDEX),
             "not json\n",
         )
         .unwrap();
@@ -577,7 +559,7 @@ mod tests {
         for item in [&first, &orphan] {
             write_fixture(
                 root.path(),
-                Path::new(".criv"),
+                Path::new(layout::DIR),
                 &snapshot_relative_path(&item.0),
                 &item.1,
             )
@@ -588,8 +570,8 @@ mod tests {
         write_index(&files, &[missing, first.0.clone()]).unwrap();
         write_fixture(
             root.path(),
-            Path::new(".criv"),
-            Path::new(LATEST_PATH),
+            Path::new(layout::DIR),
+            Path::new(layout::LATEST),
             &format!("{}\n", orphan.0),
         )
         .unwrap();
@@ -628,7 +610,7 @@ mod tests {
         let corrupt_hash = "a".repeat(64);
         write_fixture(
             root.path(),
-            Path::new(".criv"),
+            Path::new(layout::DIR),
             &snapshot_relative_path(&corrupt_hash),
             "{}\n",
         )
@@ -673,7 +655,7 @@ mod tests {
         let root = tempfile::TempDir::new().unwrap();
         let outside = tempfile::TempDir::new().unwrap();
         fs::create_dir(root.path().join(".criv")).unwrap();
-        symlink(outside.path(), root.path().join(STORE_DIR)).unwrap();
+        symlink(outside.path(), root.path().join(layout::SNAPSHOTS)).unwrap();
 
         let error = list(root.path()).unwrap_err();
         assert!(

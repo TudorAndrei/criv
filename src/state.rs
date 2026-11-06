@@ -8,7 +8,7 @@ use std::{cell::Cell, thread_local};
 use criv_state_wire::STATE_SCHEMA;
 use criv_state_wire::{
     AssetIndexEntry, Edge, EdgeKind, Graph, Node, NodeKind, PatternMatch, SourceIndexEntry,
-    StateDocument, source_identity::SourceIdentity,
+    StateDocument, content_hash, node_id,
 };
 use serde::{Serialize, Serializer};
 
@@ -249,7 +249,7 @@ impl State {
         let json = serde_json::to_string_pretty(&self.wire)
             .map_err(|err| CrivError::new(format!("failed to serialize state: {err}")))?;
         Ok(SerializedState {
-            hash: blake3::hash(json.as_bytes()).to_hex().to_string(),
+            hash: content_hash::of_document(&json),
             published: format!("{json}\n"),
         })
     }
@@ -606,45 +606,16 @@ fn graph_root(graph: &Graph) -> String {
     StableHasher::new("graph").strs(&hashes).finish()
 }
 
-fn note_node_id(id: &str) -> String {
-    format!("note:{id}")
-}
-
-fn code_node_id(path: &str) -> String {
-    format!("code:{}", SourceIdentity::file(path))
-}
-
-fn pattern_node_id(id: &str) -> String {
-    format!("pattern:{id}")
-}
-
-fn import_node_id(path: &str, module: &str) -> String {
-    format!("import:{path}:{module}")
-}
-
 fn directive_node_id(file: &SourceFile, directive: &Import) -> String {
     if file.language != Language::Elixir || directive.kind == DirectiveKind::Legacy {
-        return import_node_id(&file.path, &directive.module);
+        return node_id::import(&file.path, &directive.module);
     }
-    format!(
-        "import:{}:{}:{}:{}",
-        file.path,
+    node_id::directive(
+        &file.path,
         directive.kind.as_str(),
-        directive.module,
-        directive.site
+        &directive.module,
+        directive.site,
     )
-}
-
-fn symbol_node_id(id: &str) -> String {
-    format!("symbol:{id}")
-}
-
-fn external_call_node_id(id: &str) -> String {
-    format!("external-call:{id}")
-}
-
-fn external_module_node_id(id: &str) -> String {
-    format!("external-module:{id}")
 }
 
 fn symbol_label(symbol: &Symbol) -> String {

@@ -1,8 +1,12 @@
 //! Shared wire contract for published criv State documents.
 
+pub mod asset;
+pub mod content_hash;
+pub mod layout;
+pub mod node_id;
 pub mod source_identity;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -132,6 +136,67 @@ pub struct Edge {
     pub kind: EdgeKind,
     #[serde(default)]
     pub hash: String,
+}
+
+impl Edge {
+    /// The `{from}:{kind}:{to}` text of this edge.
+    #[must_use]
+    pub fn row(&self) -> String {
+        edge_row(&self.from, self.kind.as_str(), &self.to)
+    }
+}
+
+fn edge_row(from: &str, kind: &str, to: &str) -> String {
+    format!("{from}:{kind}:{to}")
+}
+
+/// The node ids and edge rows of a State document read without its schema
+/// or kind types, so a revision with a kind this build does not know still
+/// compares.
+#[derive(Debug, Default, Deserialize)]
+pub struct GraphRowsView {
+    #[serde(default)]
+    graph: GraphRowsViewGraph,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GraphRowsViewGraph {
+    #[serde(default)]
+    nodes: Vec<NodeIdView>,
+    #[serde(default)]
+    edges: Vec<EdgeTextView>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NodeIdView {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct EdgeTextView {
+    from: String,
+    kind: String,
+    to: String,
+}
+
+impl GraphRowsView {
+    #[must_use]
+    pub fn node_ids(&self) -> BTreeSet<&str> {
+        self.graph
+            .nodes
+            .iter()
+            .map(|node| node.id.as_str())
+            .collect()
+    }
+
+    #[must_use]
+    pub fn edge_rows(&self) -> BTreeSet<String> {
+        self.graph
+            .edges
+            .iter()
+            .map(|edge| edge_row(&edge.from, &edge.kind, &edge.to))
+            .collect()
+    }
 }
 
 /// Kind of a graph edge. Serde and `as_str` share one kebab-case spelling.
@@ -286,6 +351,32 @@ mod tests {
                 assert_eq!(left.cmp(&right), left.as_str().cmp(right.as_str()));
             }
         }
+    }
+
+    #[test]
+    fn rows_view_reads_unknown_kinds_with_the_typed_row_text() {
+        let edge = Edge {
+            from: "note:ADR-0001".into(),
+            to: "code:src/lib.rs".into(),
+            kind: EdgeKind::References,
+            hash: String::new(),
+        };
+        let view: GraphRowsView = serde_json::from_value(serde_json::json!({
+            "graph": {
+                "nodes": [{"id": "note:ADR-0001", "kind": "retired-kind"}],
+                "edges": [
+                    {"from": "note:ADR-0001", "kind": "references", "to": "code:src/lib.rs"},
+                    {"from": "a", "kind": "retired-kind", "to": "b"}
+                ]
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(view.node_ids(), BTreeSet::from(["note:ADR-0001"]));
+        assert_eq!(
+            view.edge_rows(),
+            BTreeSet::from([edge.row(), "a:retired-kind:b".to_string()])
+        );
     }
 
     #[test]
