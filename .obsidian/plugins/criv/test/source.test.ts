@@ -33,9 +33,7 @@ async function loadedFixture(): Promise<{
   projections: CrivInitialProjections;
   resolver: SourceResolver;
 }> {
-  const revision = await createPackagedCrivStateModule("unavailable").loadState(
-    JSON.stringify(fixture.state),
-  );
+  const revision = await createPackagedCrivStateModule().loadState(JSON.stringify(fixture.state));
   const projections = revision.initialProjections();
   const sources = new Map(projections.sources.map((source) => [source.path, source]));
   return {

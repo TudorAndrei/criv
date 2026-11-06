@@ -103,20 +103,6 @@ export const CRIV_LOADED_STATE_DISPOSED = "criv-loaded-state-disposed";
 export const CRIV_STATE_JSON_INVALID = "criv-state-json-invalid";
 export const CRIV_STATE_SCHEMA_UNSUPPORTED = "criv-state-schema-unsupported";
 
-export type CrivStateContractErrorCode =
-  | typeof CRIV_STATE_JSON_INVALID
-  | typeof CRIV_STATE_SCHEMA_UNSUPPORTED;
-
-export class CrivStateContractError extends Error {
-  readonly code: CrivStateContractErrorCode;
-
-  constructor(code: CrivStateContractErrorCode, message: string) {
-    super(message);
-    this.name = "CrivStateContractError";
-    this.code = code;
-  }
-}
-
 export class CrivWasmLoadError extends Error {
   readonly code = CRIV_WASM_LOAD_ERROR;
 
