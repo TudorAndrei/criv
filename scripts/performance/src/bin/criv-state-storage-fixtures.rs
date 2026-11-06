@@ -18,6 +18,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use criv_state_wire::{content_hash, layout};
 use generate::{append_source_revision, generate};
 use manifest::LoadedManifest;
 use serde::Serialize;
@@ -81,7 +82,7 @@ fn run(args: Args) -> Result<(), String> {
             append_source_revision(vault.path(), &generated, revision + 1)?;
         }
         publish_state(&binary, vault.path(), revision)?;
-        let source = vault.path().join(".criv/state.json");
+        let source = vault.path().join(layout::STATE);
         let name = format!("{revision:03}.json");
         let destination = args.output.join(&name);
         let bytes = fs::read(&source)
@@ -91,7 +92,7 @@ fn run(args: Args) -> Result<(), String> {
             revision,
             path: name,
             bytes: bytes.len(),
-            digest: blake3::hash(&bytes).to_hex().to_string(),
+            digest: content_hash::of_bytes(&bytes),
         });
     }
 

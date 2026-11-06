@@ -49,7 +49,7 @@ impl LoadedManifest {
         manifest.validate(path)?;
         Ok(Self {
             path: path.to_path_buf(),
-            digest: blake3::hash(&bytes).to_hex().to_string(),
+            digest: criv_state_wire::content_hash::of_bytes(&bytes),
             bytes,
             manifest,
         })

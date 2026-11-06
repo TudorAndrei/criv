@@ -5,6 +5,7 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use criv_state_wire::content_hash;
 use serde::Serialize;
 use usage_rs::Cli;
 
@@ -352,11 +353,11 @@ fn git_path_summary(root: &Path) -> Result<GitPathSummary, String> {
     )?;
     Ok(GitPathSummary {
         tracked_paths: nul_path_count(&tracked),
-        tracked_path_digest: bytes_digest(&tracked),
+        tracked_path_digest: content_hash::of_bytes(&tracked),
         ignored_paths: nul_path_count(&ignored),
-        ignored_path_digest: bytes_digest(&ignored),
+        ignored_path_digest: content_hash::of_bytes(&ignored),
         ignored_directories: nul_path_count(&ignored_directories),
-        ignored_directory_digest: bytes_digest(&ignored_directories),
+        ignored_directory_digest: content_hash::of_bytes(&ignored_directories),
     })
 }
 
@@ -444,7 +445,7 @@ fn git_identity(root: &Path) -> Result<GitIdentity, String> {
     Ok(GitIdentity {
         head,
         clean: status.is_empty(),
-        status_digest: bytes_digest(&status),
+        status_digest: content_hash::of_bytes(&status),
         index_digest: optional_file_digest(&git_dir.join("index")),
         info_exclude_digest: optional_file_digest(&git_dir.join("info/exclude")),
         global_exclude_path,
@@ -455,7 +456,7 @@ fn git_identity(root: &Path) -> Result<GitIdentity, String> {
             &["config", "--get", "core.ignorecase"],
         ),
         core_symlinks: optional_command_text(root, "git", &["config", "--get", "core.symlinks"]),
-        submodule_status_digest: bytes_digest(&submodules),
+        submodule_status_digest: content_hash::of_bytes(&submodules),
     })
 }
 
@@ -465,7 +466,7 @@ fn identity_digest(git: &GitIdentity, entries: &[EntryIdentity]) -> Result<Strin
         git,
         entries,
     })
-    .map(|bytes| bytes_digest(&bytes))
+    .map(|bytes| content_hash::of_bytes(&bytes))
     .map_err(display_error)
 }
 
@@ -633,10 +634,6 @@ fn optional_command_text(root: &Path, program: &str, args: &[&str]) -> Option<St
 
 fn optional_file_digest(path: &Path) -> Option<String> {
     path.is_file().then(|| stream_digest(path).ok()).flatten()
-}
-
-fn bytes_digest(bytes: &[u8]) -> String {
-    blake3::hash(bytes).to_hex().to_string()
 }
 
 fn display_error(error: impl std::fmt::Display) -> String {

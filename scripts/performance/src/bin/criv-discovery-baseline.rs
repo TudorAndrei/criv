@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use criv_state_wire::content_hash;
 use serde::{Deserialize, Serialize};
 use usage_rs::{Cli, ValueEnum};
 
@@ -240,7 +241,7 @@ fn run(mut args: Args) -> Result<(), String> {
         .unwrap_or_else(|_| std::env::consts::OS.into());
     let architecture = std::env::consts::ARCH.to_string();
     let processor = processor_identity(&repository_root);
-    let machine_digest = bytes_digest(
+    let machine_digest = content_hash::of_bytes(
         format!("{operating_system}\0{architecture}\0{processor}\0{rustc_verbose}").as_bytes(),
     );
     let run_seed = format!(
@@ -251,7 +252,7 @@ fn run(mut args: Args) -> Result<(), String> {
         started_at_utc,
         std::process::id()
     );
-    let run_id = blake3::hash(run_seed.as_bytes()).to_hex()[..16].to_string();
+    let run_id = content_hash::of_bytes(run_seed.as_bytes())[..16].to_string();
     let run_identity = RunIdentity {
         schema: RUN_SCHEMA,
         run_id: run_id.clone(),
@@ -545,8 +546,8 @@ fn run_attempt(
             user_seconds: output.user_seconds,
             system_seconds: output.system_seconds,
             peak_rss_bytes: output.peak_rss_bytes,
-            stdout_digest: bytes_digest(&output.stdout),
-            stderr_digest: bytes_digest(&output.stderr),
+            stdout_digest: content_hash::of_bytes(&output.stdout),
+            stderr_digest: content_hash::of_bytes(&output.stderr),
             stdout_path: stdout_path.display().to_string(),
             stderr_path: stderr_path.display().to_string(),
             probe,
@@ -917,12 +918,8 @@ fn write_json(path: PathBuf, value: &impl Serialize) -> Result<(), String> {
 
 fn file_digest(path: &Path) -> Result<String, String> {
     fs::read(path)
-        .map(|bytes| bytes_digest(&bytes))
+        .map(|bytes| content_hash::of_bytes(&bytes))
         .map_err(display_error)
-}
-
-fn bytes_digest(bytes: &[u8]) -> String {
-    blake3::hash(bytes).to_hex().to_string()
 }
 
 fn unix_millis() -> u128 {

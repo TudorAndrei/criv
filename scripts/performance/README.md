@@ -12,9 +12,11 @@ committed.
 The canonical list includes `elixir-mixed.toml`, `elixir-parse-heavy.toml`, and
 `elixir-relationships.toml`. The generator creates valid `.ex` and `.exs`
 modules. The relationship workload has one static remote call for each of its
-8,192 callables. The harness rejects a sample if one selected Elixir file is
-not in the Elixir source graph or if parsed and published relationship counts
-do not match the manifest. Raw rows record source counts, bytes, Elixir
+8,192 callables. The harness reads Elixir coverage from the published State,
+never from the private source-graph cache; after a case that does not publish
+State, it runs an unmeasured `criv watch --once` first. It rejects a sample if
+one selected Elixir file has no Elixir code node in State or if parsed and
+published relationship counts do not match the manifest. Raw rows record source counts, bytes, Elixir
 coverage, exact relationship counts, peak resident memory, and output
 identity. This is observation evidence. It is not a language-throughput gate.
 
