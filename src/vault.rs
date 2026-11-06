@@ -8,15 +8,15 @@ use serde::Deserialize;
 use crate::Result;
 use crate::config::Config;
 use crate::diagnostic::SourceLocation;
-use crate::discovery::{discover_vault, read_selected_text_from};
+use crate::discovery::discover_vault;
 use crate::glob::GlobMatcher;
-use crate::identity::{pattern_id, slug, split_pattern_id, strip_prefix};
+use crate::identity::{pattern_id, slug, split_pattern_id};
 use crate::markdown::{
     LinkTarget, find_wiki_links_with_lines, line_index, line_number,
     markdown_headings as parse_markdown_headings, split_frontmatter,
 };
 use crate::repository::RepositoryFiles;
-use crate::source::{SourceGraph, SourceState};
+use crate::source::{SourceGraph, SourceState, read_selected_text};
 use crate::structural::PolicyDefinition;
 #[cfg(test)]
 use crate::work::{self, Work};
@@ -343,8 +343,8 @@ impl Vault {
         let discovered = discover_vault(root, config.docs_dir())?;
         let notes = discovered
             .markdown
-            .into_iter()
-            .map(|path| parse_note(files, &root.join(path)))
+            .iter()
+            .map(|path| parse_note(files, path))
             .collect::<Result<Vec<_>>>()?;
         let assets = load_documentation_assets(files, discovered.assets)?;
 
@@ -776,8 +776,8 @@ fn effective_accepted_decision_ids(
     accepted.difference(&superseded).cloned().collect()
 }
 
-fn parse_note(files: &RepositoryFiles, path: &Path) -> Result<Note> {
-    let contents = read_selected_text_from(files, path)?;
+fn parse_note(files: &RepositoryFiles, relative: &str) -> Result<Note> {
+    let contents = read_selected_text(files, relative)?;
     let source: Arc<str> = Arc::from(contents.as_str());
     let frontmatter = split_frontmatter(&contents);
     let (yaml, frontmatter_start, body_start) = frontmatter.map_or(("", 0, 0), |frontmatter| {
@@ -803,8 +803,8 @@ fn parse_note(files: &RepositoryFiles, path: &Path) -> Result<Note> {
             ..Note::default()
         },
     };
-    note.path = path.to_path_buf();
-    note.rel_path = strip_prefix(path, files.root());
+    note.path = files.root().join(relative);
+    note.rel_path = relative.to_string();
     let (line_offset, body_start) = if note.frontmatter_error.is_some() {
         (0, 0)
     } else {

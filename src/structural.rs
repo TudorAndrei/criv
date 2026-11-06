@@ -10,7 +10,7 @@ use ast_grep_language::{Language, LanguageExt, SupportLang};
 use crate::Result;
 use crate::diagnostic::{DiagnosticCode, SourceLocation};
 use crate::repository::RepositoryFiles;
-use crate::source::read_source_to_string_from;
+use crate::source::read_selected;
 #[cfg(test)]
 use crate::work::{self, Work};
 
@@ -131,7 +131,8 @@ pub fn find_policies_batch(
             continue;
         }
 
-        let contents: Arc<str> = Arc::from(read_source_to_string_from(files, source_file)?);
+        let contents: Arc<str> =
+            Arc::from(String::from_utf8_lossy(&read_selected(files, source_file)?));
         #[cfg(test)]
         work::record(Work::AstParse);
         let ast = language.ast_grep(contents.as_ref());

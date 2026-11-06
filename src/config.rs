@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
@@ -40,7 +41,7 @@ pub struct Config {
     source_roots: Vec<String>,
     source_exclude: Vec<String>,
     source_index: bool,
-    state_keep: usize,
+    state_keep: NonZeroUsize,
     enforce_stages: Vec<Stage>,
     import_policies: Vec<ImportPolicyConfig>,
 }
@@ -90,7 +91,7 @@ impl Default for Config {
             source_roots: vec!["src".into(), "lib".into()],
             source_exclude: vec!["**/target/**".into(), "**/node_modules/**".into()],
             source_index: true,
-            state_keep: 20,
+            state_keep: NonZeroUsize::MIN.saturating_add(19),
             enforce_stages: vec![Stage::Commit, Stage::Push, Stage::Ci],
             import_policies: Vec::new(),
         }
@@ -136,7 +137,7 @@ impl Config {
         self.source_index
     }
 
-    pub(crate) const fn state_keep(&self) -> usize {
+    pub(crate) const fn state_keep(&self) -> NonZeroUsize {
         self.state_keep
     }
 
@@ -219,7 +220,11 @@ impl RawConfig {
             source_roots,
             source_exclude: self.source.exclude.unwrap_or(defaults.source_exclude),
             source_index: self.index.source.unwrap_or(defaults.source_index),
-            state_keep: positive_state_keep(self.state.keep.unwrap_or(defaults.state_keep))?,
+            state_keep: match self.state.keep {
+                Some(keep) => NonZeroUsize::new(keep)
+                    .ok_or_else(|| CrivError::new("state.keep must be a positive integer"))?,
+                None => defaults.state_keep,
+            },
             enforce_stages: self.enforce.stages.unwrap_or(defaults.enforce_stages),
             import_policies: self.enforce.imports,
         })
@@ -279,13 +284,6 @@ struct RawIndex {
 #[derive(Debug, Default, Deserialize)]
 struct RawState {
     keep: Option<usize>,
-}
-
-fn positive_state_keep(keep: usize) -> Result<usize> {
-    if keep == 0 {
-        return Err(CrivError::new("state.keep must be a positive integer"));
-    }
-    Ok(keep)
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -429,16 +427,17 @@ plugin = false
 
         assert_eq!(config.source_roots, vec!["src"]);
         assert!(!config.source_index);
-        assert_eq!(config.state_keep, 3);
+        assert_eq!(config.state_keep.get(), 3);
     }
 
     #[test]
     fn parses_state_retention_and_defaults_to_twenty() {
-        assert_eq!(Config::parse(None).unwrap().state_keep, 20);
+        assert_eq!(Config::parse(None).unwrap().state_keep.get(), 20);
         assert_eq!(
             Config::parse(Some("[state]\nkeep = 7\n"))
                 .unwrap()
-                .state_keep,
+                .state_keep
+                .get(),
             7
         );
     }

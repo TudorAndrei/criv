@@ -106,17 +106,17 @@ impl QueryCommand {
             ),
             Self::CitedBy(options) => {
                 let vault = load_vault(files, SourceLoad::Skip)?;
-                let index = QueryReverseIndex::build(&vault, ReverseIndexScope::Notes);
+                let index = NoteCitationIndex::build(&vault);
                 (cited_by(&vault, &index, &options.note_id)?, options.output)
             }
             Self::OrphanDocs(output) => {
                 let vault = load_vault(files, SourceLoad::Skip)?;
-                let index = QueryReverseIndex::build(&vault, ReverseIndexScope::Notes);
+                let index = NoteCitationIndex::build(&vault);
                 (orphan_docs(&vault, &index), output)
             }
             Self::References(options) => {
                 let vault = load_vault(files, SourceLoad::Refresh)?;
-                let index = QueryReverseIndex::build(&vault, ReverseIndexScope::Sources);
+                let index = SourceReferenceIndex::build(&vault);
                 (index.references(&vault, &options.symbol), options.output)
             }
             Self::Governs(options) => (
@@ -136,45 +136,27 @@ impl QueryCommand {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReverseIndexScope {
-    Notes,
-    Sources,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum SourceReferenceKey {
     Path(String),
     Symbol { path: String, fragment: String },
 }
 
+/// The notes that cite each note, built once per query request.
 #[derive(Debug)]
-struct QueryReverseIndex {
+struct NoteCitationIndex {
     citing_notes: BTreeMap<String, Vec<usize>>,
     notes_with_outgoing_citations: Vec<bool>,
-    source_references: BTreeMap<SourceReferenceKey, Vec<usize>>,
 }
 
-impl QueryReverseIndex {
-    fn build(vault: &Vault, scope: ReverseIndexScope) -> Self {
-        let include_notes = scope == ReverseIndexScope::Notes;
-        let include_sources = scope == ReverseIndexScope::Sources;
+impl NoteCitationIndex {
+    fn build(vault: &Vault) -> Self {
         let mut citing_notes = BTreeMap::<String, Vec<usize>>::new();
-        let mut notes_with_outgoing_citations = if include_notes {
-            vec![false; vault.notes().len()]
-        } else {
-            Vec::new()
-        };
-        let mut source_references = BTreeMap::<SourceReferenceKey, Vec<usize>>::new();
-
+        let mut notes_with_outgoing_citations = vec![false; vault.notes().len()];
         for (note_index, note) in vault.notes().iter().enumerate() {
             let mut cited_note_ids = BTreeSet::new();
-            let mut source_keys = BTreeSet::new();
-
             for link in note.wiki_links() {
-                if include_notes
-                    && let ResolvedLink::Note { id, .. } = vault.resolve_link(link.target())
-                {
+                if let ResolvedLink::Note { id, .. } = vault.resolve_link(link.target()) {
                     if let Some(has_outgoing) = notes_with_outgoing_citations.get_mut(note_index) {
                         *has_outgoing = true;
                     }
@@ -182,37 +164,45 @@ impl QueryReverseIndex {
                         cited_note_ids.insert(id);
                     }
                 }
-                if include_sources {
-                    collect_source_reference_keys(vault, link.target(), &mut source_keys);
-                }
             }
-            if include_sources {
-                for target in note.targets_symbols() {
-                    collect_source_reference_keys(
-                        vault,
-                        LinkTarget::parse(target),
-                        &mut source_keys,
-                    );
-                }
-            }
-
             for cited_id in cited_note_ids {
                 citing_notes.entry(cited_id).or_default().push(note_index);
             }
-            for key in source_keys {
-                source_references.entry(key).or_default().push(note_index);
-            }
         }
-
         Self {
             citing_notes,
             notes_with_outgoing_citations,
-            source_references,
         }
     }
 
     fn citing_notes(&self, vault: &Vault, note_id: &str) -> Vec<String> {
         sorted_note_ids(vault, self.citing_notes.get(note_id).map(Vec::as_slice))
+    }
+}
+
+/// The notes that reference each Source file and symbol, built once per
+/// query request.
+#[derive(Debug)]
+struct SourceReferenceIndex {
+    source_references: BTreeMap<SourceReferenceKey, Vec<usize>>,
+}
+
+impl SourceReferenceIndex {
+    fn build(vault: &Vault) -> Self {
+        let mut source_references = BTreeMap::<SourceReferenceKey, Vec<usize>>::new();
+        for (note_index, note) in vault.notes().iter().enumerate() {
+            let mut source_keys = BTreeSet::new();
+            for link in note.wiki_links() {
+                collect_source_reference_keys(vault, link.target(), &mut source_keys);
+            }
+            for target in note.targets_symbols() {
+                collect_source_reference_keys(vault, LinkTarget::parse(target), &mut source_keys);
+            }
+            for key in source_keys {
+                source_references.entry(key).or_default().push(note_index);
+            }
+        }
+        Self { source_references }
     }
 
     fn references(&self, vault: &Vault, symbol: &str) -> Vec<String> {
@@ -309,43 +299,42 @@ struct CoverageOptions {
     output: OutputOptions,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy)]
 enum NodeKind {
     Code,
     Doc,
     Decision,
-    Function,
-    Method,
-    Class,
-    Module,
-    Protocol,
-    Implementation,
-    Struct,
-    Exception,
-    Behaviour,
-    Macro,
-    Guard,
-    Callback,
-    MacroCallback,
+    Symbol(SymbolKind),
 }
 
-impl NodeKind {
-    const fn symbol_kind(self) -> Option<SymbolKind> {
-        match self {
-            Self::Function => Some(SymbolKind::Function),
-            Self::Method => Some(SymbolKind::Method),
-            Self::Class => Some(SymbolKind::Class),
-            Self::Module => Some(SymbolKind::Module),
-            Self::Protocol => Some(SymbolKind::Protocol),
-            Self::Implementation => Some(SymbolKind::Implementation),
-            Self::Struct => Some(SymbolKind::Struct),
-            Self::Exception => Some(SymbolKind::Exception),
-            Self::Behaviour => Some(SymbolKind::Behaviour),
-            Self::Macro => Some(SymbolKind::Macro),
-            Self::Guard => Some(SymbolKind::Guard),
-            Self::Callback => Some(SymbolKind::Callback),
-            Self::MacroCallback => Some(SymbolKind::MacroCallback),
-            Self::Code | Self::Doc | Self::Decision => None,
+impl usage_rs::spec::ValueEnum for NodeKind {
+    /// The command-line words: the three note and file kinds, then each
+    /// `SymbolKind` name in declaration order.
+    const CHOICES: &'static [&'static str] = &[
+        "code",
+        "doc",
+        "decision",
+        "function",
+        "method",
+        "class",
+        "module",
+        "protocol",
+        "implementation",
+        "struct",
+        "exception",
+        "behaviour",
+        "macro",
+        "guard",
+        "callback",
+        "macro-callback",
+    ];
+
+    fn from_choice(value: &str) -> Option<Self> {
+        match value {
+            "code" => Some(Self::Code),
+            "doc" => Some(Self::Doc),
+            "decision" => Some(Self::Decision),
+            _ => SymbolKind::from_name(value).map(Self::Symbol),
         }
     }
 }
@@ -448,7 +437,7 @@ fn cites(vault: &Vault, id: &str) -> Result<Vec<String>> {
     Ok(rows)
 }
 
-fn cited_by(vault: &Vault, index: &QueryReverseIndex, id: &str) -> Result<Vec<String>> {
+fn cited_by(vault: &Vault, index: &NoteCitationIndex, id: &str) -> Result<Vec<String>> {
     let target = vault
         .resolve_note(id)
         .ok_or_else(|| CrivError::new(format!("note `{id}` does not resolve")))?;
@@ -456,7 +445,7 @@ fn cited_by(vault: &Vault, index: &QueryReverseIndex, id: &str) -> Result<Vec<St
     Ok(index.citing_notes(vault, target_id))
 }
 
-fn orphan_docs(vault: &Vault, index: &QueryReverseIndex) -> Vec<String> {
+fn orphan_docs(vault: &Vault, index: &NoteCitationIndex) -> Vec<String> {
     let mut rows = Vec::new();
     for (note_index, note) in vault.notes().iter().enumerate() {
         if note.kind() != NoteKind::Doc {
@@ -580,20 +569,15 @@ fn nodes(files: &RepositoryFiles, options: &NodesOptions) -> Result<Vec<String>>
             let vault = load_vault(files, SourceLoad::Refresh)?;
             let index = options
                 .without_docs
-                .then(|| QueryReverseIndex::build(&vault, ReverseIndexScope::Sources));
+                .then(|| SourceReferenceIndex::build(&vault));
             code_nodes(&vault, index.as_ref())
         }
-        Some(kind) => {
-            let symbol_kind = kind
-                .symbol_kind()
-                .ok_or_else(|| CrivError::new("node kind does not identify a source symbol"))?;
-            load_vault(files, SourceLoad::Refresh)?
-                .source_graph()
-                .symbols()
-                .filter(|symbol| symbol.kind == symbol_kind)
-                .map(|symbol| symbol.id.display())
-                .collect()
-        }
+        Some(NodeKind::Symbol(symbol_kind)) => load_vault(files, SourceLoad::Refresh)?
+            .source_graph()
+            .symbols()
+            .filter(|symbol| symbol.kind == symbol_kind)
+            .map(|symbol| symbol.id.display())
+            .collect(),
         None => {
             let vault = load_vault(files, SourceLoad::Refresh)?;
             let mut rows = vault.source_files().to_vec();
@@ -620,7 +604,7 @@ fn note_ids(vault: &Vault, kind: NoteKind) -> Vec<String> {
 }
 
 /// Every source symbol, or with `undocumented` only those no note references.
-fn code_nodes(vault: &Vault, undocumented: Option<&QueryReverseIndex>) -> Vec<String> {
+fn code_nodes(vault: &Vault, undocumented: Option<&SourceReferenceIndex>) -> Vec<String> {
     vault
         .source_graph()
         .symbols()
@@ -744,6 +728,20 @@ mod tests {
     }
 
     #[test]
+    fn node_kind_choices_name_every_symbol_kind_once() {
+        use strum::IntoEnumIterator;
+        use usage_rs::spec::ValueEnum as _;
+
+        let symbol_names = SymbolKind::iter()
+            .map(SymbolKind::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(NodeKind::CHOICES.get(3..), Some(symbol_names.as_slice()));
+        for choice in NodeKind::CHOICES {
+            assert!(NodeKind::from_choice(choice).is_some(), "{choice}");
+        }
+    }
+
+    #[test]
     fn docs_query_loading_performs_no_source_work() {
         let temp = TempDir::new().unwrap();
         write_query_fixture(temp.path());
@@ -803,7 +801,7 @@ mod tests {
         let vault = load_vault(&files(temp.path()), SourceLoad::Refresh).unwrap();
 
         work::reset();
-        let reverse_index = QueryReverseIndex::build(&vault, ReverseIndexScope::Sources);
+        let reverse_index = SourceReferenceIndex::build(&vault);
         assert_eq!(
             code_nodes(&vault, Some(&reverse_index)),
             vec!["src/lib.rs#fn:undocumented"]
@@ -820,8 +818,6 @@ mod tests {
             .sum::<usize>();
         assert_eq!(work::count(Work::SourceTargetResolution), input_targets);
         assert!(stored_rows <= input_targets * 2);
-        assert!(reverse_index.citing_notes.is_empty());
-        assert!(reverse_index.notes_with_outgoing_citations.is_empty());
     }
 
     #[test]
@@ -830,7 +826,7 @@ mod tests {
         write_reverse_query_fixture(temp.path());
         let vault = load_vault(&files(temp.path()), SourceLoad::Skip).unwrap();
 
-        let reverse_index = QueryReverseIndex::build(&vault, ReverseIndexScope::Notes);
+        let reverse_index = NoteCitationIndex::build(&vault);
         let input_links = vault
             .notes()
             .iter()
@@ -856,7 +852,6 @@ mod tests {
                 .count(),
             1
         );
-        assert!(reverse_index.source_references.is_empty());
     }
 
     fn query_output_options() -> OutputOptions {

@@ -1,6 +1,7 @@
 //! The local snapshot store: reconciliation, retention planning, and lookup.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -48,15 +49,18 @@ struct StoreView {
 pub struct PublicationPlan {
     pub(crate) index_contents: String,
     pub(crate) removals: Vec<String>,
+    /// The hashes stored before the publication. Snapshots are
+    /// content-addressed and removals are quarantined, so this set alone
+    /// restores the store.
+    pub(crate) prior_hashes: BTreeSet<String>,
 }
 
 pub fn plan_publication(
     files: &RepositoryFiles,
     hash: &str,
     contents: &str,
-    keep: usize,
+    keep: NonZeroUsize,
 ) -> Result<PublicationPlan> {
-    validate_keep(keep)?;
     validate_snapshot(hash, contents)?;
     let mut view = reconcile(files)?;
     if let Some(latest) = &view.latest
@@ -68,30 +72,29 @@ pub fn plan_publication(
     }
     view.order.retain(|existing| existing != hash);
     view.order.push(hash.to_string());
-    let mut removals = Vec::new();
-    while view.order.len().saturating_sub(removals.len()) > keep {
-        let next = view
-            .order
-            .iter()
-            .find(|candidate| {
-                candidate.as_str() != hash && !removals.iter().any(|removed| removed == *candidate)
-            })
-            .cloned();
-        let Some(next) = next else {
-            break;
-        };
-        removals.push(next);
-    }
-    let removed = removals.iter().collect::<BTreeSet<_>>();
-    let order = view
-        .order
-        .into_iter()
-        .filter(|entry| !removed.contains(entry))
-        .collect::<Vec<_>>();
+    let excess = view.order.len().saturating_sub(keep.get());
+    let removals = view.order.drain(..excess).collect();
     Ok(PublicationPlan {
-        index_contents: index_contents(&order)?,
+        index_contents: index_contents(&view.order)?,
         removals,
+        prior_hashes: view.hashes,
     })
+}
+
+/// The hashes of the snapshot files in the store, without reading them.
+pub fn stored_hashes(files: &RepositoryFiles) -> Result<BTreeSet<String>> {
+    let names = files
+        .read_dir_names(Path::new(layout::SNAPSHOTS))?
+        .unwrap_or_default();
+    Ok(names
+        .into_iter()
+        .filter_map(|name| {
+            let name = name.to_string_lossy();
+            name.strip_suffix(".json")
+                .filter(|hash| content_hash::is_valid(hash))
+                .map(str::to_string)
+        })
+        .collect())
 }
 
 pub fn load_unlocked(files: &RepositoryFiles, id: &SnapshotId) -> Result<Option<String>> {
@@ -123,20 +126,9 @@ pub fn load_unlocked(files: &RepositoryFiles, id: &SnapshotId) -> Result<Option<
 /// order, then unindexed hashes by modification time and hash, then `latest`.
 fn reconcile(files: &RepositoryFiles) -> Result<StoreView> {
     let latest = read_latest(files)?;
-    let names = files
-        .read_dir_names(Path::new(layout::SNAPSHOTS))?
-        .unwrap_or_default();
-
     let mut modified = BTreeMap::new();
-    for name in names {
-        let name = name.to_string_lossy().to_string();
-        let Some(hash) = name
-            .strip_suffix(".json")
-            .filter(|hash| content_hash::is_valid(hash))
-        else {
-            continue;
-        };
-        let relative = layout::snapshot(hash);
+    for hash in stored_hashes(files)? {
+        let relative = layout::snapshot(&hash);
         let (contents, metadata) =
             files
                 .read_with_metadata(Path::new(&relative))
@@ -146,8 +138,8 @@ fn reconcile(files: &RepositoryFiles) -> Result<StoreView> {
         let contents = String::from_utf8(contents).map_err(|error| {
             CrivError::new(format!("failed to read snapshot `{hash}`: {error}"))
         })?;
-        validate_snapshot(hash, &contents)?;
-        modified.insert(hash.to_string(), metadata.modified().unwrap_or(UNIX_EPOCH));
+        validate_snapshot(&hash, &contents)?;
+        modified.insert(hash, metadata.modified().unwrap_or(UNIX_EPOCH));
     }
 
     let mut seen = BTreeSet::new();
@@ -236,13 +228,6 @@ fn validate_snapshot(hash: &str, contents: &str) -> Result<()> {
         return Err(CrivError::new(format!(
             "snapshot `{hash}` is corrupt: content hash is {actual}"
         )));
-    }
-    Ok(())
-}
-
-fn validate_keep(keep: usize) -> Result<()> {
-    if keep == 0 {
-        return Err(CrivError::new("snapshot keep must be a positive integer"));
     }
     Ok(())
 }

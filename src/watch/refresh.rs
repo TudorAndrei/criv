@@ -72,11 +72,9 @@ impl RefreshSession {
             },
         )?;
         let validation = check::validate_for_publication(&vault)?;
-        let changed_files = vault.source_state().changed_files().to_vec();
         let (snapshot, state) = state::write_state(
             &vault,
             previous.map(|previous| &previous.state),
-            &changed_files,
             &validation.policies,
             precommit_check,
         )?;

@@ -4,9 +4,10 @@ use std::thread;
 
 use serde::{Deserialize, Serialize};
 
-use criv_state_wire::layout;
-use criv_state_wire::source_identity::{self, SourceIdentity, SourceSelector};
+use criv_state_wire::source_identity::{self, ElixirOwner, SourceIdentity, SourceSelector};
+use criv_state_wire::{NodeKind, content_hash, layout};
 
+use super::paths::read_selected;
 use crate::repository::RepositoryFiles;
 #[cfg(test)]
 use crate::work::{self, Work};
@@ -17,18 +18,17 @@ mod extract;
 mod syntax;
 
 // Bump when parsed source graph semantics or serialized graph types change.
-const GRAPH_CACHE_SCHEMA: &str = "criv.source-graph/4";
+const GRAPH_CACHE_SCHEMA: &str = "criv.source-graph/5";
 const MAX_SOURCE_WORKERS: usize = 16;
 const MIN_FILES_PER_SOURCE_WORKER: usize = 1_024;
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The parsed Source files and the indexes derived from them.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SourceGraph {
     files: BTreeMap<String, SourceFile>,
     file_fingerprints: BTreeMap<String, String>,
-    #[serde(skip)]
     changed_files: Vec<String>,
     symbol_index: BTreeMap<String, Vec<SymbolId>>,
-    #[serde(skip)]
     elixir_relationships: elixir::ElixirRelationships,
 }
 
@@ -65,7 +65,7 @@ pub struct Import {
     pub(crate) line: usize,
     pub(crate) site: usize,
     pub(crate) kind: DirectiveKind,
-    pub(crate) owner: Option<SymbolOwner>,
+    pub(crate) owner: Option<ElixirOwner>,
     pub(crate) scope: Option<LexicalScope>,
     pub(crate) alias: Option<String>,
     pub(crate) only: Option<DirectiveFilter>,
@@ -137,7 +137,9 @@ pub struct Symbol {
     pub(crate) name: String,
     pub(crate) kind: SymbolKind,
     pub(crate) parent: Option<String>,
-    pub(crate) owner: Option<SymbolOwner>,
+    /// The symbol in the same file that `parent` names.
+    pub(crate) parent_id: Option<SymbolId>,
+    pub(crate) owner: Option<ElixirOwner>,
     pub(crate) arity: Option<usize>,
     exported: bool,
     interface_signature: Option<InterfaceSignature>,
@@ -165,6 +167,7 @@ impl Symbol {
             name,
             kind,
             parent: None,
+            parent_id: None,
             owner: None,
             arity: None,
             exported: false,
@@ -177,10 +180,7 @@ impl Symbol {
     }
 
     fn compatibility_aliases(&self) -> Vec<String> {
-        let module = match &self.owner {
-            Some(SymbolOwner::Module { name }) => Some(name.as_str()),
-            Some(SymbolOwner::Implementation { .. }) | None => None,
-        };
+        let module = self.owner.as_ref().and_then(ElixirOwner::module_name);
         source_identity::compatibility_aliases(&self.name, self.arity, module)
     }
 }
@@ -189,12 +189,6 @@ impl Symbol {
 pub struct SymbolRange {
     pub(crate) start_line: usize,
     pub(crate) end_line: usize,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
-pub enum SymbolOwner {
-    Module { name: String },
-    Implementation { protocol: String, for_type: String },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
@@ -288,7 +282,9 @@ impl ResolvedEdge<'_> {
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize, strum::EnumIter,
+)]
 pub enum SymbolKind {
     Function,
     Method,
@@ -306,21 +302,33 @@ pub enum SymbolKind {
 }
 
 impl SymbolKind {
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::Function => "function",
-            Self::Method => "method",
-            Self::Class => "class",
-            Self::Module => "module",
-            Self::Protocol => "protocol",
-            Self::Implementation => "implementation",
-            Self::Struct => "struct",
-            Self::Exception => "exception",
-            Self::Behaviour => "behaviour",
-            Self::Macro => "macro",
-            Self::Guard => "guard",
-            Self::Callback => "callback",
-            Self::MacroCallback => "macro-callback",
+    /// The published node-kind name of the symbol kind.
+    pub(crate) fn as_str(self) -> &'static str {
+        NodeKind::from(self).as_str()
+    }
+
+    /// The symbol kind whose published name is `name`.
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
+        <Self as strum::IntoEnumIterator>::iter().find(|kind| kind.as_str() == name)
+    }
+}
+
+impl From<SymbolKind> for NodeKind {
+    fn from(kind: SymbolKind) -> Self {
+        match kind {
+            SymbolKind::Function => Self::Function,
+            SymbolKind::Method => Self::Method,
+            SymbolKind::Class => Self::Class,
+            SymbolKind::Module => Self::Module,
+            SymbolKind::Protocol => Self::Protocol,
+            SymbolKind::Implementation => Self::Implementation,
+            SymbolKind::Struct => Self::Struct,
+            SymbolKind::Exception => Self::Exception,
+            SymbolKind::Behaviour => Self::Behaviour,
+            SymbolKind::Macro => Self::Macro,
+            SymbolKind::Guard => Self::Guard,
+            SymbolKind::Callback => Self::Callback,
+            SymbolKind::MacroCallback => Self::MacroCallback,
         }
     }
 }
@@ -375,13 +383,15 @@ pub struct VariantSignature {
 #[derive(Deserialize)]
 struct GraphCacheFile {
     schema: String,
-    graph: SourceGraph,
+    files: BTreeMap<String, SourceFile>,
+    file_fingerprints: BTreeMap<String, String>,
 }
 
 #[derive(Serialize)]
 struct BorrowedGraphCacheFile<'a> {
     schema: &'static str,
-    graph: &'a SourceGraph,
+    files: &'a BTreeMap<String, SourceFile>,
+    file_fingerprints: &'a BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -475,10 +485,8 @@ pub(super) fn load_cached(files: &RepositoryFiles) -> Result<Option<SourceGraphB
     if cache.schema != GRAPH_CACHE_SCHEMA {
         return Ok(None);
     }
-    let mut graph = cache.graph;
-    graph.rebuild_elixir_relationships();
     Ok(Some(SourceGraphBuild {
-        graph,
+        graph: SourceGraph::from_files(cache.files, cache.file_fingerprints, Vec::new()),
         cache: CacheDisposition::Clean,
     }))
 }
@@ -486,7 +494,8 @@ pub(super) fn load_cached(files: &RepositoryFiles) -> Result<Option<SourceGraphB
 fn store_cached(files: &RepositoryFiles, graph: &SourceGraph) -> Result<()> {
     let cache = BorrowedGraphCacheFile {
         schema: GRAPH_CACHE_SCHEMA,
-        graph,
+        files: &graph.files,
+        file_fingerprints: &graph.file_fingerprints,
     };
     #[cfg(test)]
     work::record(Work::GraphCacheSerialization);
@@ -511,7 +520,9 @@ impl SourceGraph {
         previous: Option<&Self>,
         workers: usize,
     ) -> Result<Self> {
-        let mut graph = Self::default();
+        let mut parsed_files = BTreeMap::new();
+        let mut file_fingerprints = BTreeMap::new();
+        let mut changed_files = Vec::new();
         for processed in process_source_files(files, source_files, previous, workers)? {
             #[cfg(test)]
             work::record(Work::SourceRead);
@@ -524,44 +535,52 @@ impl SourceGraph {
             } else {
                 #[cfg(test)]
                 work::record(Work::SourceParse);
-                graph.changed_files.push(processed.parsed.path.clone());
+                changed_files.push(processed.parsed.path.clone());
             }
-            graph.insert(processed.parsed, processed.fingerprint);
+            file_fingerprints.insert(processed.parsed.path.clone(), processed.fingerprint);
+            parsed_files.insert(processed.parsed.path.clone(), processed.parsed);
         }
         if let Some(previous) = previous {
             for previous_file in previous.file_fingerprints.keys() {
-                if !graph.file_fingerprints.contains_key(previous_file) {
-                    graph.changed_files.push(previous_file.clone());
+                if !file_fingerprints.contains_key(previous_file) {
+                    changed_files.push(previous_file.clone());
                 }
             }
-            graph.changed_files.sort();
-            graph.changed_files.dedup();
+            changed_files.sort();
+            changed_files.dedup();
         }
-        graph.rebuild_elixir_relationships();
-        Ok(graph)
+        Ok(Self::from_files(
+            parsed_files,
+            file_fingerprints,
+            changed_files,
+        ))
     }
 
-    /// Adds a parsed file and indexes its symbols by selector and alias.
-    fn insert(&mut self, file: SourceFile, fingerprint: String) {
-        for symbol in &file.symbols {
+    /// The graph of `files`, with its symbols indexed by selector and alias
+    /// and its Elixir relationships resolved.
+    fn from_files(
+        files: BTreeMap<String, SourceFile>,
+        file_fingerprints: BTreeMap<String, String>,
+        changed_files: Vec<String>,
+    ) -> Self {
+        let mut symbol_index = BTreeMap::<String, Vec<SymbolId>>::new();
+        for symbol in files.values().flat_map(|file| &file.symbols) {
             for key in symbol
                 .compatibility_aliases()
                 .into_iter()
                 .chain(std::iter::once(symbol.id.selector.clone()))
             {
-                self.symbol_index
-                    .entry(key)
-                    .or_default()
-                    .push(symbol.id.clone());
+                symbol_index.entry(key).or_default().push(symbol.id.clone());
             }
         }
-        self.file_fingerprints
-            .insert(file.path.clone(), fingerprint);
-        self.files.insert(file.path.clone(), file);
-    }
-
-    fn rebuild_elixir_relationships(&mut self) {
-        self.elixir_relationships = elixir::ElixirRelationships::build(&self.files);
+        let elixir_relationships = elixir::ElixirRelationships::build(&files);
+        Self {
+            files,
+            file_fingerprints,
+            changed_files,
+            symbol_index,
+            elixir_relationships,
+        }
     }
 
     pub(crate) fn files(&self) -> impl Iterator<Item = &SourceFile> {
@@ -577,36 +596,40 @@ impl SourceGraph {
         self.file_fingerprints.get(path).map(String::as_str)
     }
 
+    /// Resolves `path#selector` inside that file, and a bare selector across
+    /// the graph.
     fn resolve_symbol_result(&self, query: &str) -> SymbolResolution {
-        let (path, selector) = query.split_once('#').unwrap_or(("", query));
-        if !path.is_empty() {
-            let Some(file) = self.files.get(path) else {
-                return SymbolResolution::Missing;
-            };
-            let exact = file
-                .symbols
-                .iter()
-                .filter(|symbol| symbol.id.selector == selector)
-                .map(|symbol| symbol.id.clone())
-                .collect::<Vec<_>>();
-            if !exact.is_empty() {
-                return symbol_resolution(exact);
-            }
-            let aliases = file
-                .symbols
-                .iter()
-                .filter(|symbol| {
-                    symbol
-                        .compatibility_aliases()
-                        .iter()
-                        .any(|alias| alias == selector)
-                })
-                .map(|symbol| symbol.id.clone())
-                .collect::<Vec<_>>();
-            return symbol_resolution(aliases);
+        let identity = SourceIdentity::parse(query);
+        let Some(selector) = identity.selector().map(ToString::to_string) else {
+            return symbol_resolution(self.symbol_index.get(query).cloned().unwrap_or_default());
+        };
+        if identity.path().is_empty() {
+            return symbol_resolution(
+                self.symbol_index
+                    .get(&selector)
+                    .cloned()
+                    .unwrap_or_default(),
+            );
         }
-
-        symbol_resolution(self.symbol_index.get(selector).cloned().unwrap_or_default())
+        let Some(file) = self.files.get(identity.path()) else {
+            return SymbolResolution::Missing;
+        };
+        let exact = file
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.id.selector == selector)
+            .map(|symbol| symbol.id.clone())
+            .collect::<Vec<_>>();
+        if !exact.is_empty() {
+            return symbol_resolution(exact);
+        }
+        let aliases = file
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.compatibility_aliases().contains(&selector))
+            .map(|symbol| symbol.id.clone())
+            .collect::<Vec<_>>();
+        symbol_resolution(aliases)
     }
 
     pub(crate) fn resolve_symbol(&self, query: &str) -> Option<SymbolId> {
@@ -697,12 +720,13 @@ impl SourceGraph {
             .files
             .values()
             .flat_map(|file| {
-                let implicit = file.language.has_implicit_entry_points();
+                let entry_point = file.language.entry_point();
                 file.symbols.iter().filter(move |symbol| {
                     symbol.exported
-                        || (implicit
-                            && (symbol.name == "main"
-                                || (symbol.parent.is_none() && !called.contains(&symbol.id))))
+                        || entry_point.is_some_and(|entry_point| {
+                            symbol.name == entry_point
+                                || (symbol.parent.is_none() && !called.contains(&symbol.id))
+                        })
                 })
             })
             .map(|symbol| symbol.id.display())
@@ -717,13 +741,6 @@ impl SourceGraph {
 
     pub(crate) fn changed_files(&self) -> &[String] {
         &self.changed_files
-    }
-
-    #[cfg(test)]
-    pub(crate) fn without_changed_files(&self) -> Self {
-        let mut graph = self.clone();
-        graph.changed_files.clear();
-        graph
     }
 
     fn resolve_call(&self, caller: &SymbolId, target: &str) -> Option<SymbolId> {
@@ -831,25 +848,20 @@ fn process_source_file(
     source_file: &str,
     previous: Option<&SourceGraph>,
 ) -> Result<Option<ProcessedSource>> {
-    let bytes = files.read(Path::new(source_file)).map_err(|error| {
-        CrivError::new(format!(
-            "failed to read selected file `{source_file}`: {error}"
-        ))
-    })?;
+    let bytes = read_selected(files, source_file)?;
     if !content_inspector::inspect(&bytes).is_text() {
         return Ok(None);
     }
-    let fingerprint = blake3::hash(&bytes).to_hex().to_string();
+    let fingerprint = content_hash::of_bytes(&bytes);
     let reused = previous
         .filter(|previous| previous.file_fingerprints.get(source_file) == Some(&fingerprint))
         .and_then(|previous| previous.files.get(source_file).cloned());
-    let (parsed, reused) = reused.map_or_else(
-        || {
-            let contents = String::from_utf8_lossy(&bytes);
-            (extract::parse_source_file(source_file, &contents), false)
-        },
-        |parsed| (parsed, true),
-    );
+    let (parsed, reused) = if let Some(parsed) = reused {
+        (parsed, true)
+    } else {
+        let contents = String::from_utf8_lossy(&bytes);
+        (extract::parse_source_file(source_file, &contents)?, false)
+    };
     Ok(Some(ProcessedSource {
         fingerprint,
         parsed,
@@ -872,10 +884,13 @@ fn symbol_resolution(mut matches: Vec<SymbolId>) -> SymbolResolution {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use extract::parse_source_file;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    fn parse_source_file(path: &str, contents: &str) -> SourceFile {
+        extract::parse_source_file(path, contents).unwrap()
+    }
 
     fn files(root: &Path) -> RepositoryFiles {
         RepositoryFiles::open(root).unwrap()
@@ -921,12 +936,15 @@ mod tests {
     }
 
     fn graph_with_files(files: impl IntoIterator<Item = SourceFile>) -> SourceGraph {
-        let mut graph = SourceGraph::default();
-        for file in files {
-            graph.insert(file, String::new());
-        }
-        graph.rebuild_elixir_relationships();
-        graph
+        let files = files
+            .into_iter()
+            .map(|file| (file.path.clone(), file))
+            .collect::<BTreeMap<_, _>>();
+        let file_fingerprints = files
+            .keys()
+            .map(|path| (path.clone(), String::new()))
+            .collect();
+        SourceGraph::from_files(files, file_fingerprints, Vec::new())
     }
 
     #[test]
@@ -948,7 +966,7 @@ mod tests {
 
     fn elixir_symbol(
         path: &str,
-        owner: SymbolOwner,
+        owner: ElixirOwner,
         kind: SymbolKind,
         name: &str,
         arity: Option<usize>,
@@ -1405,7 +1423,7 @@ mod tests {
 
     #[test]
     fn elixir_aliases_are_unique_or_ambiguous_and_exact_lookup_wins() {
-        let owner = SymbolOwner::Module {
+        let owner = ElixirOwner::Module {
             name: "My.App".into(),
         };
         let mut file = SourceFile {

@@ -477,6 +477,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_norway",
+ "strum",
  "tempfile",
  "thiserror",
  "toml",

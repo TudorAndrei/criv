@@ -11,8 +11,9 @@ use super::syntax::{
 };
 use super::{
     Call, FieldSignature, Import, InterfaceSignature, Language, ModuleDecl, SourceFile, Symbol,
-    SymbolKind, VariantSignature, elixir,
+    SymbolId, SymbolKind, VariantSignature, elixir,
 };
+use crate::{CrivError, Result};
 
 /// Everything criv knows about one language.
 struct LanguageSpec {
@@ -22,8 +23,9 @@ struct LanguageSpec {
     /// Overrides the extension-based media type of the file.
     mime: Option<&'static str>,
     grammar: Option<Grammar>,
-    /// `main` and uncalled top-level symbols count as entry points.
-    implicit_entry_points: bool,
+    /// The symbol name that, with every uncalled top-level symbol, counts as
+    /// an entry point. Without it only exported symbols do.
+    entry_point: Option<&'static str>,
 }
 
 struct Grammar {
@@ -42,6 +44,8 @@ struct GenericRules {
     symbols: &'static [(&'static str, SymbolShape)],
     modules: &'static [(&'static str, NameSource)],
     imports: &'static [(&'static str, ImportForm)],
+    /// The node kinds of a call.
+    calls: &'static [&'static str],
     container: Option<Container>,
     /// Call targets that are keywords or built-ins, beyond the common ones.
     call_keywords: &'static [&'static str],
@@ -64,8 +68,8 @@ enum SymbolShape {
     Function,
     Method,
     Class,
-    /// A variable whose value is an arrow function or function expression.
-    FunctionValue,
+    /// A variable whose value contains a node of one of these kinds.
+    FunctionValue(&'static [&'static str]),
 }
 
 #[derive(Clone, Copy)]
@@ -115,10 +119,14 @@ const TYPESCRIPT_RULES: GenericRules = GenericRules {
         ("generator_function_declaration", SymbolShape::Function),
         ("method_definition", SymbolShape::Method),
         ("method_signature", SymbolShape::Method),
-        ("variable_declarator", SymbolShape::FunctionValue),
+        (
+            "variable_declarator",
+            SymbolShape::FunctionValue(&["arrow_function", "function_expression"]),
+        ),
     ],
     modules: &[("internal_module", NameSource::Field("name"))],
     imports: &[("import_statement", ImportForm::Quoted(&["string"]))],
+    calls: &["call_expression"],
     container: None,
     call_keywords: &[],
     exported: ExportRule::ExportStatement,
@@ -132,7 +140,7 @@ static UNKNOWN: LanguageSpec = LanguageSpec {
     extensions: &[],
     mime: None,
     grammar: None,
-    implicit_entry_points: true,
+    entry_point: None,
 };
 
 static LANGUAGES: [LanguageSpec; 6] = [
@@ -151,6 +159,7 @@ static LANGUAGES: [LanguageSpec; 6] = [
                 ],
                 modules: &[("mod_item", NameSource::Field("name"))],
                 imports: &[("use_declaration", ImportForm::RustUse)],
+                calls: &["call_expression"],
                 container: Some(Container {
                     node: "impl_item",
                     parent: rust_impl_target,
@@ -161,7 +170,7 @@ static LANGUAGES: [LanguageSpec; 6] = [
                 signature: SignatureStyle::Rust,
             }),
         }),
-        implicit_entry_points: true,
+        entry_point: Some("main"),
     },
     LanguageSpec {
         language: Language::TypeScript,
@@ -172,7 +181,7 @@ static LANGUAGES: [LanguageSpec; 6] = [
             load: || tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             rules: Rules::Generic(TYPESCRIPT_RULES),
         }),
-        implicit_entry_points: true,
+        entry_point: Some("main"),
     },
     LanguageSpec {
         language: Language::JavaScript,
@@ -183,7 +192,7 @@ static LANGUAGES: [LanguageSpec; 6] = [
             load: || tree_sitter_javascript::LANGUAGE.into(),
             rules: Rules::Generic(TYPESCRIPT_RULES),
         }),
-        implicit_entry_points: true,
+        entry_point: Some("main"),
     },
     LanguageSpec {
         language: Language::Python,
@@ -202,6 +211,7 @@ static LANGUAGES: [LanguageSpec; 6] = [
                     ("import_statement", ImportForm::PythonStatement),
                     ("import_from_statement", ImportForm::PythonStatement),
                 ],
+                calls: &["call"],
                 container: None,
                 call_keywords: &["print", "len", "str", "int"],
                 exported: ExportRule::NoLeadingUnderscore,
@@ -209,7 +219,7 @@ static LANGUAGES: [LanguageSpec; 6] = [
                 signature: SignatureStyle::Plain,
             }),
         }),
-        implicit_entry_points: true,
+        entry_point: Some("main"),
     },
     LanguageSpec {
         language: Language::Go,
@@ -232,6 +242,7 @@ static LANGUAGES: [LanguageSpec; 6] = [
                     "import_spec",
                     ImportForm::Quoted(&["interpreted_string_literal", "raw_string_literal"]),
                 )],
+                calls: &["call_expression"],
                 container: None,
                 call_keywords: &[],
                 exported: ExportRule::UppercaseName,
@@ -239,7 +250,7 @@ static LANGUAGES: [LanguageSpec; 6] = [
                 signature: SignatureStyle::Plain,
             }),
         }),
-        implicit_entry_points: true,
+        entry_point: Some("main"),
     },
     LanguageSpec {
         language: Language::Elixir,
@@ -250,7 +261,7 @@ static LANGUAGES: [LanguageSpec; 6] = [
             load: || tree_sitter_elixir::LANGUAGE.into(),
             rules: Rules::Elixir,
         }),
-        implicit_entry_points: false,
+        entry_point: None,
     },
 ];
 
@@ -284,27 +295,33 @@ impl Language {
         self.spec().mime
     }
 
-    pub(super) fn has_implicit_entry_points(self) -> bool {
-        self.spec().implicit_entry_points
+    pub(super) fn entry_point(self) -> Option<&'static str> {
+        self.spec().entry_point
     }
 }
 
 /// Parses one file. Tree-sitter recovers from invalid syntax, so a file
 /// with errors keeps the declarations of its valid parts.
-pub(super) fn parse_source_file(path: &str, contents: &str) -> SourceFile {
+///
+/// # Errors
+///
+/// Returns an error when the grammar of the language cannot be loaded.
+pub(super) fn parse_source_file(path: &str, contents: &str) -> Result<SourceFile> {
     let language = Language::from_path(path);
     let Some(grammar) = &language.spec().grammar else {
-        return SourceFile::new(path, language);
+        return Ok(SourceFile::new(path, language));
     };
     let mut parser = Parser::new();
-    let tree = parser
-        .set_language(&(grammar.load)())
-        .ok()
-        .and_then(|()| parser.parse(contents, None));
-    let Some(tree) = tree else {
-        return SourceFile::new(path, language);
+    parser.set_language(&(grammar.load)()).map_err(|error| {
+        CrivError::new(format!(
+            "failed to load the {} grammar: {error}",
+            language.as_str()
+        ))
+    })?;
+    let Some(tree) = parser.parse(contents, None) else {
+        return Ok(SourceFile::new(path, language));
     };
-    match &grammar.rules {
+    Ok(match &grammar.rules {
         Rules::Elixir => elixir::parse_file(path, contents, tree.root_node()),
         Rules::Generic(rules) => {
             let mut file = SourceFile::new(path, language);
@@ -315,7 +332,42 @@ pub(super) fn parse_source_file(path: &str, contents: &str) -> SourceFile {
                 rules,
             }
             .collect(tree.root_node(), None, None, &mut file, Depth::ROOT);
+            file.resolve_container_parents();
             file
+        }
+    })
+}
+
+/// The parent a walk passes to the symbols below it.
+#[derive(Clone)]
+struct Parent {
+    name: String,
+    /// The parent symbol, when the parent is a symbol the walk has seen.
+    id: Option<SymbolId>,
+}
+
+impl SourceFile {
+    /// Points each symbol whose parent came from a container, such as a Rust
+    /// `impl`, at the one type symbol of that name in the file.
+    fn resolve_container_parents(&mut self) {
+        let types = self
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.kind == SymbolKind::Class)
+            .map(|symbol| (symbol.name.clone(), symbol.id.clone()))
+            .collect::<Vec<_>>();
+        for symbol in &mut self.symbols {
+            let Some(parent) = symbol
+                .parent
+                .as_deref()
+                .filter(|_| symbol.parent_id.is_none())
+            else {
+                continue;
+            };
+            let mut matches = types.iter().filter(|(name, _)| name == parent);
+            if let (Some((_, id)), None) = (matches.next(), matches.next()) {
+                symbol.parent_id = Some(id.clone());
+            }
         }
     }
 }
@@ -331,7 +383,7 @@ impl GenericWalk<'_> {
     fn collect(
         &self,
         node: Node<'_>,
-        parent: Option<String>,
+        parent: Option<Parent>,
         module_parent: Option<String>,
         file: &mut SourceFile,
         depth: Depth,
@@ -353,9 +405,12 @@ impl GenericWalk<'_> {
             module_parent
         };
 
-        let child_parent = if let Some(symbol) = self.symbol(node, parent.as_deref()) {
+        let child_parent = if let Some(symbol) = self.symbol(node, parent.as_ref()) {
             let symbol_parent = if symbol.kind == SymbolKind::Class {
-                Some(symbol.name.clone())
+                Some(Parent {
+                    name: symbol.name.clone(),
+                    id: Some(symbol.id.clone()),
+                })
             } else {
                 parent
             };
@@ -364,7 +419,9 @@ impl GenericWalk<'_> {
         } else if let Some(container) = self.rules.container
             && node.kind() == container.node
         {
-            node_text(node, self.contents).and_then(|text| (container.parent)(&text))
+            node_text(node, self.contents)
+                .and_then(|text| (container.parent)(&text))
+                .map(|name| Parent { name, id: None })
         } else {
             parent
         };
@@ -425,7 +482,7 @@ impl GenericWalk<'_> {
         }
     }
 
-    fn symbol(&self, node: Node<'_>, parent: Option<&str>) -> Option<Symbol> {
+    fn symbol(&self, node: Node<'_>, parent: Option<&Parent>) -> Option<Symbol> {
         let (_, shape) = self
             .rules
             .symbols
@@ -434,25 +491,25 @@ impl GenericWalk<'_> {
         let kind = match shape {
             SymbolShape::Callable if parent.is_some() => SymbolKind::Method,
             SymbolShape::Callable | SymbolShape::Function => SymbolKind::Function,
-            SymbolShape::FunctionValue
-                if descendants(node).any(|child| {
-                    matches!(child.kind(), "arrow_function" | "function_expression")
-                }) =>
-            {
+            SymbolShape::FunctionValue(values) => {
+                if !descendants(node).any(|child| values.contains(&child.kind())) {
+                    return None;
+                }
                 SymbolKind::Function
             }
-            SymbolShape::FunctionValue => return None,
             SymbolShape::Method => SymbolKind::Method,
             SymbolShape::Class => SymbolKind::Class,
         };
         let name = field_text(node, self.contents, "name")?;
         let source = node_text(node, self.contents).unwrap_or_default();
         let exported = self.exported(node);
+        let parent_name = parent.map(|parent| parent.name.as_str());
         let interface_signature =
-            Some(self.interface_signature(kind, &name, parent, exported, &source));
-        let selector = symbol_selector(kind, parent, &name);
+            Some(self.interface_signature(kind, &name, parent_name, exported, &source));
+        let selector = symbol_selector(kind, parent_name, &name);
         Some(Symbol {
-            parent: parent.map(str::to_string),
+            parent: parent_name.map(str::to_string),
+            parent_id: parent.and_then(|parent| parent.id.clone()),
             exported,
             interface_signature,
             calls: self.calls(node),
@@ -483,7 +540,7 @@ impl GenericWalk<'_> {
 
     fn calls(&self, node: Node<'_>) -> Vec<Call> {
         let mut calls = descendants(node)
-            .filter(|node| matches!(node.kind(), "call_expression" | "call"))
+            .filter(|node| self.rules.calls.contains(&node.kind()))
             .filter_map(|node| {
                 let function = node
                     .child_by_field_name("function")

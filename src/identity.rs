@@ -1,16 +1,3 @@
-use std::path::Path;
-
-fn normalize_rel(path: &Path) -> String {
-    path.components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-pub fn strip_prefix(path: &Path, root: &Path) -> String {
-    normalize_rel(path.strip_prefix(root).unwrap_or(path))
-}
-
 /// The heading slug: lowercase alphanumeric words joined by `-`.
 pub fn slug(value: &str) -> String {
     value

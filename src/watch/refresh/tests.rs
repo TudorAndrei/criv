@@ -20,7 +20,7 @@ fn lock_live_test() -> MutexGuard<'static, ()> {
 
 #[derive(Debug, Eq, PartialEq)]
 struct RefreshSnapshot {
-    source_graph: source::SourceGraph,
+    source_files: Vec<source::SourceFile>,
     state_json: String,
     state_hash: String,
     latest: String,
@@ -230,12 +230,9 @@ fn invalid_graph_cache_schema_converges_with_a_cache_free_build() {
     initial.refresh(RefreshCause::Initial, || Ok(())).unwrap();
 
     let cache_path = incremental.path().join(".criv/source-graph.json");
-    let cache = fs::read_to_string(&cache_path).unwrap();
-    fs::write(
-        &cache_path,
-        cache.replacen("criv.source-graph/4", "criv.source-graph/invalid", 1),
-    )
-    .unwrap();
+    let mut cache: Value = serde_json::from_str(&fs::read_to_string(&cache_path).unwrap()).unwrap();
+    cache["schema"] = Value::from("criv.source-graph/invalid");
+    fs::write(&cache_path, cache.to_string()).unwrap();
 
     work::reset();
     let mut incremental_session = open_session(incremental.path());
@@ -512,7 +509,7 @@ fn refresh_snapshot(root: &Path, result: &RefreshResult) -> RefreshSnapshot {
     assert_eq!(state_json, snapshot_json);
 
     RefreshSnapshot {
-        source_graph: result.vault.source_graph().without_changed_files(),
+        source_files: result.vault.source_graph().files().cloned().collect(),
         state_json,
         state_hash: result.snapshot.clone(),
         latest,

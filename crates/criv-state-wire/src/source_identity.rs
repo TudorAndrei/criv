@@ -35,8 +35,8 @@ impl SourceIdentity {
         }
     }
 
-    #[cfg(test)]
-    fn path(&self) -> &str {
+    #[must_use]
+    pub fn path(&self) -> &str {
         &self.path
     }
 
@@ -146,16 +146,16 @@ impl ElixirSelector {
         }
     }
 
-    #[cfg(test)]
-    fn callable_name(&self) -> Option<&str> {
+    #[must_use]
+    pub fn callable_name(&self) -> Option<&str> {
         match self {
             Self::Owner(_) => None,
             Self::Callable { name, .. } => Some(name),
         }
     }
 
-    #[cfg(test)]
-    const fn callable_arity(&self) -> Option<usize> {
+    #[must_use]
+    pub const fn callable_arity(&self) -> Option<usize> {
         match self {
             Self::Owner(_) => None,
             Self::Callable { arity, .. } => Some(*arity),
@@ -183,7 +183,7 @@ impl fmt::Display for ElixirSelector {
 }
 
 /// The owner part of one Elixir selector.
-#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize)]
 pub enum ElixirOwner {
     Module { name: String },
     Implementation { protocol: String, for_type: String },
@@ -332,7 +332,7 @@ impl fmt::Display for Encoded<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         use fmt::Write as _;
         for byte in self.0.bytes() {
-            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            if is_unreserved(byte) {
                 formatter.write_char(char::from(byte))?;
             } else {
                 write!(formatter, "%{byte:02X}")?;
@@ -355,12 +355,17 @@ fn decode_value(value: &str) -> Option<String> {
             decoded.push(high.checked_mul(16)?.checked_add(low)?);
             continue;
         }
-        if !byte.is_ascii_alphanumeric() && !matches!(byte, b'-' | b'.' | b'_' | b'~') {
+        if !is_unreserved(byte) {
             return None;
         }
         decoded.push(byte);
     }
     String::from_utf8(decoded).ok()
+}
+
+/// The bytes a selector value keeps without percent-encoding.
+const fn is_unreserved(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')
 }
 
 fn hex_value(value: u8) -> Option<u8> {

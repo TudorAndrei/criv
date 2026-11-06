@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use criv_state_wire::source_identity::{
-    ElixirCallableKind, ElixirOwner as SharedElixirOwner, ElixirSelector, SourceSelector,
+    ElixirCallableKind, ElixirOwner, ElixirSelector, SourceSelector,
 };
 use tree_sitter::Node;
 
@@ -12,8 +12,7 @@ use super::syntax::{
 use super::{
     CallableFilter, DirectiveFilter, DirectiveKind, FieldSignature, Import, InterfaceSignature,
     Language, LexicalScope, ModuleDecl, ModuleRelationshipRole, Relationship, RelationshipKind,
-    RelationshipTarget, SourceFile, Symbol, SymbolId, SymbolKind, SymbolOwner, SymbolRange,
-    symbol_in,
+    RelationshipTarget, SourceFile, Symbol, SymbolId, SymbolKind, SymbolRange, symbol_in,
 };
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -52,7 +51,7 @@ impl ElixirRelationships {
         let mut relationships = Self::default();
         for (path, file) in files {
             for (index, symbol) in file.symbols.iter().enumerate() {
-                let Some(SymbolOwner::Module { name: module }) = symbol.owner.as_ref() else {
+                let Some(ElixirOwner::Module { name: module }) = symbol.owner.as_ref() else {
                     continue;
                 };
                 let module = relationships.modules.entry(module.clone()).or_default();
@@ -249,11 +248,11 @@ pub(super) const fn is_executable_query_edge(kind: RelationshipKind) -> bool {
 
 pub(super) fn symbol_selector(
     kind: SymbolKind,
-    owner: &SymbolOwner,
+    owner: &ElixirOwner,
     name: &str,
     arity: Option<usize>,
 ) -> Option<String> {
-    let owner = shared_owner(owner);
+    let owner = owner.clone();
     if matches!(
         kind,
         SymbolKind::Module
@@ -281,15 +280,6 @@ pub(super) fn symbol_selector(
         | SymbolKind::Behaviour => return None,
     };
     Some(SourceSelector::elixir(ElixirSelector::callable(owner, kind, name, arity?)).to_string())
-}
-
-fn shared_owner(owner: &SymbolOwner) -> SharedElixirOwner {
-    match owner {
-        SymbolOwner::Module { name } => SharedElixirOwner::module(name),
-        SymbolOwner::Implementation { protocol, for_type } => {
-            SharedElixirOwner::implementation(protocol, for_type)
-        }
-    }
 }
 
 fn local_resolution(
@@ -333,7 +323,7 @@ fn callable_identity_matches(symbol: &Symbol, name: &str, arity: usize) -> bool 
 
 fn directive_is_active(
     directive: &Import,
-    owner: Option<&SymbolOwner>,
+    owner: Option<&ElixirOwner>,
     line: usize,
     site: usize,
 ) -> bool {
@@ -346,7 +336,7 @@ fn directive_is_active(
 
 fn resolve_module(
     file: &SourceFile,
-    owner: Option<&SymbolOwner>,
+    owner: Option<&ElixirOwner>,
     module: &str,
     line: usize,
     site: usize,
@@ -356,7 +346,7 @@ fn resolve_module(
 
 fn resolve_module_inner(
     file: &SourceFile,
-    owner: Option<&SymbolOwner>,
+    owner: Option<&ElixirOwner>,
     module: &str,
     line: usize,
     site: usize,
@@ -406,7 +396,7 @@ fn resolve_module_inner(
 
 fn effective_imports(
     file: &SourceFile,
-    owner: Option<&SymbolOwner>,
+    owner: Option<&ElixirOwner>,
     line: usize,
     site: usize,
 ) -> Vec<String> {
@@ -426,7 +416,7 @@ fn effective_imports(
 
 fn import_kind_allows(
     file: &SourceFile,
-    owner: Option<&SymbolOwner>,
+    owner: Option<&ElixirOwner>,
     module: &str,
     line: usize,
     site: usize,
@@ -469,7 +459,7 @@ fn import_kind_allows(
 
 fn resolve_directive_module(
     file: &SourceFile,
-    owner: Option<&SymbolOwner>,
+    owner: Option<&ElixirOwner>,
     directive: &Import,
 ) -> String {
     if directive.absolute {
@@ -634,7 +624,7 @@ fn parse_module(
             return;
         };
         (
-            SymbolOwner::Implementation {
+            ElixirOwner::Implementation {
                 protocol: protocol.clone(),
                 for_type: for_type.clone(),
             },
@@ -653,12 +643,12 @@ fn parse_module(
         } else {
             SymbolKind::Module
         };
-        (SymbolOwner::Module { name: name.clone() }, name, kind)
+        (ElixirOwner::Module { name: name.clone() }, name, kind)
     };
 
     let range = node_range(node);
     let mut module_relationships = match &owner {
-        SymbolOwner::Implementation { protocol, for_type } => vec![
+        ElixirOwner::Implementation { protocol, for_type } => vec![
             Relationship {
                 kind: RelationshipKind::ProtocolImplementation,
                 target: RelationshipTarget::Module {
@@ -678,7 +668,7 @@ fn parse_module(
                 site: node.start_byte(),
             },
         ],
-        SymbolOwner::Module { .. } => Vec::new(),
+        ElixirOwner::Module { .. } => Vec::new(),
     };
     let symbol_index = file.symbols.len();
     file.modules.push(ModuleDecl {
@@ -834,7 +824,7 @@ fn collect_directives(
     node: Node<'_>,
     contents: &str,
     module_name: &str,
-    owner: &SymbolOwner,
+    owner: &ElixirOwner,
     scope: LexicalScope,
     file: &mut SourceFile,
 ) {
@@ -886,7 +876,7 @@ fn parse_directive(
     node: Node<'_>,
     contents: &str,
     module_name: &str,
-    owner: &SymbolOwner,
+    owner: &ElixirOwner,
     scope: LexicalScope,
     kind: DirectiveKind,
 ) -> Vec<Import> {
@@ -1622,7 +1612,7 @@ fn is_elixir_special_form(target: &str) -> bool {
 fn emit_callables(
     path: &str,
     module_name: &str,
-    owner: &SymbolOwner,
+    owner: &ElixirOwner,
     body: &ModuleBody,
     file: &mut SourceFile,
 ) {
@@ -1781,7 +1771,7 @@ fn effective_relationship_arity(
 fn emit_callbacks(
     path: &str,
     module_name: &str,
-    owner: &SymbolOwner,
+    owner: &ElixirOwner,
     body: &ModuleBody,
     file: &mut SourceFile,
 ) {
@@ -1825,7 +1815,7 @@ fn emit_callbacks(
 
 fn module_symbol(
     path: &str,
-    owner: SymbolOwner,
+    owner: ElixirOwner,
     name: String,
     kind: SymbolKind,
     range: SymbolRange,
@@ -1835,7 +1825,7 @@ fn module_symbol(
     fields.sort();
     fields.dedup();
     let selector = symbol_selector(kind, &owner, &name, None).unwrap_or_else(|| {
-        SourceSelector::elixir(ElixirSelector::owner(shared_owner(&owner))).to_string()
+        SourceSelector::elixir(ElixirSelector::owner(owner.clone())).to_string()
     });
     Symbol {
         owner: Some(owner),
@@ -2162,7 +2152,7 @@ mod tests {
 
     #[test]
     fn creates_stable_selectors_for_elixir_owners_and_callables() {
-        let module = SymbolOwner::Module {
+        let module = ElixirOwner::Module {
             name: "My App.Δ".into(),
         };
         assert_eq!(
@@ -2178,7 +2168,7 @@ mod tests {
             "module:My%20App.%CE%94/macro-callback:build%21/1"
         );
 
-        let implementation = SymbolOwner::Implementation {
+        let implementation = ElixirOwner::Implementation {
             protocol: "Enumerable".into(),
             for_type: "My App".into(),
         };
