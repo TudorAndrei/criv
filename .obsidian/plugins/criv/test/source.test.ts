@@ -4,8 +4,10 @@ import { resolve } from "node:path";
 import test from "node:test";
 import { createPackagedCrivStateModule } from "@criv/editor-state/packaged";
 import type { CrivInitialProjections } from "@criv/editor-state";
+import type { App } from "obsidian";
 
-import type { SourceResolver } from "../src/ports";
+import type { SourceResolver, StatePort } from "../src/ports";
+import { ObsidianSourceReferencesOwner } from "../src/source/references";
 import {
   crivLinkRanges,
   frontmatterPatternTargets,
@@ -104,6 +106,37 @@ test("classifies source, pattern, and problem links but not note links", async (
   assert.equal(
     ranges[1]?.status.kind === "problem" && ranges[1].status.message,
     "Unresolved criv target: missing.rs.",
+  );
+});
+
+test("editor warnings follow a State reload without a document change", async () => {
+  const { projections, resolver } = await loadedFixture();
+  let current: CrivInitialProjections | null = null;
+  const port = { current: () => current, sourceResolver: () => resolver } as StatePort;
+  const extension = new ObsidianSourceReferencesOwner(
+    {} as App,
+    port,
+  ).editorExtension() as unknown as {
+    plugin: new (
+      view: unknown,
+      state: StatePort,
+    ) => { decorations: unknown[]; update(update: unknown): void };
+    arg: StatePort;
+  };
+  const text = "[[src/lib.rs]] [[missing.rs]]";
+  const view = {
+    visibleRanges: [{ from: 0, to: text.length }],
+    state: { sliceDoc: (from: number, to: number) => text.slice(from, to) },
+  };
+  const plugin = new extension.plugin(view, extension.arg);
+  assert.deepEqual(plugin.decorations, []);
+
+  current = projections;
+  plugin.update({ docChanged: false, viewportChanged: false, view });
+
+  assert.deepEqual(
+    plugin.decorations.map((range) => (range as { from: number; to: number }).from),
+    [15],
   );
 });
 

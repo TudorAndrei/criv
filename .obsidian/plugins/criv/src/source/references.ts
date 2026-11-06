@@ -19,6 +19,7 @@ import {
   patternTargetId,
   safeVaultPath,
   wikilinks,
+  type CrivInitialProjections,
   type CrivSelectorSuggestion,
 } from "@criv/editor-state";
 import {
@@ -230,24 +231,34 @@ class CrivSourceSuggest extends EditorSuggest<SourceSuggestionItem> {
   }
 }
 
+/**
+ * Marks unresolved and ambiguous links. A State reload reaches every editor
+ * through `workspace.updateOptions()`, whose reconfiguration updates this
+ * plugin without a document or viewport change, so it also rebuilds when the
+ * loaded projections change.
+ */
 class CrivEditorDriftPlugin implements PluginValue {
   decorations: DecorationSet;
+  private projections: CrivInitialProjections | null;
 
   constructor(
     view: EditorView,
     private readonly state: StatePort,
   ) {
+    this.projections = state.current();
     this.decorations = this.buildDecorations(view);
   }
 
   update(update: ViewUpdate): void {
-    if (update.docChanged || update.viewportChanged) {
+    const projections = this.state.current();
+    if (update.docChanged || update.viewportChanged || projections !== this.projections) {
+      this.projections = projections;
       this.decorations = this.buildDecorations(update.view);
     }
   }
 
   private buildDecorations(view: EditorView): DecorationSet {
-    const state = this.state.current();
+    const state = this.projections;
     if (!state) {
       return Decoration.none;
     }
