@@ -186,7 +186,7 @@ model {
     rustRefresh = module 'criv::refresh' {
       technology 'Rust'
       description 'Coordinates load, validation, architecture output, and state publication.'
-      link ../../src/refresh.rs 'source'
+      link ../../src/watch/refresh.rs 'source'
     }
   }
 

@@ -53,7 +53,7 @@ model {
       refreshCoordinator = component 'Refresh coordinator' {
         technology 'Rust and notify'
         description 'Coordinates one-shot and incremental vault loading, validation, generation, and publication.'
-        link ../../src/refresh.rs 'source'
+        link ../../src/watch/refresh.rs 'source'
       }
       statePublisher = component 'State publisher' {
         technology 'Rust and serde'
