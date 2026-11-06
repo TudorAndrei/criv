@@ -36,7 +36,7 @@ bundled Pkl evaluator, so no separate `pkl` CLI is needed.
 
 The top-level `steps` block in `hk.pkl` runs in the `check`, `fix`, and
 `pre-commit` hooks. It holds the gatekeepers (merge-conflict markers, files
-over 500 KB outside `brag-output/`, and private keys), the formatters, and the
+over 500 KB, and private keys), the formatters, and the
 workflow and shell linters. `pre-commit` adds gitleaks on the staged changes,
 and `check` adds gitleaks on the Git history. `hk fix` does not stage its
 changes; pass `--stage` to stage them.

@@ -1,10 +1,7 @@
 amends "package://github.com/jdx/hk/releases/download/v2.10.0/hk@2.10.0#/Config.pkl"
 import "package://github.com/jdx/hk/releases/download/v2.10.0/hk@2.10.0#/Builtins.pkl"
 
-local large_files = (Builtins.check_added_large_files) {
-  // The launch video and its soundtrack are committed on purpose.
-  exclude = List("brag-output/**")
-}
+local large_files = Builtins.check_added_large_files
 
 local gitleaks_history = new Step {
   check = "gitleaks git --redact --no-banner"
