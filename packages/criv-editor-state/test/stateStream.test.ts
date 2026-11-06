@@ -1,9 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { CrivWasmLoadError, type CrivInitialProjections } from "../src/contract.ts";
+import {
+  CrivWasmLoadError,
+  type CrivInitialProjections,
+  type CrivSelectorSuggestion,
+  type CrivSourceTargetLookupResult,
+} from "../src/contract.ts";
 import type { CrivLoadedState, CrivStateModule } from "../src/stateModule.ts";
-import { CrivStateMissingError, CrivStateStream, type CrivStateHost } from "../src/stateStream.ts";
+import {
+  CrivStateMissingError,
+  CrivStateStream,
+  crivStatusMessage,
+  readCrivState,
+  type CrivStateHost,
+} from "../src/stateStream.ts";
 
 test("publishes the loaded projections and delegates queries to the active revision", async () => {
   const revision = new FakeRevision("ready");
@@ -123,9 +134,9 @@ test("publishes only the latest-started load and disposes the late candidate", a
   const stream = new CrivStateStream(new FakeHost(["old", "new"]), stateModule);
 
   const oldResult = stream.refresh();
-  await waitFor(() => stateModule.loads === 1);
+  await stateModule.started(1);
   const newResult = stream.refresh();
-  await waitFor(() => stateModule.loads === 2);
+  await stateModule.started(2);
   newLoad.resolve(newRevision);
   await newResult;
   oldLoad.resolve(oldRevision);
@@ -147,7 +158,7 @@ test("dispose stops publication and disposes a late candidate once", async () =>
   stream.onDidChange((status) => statuses.push(status.kind));
 
   const pending = stream.refresh();
-  await waitFor(() => stateModule.loads === 1);
+  await stateModule.started(1);
   stream.dispose();
   stream.dispose();
   load.resolve(revision);
@@ -158,6 +169,53 @@ test("dispose stops publication and disposes a late candidate once", async () =>
   assert.equal(revision.disposals, 1);
   assert.equal(host.reads, 1);
   assert.equal(host.disposals, 1);
+});
+
+test("loaded starts the first load, then waits for the latest load without reloading", async () => {
+  const first = deferred<CrivLoadedState>();
+  const second = deferred<CrivLoadedState>();
+  const stateModule = new FakeModule([first.promise, second.promise]);
+  const host = new FakeHost(["first", "second"]);
+  const stream = new CrivStateStream(host, stateModule);
+
+  const initial = stream.loaded();
+  await stateModule.started(1);
+  const waiting = stream.loaded();
+  const reload = stream.refresh();
+  await stateModule.started(2);
+  first.resolve(new FakeRevision("first"));
+  second.resolve(new FakeRevision("second"));
+
+  for (const status of [await initial, await waiting]) {
+    assert.equal(status.kind === "ready" && status.projections.summary.schema, "second");
+  }
+  await reload;
+  assert.equal(host.reads, 2);
+});
+
+test("loaded keeps a failed status instead of reloading it", async () => {
+  const host = new FakeHost([new CrivStateMissingError("State is missing.")]);
+  const stream = new CrivStateStream(host, new FakeModule([]));
+
+  assert.equal((await stream.loaded()).kind, "missing");
+  assert.equal((await stream.loaded()).kind, "missing");
+  assert.equal(host.reads, 1);
+});
+
+test("reports a read failure as missing State with its cause", async () => {
+  const cause = new Error("permission denied");
+  const stream = new CrivStateStream(
+    {
+      locate: async () => ".criv/state.json",
+      read: (path) => readCrivState(path, async () => Promise.reject(cause)),
+    },
+    new FakeModule([]),
+  );
+
+  const status = await stream.refresh();
+
+  assert.equal(status.kind, "missing");
+  assert.equal(crivStatusMessage(status), "Could not read .criv/state.json: permission denied");
 });
 
 class FakeHost implements CrivStateHost<string> {
@@ -190,18 +248,34 @@ class FakeHost implements CrivStateHost<string> {
 class FakeModule implements CrivStateModule {
   loads = 0;
   private readonly revisions: (CrivLoadedState | Promise<CrivLoadedState> | Error)[];
+  private readonly starts = new Map<number, ReturnType<typeof deferred<void>>>();
 
   constructor(revisions: (CrivLoadedState | Promise<CrivLoadedState> | Error)[]) {
     this.revisions = revisions;
   }
 
+  /** Resolves once the `count`th load has started. */
+  started(count: number): Promise<void> {
+    return this.start(count).promise;
+  }
+
   async loadState(): Promise<CrivLoadedState> {
     const revision = this.revisions[this.loads];
     this.loads += 1;
+    this.start(this.loads).resolve();
     if (revision === undefined || revision instanceof Error) {
       throw revision ?? new Error("unexpected load");
     }
     return revision;
+  }
+
+  private start(count: number) {
+    let started = this.starts.get(count);
+    if (!started) {
+      started = deferred<void>();
+      this.starts.set(count, started);
+    }
+    return started;
   }
 }
 
@@ -231,15 +305,15 @@ class FakeRevision implements CrivLoadedState {
     };
   }
 
-  lookupSourceTarget(target: string) {
+  lookupSourceTarget(target: string): CrivSourceTargetLookupResult {
     return {
-      kind: "resolved" as const,
+      kind: "resolved",
       canonical_target: `${this.name}:${target}`,
       node: { id: this.name, kind: "code", label: this.name },
     };
   }
 
-  suggestSelectors(query: string, limit: number) {
+  suggestSelectors(query: string, limit: number): CrivSelectorSuggestion[] {
     return [
       {
         target: `${this.name}:${query}:${limit}`,
@@ -262,14 +336,4 @@ function deferred<Value>() {
     resolve = resolvePromise;
   });
   return { promise, resolve };
-}
-
-async function waitFor(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    if (predicate()) {
-      return;
-    }
-    await Promise.resolve();
-  }
-  throw new Error("condition was not reached");
 }

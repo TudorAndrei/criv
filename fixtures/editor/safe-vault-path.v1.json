@@ -1,0 +1,23 @@
+{
+  "cases": [
+    { "input": "src/lib.rs", "expected": "src/lib.rs" },
+    { "input": " ./src//lib.rs ", "expected": "src/lib.rs" },
+    { "input": "src\\windows\\path.rs", "expected": "src/windows/path.rs" },
+    { "input": "src/./nested/", "expected": "src/nested" },
+    { "input": ":name.rs", "expected": ":name.rs" },
+    { "input": "src/a:b.rs", "expected": "src/a:b.rs" },
+    { "input": "../secret.rs", "expected": null },
+    { "input": "src/../secret.rs", "expected": null },
+    { "input": "/etc/passwd", "expected": null },
+    { "input": "//server/share/secret.rs", "expected": null },
+    { "input": "\\\\server\\share\\secret.rs", "expected": null },
+    { "input": "C:\\Users\\name\\secret.rs", "expected": null },
+    { "input": "c:relative.rs", "expected": null },
+    { "input": "1:name.rs", "expected": null },
+    { "input": "src\u0000secret.rs", "expected": null },
+    { "input": "", "expected": null },
+    { "input": "   ", "expected": null },
+    { "input": ".", "expected": null },
+    { "input": "./", "expected": null }
+  ]
+}

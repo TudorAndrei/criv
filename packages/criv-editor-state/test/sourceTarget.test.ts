@@ -1,37 +1,45 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import type { CrivSourceTargetLookupResult } from "../src/contract.ts";
+import { lookupAsset } from "../src/assets.ts";
+import type {
+  CrivGraphNode,
+  CrivSourceTargetCandidate,
+  CrivSourceTargetLookupResult,
+} from "../src/contract.ts";
 import {
   ambiguousSourceTargetMessage,
+  looksLikeSourceTarget,
   parseLineFragment,
   patternTargetId,
+  resolvedSourceLocation,
   resolveSourceTarget,
   safeVaultPath,
   sourceTargetParts,
+  sourceTargetProblem,
+  wikilinks,
 } from "../src/sourceTarget.ts";
 
-test("normalizes safe vault-relative paths", () => {
-  assert.equal(safeVaultPath("src/lib.rs"), "src/lib.rs");
-  assert.equal(safeVaultPath(" ./src//lib.rs "), "src/lib.rs");
-  assert.equal(safeVaultPath("src\\windows\\path.rs"), "src/windows/path.rs");
+const pathFixture = JSON.parse(
+  await readFile(
+    new URL("../../../fixtures/editor/safe-vault-path.v1.json", import.meta.url),
+    "utf8",
+  ),
+) as { cases: { input: string; expected: string | null }[] };
+
+test("follows the shared path-safety fixture", () => {
+  for (const { input, expected } of pathFixture.cases) {
+    assert.equal(safeVaultPath(input), expected ?? undefined, JSON.stringify(input));
+  }
+  assert.equal(safeVaultPath(42), undefined);
 });
 
-test("rejects paths that leave the vault", () => {
-  for (const path of [
-    "../secret.rs",
-    "src/../secret.rs",
-    "/etc/passwd",
-    "C:\\Users\\name\\secret.rs",
-    "\\\\server\\share\\secret.rs",
-    "src\0secret.rs",
-    "",
-    ".",
-    undefined,
-    42,
-  ]) {
-    assert.equal(safeVaultPath(path), undefined, String(path));
-  }
+test("opens only listed assets at a safe path", () => {
+  const asset = { path: "docs/diagram.png", mime: "image/png", bytes: 1, hash: "a" };
+  assert.deepEqual(lookupAsset([asset], "./docs\\diagram.png"), { kind: "resolved", asset });
+  assert.deepEqual(lookupAsset([asset], "docs/missing.png"), { kind: "unauthorized" });
+  assert.deepEqual(lookupAsset([asset], "../diagram.png"), { kind: "invalid" });
 });
 
 test("reads the line fragments the criv CLI accepts", () => {
@@ -92,8 +100,72 @@ test("looks up the path for a line fragment and the full selector otherwise", ()
   assert.deepEqual(requests, ["src/lib.rs", "src/lib.rs#fn:run", "missing.rs"]);
 });
 
+test("opens the node file at the requested lines or else the node lines", () => {
+  const node: CrivGraphNode = {
+    id: "symbol:src/lib.rs#fn:run",
+    kind: "function",
+    label: "run",
+    path: "src/lib.rs#L10-L20",
+    line_range: "L10-L20",
+  };
+  const resolved = { kind: "resolved" as const, canonical_target: "src/lib.rs#fn:run", node };
+
+  assert.deepEqual(resolvedSourceLocation(resolved), {
+    path: "src/lib.rs",
+    lines: { start: 10, end: 20 },
+  });
+  assert.deepEqual(resolvedSourceLocation({ ...resolved, lines: { start: 12, end: 12 } }), {
+    path: "src/lib.rs",
+    lines: { start: 12, end: 12 },
+  });
+  assert.equal(
+    resolvedSourceLocation({ ...resolved, node: { ...node, path: "../escape.rs" } }),
+    undefined,
+  );
+});
+
+test("reads wikilink targets without aliases and recognizes file targets", () => {
+  assert.deepEqual(wikilinks("a [[src/lib.rs#run | label]] b [[A note]]"), [
+    { target: "src/lib.rs#run", start: 2, end: 28 },
+    { target: "A note", start: 31, end: 41 },
+  ]);
+  for (const target of ["src/lib.rs", "source:lib.rs#fn:run", "lib/sample.ex#My.App.run/1"]) {
+    assert.equal(looksLikeSourceTarget(target), true, target);
+  }
+  for (const target of ["A note", "docs/testing", "match:ADR-0001/x", "src/lib.rs.d/"]) {
+    assert.equal(looksLikeSourceTarget(target), false, target);
+  }
+});
+
+test("warns only for an unresolved or ambiguous target", () => {
+  assert.equal(
+    sourceTargetProblem("missing.rs", { kind: "unresolved" }),
+    "Unresolved criv target: missing.rs.",
+  );
+  const candidates: CrivSourceTargetCandidate[] = [
+    {
+      canonical_target: "a.rs#fn:run",
+      node_id: "symbol:a.rs#fn:run",
+      kind: "function",
+      label: "run",
+    },
+  ];
+  assert.equal(
+    sourceTargetProblem("run", { kind: "ambiguous", candidates, total_candidate_count: 2 }),
+    "Ambiguous criv source target run: a.rs#fn:run (function: run); 1 more.",
+  );
+  assert.equal(
+    sourceTargetProblem("src/lib.rs", {
+      kind: "resolved",
+      canonical_target: "src/lib.rs",
+      node: { id: "code:src/lib.rs", kind: "code", label: "src/lib.rs" },
+    }),
+    undefined,
+  );
+});
+
 test("names ambiguous candidates and the hidden remainder", () => {
-  const candidates = [
+  const candidates: CrivSourceTargetCandidate[] = [
     {
       canonical_target: "src/a.rs#fn:run",
       node_id: "symbol:src/a.rs#fn:run",

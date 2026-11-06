@@ -51,6 +51,7 @@ export class CrivStateStream<Source> implements Disposable {
   private readonly listeners = new Set<(status: CrivStateStatus<Source>) => void>();
   private statusValue: CrivStateStatus<Source> = { generation: 0, kind: "loading" };
   private generation = 0;
+  private pending: Promise<unknown> | undefined;
   private disposed = false;
 
   constructor(host: CrivStateHost<Source>, stateModule: CrivStateModule) {
@@ -71,7 +72,50 @@ export class CrivStateStream<Source> implements Disposable {
     if (this.disposed) {
       return this.statusValue;
     }
-    const generation = ++this.generation;
+    const run = this.load(++this.generation);
+    this.pending = run;
+    try {
+      return await run;
+    } finally {
+      if (this.pending === run) {
+        this.pending = undefined;
+      }
+    }
+  }
+
+  /**
+   * The settled status: starts the first load, or waits for every load in
+   * flight. It never reloads a settled status, even a failed one.
+   */
+  async loaded(): Promise<CrivStateStatus<Source>> {
+    if (this.generation === 0) {
+      await this.refresh();
+    }
+    while (this.pending) {
+      await this.pending;
+    }
+    return this.statusValue;
+  }
+
+  lookupSourceTarget(target: string): CrivSourceTargetLookupResult {
+    return this.revisions.current?.lookupSourceTarget(target) ?? { kind: "unresolved" };
+  }
+
+  suggestSelectors(query: string, limit: number): CrivSelectorSuggestion[] {
+    return this.revisions.current?.suggestSelectors(query, limit) ?? [];
+  }
+
+  dispose(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.disposed = true;
+    this.host.dispose?.();
+    this.revisions.dispose();
+    this.listeners.clear();
+  }
+
+  private async load(generation: number): Promise<CrivStateStatus<Source>> {
     if (!this.revisions.current) {
       this.publish({ generation, kind: "loading" });
     }
@@ -104,30 +148,34 @@ export class CrivStateStream<Source> implements Disposable {
     }
   }
 
-  lookupSourceTarget(target: string): CrivSourceTargetLookupResult {
-    return this.revisions.current?.lookupSourceTarget(target) ?? { kind: "unresolved" };
-  }
-
-  suggestSelectors(query: string, limit: number): CrivSelectorSuggestion[] {
-    return this.revisions.current?.suggestSelectors(query, limit) ?? [];
-  }
-
-  dispose(): void {
-    if (this.disposed) {
-      return;
-    }
-    this.disposed = true;
-    this.host.dispose?.();
-    this.revisions.dispose();
-    this.listeners.clear();
-  }
-
   private publish(status: CrivStateStatus<Source>): CrivStateStatus<Source> {
     this.statusValue = status;
     for (const listener of this.listeners) {
       listener(status);
     }
     return status;
+  }
+}
+
+export function crivStatusMessage(status: CrivStateStatus<unknown>): string {
+  switch (status.kind) {
+    case "ready":
+      return "criv state is loaded.";
+    case "loading":
+      return "criv state is loading.";
+    default:
+      return status.message;
+  }
+}
+
+/** Read State text, reporting a read failure as missing State. */
+export async function readCrivState(path: string, read: () => Promise<string>): Promise<string> {
+  try {
+    return await read();
+  } catch (error) {
+    throw new CrivStateMissingError(`Could not read ${path}: ${errorMessage(error)}`, {
+      cause: error,
+    });
   }
 }
 
