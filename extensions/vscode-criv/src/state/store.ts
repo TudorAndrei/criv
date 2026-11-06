@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import {
+  CRIV_CONFIG_FILE,
   CRIV_STATE_PATH,
   CrivStateMissingError,
   CrivStateStream,
@@ -33,13 +34,13 @@ class WorkspaceStateHost implements CrivStateHost<WorkspaceStateSource> {
 
   async locate(): Promise<WorkspaceStateSource> {
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
-      if (await exists(vscode.Uri.joinPath(folder.uri, "criv.toml"))) {
+      if (await exists(vscode.Uri.joinPath(folder.uri, CRIV_CONFIG_FILE))) {
         this.watch(folder.uri);
         return { root: folder.uri, stateUri: vscode.Uri.joinPath(folder.uri, CRIV_STATE_PATH) };
       }
     }
     this.dispose();
-    throw new CrivStateMissingError("Open a workspace containing criv.toml.");
+    throw new CrivStateMissingError(`Open a workspace containing ${CRIV_CONFIG_FILE}.`);
   }
 
   read(source: WorkspaceStateSource): Promise<string> {

@@ -2,7 +2,18 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-import type { CrivNodeKind } from "../src/contract.ts";
+import { CRIV_CONFIG_FILE, CRIV_STATE_PATH, type CrivNodeKind } from "../src/contract.ts";
+
+test("vault paths match the CLI layout", async () => {
+  const paths = JSON.parse(
+    await readFile(
+      new URL("../../../fixtures/editor/vault-paths.v1.json", import.meta.url),
+      "utf8",
+    ),
+  ) as { config: string; state: string };
+
+  assert.deepEqual(paths, { config: CRIV_CONFIG_FILE, state: CRIV_STATE_PATH });
+});
 
 test("CrivNodeKind names every wire NodeKind", async () => {
   const wireKinds = JSON.parse(

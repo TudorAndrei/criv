@@ -24,3 +24,14 @@ pub fn snapshot(hash: &str) -> String {
 pub fn quarantined_snapshot(hash: &str) -> String {
     format!("{QUARANTINE}/{hash}.json")
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn state_path_matches_the_editor_fixture() {
+        let paths: serde_json::Value =
+            serde_json::from_str(include_str!("../../../fixtures/editor/vault-paths.v1.json"))
+                .unwrap();
+        assert_eq!(paths["state"], super::STATE);
+    }
+}

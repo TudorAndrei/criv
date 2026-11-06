@@ -299,6 +299,13 @@ struct RawEnforce {
 mod tests {
     use super::*;
 
+    #[test]
+    fn config_file_matches_the_editor_fixture() {
+        let paths: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/editor/vault-paths.v1.json")).unwrap();
+        assert_eq!(paths["config"], CONFIG_FILE);
+    }
+
     /// The shipped template states every default key, so a new `Config`
     /// field does not compile here until it has a template key.
     #[test]

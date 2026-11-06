@@ -1,3 +1,6 @@
+/** The vault config file, relative to the repository root. */
+export const CRIV_CONFIG_FILE = "criv.toml";
+
 /** The State file path relative to the repository root. */
 export const CRIV_STATE_PATH = ".criv/state.json";
 
