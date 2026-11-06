@@ -13,7 +13,7 @@ pub use graph::{
     DirectiveKind, EdgeOrigin, Import, Language, ModuleRelationshipRole, Relationship,
     RelationshipKind, RelationshipTarget, SourceFile, SourceGraph, Symbol, SymbolId, SymbolKind,
 };
-pub use paths::read_source_to_string_from;
+pub use paths::{read_selected, read_selected_text};
 
 /// One complete Source observation and its graph-cache lifecycle.
 #[derive(Debug, Clone)]
@@ -67,10 +67,6 @@ impl SourceState {
 
     pub(crate) const fn graph(&self) -> &SourceGraph {
         self.graph.graph()
-    }
-
-    pub(crate) fn changed_files(&self) -> &[String] {
-        self.graph.graph().changed_files()
     }
 
     pub(crate) fn resolve_partial_path(&self, query: &str) -> Option<(String, bool)> {
@@ -180,13 +176,13 @@ mod tests {
     fn docs_reuse_clears_changes_without_source_work() {
         let (temp, config) = fixture();
         let state = refresh(temp.path(), &config, None).unwrap();
-        assert!(!state.changed_files().is_empty());
+        assert!(!state.graph().changed_files().is_empty());
         work::reset();
 
         let reused = state.reuse_for_docs();
 
         assert_eq!(reused.paths(), state.paths());
-        assert!(reused.changed_files().is_empty());
+        assert!(reused.graph().changed_files().is_empty());
         assert_eq!(work::total(), 0);
     }
 

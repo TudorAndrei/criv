@@ -8,7 +8,7 @@ use super::stable_hash::StableHasher;
 use crate::markdown::LinkTarget;
 use crate::source::{
     DirectiveKind, EdgeOrigin, Import, ModuleRelationshipRole, Relationship, RelationshipKind,
-    RelationshipTarget, SourceFile, Symbol, SymbolId, SymbolKind,
+    RelationshipTarget, SourceFile, Symbol, SymbolId,
 };
 use crate::vault::{Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 
@@ -164,26 +164,6 @@ impl From<DirectiveKind> for NodeKind {
     }
 }
 
-impl From<SymbolKind> for NodeKind {
-    fn from(kind: SymbolKind) -> Self {
-        match kind {
-            SymbolKind::Function => Self::Function,
-            SymbolKind::Method => Self::Method,
-            SymbolKind::Class => Self::Class,
-            SymbolKind::Module => Self::Module,
-            SymbolKind::Protocol => Self::Protocol,
-            SymbolKind::Implementation => Self::Implementation,
-            SymbolKind::Struct => Self::Struct,
-            SymbolKind::Exception => Self::Exception,
-            SymbolKind::Behaviour => Self::Behaviour,
-            SymbolKind::Macro => Self::Macro,
-            SymbolKind::Guard => Self::Guard,
-            SymbolKind::Callback => Self::Callback,
-            SymbolKind::MacroCallback => Self::MacroCallback,
-        }
-    }
-}
-
 pub(super) fn source_rows(vault: &Vault, file: &SourceFile) -> SourceRows {
     let mut graph = GraphBuilder::default();
     let mut dependencies = PartitionDependencies::default();
@@ -214,11 +194,7 @@ pub(super) fn source_rows(vault: &Vault, file: &SourceFile) -> SourceRows {
             )),
         );
         graph.edge(&file_id, &symbol_id, EdgeKind::Contains);
-        if let Some(parent) = &symbol.parent
-            && let Some(parent_id) = vault
-                .source_graph()
-                .resolve_symbol(&format!("{}#{}", symbol.id.path, parent))
-        {
+        if let Some(parent_id) = &symbol.parent_id {
             graph.edge(
                 &node_id::symbol(&parent_id.display()),
                 &symbol_id,

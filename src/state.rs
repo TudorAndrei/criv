@@ -30,12 +30,7 @@ struct SerializedState {
 }
 
 impl State {
-    fn build(
-        vault: &Vault,
-        previous: Option<&Self>,
-        changed_files: &[String],
-        policies: &PolicyScanPlan,
-    ) -> Result<Self> {
+    fn build(vault: &Vault, previous: Option<&Self>, policies: &PolicyScanPlan) -> Result<Self> {
         let failures = policies.registered_failures();
         if !failures.is_empty() {
             return Err(CrivError::new(
@@ -49,7 +44,7 @@ impl State {
         let partitions = StatePartitions::build(
             vault,
             previous.map(|state| &state.partitions),
-            changed_files,
+            vault.source_graph().changed_files(),
             policies,
         )?;
         let patterns = partitions.patterns();
@@ -94,17 +89,17 @@ impl State {
     }
 }
 
-/// Builds State from `vault`, reusing the partitions of `previous` that
-/// `changed_files` and the vault catalogs leave valid, and publishes it once
-/// `precommit_check` passes. Returns the snapshot hash and the State.
+/// Builds State from `vault`, reusing the partitions of `previous` that the
+/// Source files the vault observed as changed and the vault catalogs leave
+/// valid, and publishes it once `precommit_check` passes. Returns the
+/// snapshot hash and the State.
 pub fn write_state(
     vault: &Vault,
     previous: Option<&State>,
-    changed_files: &[String],
     policies: &PolicyScanPlan,
     precommit_check: impl FnOnce() -> Result<()>,
 ) -> Result<(String, State)> {
-    let state = State::build(vault, previous, changed_files, policies)?;
+    let state = State::build(vault, previous, policies)?;
     let serialized = state.serialize()?;
     publication::publish(
         vault.repository_files(),
@@ -147,33 +142,21 @@ mod tests {
     }
 
     fn build(vault: &Vault) -> Result<State> {
-        build_incremental(vault, None, &[])
+        build_incremental(vault, None)
     }
 
-    fn build_incremental(
-        vault: &Vault,
-        previous: Option<&State>,
-        changed_files: &[String],
-    ) -> Result<State> {
-        State::build(vault, previous, changed_files, &PolicyScanPlan::new(vault))
+    /// Builds over `previous` from a vault whose Source changes came from a
+    /// reload against the published Source graph cache.
+    fn build_incremental(vault: &Vault, previous: Option<&State>) -> Result<State> {
+        State::build(vault, previous, &PolicyScanPlan::new(vault))
     }
 
     fn publish(vault: &Vault) -> Result<(String, State)> {
-        publish_incremental(vault, None, &[])
+        publish_incremental(vault, None)
     }
 
-    fn publish_incremental(
-        vault: &Vault,
-        previous: Option<&State>,
-        changed_files: &[String],
-    ) -> Result<(String, State)> {
-        write_state(
-            vault,
-            previous,
-            changed_files,
-            &PolicyScanPlan::new(vault),
-            || Ok(()),
-        )
+    fn publish_incremental(vault: &Vault, previous: Option<&State>) -> Result<(String, State)> {
+        write_state(vault, previous, &PolicyScanPlan::new(vault), || Ok(()))
     }
 
     #[test]
@@ -469,8 +452,7 @@ end
         let changed_vault = load(&root).unwrap();
 
         work::reset();
-        let changed =
-            build_incremental(&changed_vault, Some(&first), &["lib/sample.ex".into()]).unwrap();
+        let changed = build_incremental(&changed_vault, Some(&first)).unwrap();
         assert_eq!(work::count(Work::SourcePartitionBuild), 1);
         assert!(changed.wire.graph.edges.iter().any(|edge| {
             edge.from == run
@@ -780,13 +762,33 @@ Consequences.
     }
 
     #[test]
+    fn a_member_is_contained_by_its_class_beside_a_same_name_symbol() {
+        let root = unique_temp_dir("criv-same-name-parent");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("criv.toml"), "[source]\nroots = [\"src\"]\n").unwrap();
+        std::fs::write(
+            root.join("src/thing.py"),
+            "class Thing:\n    def run(self):\n        pass\n\n\ndef Thing():\n    pass\n",
+        )
+        .unwrap();
+
+        let state = build(&load(&root).unwrap()).unwrap();
+
+        assert!(state.wire.graph.edges.iter().any(|edge| {
+            edge.from == "symbol:src/thing.py#type:Thing"
+                && edge.to == "symbol:src/thing.py#type:Thing/member:run"
+                && edge.kind == EdgeKind::Contains
+        }));
+    }
+
+    #[test]
     fn no_op_incremental_build_rebuilds_no_partition() {
         let root = policy_vault("criv-state-partition-allocation-reuse");
+        let first = build(&load(&root).unwrap()).unwrap();
         let vault = load(&root).unwrap();
-        let first = build(&vault).unwrap();
 
         work::reset();
-        let second = build_incremental(&vault, Some(&first), &[]).unwrap();
+        let second = build_incremental(&vault, Some(&first)).unwrap();
 
         assert_eq!(
             work::counts([
@@ -871,12 +873,7 @@ governs:
         )
         .unwrap();
         let vault = load(&root).unwrap();
-        let (_, after) = publish_incremental(
-            &vault,
-            Some(&before),
-            &["docs/adr/0002-successor.md".to_string()],
-        )
-        .unwrap();
+        let (_, after) = publish_incremental(&vault, Some(&before)).unwrap();
 
         assert!(
             !after
@@ -903,7 +900,7 @@ governs:
         )
         .unwrap();
         let vault = load(&root).unwrap();
-        let (_, after) = publish_incremental(&vault, Some(&before), &[]).unwrap();
+        let (_, after) = publish_incremental(&vault, Some(&before)).unwrap();
 
         assert_eq!(
             after.wire.patterns[DRAFT_PATTERN_ID]
@@ -928,12 +925,7 @@ governs:
 
         std::fs::write(&policy_path, DRAFT_POLICY_ADR).unwrap();
         let vault = load(&root).unwrap();
-        let (_, after) = publish_incremental(
-            &vault,
-            Some(&before),
-            &["docs/adr/0002-no-debug.md".to_string()],
-        )
-        .unwrap();
+        let (_, after) = publish_incremental(&vault, Some(&before)).unwrap();
 
         assert!(
             !after
@@ -972,13 +964,14 @@ governs:
         .unwrap();
 
         let vault = load(&root).unwrap();
-        let (_, second) = publish_incremental(
-            &vault,
-            Some(&first),
-            std::slice::from_ref(&"src/beta.rs".to_string()),
-        )
-        .unwrap();
+        work::reset();
+        let (_, second) = publish_incremental(&vault, Some(&first)).unwrap();
 
+        assert_eq!(
+            work::count(Work::AstParse),
+            1,
+            "only the changed governed file is rescanned"
+        );
         assert_eq!(
             second.wire.registered_patterns,
             vec![PATTERN_ID.to_string()]
@@ -1006,69 +999,6 @@ governs:
     }
 
     #[test]
-    fn incremental_pattern_matches_skip_files_absent_from_the_changed_set() {
-        // Pins the reuse contract itself: a file the caller does not report as
-        // changed is carried forward from the previous state and is NOT
-        // rescanned. Editing alpha on disk while reporting only beta means a
-        // full rescan would drop alpha's match, while correct reuse keeps it.
-        let root = policy_vault("criv-incremental-pattern-scope");
-
-        let vault = load(&root).unwrap();
-        let (_, first) = publish(&vault).unwrap();
-        assert_eq!(matched_files(&first).len(), 2);
-
-        std::fs::write(root.join("src/alpha.rs"), "fn alpha() {}\n").unwrap();
-
-        let vault = load(&root).unwrap();
-        let (_, second) = publish_incremental(
-            &vault,
-            Some(&first),
-            std::slice::from_ref(&"src/beta.rs".to_string()),
-        )
-        .unwrap();
-
-        assert!(
-            matched_files(&second).contains(&"src/alpha.rs".to_string()),
-            "a file outside the changed set must be reused, not rescanned"
-        );
-    }
-
-    #[test]
-    fn incremental_rescan_is_empty_when_no_changed_file_is_in_scope() {
-        // `README.md` is outside the ADR's `governs:` scope, so the scoped
-        // changed set is empty and an empty glob list must keep meaning "nothing
-        // in scope". Widening it to "no filter" would rescan the whole vault and
-        // pick up the println! added to alpha after the previous state was
-        // written — a file the caller never reported as changed.
-        let root = policy_vault("criv-incremental-pattern-out-of-scope");
-        std::fs::write(root.join("src/alpha.rs"), "fn alpha() {}\n").unwrap();
-
-        let vault = load(&root).unwrap();
-        let (_, first) = publish(&vault).unwrap();
-        assert_eq!(matched_files(&first), vec!["src/beta.rs".to_string()]);
-
-        std::fs::write(
-            root.join("src/alpha.rs"),
-            "fn alpha() {\n    println!(\"alpha\");\n}\n",
-        )
-        .unwrap();
-
-        let vault = load(&root).unwrap();
-        let (_, second) = publish_incremental(
-            &vault,
-            Some(&first),
-            std::slice::from_ref(&"README.md".to_string()),
-        )
-        .unwrap();
-
-        assert_eq!(
-            matched_files(&second),
-            vec!["src/beta.rs".to_string()],
-            "no governed file changed, so the rescan must contribute nothing"
-        );
-    }
-
-    #[test]
     fn incremental_pattern_matches_drop_deleted_files() {
         let root = policy_vault("criv-incremental-pattern-delete");
 
@@ -1079,12 +1009,7 @@ governs:
         std::fs::remove_file(root.join("src/beta.rs")).unwrap();
 
         let vault = load(&root).unwrap();
-        let (_, second) = publish_incremental(
-            &vault,
-            Some(&first),
-            std::slice::from_ref(&"src/beta.rs".to_string()),
-        )
-        .unwrap();
+        let (_, second) = publish_incremental(&vault, Some(&first)).unwrap();
 
         assert_eq!(
             matched_files(&second),

@@ -309,43 +309,42 @@ struct CoverageOptions {
     output: OutputOptions,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy)]
 enum NodeKind {
     Code,
     Doc,
     Decision,
-    Function,
-    Method,
-    Class,
-    Module,
-    Protocol,
-    Implementation,
-    Struct,
-    Exception,
-    Behaviour,
-    Macro,
-    Guard,
-    Callback,
-    MacroCallback,
+    Symbol(SymbolKind),
 }
 
-impl NodeKind {
-    const fn symbol_kind(self) -> Option<SymbolKind> {
-        match self {
-            Self::Function => Some(SymbolKind::Function),
-            Self::Method => Some(SymbolKind::Method),
-            Self::Class => Some(SymbolKind::Class),
-            Self::Module => Some(SymbolKind::Module),
-            Self::Protocol => Some(SymbolKind::Protocol),
-            Self::Implementation => Some(SymbolKind::Implementation),
-            Self::Struct => Some(SymbolKind::Struct),
-            Self::Exception => Some(SymbolKind::Exception),
-            Self::Behaviour => Some(SymbolKind::Behaviour),
-            Self::Macro => Some(SymbolKind::Macro),
-            Self::Guard => Some(SymbolKind::Guard),
-            Self::Callback => Some(SymbolKind::Callback),
-            Self::MacroCallback => Some(SymbolKind::MacroCallback),
-            Self::Code | Self::Doc | Self::Decision => None,
+impl usage_rs::spec::ValueEnum for NodeKind {
+    /// The command-line words: the three note and file kinds, then each
+    /// `SymbolKind` name in declaration order.
+    const CHOICES: &'static [&'static str] = &[
+        "code",
+        "doc",
+        "decision",
+        "function",
+        "method",
+        "class",
+        "module",
+        "protocol",
+        "implementation",
+        "struct",
+        "exception",
+        "behaviour",
+        "macro",
+        "guard",
+        "callback",
+        "macro-callback",
+    ];
+
+    fn from_choice(value: &str) -> Option<Self> {
+        match value {
+            "code" => Some(Self::Code),
+            "doc" => Some(Self::Doc),
+            "decision" => Some(Self::Decision),
+            _ => SymbolKind::from_name(value).map(Self::Symbol),
         }
     }
 }
@@ -583,17 +582,12 @@ fn nodes(files: &RepositoryFiles, options: &NodesOptions) -> Result<Vec<String>>
                 .then(|| QueryReverseIndex::build(&vault, ReverseIndexScope::Sources));
             code_nodes(&vault, index.as_ref())
         }
-        Some(kind) => {
-            let symbol_kind = kind
-                .symbol_kind()
-                .ok_or_else(|| CrivError::new("node kind does not identify a source symbol"))?;
-            load_vault(files, SourceLoad::Refresh)?
-                .source_graph()
-                .symbols()
-                .filter(|symbol| symbol.kind == symbol_kind)
-                .map(|symbol| symbol.id.display())
-                .collect()
-        }
+        Some(NodeKind::Symbol(symbol_kind)) => load_vault(files, SourceLoad::Refresh)?
+            .source_graph()
+            .symbols()
+            .filter(|symbol| symbol.kind == symbol_kind)
+            .map(|symbol| symbol.id.display())
+            .collect(),
         None => {
             let vault = load_vault(files, SourceLoad::Refresh)?;
             let mut rows = vault.source_files().to_vec();
@@ -741,6 +735,20 @@ mod tests {
 
     fn files(root: &Path) -> RepositoryFiles {
         RepositoryFiles::open(root).unwrap()
+    }
+
+    #[test]
+    fn node_kind_choices_name_every_symbol_kind_once() {
+        use strum::IntoEnumIterator;
+        use usage_rs::spec::ValueEnum as _;
+
+        let symbol_names = SymbolKind::iter()
+            .map(SymbolKind::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(NodeKind::CHOICES.get(3..), Some(symbol_names.as_slice()));
+        for choice in NodeKind::CHOICES {
+            assert!(NodeKind::from_choice(choice).is_some(), "{choice}");
+        }
     }
 
     #[test]

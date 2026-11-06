@@ -183,7 +183,7 @@ impl fmt::Display for ElixirSelector {
 }
 
 /// The owner part of one Elixir selector.
-#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize)]
 pub enum ElixirOwner {
     Module { name: String },
     Implementation { protocol: String, for_type: String },

@@ -174,15 +174,9 @@ impl SourceEventFilter {
         let Ok(relative) = event.strip_prefix(&self.root) else {
             return false;
         };
-        let mut parts = Vec::new();
-        for component in relative.components() {
-            match component {
-                Component::Normal(part) => parts.push(part.to_string_lossy()),
-                Component::CurDir => {}
-                Component::ParentDir | Component::RootDir | Component::Prefix(_) => return true,
-            }
-        }
-        let relative = parts.join("/");
+        let Some(relative) = join_normal_components(relative) else {
+            return true;
+        };
         let intersects_root = rules.roots.iter().any(|source_root| {
             path_contains(source_root, &relative) || path_contains(&relative, source_root)
         });
@@ -237,16 +231,6 @@ fn vault_selection_kind(path: &Path) -> Option<SelectionKind> {
         return Some(SelectionKind::VaultMarkdown);
     }
     asset::mime_for_path(path.to_str()?).map(|_| SelectionKind::VaultAsset)
-}
-
-pub fn read_selected_text_from(files: &RepositoryFiles, path: &Path) -> Result<String> {
-    let root = files.root();
-    let relative = relative_utf8(root, path)?;
-    files.read_string(Path::new(&relative)).map_err(|error| {
-        CrivError::new(format!(
-            "failed to read selected file `{relative}`: {error}"
-        ))
-    })
 }
 
 fn walk(root: &Path, builder: &mut WalkBuilder, profile: Arc<Profile>) -> Collected {
@@ -579,29 +563,32 @@ fn relative_utf8(root: &Path, path: &Path) -> Result<String> {
             root.display()
         ))
     })?;
+    if relative.to_str().is_none() {
+        return Err(CrivError::new(format!(
+            "discovered path {} is not valid UTF-8",
+            path.display()
+        )));
+    }
+    join_normal_components(relative).ok_or_else(|| {
+        CrivError::new(format!(
+            "discovered path {} has an invalid repository identity",
+            path.display()
+        ))
+    })
+}
+
+/// The `/`-joined normal components of `relative`, or `None` when a
+/// component leaves it. A component that is not UTF-8 joins in lossy form.
+fn join_normal_components(relative: &Path) -> Option<String> {
     let mut parts = Vec::new();
     for component in relative.components() {
         match component {
-            Component::Normal(part) => parts.push(
-                part.to_str()
-                    .ok_or_else(|| {
-                        CrivError::new(format!(
-                            "discovered path {} is not valid UTF-8",
-                            path.display()
-                        ))
-                    })?
-                    .to_string(),
-            ),
+            Component::Normal(part) => parts.push(part.to_string_lossy()),
             Component::CurDir => {}
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                return Err(CrivError::new(format!(
-                    "discovered path {} has an invalid repository identity",
-                    path.display()
-                )));
-            }
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
         }
     }
-    Ok(parts.join("/"))
+    Some(parts.join("/"))
 }
 
 fn subtree_prune_matcher(patterns: &[String]) -> Result<Option<GlobMatcher>> {
@@ -896,20 +883,6 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("directory link `docs/active-link`")
-        );
-    }
-
-    #[test]
-    fn selected_text_read_errors_report_the_repository_path() {
-        let temp = TempDir::new().unwrap();
-        write(&temp.path().join("docs/invalid.md"), &[0xFF]);
-        let files = RepositoryFiles::open(temp.path()).unwrap();
-
-        assert!(
-            read_selected_text_from(&files, &files.root().join("docs/invalid.md"))
-                .unwrap_err()
-                .to_string()
-                .contains("failed to read selected file `docs/invalid.md`")
         );
     }
 
