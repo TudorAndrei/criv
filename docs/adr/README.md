@@ -172,6 +172,9 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0160-own-the-published-state-grammar-in-the-wire-crate|ADR-0160]] - Own the published State grammar in the wire crate
 - [[0161-describe-source-languages-in-one-table|ADR-0161]] - Describe Source languages in one table
 - [[0162-keep-the-vault-model-deep-and-state-fingerprints-in-state|ADR-0162]] - Keep the vault model deep and State fingerprints in State
+- [[0163-separate-the-adr-gate-from-one-reconcile-transaction|ADR-0163]] - Separate the ADR gate from one reconcile transaction
+- [[0164-type-git-revisions-on-one-opened-repository|ADR-0164]] - Type Git revisions on one opened repository
+- [[0165-define-repository-files-without-a-forwarding-layer|ADR-0165]] - Define repository files without a forwarding layer
 - [[0170-share-editor-state-behaviour-and-embed-the-wasm-runtime|ADR-0170]] - Share editor State behaviour and embed the Wasm runtime
 - [[0171-retain-state-wire-and-elixir-rules-after-the-editor-state-move|ADR-0171]] - Retain State wire and Elixir rules after the editor-state move
 - [[0172-retain-the-obsidian-owner-layout-with-typescript-tests|ADR-0172]] - Retain the Obsidian owner layout with TypeScript tests
