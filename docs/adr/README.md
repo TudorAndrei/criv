@@ -171,6 +171,7 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0159-derive-configuration-defaults-from-one-type|ADR-0159]] - Derive configuration defaults from one type
 - [[0160-own-the-published-state-grammar-in-the-wire-crate|ADR-0160]] - Own the published State grammar in the wire crate
 - [[0161-describe-source-languages-in-one-table|ADR-0161]] - Describe Source languages in one table
+- [[0162-keep-the-vault-model-deep-and-state-fingerprints-in-state|ADR-0162]] - Keep the vault model deep and State fingerprints in State
 - [[0170-share-editor-state-behaviour-and-embed-the-wasm-runtime|ADR-0170]] - Share editor State behaviour and embed the Wasm runtime
 - [[0171-retain-state-wire-and-elixir-rules-after-the-editor-state-move|ADR-0171]] - Retain State wire and Elixir rules after the editor-state move
 - [[0172-retain-the-obsidian-owner-layout-with-typescript-tests|ADR-0172]] - Retain the Obsidian owner layout with TypeScript tests
