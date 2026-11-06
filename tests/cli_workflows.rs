@@ -1269,22 +1269,29 @@ fn query_usage_errors_are_reported() {
         .stderr(predicate::str::contains("unrecognized subcommand 'bogus'"));
     let listed = criv(root).args(["query"]).assert().failure().code(2);
     let stderr = String::from_utf8(listed.get_output().stderr.clone()).unwrap();
-    for name in [
-        "next-adr-id",
-        "callers",
-        "callees",
-        "attack-surface",
-        "targets",
-        "cites",
-        "cited-by",
-        "orphan-docs",
-        "references",
-        "governs",
-        "governing",
-        "coverage",
-        "nodes",
-        "diff",
-    ] {
+    let tree: serde_json::Value = serde_json::from_slice(
+        &criv(root)
+            .arg("--usage-json")
+            .assert()
+            .success()
+            .get_output()
+            .stdout,
+    )
+    .unwrap();
+    let query = tree["subcommands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|command| command["name"] == "query")
+        .unwrap();
+    let names: Vec<&str> = query["subcommands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|command| command["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"diff"), "query declares {names:?}");
+    for name in names {
         assert!(stderr.contains(name), "missing query subcommand {name}");
     }
 
