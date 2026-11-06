@@ -278,7 +278,6 @@ impl StatePartitions {
 
     pub(super) fn graph(&self) -> Graph {
         let mut builder = GraphBuilder::default();
-        // Every code file node precedes the Source details.
         for partition in self.sources.values() {
             builder.push_node(partition.rows.code_node.clone());
         }

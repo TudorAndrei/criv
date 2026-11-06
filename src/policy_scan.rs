@@ -86,8 +86,6 @@ impl PolicyScanPlan {
                 #[cfg(test)]
                 work::record(Work::PolicyDefinition);
                 let full_id = active_adr_id.map(|adr_id| pattern_id(adr_id, local_id));
-                // A registered pattern id names the first declaration of the
-                // local id in the decision note that the ADR id resolves to.
                 let registered = first_declaration
                     && full_id.as_ref().is_some_and(|full_id| {
                         vault.patterns().contains(full_id)
@@ -152,7 +150,6 @@ impl PolicyScanPlan {
         &self.owners
     }
 
-    /// Every registered pattern whose definition does not compile, by id.
     pub(crate) fn registered_failures(&self) -> &[PolicyFailure] {
         &self.registered_failures
     }
@@ -229,7 +226,6 @@ impl PlannedPolicy {
         &self.pattern_id
     }
 
-    /// Whether this declaration is the one its pattern id registers.
     pub(crate) const fn is_registered(&self) -> bool {
         self.registered
     }

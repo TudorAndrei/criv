@@ -1093,7 +1093,6 @@ governs:
         );
     }
 
-    /// A temporary repository root, removed when the test drops it.
     struct TempRoot(tempfile::TempDir);
 
     impl std::ops::Deref for TempRoot {

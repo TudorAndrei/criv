@@ -140,7 +140,6 @@ impl Note {
         &self.path
     }
 
-    /// The repository-relative path.
     pub(crate) fn rel_path(&self) -> &str {
         &self.rel_path
     }
@@ -746,9 +745,7 @@ fn parse_note(files: &RepositoryFiles, path: &Path) -> Result<Note> {
             frontmatter.body_start,
         )
     });
-    // Positions are file-relative (ADR-0045). The frontmatter offset applies to
-    // the parsed-note body only; the error branch keeps the whole file as the
-    // body, so it needs no offset at all.
+    // ADR-0045
     let mut note = match parse_frontmatter(yaml) {
         Ok(note) => Note {
             body: contents.get(body_start..).unwrap_or_default().to_string(),
@@ -1610,8 +1607,6 @@ roots = ["src"]
 
     #[test]
     fn note_positions_are_file_relative_when_frontmatter_fails_to_parse() {
-        // The error branch keeps the whole file as the body, so no offset
-        // applies — adding one would push every position past its real line.
         let contents = "---\nid: [unclosed\n---\n\n# Heading\n\nSee [[other-note]].\n";
         let note = parsed_note(contents);
 

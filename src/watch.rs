@@ -1052,7 +1052,6 @@ mod tests {
     }
 
     #[test]
-    /// Reject stale configuration and retain pending source work for the retry.
     fn changed_configuration_rejects_publication_and_preserves_source_retry() {
         let (_temp, files, mut session) = refresh_fixture();
         let before = published_artifacts(files.root());
@@ -1111,7 +1110,6 @@ mod tests {
     }
 
     #[test]
-    /// Return the refresh error when the active configuration still matches.
     fn unchanged_configuration_reports_refresh_failure() {
         let (_temp, files, mut session) = refresh_fixture();
         let previous = previous_snapshot(&session);
@@ -1126,7 +1124,6 @@ mod tests {
     }
 
     #[test]
-    /// Give configuration replacement priority over an obsolete refresh error.
     fn changed_configuration_takes_priority_over_a_refresh_failure() {
         let (_temp, files, mut session) = refresh_fixture();
         corrupt_a_snapshot(&files);
@@ -1140,7 +1137,6 @@ mod tests {
     }
 
     #[test]
-    /// Suspend on an invalid configuration and recover once it is repaired.
     fn session_suspends_on_invalid_configuration_and_recovers() {
         let (_temp, files, initial) = refresh_fixture();
         let factory = Arc::new(ScriptedWatcherFactory::new(vec![
@@ -1187,7 +1183,6 @@ mod tests {
     }
 
     #[test]
-    /// A docs event reuses the Source state; a source event observes the change.
     fn event_paths_choose_docs_reuse_or_source_refresh() {
         let (_temp, files, _initial) = refresh_fixture();
         let factory = Arc::new(ScriptedWatcherFactory::new(vec![vec![
@@ -1235,7 +1230,6 @@ mod tests {
     }
 
     #[test]
-    /// Build the candidate from its snapshot, then process queued config changes.
     fn candidate_uses_its_snapshot_then_observes_the_queued_configuration_event() {
         let (_temp, files, _initial) = refresh_fixture();
         let original = read_config_source(&files).unwrap();

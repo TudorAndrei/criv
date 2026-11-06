@@ -28,7 +28,6 @@ pub(super) trait Receipt: DeserializeOwned + Serialize {
     fn schema(&self) -> &str;
     fn head_sha(&self) -> &str;
 
-    /// The receipt, or `None` when there is none.
     fn read(files: &RepositoryFiles) -> Result<Option<Self>> {
         let Some(contents) = files.read_optional_string(Path::new(Self::PATH))? else {
             return Ok(None);

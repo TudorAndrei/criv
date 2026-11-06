@@ -189,7 +189,6 @@ impl Serialize for DiagnosticCode {
     }
 }
 
-// Output sorts diagnostics by the code text, not by declaration order.
 impl Ord for DiagnosticCode {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.as_str().cmp(other.as_str())

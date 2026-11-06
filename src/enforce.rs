@@ -64,7 +64,6 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
 
     let changes = changed_entries(root, options, ci_base_ref.as_deref())?;
     let changed_files = changes.as_ref().map(ChangedSet::affected_paths);
-    // CI scans the whole vault; the other stages scan only what changed.
     let scanned_files = changed_files
         .as_ref()
         .filter(|_| options.stage != Stage::Ci);

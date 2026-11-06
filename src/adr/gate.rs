@@ -202,7 +202,6 @@ fn immutability_violations(
         .collect()
 }
 
-/// The new text differs only by equivalent portable ADR links.
 fn is_portable_link_migration(old: &str, new: &str) -> bool {
     old != new && normalize_portable_adr_links(new) == old
 }
@@ -309,7 +308,6 @@ mod tests {
     }
 
     #[test]
-    /// Keep file errors before receipt errors and report scope changes last.
     fn current_receipt_failures_follow_file_order_and_precede_scope_failure() {
         let root = decision_repository();
         let files = RepositoryFiles::open(root.path()).unwrap();
@@ -381,7 +379,6 @@ mod tests {
     }
 
     #[test]
-    /// Detect an ADR edit using the old scope when configuration moves it.
     fn scope_change_is_rejected_even_when_new_scope_hides_the_adr() {
         let root = decision_repository();
         let files = RepositoryFiles::open(root.path()).unwrap();
@@ -410,7 +407,6 @@ mod tests {
     }
 
     #[test]
-    /// Distinguish a branch allocation conflict from a published ADR edit.
     fn ci_allows_branch_local_deletion_but_rejects_a_published_edit() {
         let root = decision_repository();
         let files = RepositoryFiles::open(root.path()).unwrap();
@@ -450,7 +446,6 @@ mod tests {
     }
 
     #[test]
-    /// Allow new decisions while preserving the published decision contract.
     fn immutability_allows_new_adrs_but_blocks_existing_changes() {
         let root = tempfile::TempDir::new().unwrap();
         let files = RepositoryFiles::open(root.path()).unwrap();
@@ -473,7 +468,6 @@ mod tests {
     }
 
     #[test]
-    /// Accept a portable-link migration only from a regular, readable file.
     fn working_tree_migration_requires_regular_readable_content() {
         let root = tempfile::TempDir::new().unwrap();
         git(root.path(), &["init"]);
@@ -511,7 +505,6 @@ mod tests {
     }
 
     #[test]
-    /// Keep a content edit from using the portable-link migration exception.
     fn portable_link_migrations_reject_content_edits() {
         let old = "See [[ADR-0010]].\n";
         let new = "Changed decision text and see [[0010-criv-init-installs-agent-runtime-skills|ADR-0010]].\n";
@@ -520,7 +513,6 @@ mod tests {
     }
 
     #[test]
-    /// Reject portable links whose target changes the referenced decision.
     fn portable_link_migrations_reject_mismatched_targets() {
         let old = "See [[ADR-0010]].\n";
         let new = "See [[0011-embed-runtime-skill-templates-as-assets|ADR-0010]].\n";

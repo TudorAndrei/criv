@@ -167,7 +167,6 @@ impl GitRepository {
         })
     }
 
-    /// The repository's Git directory, such as `.git`.
     pub(crate) fn git_dir(&self) -> &Path {
         self.repository.path()
     }
