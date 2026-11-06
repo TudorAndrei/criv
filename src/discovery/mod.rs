@@ -186,6 +186,36 @@ impl SourceEventFilter {
     }
 }
 
+/// Decides which watch events can change the vault selection, by the prune
+/// rules of the vault walk.
+#[derive(Debug)]
+pub struct VaultEventFilter {
+    root: PathBuf,
+    docs: String,
+}
+
+impl VaultEventFilter {
+    pub(crate) fn new(root: &Path, config: &Config) -> Self {
+        Self {
+            root: root.to_path_buf(),
+            docs: config.docs_dir().to_string(),
+        }
+    }
+
+    /// Whether a change at `event` is below the docs root and outside every
+    /// directory that the vault walk prunes. A path that is not valid UTF-8
+    /// is judged by its lossy form.
+    pub(crate) fn relevant(&self, event: &Path) -> bool {
+        let Ok(relative) = event.strip_prefix(&self.root) else {
+            return false;
+        };
+        let Some(relative) = join_normal_components(relative) else {
+            return true;
+        };
+        path_contains(&self.docs, &relative) && !profile_prunes_path(&Profile::Vault, &relative)
+    }
+}
+
 /// The notes and assets under `docs_dir`, as [`Config::docs_dir`] normalizes it.
 pub fn discover_vault(root: &Path, docs_relative: &str) -> Result<VaultPaths> {
     let profile = Arc::new(Profile::Vault);
@@ -769,6 +799,22 @@ mod tests {
             &root.join("src/generated/output.rs")
         ));
         assert!(!event_relevant(root, &config, &root.join("docs/note.md")));
+    }
+
+    #[test]
+    fn vault_events_follow_the_vault_prune_rules() {
+        let root = Path::new("/repository");
+        let filter = VaultEventFilter::new(root, &Config::default());
+
+        assert!(filter.relevant(&root.join("docs")));
+        assert!(filter.relevant(&root.join("docs/note.md")));
+        assert!(filter.relevant(&root.join("docs/sub")));
+        assert!(!filter.relevant(&root.join("docs/node_modules/pkg/readme.md")));
+        assert!(!filter.relevant(&root.join("docs/target")));
+        assert!(!filter.relevant(&root.join("docs/.criv/state.json")));
+        assert!(!filter.relevant(&root.join("docsite/note.md")));
+        assert!(!filter.relevant(&root.join("src/lib.rs")));
+        assert!(!filter.relevant(Path::new("/elsewhere/docs/note.md")));
     }
 
     #[test]

@@ -14,7 +14,7 @@ use serde::Serialize;
 use usage_rs::{Args as UsageArgs, ValueEnum};
 
 use crate::config::Config;
-use crate::discovery::SourceEventFilter;
+use crate::discovery::{SourceEventFilter, VaultEventFilter};
 use crate::repository::{self, EntryKind, RepositoryFiles};
 use crate::{CrivError, Result};
 
@@ -188,36 +188,58 @@ enum WatchDepth {
     Recursive,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum WatchedRole {
+    Docs,
+    Source,
+}
+
+/// The configured locations a watch generation observes: the docs root and
+/// each Source root, relative to the repository root.
+fn watched_locations(config: &Config) -> impl Iterator<Item = (WatchedRole, &str)> {
+    std::iter::once((WatchedRole::Docs, config.docs_dir())).chain(
+        config
+            .source_roots()
+            .iter()
+            .map(|source_root| (WatchedRole::Source, source_root.as_str())),
+    )
+}
+
 impl WatchSet {
     fn active(files: &RepositoryFiles, config: &Config) -> Self {
         let root = files.root();
         let mut targets = BTreeMap::new();
         insert_watch_target(&mut targets, root.to_path_buf(), WatchDepth::NonRecursive);
-        insert_existing_or_ancestor(&mut targets, files, &config.docs_path(root));
-        for source_root in config.source_roots() {
-            insert_existing_or_ancestor(&mut targets, files, &root.join(source_root));
+        for (_, location) in watched_locations(config) {
+            insert_existing_or_ancestor(&mut targets, files, &root.join(location));
         }
         Self::from_targets(targets)
     }
 
+    /// While a generation is suspended, watch the docs root as an active
+    /// generation does, and only the nearest existing directory of each
+    /// missing Source root.
     fn recovery(files: &RepositoryFiles, config: Option<&Config>) -> Self {
         let root = files.root();
         let mut targets = BTreeMap::new();
         insert_watch_target(&mut targets, root.to_path_buf(), WatchDepth::NonRecursive);
-        if let Some(config) = config {
-            insert_existing_or_ancestor(&mut targets, files, &config.docs_path(root));
-            for source_root in config.source_roots() {
-                let path = root.join(source_root);
-                if matches!(
-                    path_kind(files, &path),
-                    EntryKind::Missing | EntryKind::Other
-                ) {
+        for (role, location) in config.into_iter().flat_map(watched_locations) {
+            let path = root.join(location);
+            match role {
+                WatchedRole::Docs => insert_existing_or_ancestor(&mut targets, files, &path),
+                WatchedRole::Source
+                    if matches!(
+                        path_kind(files, &path),
+                        EntryKind::Missing | EntryKind::Other
+                    ) =>
+                {
                     insert_watch_target(
                         &mut targets,
                         nearest_existing_directory(files, &path),
                         WatchDepth::NonRecursive,
                     );
                 }
+                WatchedRole::Source => {}
             }
         }
         Self::from_targets(targets)
@@ -306,10 +328,10 @@ struct ActiveWatchGeneration {
     config: Config,
     config_source: Option<String>,
     refresh: RefreshSession,
-    docs_path: PathBuf,
     topology: WatchTopology,
     watcher: WatchBinding,
     source_filter: SourceEventFilter,
+    vault_filter: VaultEventFilter,
 }
 
 #[derive(Debug)]
@@ -384,8 +406,8 @@ impl ActiveWatchGeneration {
         factory: &dyn WatcherFactory,
     ) -> std::result::Result<Self, CandidateFailure> {
         let root = files.root();
-        let docs_path = config.docs_path(root);
-        require_real_docs_root(files, &docs_path).map_err(CandidateFailure::candidate)?;
+        require_real_docs_root(files, &config.docs_path(root))
+            .map_err(CandidateFailure::candidate)?;
         let topology = WatchTopology::observe(files, &config);
         let watcher = WatchBinding::start(factory, WatchSet::active(files, &config))
             .map_err(CandidateFailure::watcher)?;
@@ -397,14 +419,15 @@ impl ActiveWatchGeneration {
         println!("{summary}");
         let source_filter =
             SourceEventFilter::new(root, &config).map_err(CandidateFailure::candidate)?;
+        let vault_filter = VaultEventFilter::new(root, &config);
         Ok(Self {
             config,
             config_source,
             refresh,
-            docs_path,
             topology,
             watcher,
             source_filter,
+            vault_filter,
         })
     }
 }
@@ -460,7 +483,7 @@ impl LiveWatchSession {
             RefreshCause::SourceChanged
         } else if paths
             .iter()
-            .any(|path| path.starts_with(&self.active.docs_path))
+            .any(|path| self.active.vault_filter.relevant(path))
         {
             RefreshCause::DocsChanged
         } else {
@@ -578,15 +601,9 @@ fn read_config_source(files: &RepositoryFiles) -> Result<Option<String>> {
 impl WatchTopology {
     fn observe(files: &RepositoryFiles, config: &Config) -> Self {
         let root = files.root();
-        let mut paths = config
-            .source_roots()
-            .iter()
-            .map(|path| (path.clone(), path_kind(files, &root.join(path))))
+        let mut paths = watched_locations(config)
+            .map(|(_, location)| (location.to_string(), path_kind(files, &root.join(location))))
             .collect::<Vec<_>>();
-        paths.push((
-            config.docs_dir().to_string(),
-            path_kind(files, &config.docs_path(root)),
-        ));
         paths.sort();
         Self { paths }
     }
