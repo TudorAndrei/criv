@@ -200,3 +200,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0192-retain-explicit-source-lookup-results-after-the-editor-state-move|ADR-0192]] - Retain explicit source lookup results after the editor-state move
 - [[0193-follow-the-cli-source-wikilink-rule-in-editors|ADR-0193]] - Follow the CLI source Wikilink rule in editors
 - [[0194-check-editor-companions-through-shared-scripts-and-fixtures|ADR-0194]] - Check editor companions through shared scripts and fixtures
+- [[0195-fallow-dead-code-and-duplication-analysis-for-typescript|ADR-0195]] - Fallow dead-code and duplication analysis for TypeScript

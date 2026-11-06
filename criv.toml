@@ -27,6 +27,7 @@ roots = [
   "criv.toml",
   "hk.pkl",
   "hawk.toml",
+  ".fallowrc.json",
   "cog.toml",
   "deny.toml",
   ".taplo.toml",

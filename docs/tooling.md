@@ -6,6 +6,7 @@ targets:
   symbols:
     - criv.toml
     - hawk.toml
+    - .fallowrc.json
     - mise.toml
     - hk.pkl
     - scripts/measure-performance.sh
@@ -396,3 +397,11 @@ artifacts so its compiler work stays isolated from the other parallel checks.
 This policy is captured in [[0043-hawk-visibility-analysis|ADR-0043]] and the
 local/hosted validation boundary is
 [[0061-hook-owned-local-validation-and-direct-ci-profile|ADR-0061]].
+
+The `fallow` hk step runs `npm run check:fallow` in the pre-push hook when a
+companion package, the root npm manifests, or `.fallowrc.json` change. It runs
+`fallow dead-code` and `fallow dupes` on `@criv/editor-state`, the VS Code
+extension, and the Obsidian plugin, and needs the root `npm ci`.
+`check:editor-contracts` runs the same script in CI and release. Use
+`npx fallow health` for advisory complexity reports. This policy is captured in
+[[0195-fallow-dead-code-and-duplication-analysis-for-typescript|ADR-0195]].

@@ -34,6 +34,18 @@ local markdown_format = new Step {
   fix = "npm exec --offline -- oxfmt --write {{files}}"
 }
 
+local fallow = new Step {
+  glob = List(
+    "packages/criv-editor-state/**",
+    "extensions/vscode-criv/**",
+    ".obsidian/plugins/criv/**",
+    "package.json",
+    "package-lock.json",
+    ".fallowrc.json",
+  )
+  check = "npm run --silent check:fallow"
+}
+
 local vale = new Step {
   glob = List("docs/**/*.md")
   check = "vale {{files}}"
@@ -154,6 +166,7 @@ hooks {
       ["cargo-clippy"] = cargo_clippy
       ["cargo-test"] = cargo_test
       ["hawk"] = hawk
+      ["fallow"] = fallow
       ["criv-enforce"] = enforce_push
     }
   }
