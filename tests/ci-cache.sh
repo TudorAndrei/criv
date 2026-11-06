@@ -3,8 +3,13 @@ set -euo pipefail
 
 repository_root="$(cd "$(dirname "$0")/.." && pwd)"
 test_root="$(mktemp -d)"
-workflow="$(mktemp "$repository_root/.github/workflows/.cache-contract-XXXXXX.yml")"
-trap 'rm -rf "$test_root"; rm -f "$workflow"' EXIT
+trap 'rm -rf "$test_root"' EXIT
+# actionlint resolves local actions from the project that holds `.git`, so the
+# probe workflow lives in a scratch project with a copy of the shared action.
+lint_project="$test_root/lint project"
+mkdir -p "$lint_project/.git" "$lint_project/.github/workflows" "$lint_project/.github/actions"
+cp -R "$repository_root/.github/actions/setup-build-tools" "$lint_project/.github/actions/"
+workflow="$lint_project/.github/workflows/cache-contract.yml"
 setup="$repository_root/.github/actions/setup-build-tools/configure-env.sh"
 
 for platform in Linux macOS; do
