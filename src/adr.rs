@@ -13,6 +13,7 @@ use std::path::Path;
 use usage_rs::{Args as UsageArgs, Subcommands};
 
 use crate::Result;
+use crate::git::GitRepository;
 use crate::repository::RepositoryFiles;
 
 pub use gate::change_violations;
@@ -56,8 +57,14 @@ pub fn run(root: &Path, options: &AdrOptions) -> Result<()> {
 
 /// Why the branch's ADR IDs collide with `base_ref`, or `None` when the
 /// allocation is current. CI enforcement asks this before it scans.
-pub fn identity_conflict(files: &RepositoryFiles, base_ref: &str) -> Result<Option<String>> {
-    reconcile_transaction::conflict::<identity_reconcile::IdentityReconciliation>(files, base_ref)
+pub fn identity_conflict(
+    files: &RepositoryFiles,
+    git: &GitRepository,
+    base_ref: &str,
+) -> Result<Option<String>> {
+    reconcile_transaction::conflict::<identity_reconcile::IdentityReconciliation>(
+        files, git, base_ref,
+    )
 }
 
 impl ReconcileOptions {

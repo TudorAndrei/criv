@@ -122,7 +122,7 @@ impl Reconciliation for IdentityReconciliation {
     }
 
     fn receipt(context: &Context<'_>, plan: &Plan, writes: &Writes) -> Result<IdentityReceipt> {
-        let git = &context.git;
+        let git = context.git;
         let head = Revision::Commit(context.head_sha.clone());
         let files = writes
             .files
@@ -177,7 +177,7 @@ impl Reconciliation for IdentityReconciliation {
     }
 
     fn verify_written(context: &Context<'_>) -> Result<()> {
-        materialized_receipt(context.files, &context.git)?
+        materialized_receipt(context.files, context.git)?
             .ok_or_else(|| CrivError::new("ADR reconciliation receipt is missing"))
             .map(|_| ())
     }

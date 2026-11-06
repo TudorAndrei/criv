@@ -11,18 +11,19 @@ use crate::{identity, markdown};
 /// Validate the complete selected ADR transaction in enforcement order.
 pub fn change_violations(
     files: &RepositoryFiles,
+    git: Option<&GitRepository>,
     config: &Config,
     changes: Option<&ChangedSet>,
     stage: Stage,
 ) -> Vec<String> {
-    let Some(git) = GitRepository::discover(files.root()).ok().flatten() else {
+    let Some(git) = git else {
         return immutability_violations(config, changes, |_| false);
     };
     let identity = IdentityReceipt::read(files);
     let source = SourceReceipt::read(files);
     let gate = Gate {
         files,
-        git: &git,
+        git,
         changes,
         stage,
         renames: changes
@@ -32,7 +33,7 @@ pub fn change_violations(
             .as_ref()
             .ok()
             .and_then(Option::as_ref)
-            .map(|receipt| IdentityProof::new(receipt, &git, changes)),
+            .map(|receipt| IdentityProof::new(receipt, git, changes)),
     };
     let proofs = [gate.proof(&identity), gate.proof(&source)];
     let staged = proofs.iter().any(|proof| proof.staged);
@@ -347,6 +348,16 @@ mod tests {
         root
     }
 
+    fn gate_violations(
+        files: &RepositoryFiles,
+        config: &Config,
+        changes: Option<&ChangedSet>,
+        stage: Stage,
+    ) -> Vec<String> {
+        let git = GitRepository::discover(files.root()).unwrap();
+        change_violations(files, git.as_ref(), config, changes, stage)
+    }
+
     fn worktree_changes(root: &Path) -> ChangedSet {
         GitRepository::open(root)
             .unwrap()
@@ -381,7 +392,7 @@ mod tests {
         ));
         let config = Config::parse(Some("[vault]\ndocs = \"other\"\n")).unwrap();
         for stage in [Stage::Commit, Stage::Push] {
-            let violations = change_violations(&files, &config, Some(&changes), stage);
+            let violations = gate_violations(&files, &config, Some(&changes), stage);
             assert_eq!(violations.len(), 4);
             assert!(violations[0].starts_with("other/adr/0002-existing.md:"));
             assert_eq!(
@@ -395,12 +406,12 @@ mod tests {
             assert!(violations[3].starts_with("criv.toml moves the decision scope"));
         }
         assert_eq!(
-            change_violations(&files, &config, None, Stage::Commit).len(),
+            gate_violations(&files, &config, None, Stage::Commit).len(),
             2
         );
         git(root.path(), &["add", "."]);
         git(root.path(), &["commit", "-m", "advance beyond receipts"]);
-        assert!(change_violations(&files, &config, None, Stage::Commit).is_empty());
+        assert!(gate_violations(&files, &config, None, Stage::Commit).is_empty());
     }
 
     #[test]
@@ -414,7 +425,7 @@ mod tests {
             "ADR reconciliation receipt is malformed; remove it only after recovering the worktree";
         for stage in [Stage::Commit, Stage::Push, Stage::Ci] {
             assert_eq!(
-                change_violations(&files, &Config::default(), None, stage),
+                gate_violations(&files, &Config::default(), None, stage),
                 [malformed]
             );
         }
@@ -424,8 +435,7 @@ mod tests {
         )
         .unwrap();
         let changes = worktree_changes(root.path());
-        let violations =
-            change_violations(&files, &Config::default(), Some(&changes), Stage::Commit);
+        let violations = gate_violations(&files, &Config::default(), Some(&changes), Stage::Commit);
         assert!(violations[0].starts_with("docs/adr/0001-base.md:"));
         assert_eq!(violations[1..], [malformed]);
     }
@@ -442,7 +452,7 @@ mod tests {
         fs::write(root.path().join("criv.toml"), "").unwrap();
         fs::write(root.path().join("docs/adr/0002-new.md"), "New\n").unwrap();
         git(root.path(), &["add", "."]);
-        let violations = change_violations(
+        let violations = gate_violations(
             &files,
             &Config::default(),
             Some(&worktree_changes(root.path())),
@@ -466,7 +476,7 @@ mod tests {
         )
         .unwrap();
         let current = Config::parse(Some("[vault]\ndocs = \"other\"\n")).unwrap();
-        let violations = change_violations(
+        let violations = gate_violations(
             &files,
             &current,
             Some(&worktree_changes(root.path())),
@@ -510,11 +520,11 @@ mod tests {
                 &[],
             )
             .unwrap();
-        let violations = change_violations(&files, &Config::default(), Some(&changes), Stage::Ci);
+        let violations = gate_violations(&files, &Config::default(), Some(&changes), Stage::Ci);
         assert_eq!(violations.len(), 1);
         assert!(violations[0].starts_with("docs/adr/0001-base.md:"));
         assert_eq!(
-            change_violations(&files, &Config::default(), Some(&changes), Stage::Push).len(),
+            gate_violations(&files, &Config::default(), Some(&changes), Stage::Push).len(),
             2
         );
     }
@@ -533,8 +543,7 @@ mod tests {
             ),
             entry(ChangeStatus::Modified, "docs/adr/README.md", None),
         ]);
-        let violations =
-            change_violations(&files, &Config::default(), Some(&changes), Stage::Commit);
+        let violations = gate_violations(&files, &Config::default(), Some(&changes), Stage::Commit);
 
         assert_eq!(violations.len(), 2);
         assert!(violations[0].contains("0002-existing"));
@@ -553,7 +562,7 @@ mod tests {
         let files = RepositoryFiles::open(root.path()).unwrap();
         let changes = changes(vec![entry(ChangeStatus::Modified, path, None)]);
         let permitted = || {
-            change_violations(&files, &Config::default(), Some(&changes), Stage::Commit).is_empty()
+            gate_violations(&files, &Config::default(), Some(&changes), Stage::Commit).is_empty()
         };
         let migrated = "See [[0010-example|ADR-0010]].\n";
         fs::write(root.path().join(path), migrated).unwrap();

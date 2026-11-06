@@ -240,11 +240,11 @@ fn run_command(world: &mut VaultWorld, arguments: String) {
     );
 }
 
-#[when("I enforce the CI stage in JSON against the target branch")]
-fn enforce_ci_against_target(world: &mut VaultWorld) {
+#[when(expr = "I enforce the CI stage in JSON against the target branch named by {word}")]
+fn enforce_ci_against_target(world: &mut VaultWorld, variable: String) {
     world.output = Some(
         support::criv(world.directory.path())
-            .env("CRIV_BASE_REF", "target")
+            .env(variable, "target")
             .args(["enforce", "--stage", "ci", "--format", "json"])
             .output()
             .expect("run CI enforcement"),

@@ -24,7 +24,7 @@ pub enum Mode {
 /// One reconcile run's repository and the commits it compares.
 pub(super) struct Context<'a> {
     pub(super) files: &'a RepositoryFiles,
-    pub(super) git: GitRepository,
+    pub(super) git: &'a GitRepository,
     pub(super) base_ref: &'a str,
     pub(super) target_sha: String,
     pub(super) head_sha: String,
@@ -34,9 +34,7 @@ pub(super) struct Context<'a> {
 }
 
 impl<'a> Context<'a> {
-    fn open(files: &'a RepositoryFiles, base_ref: &'a str, command: &str) -> Result<Self> {
-        let git = GitRepository::discover(files.root())?
-            .ok_or_else(|| CrivError::new(format!("`{command}` requires a Git worktree")))?;
+    fn open(files: &'a RepositoryFiles, git: &'a GitRepository, base_ref: &'a str) -> Result<Self> {
         let target_sha = git.resolve_commit(base_ref).map_err(|_| {
             CrivError::new(format!(
                 "cannot resolve base ref `{base_ref}` to a commit; fetch complete history and retry"
@@ -119,9 +117,10 @@ pub(super) trait Reconciliation {
 /// reconciliation. Nothing is printed.
 pub(super) fn conflict<R: Reconciliation>(
     files: &RepositoryFiles,
+    git: &GitRepository,
     base_ref: &str,
 ) -> Result<Option<String>> {
-    let context = Context::open(files, base_ref, R::COMMAND)?;
+    let context = Context::open(files, git, base_ref)?;
     let plan = R::plan(&context)?;
     Ok((!R::is_current(&plan)).then(|| check_failure::<R>(&context, &plan)))
 }
@@ -141,8 +140,10 @@ pub(super) fn run<R: Reconciliation>(
     mode: Mode,
 ) -> Result<()> {
     let name = <R::Receipt as Receipt>::NAME;
-    let context = Context::open(files, base_ref, R::COMMAND)?;
-    let git = &context.git;
+    let repository = GitRepository::discover(files.root())?
+        .ok_or_else(|| CrivError::new(format!("`{}` requires a Git worktree", R::COMMAND)))?;
+    let git = &repository;
+    let context = Context::open(files, git, base_ref)?;
     let plan = R::plan(&context)?;
     println!("{name} target: {}", context.target_sha);
     if R::is_current(&plan) {
@@ -216,7 +217,7 @@ pub(super) fn run<R: Reconciliation>(
 }
 
 fn ensure_stable(context: &Context<'_>, moment: &str) -> Result<()> {
-    if super::receipt::target_is_stable(&context.git, context.base_ref, &context.target_sha) {
+    if super::receipt::target_is_stable(context.git, context.base_ref, &context.target_sha) {
         Ok(())
     } else {
         Err(CrivError::new(format!(

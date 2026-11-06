@@ -49,16 +49,19 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
             options.stage.as_str()
         )));
     }
-    let ci_base_ref = (options.stage == Stage::Ci)
-        .then(|| env::var("CRIV_BASE_REF").ok())
-        .flatten();
-    let identity_conflicts = ci_base_ref
-        .as_deref()
-        .map(|base_ref| crate::adr::identity_conflict(&files, base_ref))
-        .transpose()?
-        .into_iter()
-        .flatten()
-        .collect();
+    let repository = GitRepository::discover(root)?;
+    let Selection {
+        changes,
+        ci_base_ref,
+    } = changed_entries(repository.as_ref(), options)?;
+    let identity_conflicts = match (&repository, ci_base_ref) {
+        (Some(repository), Some(base_ref)) => {
+            crate::adr::identity_conflict(&files, repository, &base_ref)?
+                .into_iter()
+                .collect()
+        }
+        _ => Vec::new(),
+    };
 
     let check::Validation {
         diagnostics,
@@ -67,7 +70,6 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
     let errors = diagnostics.iter().filter(|diag| diag.is_error()).count();
     let warnings = diagnostics.iter().filter(|diag| diag.is_warning()).count();
 
-    let changes = changed_entries(root, options, ci_base_ref.as_deref())?;
     let changed_count = changes
         .as_ref()
         .map_or(0, |changes| changes.affected_paths().len());
@@ -81,8 +83,13 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
         .map(Diagnostic::describe)
         .collect();
     let import_violations = import_policy_violations(&vault, scanned_files.as_ref())?;
-    let adr_violations =
-        crate::adr::change_violations(&files, vault.config(), changes.as_ref(), options.stage);
+    let adr_violations = crate::adr::change_violations(
+        &files,
+        repository.as_ref(),
+        vault.config(),
+        changes.as_ref(),
+        options.stage,
+    );
     let failures = Failure::in_priority_order(
         identity_conflicts,
         policy_violations,
@@ -320,29 +327,46 @@ impl DenyRule {
     }
 }
 
+/// The changes a stage selects and, in CI, the base ref they compare with.
+#[derive(Debug)]
+struct Selection {
+    changes: Option<ChangedSet>,
+    ci_base_ref: Option<String>,
+}
+
+impl Selection {
+    const fn of(changes: Option<ChangedSet>) -> Self {
+        Self {
+            changes,
+            ci_base_ref: None,
+        }
+    }
+}
+
 fn changed_entries(
-    root: &Path,
+    repository: Option<&GitRepository>,
     options: &EnforceOptions,
-    ci_base_ref: Option<&str>,
-) -> Result<Option<ChangedSet>> {
-    let repository = GitRepository::discover(root)?;
+) -> Result<Selection> {
     match options.stage {
         Stage::Commit => repository
-            .as_ref()
             .map(|repo| repo.changed_set(&Comparison::Staged, &[]))
-            .transpose(),
+            .transpose()
+            .map(Selection::of),
         Stage::Push => match options.remote_name.as_deref() {
             Some(remote_name) => pre_push_changed_entries(
-                required_repository(repository.as_ref())?,
+                required_repository(repository)?,
                 remote_name,
                 &read_pre_push_updates()?,
             )
-            .map(Some),
-            None => repository.as_ref().map(manual_push_changed_set).transpose(),
+            .map(|changes| Selection::of(Some(changes))),
+            None => repository
+                .map(manual_push_changed_set)
+                .transpose()
+                .map(Selection::of),
         },
         Stage::Ci => ci_changed_entries(
-            repository.as_ref(),
-            ci_base_ref,
+            repository,
+            env::var("CRIV_BASE_REF").ok().as_deref(),
             env::var("GITHUB_BASE_REF").ok(),
             is_ci_environment(),
         ),
@@ -377,22 +401,30 @@ fn manual_push_changed_set(repository: &GitRepository) -> Result<ChangedSet> {
     Ok(changes)
 }
 
+/// CI compares `HEAD` with `CRIV_BASE_REF`, else with the first of
+/// `origin/$GITHUB_BASE_REF` and `$GITHUB_BASE_REF` that Git can compare.
+/// Outside CI, a missing base falls back to the worktree with no base ref.
 fn ci_changed_entries(
     repository: Option<&GitRepository>,
     criv_base_ref: Option<&str>,
     github_base_ref: Option<String>,
     ci_environment: bool,
-) -> Result<Option<ChangedSet>> {
+) -> Result<Selection> {
+    let against = |repository: &GitRepository, base_ref: String| {
+        let changes = repository.changed_set(
+            &Comparison::Trees {
+                old_ref: &base_ref,
+                new_ref: "HEAD",
+            },
+            &[],
+        )?;
+        Ok(Selection {
+            changes: Some(changes),
+            ci_base_ref: Some(base_ref),
+        })
+    };
     if let Some(base_ref) = criv_base_ref {
-        return required_repository(repository)?
-            .changed_set(
-                &Comparison::Trees {
-                    old_ref: base_ref,
-                    new_ref: "HEAD",
-                },
-                &[],
-            )
-            .map(Some);
+        return against(required_repository(repository)?, base_ref.to_owned());
     }
 
     let mut failures = Vec::new();
@@ -400,14 +432,8 @@ fn ci_changed_entries(
         && let Some(repository) = repository
     {
         for old_ref in [format!("origin/{base_ref}"), base_ref] {
-            match repository.changed_set(
-                &Comparison::Trees {
-                    old_ref: &old_ref,
-                    new_ref: "HEAD",
-                },
-                &[],
-            ) {
-                Ok(changes) => return Ok(Some(changes)),
+            match against(repository, old_ref) {
+                Ok(selection) => return Ok(selection),
                 Err(error) => failures.push(error.to_string()),
             }
         }
@@ -431,6 +457,7 @@ fn ci_changed_entries(
             Ok(changes)
         })
         .transpose()
+        .map(Selection::of)
 }
 
 fn required_repository(repository: Option<&GitRepository>) -> Result<&GitRepository> {
@@ -626,10 +653,10 @@ mod tests {
         let base = git(root.path(), &["rev-parse", "HEAD~1"]);
 
         let repository = GitRepository::open(root.path()).unwrap();
-        let changes = ci_changed_entries(Some(&repository), Some(&base), None, true)
-            .unwrap()
-            .expect("changes from explicit base ref");
+        let selection = ci_changed_entries(Some(&repository), Some(&base), None, true).unwrap();
+        let changes = selection.changes.expect("changes from explicit base ref");
 
+        assert_eq!(selection.ci_base_ref.as_deref(), Some(base.as_str()));
         assert_eq!(changes.old_ref.as_deref(), Some(base.as_str()));
         assert_eq!(
             changes.new,

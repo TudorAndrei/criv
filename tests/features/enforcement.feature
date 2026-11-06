@@ -16,11 +16,12 @@ Feature: Enforce the decisions of a Git transaction
     Given a committed vault
     And a target branch that adds decision 1 "Target Choice"
     And a topic branch that adds <topic>
-    When I enforce the CI stage in JSON against the target branch
+    When I enforce the CI stage in JSON against the target branch named by <variable>
     Then the command <result>
     And stdout is one JSON report with code "<code>"
 
     Examples:
-      | topic                       | result   | code            |
-      | a note                      | succeeds |                 |
-      | decision 1 "Topic Choice"   | fails    | adr-id-conflict |
+      | topic                     | variable        | result   | code            |
+      | a note                    | CRIV_BASE_REF   | succeeds |                 |
+      | decision 1 "Topic Choice" | CRIV_BASE_REF   | fails    | adr-id-conflict |
+      | decision 1 "Topic Choice" | GITHUB_BASE_REF | fails    | adr-id-conflict |
