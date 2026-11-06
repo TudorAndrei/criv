@@ -12,7 +12,6 @@ packages/*/node_modules/
 packages/criv-editor-state/pkg/
 extensions/vscode-criv/dist/
 extensions/vscode-criv/dist-test/
-extensions/vscode-criv/media/
 extensions/vscode-criv/node_modules/
 extensions/vscode-criv/.vscode-test/
 extensions/vscode-criv/*.vsix
