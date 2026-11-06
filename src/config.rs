@@ -165,6 +165,11 @@ impl Config {
         prefix
     }
 
+    /// The decision index note in the ADR directory.
+    pub(crate) fn adr_index_path(&self) -> String {
+        format!("{}{ADR_INDEX}", self.adr_prefix())
+    }
+
     /// Whether `other` places decisions in the same directory.
     pub(crate) fn same_decision_scope(&self, other: &Self) -> bool {
         self.docs_dir == other.docs_dir && self.adr_dir == other.adr_dir

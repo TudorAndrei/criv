@@ -3,8 +3,9 @@ fn main() {
     let code = match criv::run(&args) {
         Ok(()) => 0,
         Err(err) => {
-            if !err.is_reported() {
-                eprintln!("criv: {err}");
+            match &err {
+                criv::CrivError::Usage(rendered) => eprintln!("{}", rendered.trim_end()),
+                _ => eprintln!("criv: {err}"),
             }
             err.exit_code()
         }

@@ -57,10 +57,9 @@ pub enum CrivError {
         code: diagnostic::DiagnosticCode,
         message: String,
     },
+    /// A rendered command-line failure, reported as it is.
     #[error("{0}")]
     Usage(String),
-    #[error("")]
-    UsageReported,
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -84,14 +83,9 @@ impl CrivError {
     #[must_use]
     pub const fn exit_code(&self) -> i32 {
         match self {
-            Self::Usage(_) | Self::UsageReported => 2,
+            Self::Usage(_) => 2,
             Self::Message(_) | Self::Coded { .. } | Self::Io(_) => 1,
         }
-    }
-
-    #[must_use]
-    pub const fn is_reported(&self) -> bool {
-        matches!(self, Self::UsageReported)
     }
 }
 
@@ -137,13 +131,6 @@ pub fn run(args: &[String]) -> Result<()> {
         Err(Error::Version { .. }) => {
             println!("criv {}", env!("CARGO_PKG_VERSION"));
             return Ok(());
-        }
-        Err(err @ (Error::MissingSubcommand | Error::MissingArgsHelp { .. })) => {
-            eprint!(
-                "{}",
-                usage_rs::render_failure(CrivCli::spec(), &os_args, &err)
-            );
-            return Err(CrivError::UsageReported);
         }
         Err(err) => {
             return Err(CrivError::usage(usage_rs::render_failure(
@@ -326,6 +313,12 @@ mod tests {
         assert!(nodes.contains("--kind <KIND>"));
         assert!(nodes.contains("--without-docs"));
         assert!(!nodes.contains("--by"));
+    }
+
+    #[test]
+    fn init_refuses_to_skip_and_refresh_skills_together() {
+        let argv = ["criv", "init", "--no-skills", "--force-skills"].map(OsStr::new);
+        assert!(CrivCli::parse_from(&argv).is_err());
     }
 
     #[test]

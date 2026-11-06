@@ -63,17 +63,6 @@ fn init_force_skills_refreshes_existing_skills_but_plain_init_preserves_them() {
 }
 
 #[test]
-fn init_force_skills_respects_no_skills() {
-    let temp = TempDir::new().unwrap();
-    let root = temp.path();
-    let mut options = fast_options();
-    options.force_skills = true;
-    run(root, &options).unwrap();
-    assert!(!root.join(".agents/skills").exists());
-    assert!(!root.join(".claude/skills").exists());
-}
-
-#[test]
 fn init_force_skills_isolates_refresh_from_other_scaffolding() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();

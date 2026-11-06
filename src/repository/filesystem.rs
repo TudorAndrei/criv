@@ -95,7 +95,7 @@ impl RepositoryFiles {
         let Some(target) = self.for_read_optional(source)? else {
             return Ok(None);
         };
-        let Some(mut file) = target.open_regular(false)? else {
+        let Some(mut file) = target.open_regular()? else {
             return Ok(None);
         };
         let permissions = file.metadata()?.permissions();
@@ -144,7 +144,7 @@ impl RepositoryFiles {
         let Some(target) = self.for_read_optional(source)? else {
             return Ok(false);
         };
-        Ok(target.open_regular(false)?.is_some())
+        Ok(target.open_regular()?.is_some())
     }
 
     pub(crate) fn directory_exists(&self, source: &Path) -> Result<bool> {
@@ -380,7 +380,7 @@ impl RepositoryWriteScope<'_> {
 
     pub(crate) fn write_new(&self, destination: &Path, contents: &str) -> Result<bool> {
         let target = self.target(destination)?;
-        if target.open_regular(false)?.is_some() {
+        if target.open_regular()?.is_some() {
             return Ok(false);
         }
         target.write_atomic(contents.as_bytes(), None)?;
@@ -512,11 +512,15 @@ impl RepositoryWriteScope<'_> {
             relative: destination.to_path_buf(),
         };
         let relative_target = relative_link_target(destination, target);
+        // A Windows junction reads as a directory, so a destination that
+        // already resolves to `target` is never replaced: removing it would
+        // remove the target's contents.
+        if self.files.resolves_to(destination, target) {
+            return Ok(LinkOutcome::Unchanged);
+        }
         let created = match link.parent.symlink_metadata(&link.name) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
-                if link.parent.read_link_contents(&link.name)? == relative_target
-                    || self.files.resolves_to(destination, target)
-                {
+                if link.parent.read_link_contents(&link.name)? == relative_target {
                     return Ok(LinkOutcome::Unchanged);
                 }
                 self.remove_link(&link)?;
@@ -629,9 +633,9 @@ struct ConfinedFile {
 }
 
 impl ConfinedFile {
-    fn open_regular(&self, write: bool) -> Result<Option<cap_std::fs::File>> {
+    fn open_regular(&self) -> Result<Option<cap_std::fs::File>> {
         let mut options = nofollow_options();
-        options.read(true).write(write);
+        options.read(true);
         match self.parent.open_with(&self.name, &options) {
             Ok(file) if file.metadata()?.is_file() => Ok(Some(file)),
             Ok(_) => Err(CrivError::new(format!(
@@ -650,7 +654,7 @@ impl ConfinedFile {
     }
 
     fn open_required_regular(&self) -> Result<cap_std::fs::File> {
-        self.open_regular(false)?.ok_or_else(|| {
+        self.open_regular()?.ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 format!("vault file {} does not exist", self.relative.display()),
@@ -660,7 +664,7 @@ impl ConfinedFile {
     }
 
     fn read_optional_string(&self) -> Result<Option<String>> {
-        let Some(mut file) = self.open_regular(false)? else {
+        let Some(mut file) = self.open_regular()? else {
             return Ok(None);
         };
         let mut contents = String::new();
@@ -672,7 +676,7 @@ impl ConfinedFile {
         let inherited_permissions = match permissions {
             Some(permissions) => Some(permissions),
             None => self
-                .open_regular(false)?
+                .open_regular()?
                 .map(|file| file.metadata().map(|metadata| metadata.permissions()))
                 .transpose()?,
         };

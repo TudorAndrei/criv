@@ -188,4 +188,6 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0176-guard-runtime-boundaries-over-the-whole-source-tree|ADR-0176]] - Guard runtime boundaries over the whole source tree
 - [[0177-register-policy-patterns-once-in-the-vault|ADR-0177]] - Register policy patterns once in the vault
 - [[0178-keep-configuration-as-normalized-data|ADR-0178]] - Keep configuration as normalized data
+- [[0179-report-every-enforcement-failure-in-one-report|ADR-0179]] - Report every enforcement failure in one report
+- [[0180-keep-installation-safe-without-caller-checks|ADR-0180]] - Keep installation safe without caller checks
 - [[0185-vscode-unit-tests-by-feature-directory|ADR-0185]] - VS Code unit tests by feature directory
