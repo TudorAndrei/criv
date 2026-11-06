@@ -10,7 +10,7 @@ use super::receipt::{
     self, IdentityFile, IdentityMapping, IdentityReceipt, IdentitySource, Receipt,
 };
 use super::reconcile_transaction::{Context, FileWrite, Reconciliation, Writes};
-use crate::config::{CONFIG_FILE, Config};
+use crate::config::Config;
 use crate::git::{ChangeStatus, Comparison, GitRepository, Revision};
 use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
@@ -194,14 +194,7 @@ impl Reconciliation for IdentityReconciliation {
         } = context;
         let target = Revision::Commit(target_sha.clone());
         let config = Config::load_from(files)?;
-        let target_config = git
-            .file(&target, CONFIG_FILE)?
-            .map(|file| {
-                String::from_utf8(file.bytes)
-                    .map_err(|_| CrivError::new(format!("target {CONFIG_FILE} is not UTF-8")))
-            })
-            .transpose()?;
-        let target_config = Config::parse(target_config.as_deref())?;
+        let target_config = Config::at_revision(git, &target)?.unwrap_or_default();
         if !config.same_decision_scope(&target_config) {
             return Err(CrivError::new(
                 "refusing ADR reconciliation because vault.docs or vault.adr differs from the target; cannot prove ADR ownership",

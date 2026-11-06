@@ -197,18 +197,9 @@ impl Gate<'_> {
         // An unborn `HEAD` or a configuration added by this change has no
         // earlier scope. One that cannot be read has an unknown scope.
         let old_ref = changes.old_ref.clone()?;
-        let previous = match self
-            .git
-            .file(&Revision::Commit(old_ref.clone()), CONFIG_FILE)
-        {
+        let previous = match Config::at_revision(self.git, &Revision::Commit(old_ref.clone())) {
             Ok(None) => return None,
-            Ok(Some(file)) => String::from_utf8(file.bytes)
-                .map_err(|error| error.to_string())
-                .and_then(|text| Config::parse(Some(&text)).map_err(|error| error.to_string())),
-            Err(error) => Err(error.to_string()),
-        };
-        let previous = match previous {
-            Ok(previous) => previous,
+            Ok(Some(previous)) => previous,
             Err(error) => {
                 return paths().any(|path| current.is_adr_path(path)).then(|| {
                     format!(

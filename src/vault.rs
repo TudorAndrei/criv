@@ -60,7 +60,7 @@ pub enum DecisionStatus {
 }
 
 impl DecisionStatus {
-    fn parse(status: &str) -> Self {
+    pub(crate) fn parse(status: &str) -> Self {
         match status {
             "draft" => Self::Draft,
             "accepted" => Self::Accepted,

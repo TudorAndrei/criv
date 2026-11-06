@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
 use crate::markdown;
+use crate::vault::DecisionStatus;
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Copy)]
@@ -30,7 +31,7 @@ pub(super) fn transition_matches(
     let accepted = |contents: &str| {
         markdown::split_frontmatter(contents)
             .and_then(|frontmatter| frontmatter.scalar("status"))
-            .is_some_and(|status| status == "accepted")
+            .is_some_and(|status| DecisionStatus::parse(&status) == DecisionStatus::Accepted)
     };
     if !accepted(old) || !accepted(new) {
         return false;

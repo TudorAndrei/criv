@@ -6,6 +6,7 @@ use serde::Deserialize;
 use usage_rs::ValueEnum;
 
 use crate::diagnostic::DiagnosticCode;
+use crate::git::{GitRepository, Revision};
 use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
@@ -102,6 +103,17 @@ impl Config {
     pub(crate) fn load_from(files: &RepositoryFiles) -> Result<Self> {
         let contents = files.read_optional_string(Path::new(CONFIG_FILE))?;
         Self::parse(contents.as_deref())
+    }
+
+    /// The configuration that `revision` holds, or `None` when it has no
+    /// [`CONFIG_FILE`].
+    pub(crate) fn at_revision(git: &GitRepository, revision: &Revision) -> Result<Option<Self>> {
+        let Some(file) = git.file(revision, CONFIG_FILE)? else {
+            return Ok(None);
+        };
+        let contents = String::from_utf8(file.bytes)
+            .map_err(|_| CrivError::new(format!("{CONFIG_FILE} at `{revision}` is not UTF-8")))?;
+        Self::parse(Some(&contents)).map(Some)
     }
 
     /// Parses checkout or Git-tree configuration with the same defaults and
