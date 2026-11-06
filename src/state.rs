@@ -110,7 +110,7 @@ pub fn write_state(
         vault.repository_files(),
         &serialized.hash,
         &serialized.published,
-        vault.config().state_keep,
+        vault.config().state_keep(),
         precommit_check,
     )?;
     Ok((serialized.hash, state))

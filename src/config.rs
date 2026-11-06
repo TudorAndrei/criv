@@ -5,7 +5,6 @@ use serde::Deserialize;
 use usage_rs::ValueEnum;
 
 use crate::diagnostic::DiagnosticCode;
-use crate::glob::GlobMatcher;
 use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
 
@@ -30,16 +29,17 @@ pub fn open_vault(root: &Path) -> Result<RepositoryFiles> {
     ))
 }
 
-#[derive(Debug, Clone)]
+/// The vault configuration. Its paths are normalized when it is parsed.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
-    pub(crate) docs_dir: String,
-    pub(crate) adr_dir: String,
-    pub(crate) source_roots: Vec<String>,
-    pub(crate) source_exclude: Vec<String>,
-    pub(crate) source_index: bool,
-    pub(crate) state_keep: usize,
-    pub(crate) enforce_stages: Vec<Stage>,
-    pub(crate) import_policies: Vec<ImportPolicy>,
+    docs_dir: String,
+    adr_dir: String,
+    source_roots: Vec<String>,
+    source_exclude: Vec<String>,
+    source_index: bool,
+    state_keep: usize,
+    enforce_stages: Vec<Stage>,
+    import_policies: Vec<ImportPolicyConfig>,
 }
 
 /// A Git transaction that `criv enforce` validates.
@@ -61,46 +61,12 @@ impl Stage {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ImportPolicy {
+/// One `[[enforce.imports]]` entry as configured.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ImportPolicyConfig {
     pub(crate) id: String,
-    pub(crate) scope_matcher: GlobMatcher,
-    pub(crate) deny: Vec<DenyRule>,
-}
-
-/// One denied import: a module path, or a glob over `/`-separated module paths.
-#[derive(Debug, Clone)]
-pub struct DenyRule {
-    pub(crate) pattern: String,
-    matcher: Option<GlobMatcher>,
-}
-
-impl DenyRule {
-    fn new(pattern: String, policy_id: &str) -> Result<Self> {
-        let matcher = pattern
-            .contains(['*', '?', '['])
-            .then(|| {
-                GlobMatcher::new(&[pattern.replace("::", "/")]).map_err(|err| {
-                    CrivError::new(format!(
-                        "invalid enforce.imports deny glob for policy `{policy_id}`: {err}"
-                    ))
-                })
-            })
-            .transpose()?;
-        Ok(Self { pattern, matcher })
-    }
-
-    /// A module path matches the exact path, any path below it, or the glob.
-    pub(crate) fn matches(&self, module: &str) -> bool {
-        self.matcher.as_ref().map_or_else(
-            || {
-                module
-                    .strip_prefix(self.pattern.as_str())
-                    .is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
-            },
-            |matcher| matcher.is_match(&module.replace("::", "/")),
-        )
-    }
+    pub(crate) scope: Vec<String>,
+    pub(crate) deny: Vec<String>,
 }
 
 impl Default for Config {
@@ -133,6 +99,40 @@ impl Config {
         let raw: RawConfig = toml::from_str(contents)
             .map_err(|err| CrivError::new(format!("failed to parse {CONFIG_FILE}: {err}")))?;
         raw.into_config()
+    }
+
+    /// The documentation directory, `/`-separated below the root, or `.`.
+    pub(crate) fn docs_dir(&self) -> &str {
+        &self.docs_dir
+    }
+
+    pub(crate) fn adr_dir(&self) -> &str {
+        &self.adr_dir
+    }
+
+    /// The Source roots, each `/`-separated below the root, or `.`.
+    pub(crate) fn source_roots(&self) -> &[String] {
+        &self.source_roots
+    }
+
+    pub(crate) fn source_exclude(&self) -> &[String] {
+        &self.source_exclude
+    }
+
+    pub(crate) const fn source_index(&self) -> bool {
+        self.source_index
+    }
+
+    pub(crate) const fn state_keep(&self) -> usize {
+        self.state_keep
+    }
+
+    pub(crate) fn enforce_stages(&self) -> &[Stage] {
+        &self.enforce_stages
+    }
+
+    pub(crate) fn import_policies(&self) -> &[ImportPolicyConfig] {
+        &self.import_policies
     }
 
     pub(crate) fn docs_path(&self, root: &Path) -> PathBuf {
@@ -183,33 +183,29 @@ impl RawConfig {
                 "{CONFIG_FILE} [patterns.*] is no longer supported; move persistent patterns into an ADR policy.patterns entry and use its ADR-NNNN/local-id",
             )));
         }
+        let source_roots = self
+            .source
+            .roots
+            .unwrap_or(defaults.source_roots)
+            .into_iter()
+            .map(|root| relative_path("source.roots", &root))
+            .collect::<Result<Vec<_>>>()?;
         Ok(Config {
             docs_dir,
             adr_dir: relative_path("vault.adr", &self.vault.adr.unwrap_or(defaults.adr_dir))?,
-            source_roots: self
-                .source
-                .roots
-                .unwrap_or(defaults.source_roots)
-                .into_iter()
-                .map(|root| relative_path("source.roots", &root))
-                .collect::<Result<Vec<_>>>()?,
+            source_roots,
             source_exclude: self.source.exclude.unwrap_or(defaults.source_exclude),
             source_index: self.index.source.unwrap_or(defaults.source_index),
             state_keep: positive_state_keep(self.state.keep.unwrap_or(defaults.state_keep))?,
             enforce_stages: self.enforce.stages.unwrap_or(defaults.enforce_stages),
-            import_policies: self
-                .enforce
-                .imports
-                .into_iter()
-                .map(RawImportPolicy::into_policy)
-                .collect::<Result<Vec<_>>>()?,
+            import_policies: self.enforce.imports,
         })
     }
 }
 
 /// Normalize a configured path to `/`-separated segments below the vault
 /// root, or `.` for the root itself.
-pub fn relative_path(field: &str, value: &str) -> Result<String> {
+fn relative_path(field: &str, value: &str) -> Result<String> {
     let value = value.trim();
     if value.is_empty() {
         return Err(CrivError::new(format!("{field} must not be empty")));
@@ -258,7 +254,6 @@ struct RawIndex {
 }
 
 #[derive(Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
 struct RawState {
     keep: Option<usize>,
 }
@@ -274,41 +269,7 @@ fn positive_state_keep(keep: usize) -> Result<usize> {
 #[serde(default)]
 struct RawEnforce {
     stages: Option<Vec<Stage>>,
-    imports: Vec<RawImportPolicy>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct RawImportPolicy {
-    id: Option<String>,
-    scope: Vec<String>,
-    deny: Vec<String>,
-}
-
-impl RawImportPolicy {
-    fn into_policy(self) -> Result<ImportPolicy> {
-        let id = self.id.unwrap_or_else(|| "import-policy".into());
-        let scope = if self.scope.is_empty() {
-            vec!["**".into()]
-        } else {
-            self.scope
-        };
-        let scope_matcher = GlobMatcher::new(&scope).map_err(|err| {
-            CrivError::new(format!(
-                "invalid enforce.imports scope for policy `{id}`: {err}"
-            ))
-        })?;
-        let deny = self
-            .deny
-            .into_iter()
-            .map(|pattern| DenyRule::new(pattern, &id))
-            .collect::<Result<Vec<_>>>()?;
-        Ok(ImportPolicy {
-            id,
-            scope_matcher,
-            deny,
-        })
-    }
+    imports: Vec<ImportPolicyConfig>,
 }
 
 #[cfg(test)]
@@ -328,7 +289,7 @@ mod tests {
 
     #[test]
     fn parses_import_policies() {
-        let raw = toml::from_str::<RawConfig>(
+        let config = Config::parse(Some(
             r#"
 [enforce]
 stages = ["ci"]
@@ -338,30 +299,37 @@ id = "no-db-from-ui"
 scope = ["src/ui/**"]
 deny = ["crate::db"]
 "#,
-        )
+        ))
         .unwrap();
 
-        let config = raw.into_config().unwrap();
         assert_eq!(config.enforce_stages, vec![Stage::Ci]);
-        assert_eq!(config.import_policies.len(), 1);
-        assert_eq!(config.import_policies[0].id, "no-db-from-ui");
-        assert!(
-            config.import_policies[0]
-                .scope_matcher
-                .is_match("src/ui/view.rs")
+        assert_eq!(
+            config.import_policies,
+            [ImportPolicyConfig {
+                id: "no-db-from-ui".into(),
+                scope: vec!["src/ui/**".into()],
+                deny: vec!["crate::db".into()],
+            }]
         );
-        let deny = &config.import_policies[0].deny;
-        assert_eq!(deny.len(), 1);
-        assert_eq!(deny[0].pattern, "crate::db");
     }
 
     #[test]
-    fn deny_rules_match_exact_prefix_and_glob_forms() {
-        let rule = |pattern: &str| DenyRule::new(pattern.into(), "test").unwrap();
-        assert!(rule("crate::infra").matches("crate::infra::db"));
-        assert!(rule("crate::infra::*").matches("crate::infra::db"));
-        assert!(rule("sqlx").matches("sqlx"));
-        assert!(!rule("crate::infra").matches("crate::infrastructure"));
+    fn an_import_policy_states_its_id_scope_and_deny() {
+        for missing in ["id", "scope", "deny"] {
+            let entry = [
+                ("id", "id = \"policy\""),
+                ("scope", "scope = [\"src/**\"]"),
+                ("deny", "deny = [\"crate::db\"]"),
+            ]
+            .into_iter()
+            .filter(|(key, _)| *key != missing)
+            .map(|(_, line)| line)
+            .collect::<Vec<_>>()
+            .join("\n");
+            let error =
+                Config::parse(Some(&format!("[[enforce.imports]]\n{entry}\n"))).unwrap_err();
+            assert!(error.to_string().contains(missing), "{error}");
+        }
     }
 
     #[test]
@@ -373,39 +341,10 @@ deny = ["crate::db"]
         assert!(!config.is_adr_path("adr/README.md"));
     }
 
+    /// ADR-0021: unknown TOML keys are ignored.
     #[test]
-    fn rejects_invalid_import_policy_scope_and_deny_globs() {
-        let scope = toml::from_str::<RawConfig>(
-            r#"
-[[enforce.imports]]
-id = "bad-scope"
-scope = ["src/[.rs"]
-"#,
-        )
-        .unwrap()
-        .into_config()
-        .unwrap_err();
-        assert!(scope.to_string().contains("bad-scope"));
-        assert!(scope.to_string().contains("scope"));
-
-        let deny = toml::from_str::<RawConfig>(
-            r#"
-[[enforce.imports]]
-id = "bad-deny"
-scope = ["src/**"]
-deny = ["crate::["]
-"#,
-        )
-        .unwrap()
-        .into_config()
-        .unwrap_err();
-        assert!(deny.to_string().contains("bad-deny"));
-        assert!(deny.to_string().contains("deny glob"));
-    }
-
-    #[test]
-    fn parses_supported_index_config_and_ignores_removed_knobs() {
-        let raw = toml::from_str::<RawConfig>(
+    fn ignores_unknown_configuration_keys() {
+        let config = Config::parse(Some(
             r#"
 [source]
 roots = ["src"]
@@ -414,17 +353,20 @@ languages = ["rust"]
 [index]
 source = false
 notes = "memory"
-legacy = true
+
+[state]
+keep = 3
+unknown = true
 
 [obsidian]
 plugin = false
 "#,
-        )
+        ))
         .unwrap();
 
-        let config = raw.into_config().unwrap();
         assert_eq!(config.source_roots, vec!["src"]);
         assert!(!config.source_index);
+        assert_eq!(config.state_keep, 3);
     }
 
     #[test]
@@ -451,15 +393,13 @@ plugin = false
 
     #[test]
     fn rejects_legacy_pattern_configuration_with_migration_guidance() {
-        let error = toml::from_str::<RawConfig>(
+        let error = Config::parse(Some(
             r#"
 [patterns.no-println]
 language = "rust"
 pattern = "println!($$$ARGS)"
 "#,
-        )
-        .unwrap()
-        .into_config()
+        ))
         .unwrap_err();
 
         let message = error.to_string();
@@ -470,7 +410,7 @@ pattern = "println!($$$ARGS)"
 
     #[test]
     fn normalizes_relative_vault_paths() {
-        let raw = toml::from_str::<RawConfig>(
+        let config = Config::parse(Some(
             r#"
 [vault]
 docs = "./docs"
@@ -479,10 +419,9 @@ adr = "./adr"
 [source]
 roots = ["./src", ".github/workflows", "Cargo.toml"]
 "#,
-        )
+        ))
         .unwrap();
 
-        let config = raw.into_config().unwrap();
         assert_eq!(config.docs_dir, "docs");
         assert_eq!(config.adr_dir, "adr");
         assert_eq!(
@@ -493,30 +432,15 @@ roots = ["./src", ".github/workflows", "Cargo.toml"]
 
     #[test]
     fn rejects_absolute_vault_paths() {
-        let raw = toml::from_str::<RawConfig>(
-            r#"
-[vault]
-docs = "/tmp/docs"
-"#,
-        )
-        .unwrap();
-
-        let error = raw.into_config().unwrap_err();
+        let error = Config::parse(Some("[vault]\ndocs = \"/tmp/docs\"\n")).unwrap_err();
         assert!(error.to_string().contains("vault.docs"));
         assert!(error.to_string().contains("relative"));
     }
 
     #[test]
     fn rejects_parent_traversal_in_vault_paths() {
-        let raw = toml::from_str::<RawConfig>(
-            r#"
-[source]
-roots = ["src", "../outside"]
-"#,
-        )
-        .unwrap();
-
-        let error = raw.into_config().unwrap_err();
+        let error =
+            Config::parse(Some("[source]\nroots = [\"src\", \"../outside\"]\n")).unwrap_err();
         assert!(error.to_string().contains("source.roots"));
         assert!(error.to_string().contains("escape"));
     }

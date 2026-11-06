@@ -41,5 +41,5 @@ pub fn source_candidates(root: &Path) -> Result<Vec<String>> {
 /// Returns an error when the configuration or the vault cannot be read.
 pub fn vault_markdown(root: &Path) -> Result<Vec<String>> {
     let config = Config::load_from(&RepositoryFiles::open(root)?)?;
-    Ok(discovery::discover_vault(root, &config.docs_dir)?.markdown)
+    Ok(discovery::discover_vault(root, config.docs_dir())?.markdown)
 }

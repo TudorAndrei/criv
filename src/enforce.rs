@@ -7,9 +7,10 @@ use serde::Serialize;
 use usage_rs::{Args as UsageArgs, ValueEnum};
 
 use crate::check;
-use crate::config::{CONFIG_FILE, Stage};
+use crate::config::{CONFIG_FILE, ImportPolicyConfig, Stage};
 use crate::diagnostic::{Diagnostic, DiagnosticCode};
 use crate::git::{ChangedSet, Comparison, GitRepository, is_zero_oid};
+use crate::glob::GlobMatcher;
 use crate::vault::{LoadOptions, Vault};
 use crate::{CrivError, Result};
 
@@ -42,7 +43,7 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
     }
     let files = crate::config::open_vault(root)?;
     let vault = Vault::load(&files, LoadOptions::default())?;
-    if !vault.config().enforce_stages.contains(&options.stage) {
+    if !vault.config().enforce_stages().contains(&options.stage) {
         return Err(CrivError::new(format!(
             "stage `{}` is not enabled in {CONFIG_FILE}",
             options.stage.as_str()
@@ -77,7 +78,7 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
         .iter()
         .map(Diagnostic::describe)
         .collect::<Vec<_>>();
-    let import_violations = import_policy_violations(&vault, scanned_files);
+    let import_violations = import_policy_violations(&vault, scanned_files)?;
     let adr_violations =
         crate::adr::change_violations(&files, vault.config(), changes.as_ref(), options.stage);
     let changed_count = changed_files.as_ref().map_or(0, Vec::len);
@@ -204,21 +205,25 @@ fn enforce_failure(
     })
 }
 
-fn import_policy_violations(vault: &Vault, changed_files: Option<&Vec<String>>) -> Vec<String> {
+fn import_policy_violations(
+    vault: &Vault,
+    changed_files: Option<&Vec<String>>,
+) -> Result<Vec<String>> {
     let mut violations = Vec::new();
-    for policy in &vault.config().import_policies {
+    for config in vault.config().import_policies() {
+        let policy = ImportPolicy::compile(config)?;
         for file in vault.source_graph().files() {
             if changed_files.is_some_and(|files| !files.contains(&file.path)) {
                 continue;
             }
-            if !policy.scope_matcher.is_match(&file.path) {
+            if !policy.scope.is_match(&file.path) {
                 continue;
             }
             for import in &file.imports {
                 if policy.deny.iter().any(|rule| rule.matches(&import.module)) {
                     violations.push(format!(
                         "{}:{}: import policy `{}` denies `{}`",
-                        file.path, import.line, policy.id, import.module
+                        file.path, import.line, config.id, import.module
                     ));
                 }
             }
@@ -226,7 +231,67 @@ fn import_policy_violations(vault: &Vault, changed_files: Option<&Vec<String>>) 
     }
     violations.sort();
     violations.dedup();
-    violations
+    Ok(violations)
+}
+
+/// A configured import policy with its globs compiled.
+struct ImportPolicy {
+    scope: GlobMatcher,
+    deny: Vec<DenyRule>,
+}
+
+impl ImportPolicy {
+    fn compile(config: &ImportPolicyConfig) -> Result<Self> {
+        let id = &config.id;
+        let scope = GlobMatcher::new(&config.scope).map_err(|err| {
+            CrivError::new(format!(
+                "invalid enforce.imports scope for policy `{id}`: {err}"
+            ))
+        })?;
+        let deny = config
+            .deny
+            .iter()
+            .map(|pattern| DenyRule::new(pattern, id))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self { scope, deny })
+    }
+}
+
+/// One denied import: a module path, or a glob over `/`-separated module paths.
+struct DenyRule {
+    pattern: String,
+    matcher: Option<GlobMatcher>,
+}
+
+impl DenyRule {
+    fn new(pattern: &str, policy_id: &str) -> Result<Self> {
+        let matcher = pattern
+            .contains(['*', '?', '['])
+            .then(|| {
+                GlobMatcher::new(&[pattern.replace("::", "/")]).map_err(|err| {
+                    CrivError::new(format!(
+                        "invalid enforce.imports deny glob for policy `{policy_id}`: {err}"
+                    ))
+                })
+            })
+            .transpose()?;
+        Ok(Self {
+            pattern: pattern.to_string(),
+            matcher,
+        })
+    }
+
+    /// A module path matches the exact path, any path below it, or the glob.
+    fn matches(&self, module: &str) -> bool {
+        self.matcher.as_ref().map_or_else(
+            || {
+                module
+                    .strip_prefix(self.pattern.as_str())
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
+            },
+            |matcher| matcher.is_match(&module.replace("::", "/")),
+        )
+    }
 }
 
 fn changed_entries(
@@ -422,6 +487,35 @@ mod tests {
     use super::*;
     use crate::git::ChangeStatus;
     use crate::git::fixture::git;
+
+    #[test]
+    fn deny_rules_match_exact_prefix_and_glob_forms() {
+        let rule = |pattern: &str| DenyRule::new(pattern, "test").unwrap();
+        assert!(rule("crate::infra").matches("crate::infra::db"));
+        assert!(rule("crate::infra::*").matches("crate::infra::db"));
+        assert!(rule("sqlx").matches("sqlx"));
+        assert!(!rule("crate::infra").matches("crate::infrastructure"));
+    }
+
+    #[test]
+    fn rejects_invalid_import_policy_scope_and_deny_globs() {
+        let policy = |id: &str, scope: &str, deny: &str| ImportPolicyConfig {
+            id: id.into(),
+            scope: vec![scope.into()],
+            deny: vec![deny.into()],
+        };
+        let scope = ImportPolicy::compile(&policy("bad-scope", "src/[.rs", "crate::db"))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(scope.contains("bad-scope") && scope.contains("scope"));
+
+        let deny = ImportPolicy::compile(&policy("bad-deny", "src/**", "crate::["))
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(deny.contains("bad-deny") && deny.contains("deny glob"));
+    }
 
     fn two_commit_repository() -> tempfile::TempDir {
         let root = tempfile::TempDir::new().unwrap();

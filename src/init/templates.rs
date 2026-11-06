@@ -51,7 +51,7 @@ mod tests {
     #[test]
     fn default_config_template_states_the_config_defaults() {
         let parsed = Config::parse(Some(DEFAULT_CONFIG)).unwrap();
-        assert_eq!(format!("{parsed:?}"), format!("{:?}", Config::default()));
+        assert_eq!(parsed, Config::default());
 
         let template: toml::Value = toml::from_str(DEFAULT_CONFIG).unwrap();
         for (table, key) in [

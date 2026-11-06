@@ -187,3 +187,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0175-declare-the-command-tree-and-shipped-skills-once|ADR-0175]] - Declare the command tree and shipped skills once
 - [[0176-guard-runtime-boundaries-over-the-whole-source-tree|ADR-0176]] - Guard runtime boundaries over the whole source tree
 - [[0177-register-policy-patterns-once-in-the-vault|ADR-0177]] - Register policy patterns once in the vault
+- [[0178-keep-configuration-as-normalized-data|ADR-0178]] - Keep configuration as normalized data

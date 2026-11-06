@@ -84,10 +84,11 @@ to disable its gate without uninstalling the hook. A name other than `commit`,
 stages = ["commit", "ci"]
 ```
 
-## `[[enforce.import_policies]]`
+## `[[enforce.imports]]`
 
 An import policy fails the enforcement gate when a file in `scope` imports
-something in `deny`. Each entry needs all three keys.
+something in `deny`. Each entry needs all three keys. `criv enforce` compiles
+the globs and reports an invalid one with the policy `id`.
 
 | Key     | Type                  | Meaning                                                                                                                                                                                    |
 | ------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -96,7 +97,7 @@ something in `deny`. Each entry needs all three keys.
 | `deny`  | array of strings      | Import targets the scope must not use. A plain string matches the module or any child of it, so `tokio` also denies `tokio::net`. A glob matches the module path with `::` written as `/`. |
 
 ```toml
-[[enforce.import_policies]]
+[[enforce.imports]]
 id = "domain-stays-pure"
 scope = ["src/domain/**"]
 deny = ["reqwest", "tokio/net/*"]
@@ -111,3 +112,5 @@ carries the code and the repair as fields.
 `[patterns.*]` is refused. Persistent named patterns belong in an ADR
 `policy.patterns` entry, addressed as `ADR-NNNN/local-id`. criv reports the
 replacement when it finds the old table.
+
+Other unknown keys are ignored, in every table.

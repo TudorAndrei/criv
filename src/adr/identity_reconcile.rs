@@ -216,7 +216,8 @@ fn build_plan(context: &Context<'_>) -> Result<Plan> {
         })
         .transpose()?;
     let target_config = Config::parse(target_config.as_deref())?;
-    if config.docs_dir != target_config.docs_dir || config.adr_dir != target_config.adr_dir {
+    if config.docs_dir() != target_config.docs_dir() || config.adr_dir() != target_config.adr_dir()
+    {
         return Err(CrivError::new(
             "refusing ADR reconciliation because vault.docs or vault.adr differs from the target; cannot prove ADR ownership",
         ));

@@ -99,11 +99,7 @@ mod tests {
         .unwrap();
         (
             temp,
-            Config {
-                source_roots: vec!["src".into()],
-                source_exclude: vec![],
-                ..Config::default()
-            },
+            Config::parse(Some("[source]\nroots = [\"src\"]\nexclude = []\n")).unwrap(),
         )
     }
 
@@ -162,11 +158,10 @@ mod tests {
         let pruned = root.join("src/pruned");
         fs::set_permissions(&selected, fs::Permissions::from_mode(0o000)).unwrap();
         fs::set_permissions(&pruned, fs::Permissions::from_mode(0o000)).unwrap();
-        let config = Config {
-            source_roots: vec!["src".into()],
-            source_exclude: vec!["src/pruned/**".into()],
-            ..Config::default()
-        };
+        let config = Config::parse(Some(
+            "[source]\nroots = [\"src\"]\nexclude = [\"src/pruned/**\"]\n",
+        ))
+        .unwrap();
 
         let can_read_without_permission = fs::File::open(&selected).is_ok();
         let result = refresh(root, &config, None);
@@ -197,8 +192,8 @@ mod tests {
 
     #[test]
     fn disabled_state_does_no_source_work() {
-        let (temp, mut config) = fixture();
-        config.source_index = false;
+        let (temp, _) = fixture();
+        let config = Config::parse(Some("[index]\nsource = false\n")).unwrap();
         work::reset();
 
         let state = refresh(temp.path(), &config, None).unwrap();

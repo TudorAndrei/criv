@@ -340,7 +340,7 @@ impl Vault {
         let config = options
             .config
             .map_or_else(|| Config::load_from(files), Ok)?;
-        let discovered = discover_vault(root, &config.docs_dir)?;
+        let discovered = discover_vault(root, config.docs_dir())?;
         let notes = discovered
             .markdown
             .into_iter()

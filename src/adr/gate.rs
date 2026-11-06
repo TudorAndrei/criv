@@ -160,7 +160,7 @@ impl Gate<'_> {
             .text(&Revision::Commit(changes.old_ref.clone()?), CONFIG_FILE)
             .ok()?;
         let previous = Config::parse(Some(&previous)).ok()?;
-        if previous.docs_dir == current.docs_dir && previous.adr_dir == current.adr_dir {
+        if previous.docs_dir() == current.docs_dir() && previous.adr_dir() == current.adr_dir() {
             return None;
         }
         paths()
@@ -168,7 +168,7 @@ impl Gate<'_> {
             .then(|| {
                 format!(
                     "{CONFIG_FILE} moves the decision scope from `{}/{}` to `{}/{}` in the same transaction as a decision change; the immutability gate would read the new scope",
-                    previous.docs_dir, previous.adr_dir, current.docs_dir, current.adr_dir
+                    previous.docs_dir(), previous.adr_dir(), current.docs_dir(), current.adr_dir()
                 )
             })
     }
@@ -329,10 +329,7 @@ mod tests {
             "other/adr/0002-existing.md",
             None,
         ));
-        let config = Config {
-            docs_dir: "other".into(),
-            ..Config::default()
-        };
+        let config = Config::parse(Some("[vault]\ndocs = \"other\"\n")).unwrap();
         for stage in [Stage::Commit, Stage::Push] {
             let violations = change_violations(&files, &config, Some(&changes), stage);
             assert_eq!(violations.len(), 4);
@@ -388,10 +385,7 @@ mod tests {
             "Changed decision\n",
         )
         .unwrap();
-        let current = Config {
-            docs_dir: "other".into(),
-            ..Config::default()
-        };
+        let current = Config::parse(Some("[vault]\ndocs = \"other\"\n")).unwrap();
         let violations = change_violations(
             &files,
             &current,

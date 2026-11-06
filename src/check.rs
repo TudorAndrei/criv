@@ -300,7 +300,8 @@ fn validate_decision_note(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diag
             None,
             format!(
                 "decision notes must live under {}/{}",
-                config.docs_dir, config.adr_dir
+                config.docs_dir(),
+                config.adr_dir()
             ),
         ));
     }

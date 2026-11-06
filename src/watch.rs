@@ -194,7 +194,7 @@ impl WatchSet {
         let mut targets = BTreeMap::new();
         insert_watch_target(&mut targets, root.to_path_buf(), WatchDepth::NonRecursive);
         insert_existing_or_ancestor(&mut targets, files, &config.docs_path(root));
-        for source_root in &config.source_roots {
+        for source_root in config.source_roots() {
             insert_existing_or_ancestor(&mut targets, files, &root.join(source_root));
         }
         Self::from_targets(targets)
@@ -206,7 +206,7 @@ impl WatchSet {
         insert_watch_target(&mut targets, root.to_path_buf(), WatchDepth::NonRecursive);
         if let Some(config) = config {
             insert_existing_or_ancestor(&mut targets, files, &config.docs_path(root));
-            for source_root in &config.source_roots {
+            for source_root in config.source_roots() {
                 let path = root.join(source_root);
                 if matches!(
                     path_kind(files, &path),
@@ -579,12 +579,12 @@ impl WatchTopology {
     fn observe(files: &RepositoryFiles, config: &Config) -> Self {
         let root = files.root();
         let mut paths = config
-            .source_roots
+            .source_roots()
             .iter()
             .map(|path| (path.clone(), path_kind(files, &root.join(path))))
             .collect::<Vec<_>>();
         paths.push((
-            config.docs_dir.clone(),
+            config.docs_dir().to_string(),
             path_kind(files, &config.docs_path(root)),
         ));
         paths.sort();

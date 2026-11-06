@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use criv_state_wire::{asset, layout};
 use ignore::{DirEntry, Error as WalkError, ParallelVisitor, ParallelVisitorBuilder, WalkBuilder};
 
-use crate::config::{Config, relative_path};
+use crate::config::Config;
 use crate::glob::GlobMatcher;
 use crate::repository::RepositoryFiles;
 use crate::{CrivError, Result};
@@ -92,19 +92,19 @@ struct SourceRules {
 
 impl SourceScope {
     pub(crate) fn new(config: &Config) -> Result<Self> {
-        if !config.source_index {
+        if !config.source_index() {
             return Ok(Self { rules: None });
         }
         let roots = config
-            .source_roots
+            .source_roots()
             .iter()
-            .map(|value| relative_path("source.roots", value))
-            .collect::<Result<BTreeSet<_>>>()?
+            .cloned()
+            .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
         let profile = Profile::Source {
-            exclude: GlobMatcher::new(&config.source_exclude)?,
-            prune: subtree_prune_matcher(&config.source_exclude)?,
+            exclude: GlobMatcher::new(config.source_exclude())?,
+            prune: subtree_prune_matcher(config.source_exclude())?,
         };
         Ok(Self {
             rules: Some(SourceRules {
@@ -192,16 +192,16 @@ impl SourceEventFilter {
     }
 }
 
-pub fn discover_vault(root: &Path, docs_dir: &str) -> Result<VaultPaths> {
-    let docs_relative = relative_path("vault.docs", docs_dir)?;
+/// The notes and assets under `docs_dir`, as [`Config::docs_dir`] normalizes it.
+pub fn discover_vault(root: &Path, docs_relative: &str) -> Result<VaultPaths> {
     let profile = Arc::new(Profile::Vault);
-    if profile_prunes_path(profile.as_ref(), &docs_relative) {
+    if profile_prunes_path(profile.as_ref(), docs_relative) {
         return Ok(VaultPaths {
             markdown: Vec::new(),
             assets: Vec::new(),
         });
     }
-    let Some(kind) = validate_root(root, &docs_relative)? else {
+    let Some(kind) = validate_root(root, docs_relative)? else {
         return Ok(VaultPaths {
             markdown: Vec::new(),
             assets: Vec::new(),
@@ -213,7 +213,7 @@ pub fn discover_vault(root: &Path, docs_dir: &str) -> Result<VaultPaths> {
         )));
     }
 
-    let mut builder = WalkBuilder::new(root.join(&docs_relative));
+    let mut builder = WalkBuilder::new(root.join(docs_relative));
     builder
         .standard_filters(false)
         .follow_links(false)
@@ -669,6 +669,11 @@ mod tests {
         fs::write(path, contents).unwrap();
     }
 
+    /// A configuration with this `[source]` table.
+    fn source_config(source: &str) -> Config {
+        Config::parse(Some(&format!("[source]\n{source}\n"))).unwrap()
+    }
+
     fn discover_source(root: &Path, config: &Config) -> Result<Vec<String>> {
         discover_source_candidates(&RepositoryFiles::open(root)?, &SourceScope::new(config)?)
     }
@@ -690,11 +695,8 @@ mod tests {
         write(&root.join("src/excluded.rs"), b"pub fn excluded() {}\n");
         write(&root.join("src/binary.rs"), b"\0binary");
         write(&root.join(".git/private.rs"), b"private\n");
-        let config = Config {
-            source_roots: vec!["src".into(), "./src/.".into()],
-            source_exclude: vec!["src/excluded.rs".into()],
-            ..Config::default()
-        };
+        let config =
+            source_config("roots = [\"src\", \"./src/.\"]\nexclude = [\"src/excluded.rs\"]");
 
         assert_eq!(
             discover_source(root, &config).unwrap(),
@@ -711,11 +713,7 @@ mod tests {
     #[test]
     fn an_invalid_exclude_glob_fails_the_walk_and_the_event_filter() {
         let temp = TempDir::new().unwrap();
-        let config = Config {
-            source_roots: vec!["src".into()],
-            source_exclude: vec!["src/[".into()],
-            ..Config::default()
-        };
+        let config = source_config("roots = [\"src\"]\nexclude = [\"src/[\"]");
 
         assert!(discover_source(temp.path(), &config).is_err());
         assert!(SourceEventFilter::new(temp.path(), &config).is_err());
@@ -730,10 +728,7 @@ mod tests {
             &root.join("scripts/check.exs"),
             b"defmodule Check do\nend\n",
         );
-        let config = Config {
-            source_roots: vec!["lib".into(), "scripts/check.exs".into()],
-            ..Config::default()
-        };
+        let config = source_config("roots = [\"lib\", \"scripts/check.exs\"]");
 
         assert_eq!(
             discover_source(root, &config).unwrap(),
@@ -755,18 +750,16 @@ mod tests {
         write(&root.join("src/nested/mod.rs"), b"pub fn nested() {}\n");
         write(&root.join("src/generated/skip.rs"), b"generated\n");
         write(&root.join(".git/private.rs"), b"private\n");
-        let config = Config {
-            source_roots: vec![
-                "missing".into(),
-                "src/nested".into(),
-                "src".into(),
-                "src/lib.rs".into(),
-                ".git".into(),
-                "src/generated".into(),
-            ],
-            source_exclude: vec!["src/generated/**".into()],
-            ..Config::default()
-        };
+        let config = source_config(
+            "roots = [
+                \"missing\",
+                \"src/nested\",
+                \"src\",
+                \"src/lib.rs\",
+                \".git\",
+                \"src/generated\",
+            ]\nexclude = [\"src/generated/**\"]",
+        );
 
         assert_eq!(
             discover_source(root, &config).unwrap(),
@@ -778,11 +771,7 @@ mod tests {
     fn source_events_ignore_only_proven_pruned_scope() {
         let temp = TempDir::new().unwrap();
         let root = temp.path();
-        let config = Config {
-            source_roots: vec!["src".into()],
-            source_exclude: vec!["src/generated/**".into()],
-            ..Config::default()
-        };
+        let config = source_config("roots = [\"src\"]\nexclude = [\"src/generated/**\"]");
 
         assert!(event_relevant(root, &config, &root.join("src")));
         assert!(event_relevant(root, &config, &root.join("src/lib.rs")));
@@ -937,10 +926,7 @@ mod tests {
             &root.join("src").join(OsString::from_vec(vec![b'a', 0xFF])),
             b"text\n",
         );
-        let config = Config {
-            source_roots: vec!["src".into()],
-            ..Config::default()
-        };
+        let config = source_config("roots = [\"src\"]");
 
         assert!(
             discover_source(root, &config)
