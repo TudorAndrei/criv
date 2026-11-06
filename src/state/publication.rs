@@ -1,9 +1,10 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::time::Duration;
 
-use criv_state_wire::{content_hash, layout};
+use criv_state_wire::layout;
 use serde::{Deserialize, Serialize};
 
 use super::snapshots;
@@ -11,7 +12,7 @@ use crate::repository::{self, RepositoryFiles};
 use crate::{CrivError, Result};
 
 const LOCK_TIMEOUT: Duration = Duration::from_secs(2);
-const TRANSACTION_SCHEMA: &str = "criv.state-publication.v1";
+const TRANSACTION_SCHEMA: &str = "criv.state-publication.v2";
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TransactionRecord {
@@ -20,12 +21,11 @@ struct TransactionRecord {
     candidate_hash: String,
     candidate_state: String,
     candidate_index: String,
-    keep: usize,
     removals: Vec<String>,
     prior_state: Option<String>,
     prior_latest: Option<String>,
     prior_index: Option<String>,
-    prior_snapshots: BTreeMap<String, String>,
+    prior_hashes: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -71,7 +71,7 @@ pub fn publish(
     files: &RepositoryFiles,
     hash: &str,
     contents: &str,
-    keep: usize,
+    keep: NonZeroUsize,
     precommit_check: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     publish_controlled(
@@ -88,7 +88,7 @@ fn publish_controlled(
     files: &RepositoryFiles,
     hash: &str,
     contents: &str,
-    keep: usize,
+    keep: NonZeroUsize,
     control: &impl PublicationControl,
     precommit_check: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
@@ -103,12 +103,11 @@ fn publish_controlled(
         candidate_hash: hash.to_string(),
         candidate_state: contents.to_string(),
         candidate_index: plan.index_contents,
-        keep,
         removals: plan.removals,
         prior_state: read_optional(files, layout::STATE, "State commit record")?,
         prior_latest: read_optional(files, layout::LATEST, "latest snapshot pointer")?,
         prior_index: read_optional(files, layout::SNAPSHOT_INDEX, "snapshot index")?,
-        prior_snapshots: capture_snapshots(files)?,
+        prior_hashes: plan.prior_hashes,
     };
     write_record(files, &record)?;
     if let Err(error) = control.checkpoint(PublicationStep::Record) {
@@ -298,19 +297,8 @@ fn restore_prior(files: &RepositoryFiles, record: &TransactionRecord) -> Result<
     restore_optional(files, layout::LATEST, record.prior_latest.as_deref())?;
     restore_optional(files, layout::SNAPSHOT_INDEX, record.prior_index.as_deref())?;
 
-    let current = managed_snapshot_paths(files)?;
-    let prior = record
-        .prior_snapshots
-        .keys()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    for path in current.difference(&prior) {
-        remove_optional(files, path)?;
-    }
-    for (path, contents) in &record.prior_snapshots {
-        files
-            .write_scope(Path::new(layout::SNAPSHOTS))?
-            .write_atomic(Path::new(path), contents)?;
+    for hash in snapshots::stored_hashes(files)?.difference(&record.prior_hashes) {
+        remove_optional(files, &layout::snapshot(hash))?;
     }
     for hash in &record.removals {
         let quarantined = layout::quarantined_snapshot(hash);
@@ -365,37 +353,12 @@ fn read_optional(files: &RepositoryFiles, path: &str, label: &str) -> Result<Opt
         .map_err(|error| CrivError::new(format!("failed to read {label} `{path}`: {error}")))
 }
 
-fn capture_snapshots(files: &RepositoryFiles) -> Result<BTreeMap<String, String>> {
-    let mut snapshots = BTreeMap::new();
-    for relative in managed_snapshot_paths(files)? {
-        let contents = read_optional(files, &relative, "snapshot")?
-            .ok_or_else(|| CrivError::new(format!("snapshot {relative} disappeared")))?;
-        snapshots.insert(relative, contents);
-    }
-    Ok(snapshots)
-}
-
-fn managed_snapshot_paths(files: &RepositoryFiles) -> Result<BTreeSet<String>> {
-    let Some(names) = files.read_dir_names(Path::new(layout::SNAPSHOTS))? else {
-        return Ok(BTreeSet::new());
-    };
-    let mut paths = BTreeSet::new();
-    for name in names {
-        let name = name.to_string_lossy().to_string();
-        let Some(hash) = name.strip_suffix(".json") else {
-            continue;
-        };
-        if content_hash::is_valid(hash) {
-            paths.insert(layout::snapshot(hash));
-        }
-    }
-    Ok(paths)
-}
-
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
     use std::sync::{Arc, Barrier};
+
+    use criv_state_wire::content_hash;
 
     use super::*;
 
@@ -423,9 +386,13 @@ mod tests {
     }
 
     fn publish_root(root: &Path, hash: &str, contents: &str, keep: usize) -> Result<()> {
-        publish(&RepositoryFiles::open(root)?, hash, contents, keep, || {
-            Ok(())
-        })
+        publish(
+            &RepositoryFiles::open(root)?,
+            hash,
+            contents,
+            NonZeroUsize::new(keep).unwrap(),
+            || Ok(()),
+        )
     }
 
     fn publish_root_with(
@@ -439,10 +406,47 @@ mod tests {
             &RepositoryFiles::open(root)?,
             hash,
             contents,
-            keep,
+            NonZeroUsize::new(keep).unwrap(),
             control,
             || Ok(()),
         )
+    }
+
+    fn fail_at(step: PublicationStep) -> FailAt {
+        FailAt {
+            step,
+            hits: Cell::new(0),
+            also_fail_rollback: false,
+        }
+    }
+
+    #[test]
+    fn rollback_restores_quarantined_snapshots_and_keeps_a_republished_one() {
+        let root = tempfile::tempdir().unwrap();
+        let first = state("first");
+        let second = state("second");
+        let candidate = state("candidate");
+        publish_root(root.path(), &first.0, &first.1, 20).unwrap();
+        publish_root(root.path(), &second.0, &second.1, 20).unwrap();
+        let before = snapshot_files(root.path());
+
+        for hash_and_contents in [&candidate, &first] {
+            publish_root_with(
+                root.path(),
+                &hash_and_contents.0,
+                &hash_and_contents.1,
+                1,
+                &fail_at(PublicationStep::InstallLatest),
+            )
+            .unwrap_err();
+
+            assert_eq!(snapshot_files(root.path()), before);
+            assert_eq!(
+                fs::read_to_string(root.path().join(layout::snapshot(&first.0))).unwrap(),
+                first.1
+            );
+            assert!(!root.path().join(layout::QUARANTINE).exists());
+        }
     }
 
     #[test]
