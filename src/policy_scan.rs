@@ -418,10 +418,13 @@ mod tests {
     fn every_registered_failure_is_kept_in_pattern_id_order() {
         let (temp, _) = policy_fixture("invalid-policy");
         let adr = temp.path().join("docs/adr/0001-policy.md");
-        let contents = fs::read_to_string(&adr).unwrap().replace(
-            "policy:\n  patterns:\n",
-            "policy:\n  patterns:\n    - id: also-invalid\n      language: rust\n",
-        );
+        let contents = fs::read_to_string(&adr)
+            .unwrap()
+            .replace("\r\n", "\n")
+            .replace(
+                "policy:\n  patterns:\n",
+                "policy:\n  patterns:\n    - id: also-invalid\n      language: rust\n",
+            );
         fs::write(&adr, contents).unwrap();
         let vault = load(temp.path());
 

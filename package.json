@@ -11,7 +11,7 @@
     "format:markdown": "oxfmt --write '**/*.md'",
     "format:markdown:check": "oxfmt --check '**/*.md'",
     "check:fallow": "fallow dead-code && fallow dupes",
-    "check:editor-contracts": "npm run check:fallow && npm --prefix packages/criv-editor-state run lint && npm --prefix packages/criv-editor-state run format:check && npm --prefix packages/criv-editor-state run check-types && npm --prefix packages/criv-editor-state test",
+    "check:editor-contracts": "npm run check:fallow && npm --prefix packages/criv-editor-state run lint && npm --prefix packages/criv-editor-state run format:check && npm --prefix packages/criv-editor-state test",
     "check:obsidian": "npm audit --workspace criv-obsidian-plugin --audit-level=high && npm --prefix .obsidian/plugins/criv run format:check && npm --prefix .obsidian/plugins/criv run lint && npm --prefix .obsidian/plugins/criv test && npm --prefix .obsidian/plugins/criv run build",
     "check:vscode": "npm audit --workspace vscode-criv --audit-level=high && npm --prefix extensions/vscode-criv run format:check && npm --prefix extensions/vscode-criv run lint && npm --prefix extensions/vscode-criv test && npm --prefix extensions/vscode-criv run test:integration",
     "build:site": "node scripts/prepare-docs-site.mjs && mdbook build .site-build/docs-book"

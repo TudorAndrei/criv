@@ -15,7 +15,7 @@
     "format": "oxfmt --write src test esbuild.mjs",
     "format:check": "oxfmt --check src test esbuild.mjs",
     "lint": "oxlint src test esbuild.mjs",
-    "test": "npm run build:wasm && node --test \"test/**/*.test.ts\""
+    "test": "npm run build:wasm && npm run check-types && node --test \"test/**/*.test.ts\""
   },
   "devDependencies": {
     "@types/node": "26.6.6",
