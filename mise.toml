@@ -59,7 +59,7 @@ run = "hk fix"
 
 [tasks.release-plan]
 description = "Show the next SemVer version from conventional commits"
-run = "cog bump --dry-run --auto"
+run = "bash scripts/release-version.sh"
 
 [tasks.release-auto]
 description = "Prepare a Cocogitto release commit for the hosted release workflow"

@@ -81,9 +81,12 @@ gh attestation verify dist/criv-aarch64-apple-darwin.tar.gz \
 
 Conventional commits drive the automatic bump: `fix` produces a patch release,
 `feat` produces a minor release, and `!` or `BREAKING CHANGE:` produces a major
-release. While criv is still in `0.y.z`, Cocogitto will not automatically select
-`1.0.0`; cut that intentionally with a manual versioned release if needed. This
-decision is captured in [[0016-conventional-commit-semver-release-automation|ADR-0016]].
+release. This decision is captured in [[0016-conventional-commit-semver-release-automation|ADR-0016]].
+A breaking change also produces a major release from `0.y.z`, so the first one
+after `0.14.0` releases `1.0.0`. A breaking marker in a squash commit body
+counts. `scripts/release-version.sh` makes this decision for both the release
+workflow and `mise run release-plan`, per
+[[0196-bump-the-major-version-for-every-breaking-change|ADR-0196]].
 
 Releases remain Git-tag-only. Do not publish `criv` to crates.io until
 the CLI API, state schema compatibility policy, and installer story are stable
