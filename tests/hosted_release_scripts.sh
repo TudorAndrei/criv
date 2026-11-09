@@ -57,4 +57,32 @@ zip_entries="$(unzip -Z1 "$test_root/dist/criv-x86_64-pc-windows-msvc.zip")"
 grep -Fx 'criv.exe' <<<"$zip_entries" >/dev/null
 grep -Fx 'vscode-criv.vsix' <<<"$zip_entries" >/dev/null
 
+history="$test_root/history"
+mkdir "$history"
+cp "$repository_root/cog.toml" "$history/"
+export GIT_AUTHOR_NAME=criv GIT_AUTHOR_EMAIL=criv@example.invalid
+export GIT_COMMITTER_NAME=criv GIT_COMMITTER_EMAIL=criv@example.invalid
+git -C "$history" init -q -b main
+git -C "$history" add cog.toml
+git -C "$history" commit -q --no-verify -m "chore: start history"
+
+expect_next_version() {
+  local tag="$1" message="$2" expected="$3" actual
+  git -C "$history" tag "$tag"
+  git -C "$history" commit -q --no-verify --allow-empty -m "$message"
+  actual="$(cd "$history" && "$repository_root/scripts/release-version.sh" 2>/dev/null)"
+  if [[ "$actual" != "$expected" ]]; then
+    printf 'after %s and "%s": expected "%s", got "%s"\n' \
+      "$tag" "$message" "$expected" "$actual" >&2
+    exit 1
+  fi
+}
+
+expect_next_version v0.14.0 "refactor: tidy" ""
+expect_next_version v0.14.1 "fix: repair" "0.14.2"
+expect_next_version v0.14.2 "feat: add" "0.15.0"
+expect_next_version v0.15.0 "refactor!: remove" "1.0.0"
+expect_next_version v0.15.1 $'perf(x): drop\n\nBREAKING CHANGE: gone' "1.0.0"
+expect_next_version v1.0.0 "fix(cli)!: rename" "2.0.0"
+
 echo "hosted release scripts: ok"

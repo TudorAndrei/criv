@@ -94,21 +94,10 @@ if [[ -n "$prepared_line" ]]; then
   exit 0
 fi
 
-bump_status=0
-bump_output="$(cog bump --dry-run --auto 2>&1)" || bump_status=$?
-if grep -qiE 'no commits|no conventional|no bump|nothing to bump' <<<"$bump_output"; then
+version="$("$(dirname "$0")/release-version.sh")"
+if [[ -z "$version" ]]; then
   no_release
   exit 0
-fi
-if ((bump_status != 0)); then
-  printf '%s\n' "$bump_output" >&2
-  exit 1
-fi
-version="$(grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+' <<<"$bump_output" | tail -n 1 || true)"
-version="${version#v}"
-if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$ ]]; then
-  echo "Cocogitto returned an invalid SemVer version: $version" >&2
-  exit 1
 fi
 
 tag="v$version"
