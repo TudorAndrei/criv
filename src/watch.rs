@@ -1353,11 +1353,17 @@ mod tests {
 
         let error = lock(root, WatchMode::Once).unwrap_err();
 
-        assert!(
-            error.to_string().contains(&format!(
-                "another watch session owns State refresh (mode live, pid {})",
+        // A Windows file lock also blocks other handles from reading the owner record.
+        let expected = if cfg!(windows) {
+            "another watch session owns State refresh;".to_owned()
+        } else {
+            format!(
+                "another watch session owns State refresh (mode live, pid {});",
                 std::process::id()
-            )),
+            )
+        };
+        assert!(
+            error.to_string().contains(&expected),
             "unexpected error: {error}"
         );
         drop(first);
