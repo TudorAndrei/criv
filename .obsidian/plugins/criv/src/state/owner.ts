@@ -1,267 +1,141 @@
 import { Notice } from "obsidian";
 import type { App } from "obsidian";
-import { LoadedRevisionOwner } from "@criv/editor-state";
-import type { AssetIndexEntry, CrivState, SourceIndexEntry, SourceResolver } from "../source/model";
-import { safeVaultPath } from "../source/model";
-import type { DisposableSubscription, ObsidianStateStatus, StatePort } from "../ports";
 import {
-  CrivWasmLoadError,
-  type CrivLoadedState,
+  CrivStateMissingError,
+  CrivStateStream,
+  crivStatusMessage,
+  readCrivState,
+  safeVaultPath,
+  type CrivInitialProjections,
   type CrivSelectorSuggestion,
-  type CrivStateSummary,
-} from "./wasm";
+  type CrivSourceEntry,
+  type CrivStateHost,
+  type CrivStateStatus,
+  type Disposable,
+} from "@criv/editor-state";
+import { createPackagedCrivStateModule } from "@criv/editor-state/packaged";
+
+import type { SourceResolver, StatePort } from "../ports";
 
 interface StateFileToken {
   mtime: number;
   size: number;
 }
 
+/** Owns the State file, its loaded revision, and the status stream for the vault. */
 export class ObsidianStateOwner implements StatePort {
-  private state: CrivState | null = null;
-  private stateSources: SourceIndexEntry[] = [];
-  private stateAssets: AssetIndexEntry[] = [];
-  private stateSourcesByPath = new Map<string, SourceIndexEntry>();
-  private stateSummary: CrivStateSummary | null = null;
-  private readonly revisions = new LoadedRevisionOwner<CrivLoadedState>();
-  private stateToken: StateFileToken | null = null;
-  private stateError: string | null = null;
-  private statusValue: ObsidianStateStatus = { generation: 0, kind: "loading" };
-  private nextGeneration = 0;
-  private readonly listeners = new Set<(status: ObsidianStateStatus) => void>();
-  private disposed = false;
+  private readonly host: ObsidianStateHost;
+  private readonly stream: CrivStateStream<string>;
+  private sourcesByPath = new Map<string, CrivSourceEntry>();
   private wasmFailureNotified = false;
+
+  constructor(app: App, statePath: () => string) {
+    this.host = new ObsidianStateHost(app, statePath);
+    this.stream = new CrivStateStream(this.host, createPackagedCrivStateModule());
+    this.stream.onDidChange((status) => this.observe(status));
+  }
+
+  refresh(): Promise<CrivStateStatus<string>> {
+    return this.stream.refresh();
+  }
+
+  /** Reload State when the State file changed since the last read. */
+  async poll(): Promise<void> {
+    if (await this.host.changed()) {
+      await this.stream.refresh();
+    }
+  }
+
+  onStatusChange(listener: (status: CrivStateStatus<string>) => void): Disposable {
+    return this.stream.onDidChange(listener);
+  }
+
+  async showStatus(): Promise<void> {
+    const projections = await this.load();
+    if (!projections) {
+      new Notice(this.statusMessage());
+      return;
+    }
+    const { summary } = projections;
+    new Notice(
+      `criv ${summary.schema}: ${summary.node_count} nodes, ${summary.edge_count} edges, ${summary.source_count} source files`,
+    );
+  }
+
+  async load(): Promise<CrivInitialProjections | null> {
+    const status = await this.stream.loaded();
+    return status.kind === "ready" ? status.projections : null;
+  }
+
+  current(): CrivInitialProjections | null {
+    const status = this.stream.status;
+    return status.kind === "ready" ? status.projections : null;
+  }
+
+  statusMessage(): string {
+    return crivStatusMessage(this.stream.status);
+  }
+
+  sourceResolver(): SourceResolver {
+    return {
+      lookupSourceTarget: (target) => this.stream.lookupSourceTarget(target),
+      sourceEntry: (path) => this.sourcesByPath.get(path),
+    };
+  }
+
+  suggestSelectors(query: string, limit: number): CrivSelectorSuggestion[] {
+    return this.stream.suggestSelectors(query, limit);
+  }
+
+  dispose(): void {
+    this.stream.dispose();
+    this.sourcesByPath.clear();
+  }
+
+  private observe(status: CrivStateStatus<string>): void {
+    this.sourcesByPath =
+      status.kind === "ready"
+        ? new Map(status.projections.sources.map((source) => [source.path, source]))
+        : new Map();
+    if (status.kind === "unavailable" && !this.wasmFailureNotified) {
+      this.wasmFailureNotified = true;
+      new Notice(status.message);
+    }
+  }
+}
+
+class ObsidianStateHost implements CrivStateHost<string> {
+  private lastRead: StateFileToken | null = null;
 
   constructor(
     private readonly app: App,
     private readonly statePath: () => string,
-    private readonly loadWasmRevision: (raw: string) => Promise<CrivLoadedState>,
   ) {}
 
-  async readState(): Promise<CrivStateSummary | null> {
-    await this.getState();
-    return this.stateSummary;
-  }
-
-  async showStatus(): Promise<void> {
-    const state = await this.readState();
-    if (!state) {
-      new Notice(`criv state is missing at ${this.statePath()}`);
-      return;
-    }
-    new Notice(
-      `criv ${state.schema}: ${state.node_count} nodes, ${state.edge_count} edges, ${state.source_count} source files`,
-    );
-  }
-
-  async loadState(observedToken?: StateFileToken | null): Promise<CrivState | null> {
-    if (this.disposed) {
-      return this.state;
-    }
-    const generation = ++this.nextGeneration;
-    if (!this.revisions.current) {
-      this.publish({ generation, kind: "loading" });
-    }
-    const configuredPath = this.statePath();
-    let resolvedPath: string | null = null;
-    let token: StateFileToken | null = null;
-    const result = await this.revisions.replace(
-      async (attempt) => {
-        resolvedPath = safeVaultPath(configuredPath);
-        if (!resolvedPath) {
-          throw new Error(`Invalid criv state path ${configuredPath}.`);
-        }
-        token =
-          observedToken === undefined ? await this.readStateFileToken(resolvedPath) : observedToken;
-        attempt.assertCurrent();
-        let raw: string;
-        try {
-          raw = await this.app.vault.adapter.read(resolvedPath);
-        } catch (error) {
-          throw new ObsidianStateReadError(error);
-        }
-        attempt.assertCurrent();
-        return this.loadWasmRevision(raw);
-      },
-      (candidate) => candidate.initialProjections(),
-    );
-
-    if (result.kind !== "committed" && result.kind !== "failed") {
-      return this.state;
-    }
-    if (result.kind === "committed") {
-      this.state = {
-        registeredPatterns: result.value.registeredPatterns,
-        patternMatches: result.value.patternMatches,
-      };
-      this.stateSources = result.value.sources;
-      this.stateAssets = result.value.assets;
-      this.stateSourcesByPath = new Map(
-        result.value.sources.map((source) => [source.path, source]),
-      );
-      this.stateSummary = result.value.summary;
-      this.stateToken = token;
-      this.stateError = null;
-      this.publish({ generation, kind: "ready", state: this.state });
-      return this.state;
-    }
-
-    this.clearCache();
-    this.stateToken = token;
-    this.recordWasmFailure(result.error);
-    this.stateError =
-      resolvedPath === null
-        ? `Invalid criv state path ${configuredPath}.`
-        : result.error instanceof ObsidianStateReadError
-          ? `Could not read ${resolvedPath}: ${errorMessage(result.error.cause)}`
-          : result.error instanceof CrivWasmLoadError
-            ? result.error.message
-            : `Could not read ${resolvedPath}: ${errorMessage(result.error)}`;
-    this.publish({
-      generation,
-      kind:
-        result.error instanceof ObsidianStateReadError
-          ? "missing"
-          : result.error instanceof CrivWasmLoadError
-            ? "unavailable"
-            : "invalid",
-      message: this.stateError,
-    });
-    return null;
-  }
-
-  async observeFile(): Promise<void> {
-    if (this.disposed) {
-      return;
-    }
+  async locate(): Promise<string> {
     const path = safeVaultPath(this.statePath());
     if (!path) {
-      return;
+      throw new CrivStateMissingError(`Invalid criv state path ${this.statePath()}.`);
     }
-    const token = await this.readStateFileToken(path);
-    if (sameStateFileToken(token, this.stateToken)) {
-      return;
+    return path;
+  }
+
+  async read(path: string): Promise<string> {
+    this.lastRead = await this.token(path);
+    return readCrivState(path, () => this.app.vault.adapter.read(path));
+  }
+
+  async changed(): Promise<boolean> {
+    const path = safeVaultPath(this.statePath());
+    if (!path) {
+      return false;
     }
-    await this.loadState(token);
+    const token = await this.token(path);
+    return token?.mtime !== this.lastRead?.mtime || token?.size !== this.lastRead?.size;
   }
 
-  currentStateStatus(): ObsidianStateStatus {
-    return this.statusValue;
+  private async token(path: string): Promise<StateFileToken | null> {
+    const stat = await this.app.vault.adapter.stat(path).catch(() => null);
+    return stat ? { mtime: stat.mtime, size: stat.size } : null;
   }
-
-  onStateStatusChange(listener: (status: ObsidianStateStatus) => void): DisposableSubscription {
-    this.listeners.add(listener);
-    let disposed = false;
-    return {
-      dispose: () => {
-        if (disposed) {
-          return;
-        }
-        disposed = true;
-        this.listeners.delete(listener);
-      },
-    };
-  }
-
-  async getState(): Promise<CrivState | null> {
-    return this.state ?? (await this.loadState());
-  }
-
-  stateStatus(): string {
-    return this.stateError ?? `criv state is unavailable at ${this.statePath()}.`;
-  }
-
-  cachedState(): CrivState | null {
-    return this.state;
-  }
-
-  cachedSourceResolver(): SourceResolver {
-    return {
-      lookupSourceTarget: (target) =>
-        this.revisions.current?.lookupSourceTarget(target) ?? { kind: "unresolved" },
-      sourceEntry: (path) => this.stateSourcesByPath.get(path),
-    };
-  }
-
-  suggestSourceSelectors(query: string, limit: number): CrivSelectorSuggestion[] {
-    return this.revisions.current?.suggestSelectors(query, limit) ?? [];
-  }
-
-  recordWasmFailure(error: unknown): void {
-    if (!(error instanceof CrivWasmLoadError) || this.wasmFailureNotified) {
-      return;
-    }
-    this.wasmFailureNotified = true;
-    new Notice(error.message);
-  }
-
-  async sourceEntries(): Promise<SourceIndexEntry[]> {
-    await this.getState();
-    return this.stateSources.slice();
-  }
-
-  async assetEntries(): Promise<AssetIndexEntry[]> {
-    await this.getState();
-    return this.stateAssets.slice();
-  }
-
-  async patternIds(): Promise<string[]> {
-    const state = await this.getState();
-    return state?.registeredPatterns ?? [];
-  }
-
-  dispose(): void {
-    if (this.disposed) {
-      return;
-    }
-    this.disposed = true;
-    this.listeners.clear();
-    this.revisions.dispose();
-    this.clearCache();
-  }
-
-  private clearCache(): void {
-    this.state = null;
-    this.stateSources = [];
-    this.stateAssets = [];
-    this.stateSourcesByPath.clear();
-    this.stateSummary = null;
-    this.stateToken = null;
-  }
-
-  private publish(status: ObsidianStateStatus): void {
-    if (this.disposed) {
-      return;
-    }
-    this.statusValue = status;
-    for (const listener of this.listeners) {
-      listener(status);
-    }
-  }
-
-  private async readStateFileToken(path: string): Promise<StateFileToken | null> {
-    try {
-      const stat = await this.app.vault.adapter.stat(path);
-      return stat ? { mtime: stat.mtime, size: stat.size } : null;
-    } catch {
-      return null;
-    }
-  }
-}
-
-class ObsidianStateReadError extends Error {
-  readonly cause: unknown;
-
-  constructor(cause: unknown) {
-    super("The criv State file could not be read.");
-    this.name = "ObsidianStateReadError";
-    this.cause = cause;
-  }
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function sameStateFileToken(left: StateFileToken | null, right: StateFileToken | null): boolean {
-  return left?.mtime === right?.mtime && left?.size === right?.size;
 }

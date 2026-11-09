@@ -1,11 +1,9 @@
 import {
   EditorSuggest,
-  Notice,
   type Editor,
   type EditorPosition,
   type EditorSuggestContext,
   type EditorSuggestTriggerInfo,
-  type MarkdownPostProcessorContext,
 } from "obsidian";
 import type { App } from "obsidian";
 import { RangeSetBuilder } from "@codemirror/state";
@@ -18,19 +16,17 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import {
-  addTarget,
-  addTextTargets,
+  patternTargetId,
+  wikilinks,
+  type CrivInitialProjections,
+  type CrivSelectorSuggestion,
+} from "@criv/editor-state";
+import {
   crivLinkRanges,
-  decodeSourceLinkTarget,
-  looksLikeSourceOrPattern,
+  crivLinkStatus,
   patternTooltip,
-  resolvePattern,
-  resolveSourceResult,
-  safeVaultPath,
   sourceTooltip,
-  type CrivState,
   type LinkedSource,
-  type SourceResolver,
 } from "./model";
 import type { StatePort } from "../ports";
 import {
@@ -39,7 +35,6 @@ import {
   renderPreview,
   renderPreviewError,
 } from "./preview";
-import type { CrivSelectorSuggestion } from "../state/wasm";
 
 const LINK_TARGET_SELECTOR = [
   "[data-href]",
@@ -52,13 +47,6 @@ const LINK_TARGET_SELECTOR = [
   ".cm-underline",
 ].join(",");
 
-interface SourceSuggestionItem {
-  insertText: string;
-  label: string;
-  path: string;
-  detail?: string;
-}
-
 export class ObsidianSourceReferencesOwner {
   private hoverEl: HTMLElement | null = null;
   private hoverSourceKey: string | null = null;
@@ -67,10 +55,9 @@ export class ObsidianSourceReferencesOwner {
   constructor(
     private readonly app: App,
     private readonly state: StatePort,
-    private readonly openExternal: (path: string) => void,
   ) {}
 
-  createSuggest(): EditorSuggest<SourceSuggestionItem> {
+  createSuggest(): EditorSuggest<CrivSelectorSuggestion> {
     return new CrivSourceSuggest(this.app, this.state);
   }
 
@@ -80,8 +67,8 @@ export class ObsidianSourceReferencesOwner {
     }).of(this.state);
   }
 
-  async decorateLinks(el: HTMLElement, _ctx: MarkdownPostProcessorContext): Promise<void> {
-    const state = await this.state.getState();
+  async decorateLinks(el: HTMLElement): Promise<void> {
+    const state = await this.state.load();
     if (!state) {
       return;
     }
@@ -95,37 +82,22 @@ export class ObsidianSourceReferencesOwner {
         anchor.setAttribute("title", "Malformed criv source target");
         continue;
       }
-      const sourceResult = resolveSourceResultFromTargets(
-        this.state.cachedSourceResolver(),
-        parsedTargets.targets,
-      );
-      const pattern = resolvePatternFromElement(state, anchor);
-      if (sourceResult.kind === "resolved") {
-        anchor.addClass("criv-source-ref");
-        anchor.setAttribute("title", sourceTooltip(sourceResult.source));
-        continue;
-      }
-      if (sourceResult.kind === "ambiguous") {
-        anchor.addClass("criv-warning");
-        anchor.setAttribute(
-          "title",
-          ambiguousSourceMessage(
-            parsedTargets.targets[0] ?? "",
-            sourceResult.candidates,
-            sourceResult.totalCandidateCount,
-          ),
-        );
-        continue;
-      }
-      if (pattern) {
-        anchor.addClass("criv-pattern-ref");
-        anchor.setAttribute("title", patternTooltip(state, pattern));
-        continue;
-      }
-      const target = parsedTargets.targets[0] ?? "";
-      if (looksLikeSourceOrPattern(target)) {
-        anchor.addClass("criv-warning");
-        anchor.setAttribute("title", "Unresolved criv reference");
+      const status = crivLinkStatus(state, this.state.sourceResolver(), parsedTargets.targets);
+      switch (status?.kind) {
+        case "source":
+          anchor.addClass("criv-source-ref");
+          anchor.setAttribute("title", sourceTooltip(status.source));
+          break;
+        case "pattern":
+          anchor.addClass("criv-pattern-ref");
+          anchor.setAttribute("title", patternTooltip(state, status.id));
+          break;
+        case "problem":
+          anchor.addClass("criv-warning");
+          anchor.setAttribute("title", status.message);
+          break;
+        case undefined:
+          break;
       }
     }
   }
@@ -136,16 +108,18 @@ export class ObsidianSourceReferencesOwner {
     if (!link || link.closest(".criv-hover-preview")) {
       return;
     }
-    if (!(await this.state.getState())) {
+    const state = await this.state.load();
+    const parsed = linkTargets(link);
+    if (!state || parsed.malformed) {
       return;
     }
-    const source = resolveSourceFromElement(this.state.cachedSourceResolver(), link);
-    if (!source) {
+    const status = crivLinkStatus(state, this.state.sourceResolver(), parsed.targets);
+    if (status?.kind !== "source") {
       return;
     }
     link.addClass("criv-source-ref");
-    link.setAttribute("title", sourceTooltip(source));
-    await this.showHoverPreview(event, source);
+    link.setAttribute("title", sourceTooltip(status.source));
+    await this.showHoverPreview(event, status.source);
   }
 
   handleDocumentMouseOut(event: MouseEvent): void {
@@ -161,21 +135,12 @@ export class ObsidianSourceReferencesOwner {
     this.hideHoverPreview();
   }
 
-  openValidatedSource(target: string): void {
-    const result = resolveSourceResult(this.state.cachedSourceResolver(), target);
-    if (result.kind === "resolved") {
-      this.openExternal(result.source.entry.path);
-      return;
-    }
-    new Notice(`Could not resolve criv source target ${target}.`);
-  }
-
   dispose(): void {
     this.hideHoverPreview();
   }
 
   private async showHoverPreview(event: MouseEvent, source: LinkedSource): Promise<void> {
-    const sourceKey = `${source.entry.path}#${source.fragment ?? ""}`;
+    const sourceKey = `${source.entry.path}#${source.lines?.start}-${source.lines?.end}`;
     if (this.hoverEl && this.hoverSourceKey === sourceKey) {
       positionHoverPreview(this.hoverEl, event);
       return;
@@ -212,7 +177,12 @@ export class ObsidianSourceReferencesOwner {
   }
 }
 
-class CrivSourceSuggest extends EditorSuggest<SourceSuggestionItem> {
+/**
+ * Completes a source selector typed after `[[`. Selecting one replaces the
+ * whole Wikilink with the bare selector, because `criv check` reserves
+ * Wikilinks for document references (`sourceWikilinkWarning`).
+ */
+class CrivSourceSuggest extends EditorSuggest<CrivSelectorSuggestion> {
   constructor(
     app: App,
     private readonly state: StatePort,
@@ -227,86 +197,86 @@ class CrivSourceSuggest extends EditorSuggest<SourceSuggestionItem> {
       return null;
     }
     const query = line.slice(open + 2);
-    if (query.includes(" ") || query.startsWith("match:")) {
+    if (query.includes(" ") || patternTargetId(query) !== undefined) {
       return null;
     }
     return {
-      start: { line: cursor.line, ch: open + 2 },
+      start: { line: cursor.line, ch: open },
       end: cursor,
       query,
     };
   }
 
-  async getSuggestions(context: EditorSuggestContext): Promise<SourceSuggestionItem[]> {
-    if (!(await this.state.getState())) {
+  async getSuggestions(context: EditorSuggestContext): Promise<CrivSelectorSuggestion[]> {
+    if (!(await this.state.load())) {
       return [];
     }
-    try {
-      return sourceSuggestionItemsFromWasm(this.state.suggestSourceSelectors(context.query, 20));
-    } catch (error) {
-      this.state.recordWasmFailure(error);
-      return [];
-    }
+    return this.state.suggestSelectors(context.query, 20);
   }
 
-  renderSuggestion(value: SourceSuggestionItem, el: HTMLElement): void {
-    el.createDiv({ text: value.label });
-    if (value.detail) {
-      el.createDiv({ cls: "criv-source-suggestion-detail", text: value.detail });
-    }
+  renderSuggestion(value: CrivSelectorSuggestion, el: HTMLElement): void {
+    el.createDiv({ text: value.label || value.target });
+    el.createDiv({ cls: "criv-source-suggestion-detail", text: value.detail || value.kind });
   }
 
-  selectSuggestion(value: SourceSuggestionItem): void {
-    if (this.context) {
-      this.context.editor.replaceRange(value.insertText, this.context.start, this.context.end);
+  selectSuggestion(value: CrivSelectorSuggestion): void {
+    if (!this.context) {
+      return;
     }
+    const { editor, start, end } = this.context;
+    const closing = { line: end.line, ch: end.ch + 2 };
+    editor.replaceRange(
+      value.target,
+      start,
+      editor.getRange(end, closing) === "]]" ? closing : end,
+    );
   }
 }
 
+/**
+ * Marks unresolved and ambiguous links. A State reload reaches every editor
+ * through `workspace.updateOptions()`, whose reconfiguration updates this
+ * plugin without a document or viewport change, so it also rebuilds when the
+ * loaded projections change.
+ */
 class CrivEditorDriftPlugin implements PluginValue {
   decorations: DecorationSet;
+  private projections: CrivInitialProjections | null;
 
   constructor(
     view: EditorView,
     private readonly state: StatePort,
   ) {
+    this.projections = state.current();
     this.decorations = this.buildDecorations(view);
   }
 
   update(update: ViewUpdate): void {
-    if (update.docChanged || update.viewportChanged) {
+    const projections = this.state.current();
+    if (update.docChanged || update.viewportChanged || projections !== this.projections) {
+      this.projections = projections;
       this.decorations = this.buildDecorations(update.view);
     }
   }
 
   private buildDecorations(view: EditorView): DecorationSet {
-    const state = this.state.cachedState();
+    const state = this.projections;
     if (!state) {
       return Decoration.none;
     }
     const builder = new RangeSetBuilder<Decoration>();
     for (const { from, to } of view.visibleRanges) {
       const text = view.state.sliceDoc(from, to);
-      for (const range of crivLinkRanges(text, state, this.state.cachedSourceResolver())) {
-        if (range.status === "resolved") {
+      for (const range of crivLinkRanges(text, state, this.state.sourceResolver())) {
+        if (range.status.kind !== "problem") {
           continue;
         }
-        const title =
-          range.status === "ambiguous"
-            ? ambiguousSourceMessage(
-                range.target,
-                range.candidates ?? [],
-                range.totalCandidateCount ?? 0,
-              )
-            : range.status === "malformed"
-              ? "Malformed criv source target"
-              : "Unresolved criv reference";
         builder.add(
           from + range.from,
           from + range.to,
           Decoration.mark({
             class: "criv-editor-warning",
-            attributes: { "data-criv-target": range.target, title },
+            attributes: { "data-criv-target": range.target, title: range.status.message },
           }),
         );
       }
@@ -315,97 +285,38 @@ class CrivEditorDriftPlugin implements PluginValue {
   }
 }
 
-function sourceSuggestionItemsFromWasm(items: CrivSelectorSuggestion[]): SourceSuggestionItem[] {
-  const suggestions: SourceSuggestionItem[] = [];
-  for (const item of items) {
-    const path = safeVaultPath(item.path);
-    if (!path) {
-      continue;
-    }
-    suggestions.push({
-      insertText: item.target,
-      label: item.label || item.target,
-      path,
-      detail: item.detail || item.kind,
-    });
-  }
-  return suggestions;
-}
-
-function resolveSourceFromElement(
-  resolver: SourceResolver,
-  element: HTMLElement,
-): LinkedSource | null {
-  const parsed = linkTargets(element);
-  if (parsed.malformed) {
-    return null;
-  }
-  const result = resolveSourceResultFromTargets(resolver, parsed.targets);
-  return result.kind === "resolved" ? result.source : null;
-}
-
-function resolveSourceResultFromTargets(
-  resolver: SourceResolver,
-  targets: string[],
-): ReturnType<typeof resolveSourceResult> {
-  for (const target of targets) {
-    const result = resolveSourceResult(resolver, target);
-    if (result.kind !== "unresolved") {
-      return result;
-    }
-  }
-  return { kind: "unresolved" };
-}
-
-function resolvePatternFromElement(state: CrivState, element: HTMLElement): string | null {
-  for (const target of linkTargets(element).targets) {
-    const pattern = resolvePattern(state, target);
-    if (pattern) {
-      return pattern;
-    }
-  }
-  return null;
-}
-
+/** Candidate link targets for a rendered link, from its attributes and its own text. */
 function linkTargets(element: HTMLElement): { targets: string[]; malformed: boolean } {
   const targets: string[] = [];
-  const dataHref = element.getAttribute("data-href");
-  if (dataHref) {
-    addTarget(targets, dataHref);
-  }
-  const ariaLabel = element.getAttribute("aria-label");
-  if (ariaLabel) {
-    const match = ariaLabel.match(/(?:open|link|to)\s+(.+)$/i);
-    if (match?.[1]) {
-      addTarget(targets, match[1]);
-    }
-  }
+  addTarget(targets, element.getAttribute("data-href"));
+  addTarget(targets, element.getAttribute("aria-label")?.match(/(?:open|link|to)\s+(.+)$/i)?.[1]);
   const href = element.getAttribute("href");
   if (href && !href.includes("://")) {
-    const decoded = decodeSourceLinkTarget(href.replace(/^#/, ""));
+    const decoded = decodeLinkTarget(href.replace(/^#/, ""));
     if (decoded === null) {
       return { targets: [], malformed: true };
     }
     addTarget(targets, decoded);
   }
-  addTextTargets(targets, element.textContent);
-  addTextTargets(targets, (element.closest(".cm-line") as HTMLElement | null)?.textContent);
+  const text = element.textContent ?? "";
+  addTarget(targets, text);
+  for (const link of wikilinks(text)) {
+    addTarget(targets, link.target);
+  }
   return { targets: Array.from(new Set(targets)), malformed: false };
 }
 
-function ambiguousSourceMessage(
-  target: string,
-  candidates: { canonical_target: string; kind: string; label: string; node_id: string }[],
-  totalCandidateCount: number,
-): string {
-  const details = candidates.map((candidate) => {
-    const base = `${candidate.canonical_target} (${candidate.kind}: ${candidate.label})`;
-    const sameTargetCount = candidates.filter(
-      (other) => other.canonical_target === candidate.canonical_target,
-    ).length;
-    return sameTargetCount > 1 ? `${base} [${candidate.node_id}]` : base;
-  });
-  const remaining = totalCandidateCount - candidates.length;
-  const suffix = remaining > 0 ? `; ${remaining} more` : "";
-  return `Ambiguous criv source target ${target}: ${details.join("; ")}${suffix}`;
+function addTarget(targets: string[], value: string | null | undefined): void {
+  const target = value?.trim();
+  if (target) {
+    targets.push(target);
+  }
+}
+
+function decodeLinkTarget(target: string): string | null {
+  try {
+    return decodeURIComponent(target);
+  } catch {
+    return null;
+  }
 }

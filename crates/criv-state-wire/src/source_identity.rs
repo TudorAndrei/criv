@@ -10,15 +10,13 @@ pub struct SourceIdentity {
 }
 
 impl SourceIdentity {
-    /// Create a file identity with no selector.
-    pub fn file(path: impl Into<String>) -> Self {
+    pub(crate) fn file(path: impl Into<String>) -> Self {
         Self {
             path: path.into(),
             selector: None,
         }
     }
 
-    /// Create a symbol identity with one selector.
     pub fn symbol(path: impl Into<String>, selector: SourceSelector) -> Self {
         Self {
             path: path.into(),
@@ -37,13 +35,11 @@ impl SourceIdentity {
         }
     }
 
-    /// Return the repository-relative source path.
-    #[cfg(test)]
-    fn path(&self) -> &str {
+    #[must_use]
+    pub fn path(&self) -> &str {
         &self.path
     }
 
-    /// Return the optional symbol selector.
     #[must_use]
     pub const fn selector(&self) -> Option<&SourceSelector> {
         self.selector.as_ref()
@@ -75,7 +71,6 @@ impl SourceSelector {
         Self::Opaque(text.into())
     }
 
-    /// Create a structured Elixir selector.
     #[must_use]
     pub const fn elixir(selector: ElixirSelector) -> Self {
         Self::Elixir(selector)
@@ -86,7 +81,6 @@ impl SourceSelector {
         parse_elixir_selector(text).map_or_else(|| Self::Opaque(text.to_string()), Self::Elixir)
     }
 
-    /// Return the structured Elixir selector, when this is one.
     #[must_use]
     pub const fn as_elixir(&self) -> Option<&ElixirSelector> {
         match self {
@@ -108,9 +102,7 @@ impl fmt::Display for SourceSelector {
 /// One structured Elixir owner or callable selector.
 #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ElixirSelector {
-    /// A module or protocol implementation owner.
     Owner(ElixirOwner),
-    /// A callable below one owner.
     Callable {
         owner: ElixirOwner,
         kind: ElixirCallableKind,
@@ -120,13 +112,11 @@ pub enum ElixirSelector {
 }
 
 impl ElixirSelector {
-    /// Create an owner-only selector.
     #[must_use]
     pub const fn owner(owner: ElixirOwner) -> Self {
         Self::Owner(owner)
     }
 
-    /// Create a callable selector.
     pub fn callable(
         owner: ElixirOwner,
         kind: ElixirCallableKind,
@@ -141,7 +131,6 @@ impl ElixirSelector {
         }
     }
 
-    /// Return the owner for this selector.
     #[must_use]
     pub const fn owner_identity(&self) -> &ElixirOwner {
         match self {
@@ -149,27 +138,16 @@ impl ElixirSelector {
         }
     }
 
-    /// Return the callable kind when this selector names a callable.
     #[must_use]
-    pub const fn callable_kind(&self) -> Option<ElixirCallableKind> {
-        match self {
-            Self::Owner(_) => None,
-            Self::Callable { kind, .. } => Some(*kind),
-        }
-    }
-
-    /// Return the decoded callable name when this selector names a callable.
-    #[cfg(test)]
-    fn callable_name(&self) -> Option<&str> {
+    pub fn callable_name(&self) -> Option<&str> {
         match self {
             Self::Owner(_) => None,
             Self::Callable { name, .. } => Some(name),
         }
     }
 
-    /// Return the source arity when this selector names a callable.
-    #[cfg(test)]
-    const fn callable_arity(&self) -> Option<usize> {
+    #[must_use]
+    pub const fn callable_arity(&self) -> Option<usize> {
         match self {
             Self::Owner(_) => None,
             Self::Callable { arity, .. } => Some(*arity),
@@ -197,43 +175,29 @@ impl fmt::Display for ElixirSelector {
 }
 
 /// The owner part of one Elixir selector.
-#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, serde::Serialize, serde::Deserialize)]
 pub enum ElixirOwner {
-    /// A normal module-like owner.
     Module { name: String },
-    /// A protocol implementation owner.
     Implementation { protocol: String, for_type: String },
 }
 
 impl ElixirOwner {
-    /// Create a module owner.
-    pub fn module(name: impl Into<String>) -> Self {
+    fn module(name: impl Into<String>) -> Self {
         Self::Module { name: name.into() }
     }
 
-    /// Create a protocol implementation owner.
-    pub fn implementation(protocol: impl Into<String>, for_type: impl Into<String>) -> Self {
+    fn implementation(protocol: impl Into<String>, for_type: impl Into<String>) -> Self {
         Self::Implementation {
             protocol: protocol.into(),
             for_type: for_type.into(),
         }
     }
 
-    /// Return the module name for a module owner.
     #[must_use]
     pub fn module_name(&self) -> Option<&str> {
         match self {
             Self::Module { name } => Some(name),
             Self::Implementation { .. } => None,
-        }
-    }
-
-    /// Return the protocol and type for an implementation owner.
-    #[cfg(test)]
-    fn implementation_parts(&self) -> Option<(&str, &str)> {
-        match self {
-            Self::Module { .. } => None,
-            Self::Implementation { protocol, for_type } => Some((protocol, for_type)),
         }
     }
 }
@@ -285,6 +249,26 @@ impl ElixirCallableKind {
     }
 }
 
+/// The selector aliases that also name a symbol inside its file: `name`,
+/// `name/arity`, and, for a symbol owned by a module, `Module.name/arity`.
+#[must_use]
+pub fn compatibility_aliases(
+    name: &str,
+    arity: Option<usize>,
+    module: Option<&str>,
+) -> Vec<String> {
+    let mut aliases = vec![name.to_string()];
+    if let Some(arity) = arity {
+        aliases.push(format!("{name}/{arity}"));
+        if let Some(module) = module {
+            aliases.push(format!("{module}.{name}/{arity}"));
+        }
+    }
+    aliases.sort();
+    aliases.dedup();
+    aliases
+}
+
 fn parse_elixir_selector(text: &str) -> Option<ElixirSelector> {
     if let Some(rest) = text.strip_prefix("module:") {
         let (name, callable) = split_owner_and_callable(rest);
@@ -332,7 +316,7 @@ impl fmt::Display for Encoded<'_> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         use fmt::Write as _;
         for byte in self.0.bytes() {
-            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            if is_unreserved(byte) {
                 formatter.write_char(char::from(byte))?;
             } else {
                 write!(formatter, "%{byte:02X}")?;
@@ -355,12 +339,17 @@ fn decode_value(value: &str) -> Option<String> {
             decoded.push(high.checked_mul(16)?.checked_add(low)?);
             continue;
         }
-        if !byte.is_ascii_alphanumeric() && !matches!(byte, b'-' | b'.' | b'_' | b'~') {
+        if !is_unreserved(byte) {
             return None;
         }
         decoded.push(byte);
     }
     String::from_utf8(decoded).ok()
+}
+
+/// The bytes a selector value keeps without percent-encoding.
+const fn is_unreserved(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')
 }
 
 fn hex_value(value: u8) -> Option<u8> {
@@ -530,11 +519,14 @@ mod tests {
         let identity =
             SourceIdentity::parse("lib/sample.ex#impl:Enumerable/for:My.App/fn:reduce/3");
         let selector = identity.selector().unwrap().as_elixir().unwrap();
-        assert_eq!(
-            selector.owner_identity().implementation_parts(),
-            Some(("Enumerable", "My.App"))
-        );
-        assert_eq!(selector.callable_kind(), Some(ElixirCallableKind::Function));
+        assert!(matches!(
+            selector,
+            ElixirSelector::Callable {
+                owner: ElixirOwner::Implementation { protocol, for_type },
+                kind: ElixirCallableKind::Function,
+                ..
+            } if protocol == "Enumerable" && for_type == "My.App"
+        ));
         assert_eq!(selector.callable_name(), Some("reduce"));
         assert_eq!(selector.callable_arity(), Some(3));
     }

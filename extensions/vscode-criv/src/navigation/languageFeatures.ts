@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
+import type { CrivSelectorSuggestion } from "@criv/editor-state";
 
-import { COMMAND_OPEN_SOURCE_TARGET } from "../commands/identifiers";
+import { CRIV_COMMANDS } from "../commands/identifiers";
 import {
   analyzeSourceReferences,
   appendSourceHoverContents,
@@ -10,13 +11,13 @@ import {
   sourceReferenceDiagnosticCode,
   type SourceReference,
 } from "./references";
-import type { WorkspaceStateStore } from "../state/store";
+import type { WorkspaceState } from "../state/store";
 
 const SOURCE_SELECTOR = [{ language: "markdown", scheme: "file" }];
 
 export function registerSourceLanguageFeatures(
   context: vscode.ExtensionContext,
-  store: WorkspaceStateStore,
+  store: WorkspaceState,
 ): void {
   const diagnostics = new SourceDiagnostics(store);
   context.subscriptions.push(
@@ -37,26 +38,26 @@ export function registerSourceLanguageFeatures(
 }
 
 class SourceDocumentLinkProvider implements vscode.DocumentLinkProvider {
-  constructor(private readonly store: WorkspaceStateStore) {}
+  constructor(private readonly store: WorkspaceState) {}
 
   provideDocumentLinks(document: vscode.TextDocument): vscode.DocumentLink[] {
-    const references = documentReferences(this.store, document);
-    return references
-      .filter((reference) => reference.canonicalTarget)
-      .map((reference) => {
-        const target = reference.canonicalTarget ?? reference.target;
-        return new vscode.DocumentLink(
-          rangeFromOffsets(document, reference.start, reference.end),
-          vscode.Uri.parse(
-            `command:${COMMAND_OPEN_SOURCE_TARGET}?${encodeURIComponent(JSON.stringify([target]))}`,
-          ),
-        );
-      });
+    return documentReferences(this.store, document).flatMap(({ resolution, start, end }) =>
+      resolution.kind === "resolved"
+        ? [
+            new vscode.DocumentLink(
+              rangeFromOffsets(document, start, end),
+              vscode.Uri.parse(
+                `command:${CRIV_COMMANDS.openSourceTarget}?${encodeURIComponent(JSON.stringify([resolution.canonical_target]))}`,
+              ),
+            ),
+          ]
+        : [],
+    );
   }
 }
 
 class SourceHoverProvider implements vscode.HoverProvider {
-  constructor(private readonly store: WorkspaceStateStore) {}
+  constructor(private readonly store: WorkspaceState) {}
 
   provideHover(document: vscode.TextDocument, position: vscode.Position): vscode.Hover | undefined {
     const reference = referenceAtOffset(
@@ -74,16 +75,16 @@ class SourceHoverProvider implements vscode.HoverProvider {
 }
 
 class SourceCompletionProvider implements vscode.CompletionItemProvider {
-  constructor(private readonly store: WorkspaceStateStore) {}
+  constructor(private readonly store: WorkspaceState) {}
 
-  async provideCompletionItems(
+  provideCompletionItems(
     document: vscode.TextDocument,
     position: vscode.Position,
-  ): Promise<vscode.CompletionItem[]> {
+  ): vscode.CompletionItem[] {
     const offset = document.offsetAt(position);
     const token = completionToken(document.getText(), offset);
     const range = rangeFromOffsets(document, token.start, offset);
-    const suggestions = await this.store.suggestSelectors(token.query, 50);
+    const suggestions = this.store.suggestSelectors(token.query, 50);
     return suggestions.map((suggestion) => {
       const item = new vscode.CompletionItem(suggestion.target, completionKind(suggestion.kind));
       item.detail = suggestion.detail;
@@ -99,9 +100,9 @@ class SourceDiagnostics implements vscode.Disposable {
   private readonly collection = vscode.languages.createDiagnosticCollection("criv-source");
   private readonly subscriptions: vscode.Disposable[] = [];
 
-  constructor(private readonly store: WorkspaceStateStore) {
+  constructor(private readonly store: WorkspaceState) {
     this.subscriptions.push(
-      store.onDidChangeStatus(() => this.updateVisibleDocuments()),
+      store.onDidChange(() => this.updateVisibleDocuments()),
       vscode.workspace.onDidOpenTextDocument((document) => this.update(document)),
       vscode.workspace.onDidChangeTextDocument((event) => this.update(event.document)),
       vscode.workspace.onDidCloseTextDocument((document) => this.collection.delete(document.uri)),
@@ -134,9 +135,10 @@ class SourceDiagnostics implements vscode.Disposable {
       if (!message) {
         return [];
       }
-      const severity = reference.legacy
-        ? vscode.DiagnosticSeverity.Warning
-        : vscode.DiagnosticSeverity.Information;
+      const severity =
+        reference.kind === "wikilink"
+          ? vscode.DiagnosticSeverity.Warning
+          : vscode.DiagnosticSeverity.Information;
       const diagnostic = new vscode.Diagnostic(
         rangeFromOffsets(document, reference.start, reference.end),
         message,
@@ -151,7 +153,7 @@ class SourceDiagnostics implements vscode.Disposable {
 }
 
 function documentReferences(
-  store: WorkspaceStateStore,
+  store: WorkspaceState,
   document: vscode.TextDocument,
 ): SourceReference[] {
   if (store.status.kind !== "ready" || !isSourceSelectorDocument(document)) {
@@ -164,17 +166,28 @@ function rangeFromOffsets(document: vscode.TextDocument, start: number, end: num
   return new vscode.Range(document.positionAt(start), document.positionAt(end));
 }
 
-function completionKind(kind: string): vscode.CompletionItemKind {
+function completionKind(kind: CrivSelectorSuggestion["kind"]): vscode.CompletionItemKind {
   switch (kind) {
     case "file":
     case "code":
       return vscode.CompletionItemKind.File;
     case "function":
-    case "fn":
+    case "callback":
+    case "macro":
+    case "macro-callback":
       return vscode.CompletionItemKind.Function;
+    case "method":
+      return vscode.CompletionItemKind.Method;
     case "class":
-    case "type":
       return vscode.CompletionItemKind.Class;
+    case "struct":
+      return vscode.CompletionItemKind.Struct;
+    case "module":
+    case "external-module":
+      return vscode.CompletionItemKind.Module;
+    case "behaviour":
+    case "protocol":
+      return vscode.CompletionItemKind.Interface;
     default:
       return vscode.CompletionItemKind.Reference;
   }

@@ -1,8 +1,12 @@
 //! Shared wire contract for published criv State documents.
 
+pub mod asset;
+pub mod content_hash;
+pub mod layout;
+pub mod node_id;
 pub mod source_identity;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -48,6 +52,60 @@ impl Default for StateDocument {
     fn default() -> Self {
         Self::new(Graph::default(), Vec::new(), BTreeMap::new(), Vec::new())
     }
+}
+
+/// Why a State document text cannot be read.
+#[derive(Debug)]
+pub enum StateReadError {
+    Json(serde_json::Error),
+    /// The `schema` value found, or `<missing>`.
+    UnsupportedSchema(String),
+}
+
+#[derive(Deserialize)]
+struct SchemaView {
+    #[serde(default)]
+    schema: Option<serde_json::Value>,
+}
+
+/// Checks that `raw` is a JSON object whose `schema` is [`STATE_SCHEMA`],
+/// without decoding the graph, so a revision with a kind this build does not
+/// know still passes.
+///
+/// # Errors
+///
+/// Returns an error when `raw` is not JSON or names another schema.
+pub fn check_schema(raw: &str) -> Result<(), StateReadError> {
+    let view = serde_json::from_str::<SchemaView>(raw).map_err(StateReadError::Json)?;
+    match view.schema.as_ref().and_then(serde_json::Value::as_str) {
+        Some(STATE_SCHEMA) => Ok(()),
+        found => Err(StateReadError::UnsupportedSchema(
+            found.unwrap_or("<missing>").to_string(),
+        )),
+    }
+}
+
+/// Decodes a State document after [`check_schema`].
+///
+/// # Errors
+///
+/// Returns an error when the schema check fails or the document does not
+/// match the State grammar.
+pub fn decode(raw: &str) -> Result<StateDocument, StateReadError> {
+    check_schema(raw)?;
+    serde_json::from_str(raw).map_err(StateReadError::Json)
+}
+
+/// The published text of `document`: pretty-printed JSON and one final
+/// newline, which [`content_hash::of_document`] leaves out of the hash.
+///
+/// # Errors
+///
+/// Returns an error when `document` cannot be serialized.
+pub fn encode(document: &StateDocument) -> Result<String, serde_json::Error> {
+    let mut published = serde_json::to_string_pretty(document)?;
+    published.push('\n');
+    Ok(published)
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -132,6 +190,60 @@ pub struct Edge {
     pub kind: EdgeKind,
     #[serde(default)]
     pub hash: String,
+}
+
+/// The `{from}:{kind}:{to}` text of an edge.
+fn edge_row(from: &str, kind: &str, to: &str) -> String {
+    format!("{from}:{kind}:{to}")
+}
+
+/// The node ids and edge rows of a State document read without its schema
+/// or kind types, so a revision with a kind this build does not know still
+/// compares.
+#[derive(Debug, Default, Deserialize)]
+pub struct GraphRowsView {
+    #[serde(default)]
+    graph: GraphRowsViewGraph,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct GraphRowsViewGraph {
+    #[serde(default)]
+    nodes: Vec<NodeIdView>,
+    #[serde(default)]
+    edges: Vec<EdgeTextView>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NodeIdView {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct EdgeTextView {
+    from: String,
+    kind: String,
+    to: String,
+}
+
+impl GraphRowsView {
+    #[must_use]
+    pub fn node_ids(&self) -> BTreeSet<&str> {
+        self.graph
+            .nodes
+            .iter()
+            .map(|node| node.id.as_str())
+            .collect()
+    }
+
+    #[must_use]
+    pub fn edge_rows(&self) -> BTreeSet<String> {
+        self.graph
+            .edges
+            .iter()
+            .map(|edge| edge_row(&edge.from, &edge.kind, &edge.to))
+            .collect()
+    }
 }
 
 /// Kind of a graph edge. Serde and `as_str` share one kebab-case spelling.
@@ -248,16 +360,6 @@ mod tests {
         assert_eq!(value["registered-patterns"][0], "ADR-0001/entrypoint");
         assert_eq!(value["source-index"][0]["path"], "src/lib.rs");
         assert_eq!(value["asset-index"][0]["path"], "docs/diagram.png");
-
-        let decoded: StateDocument = serde_json::from_value(value).unwrap();
-        assert_eq!(decoded.schema, STATE_SCHEMA);
-        assert_eq!(decoded.graph.nodes[0].hash, "node-hash");
-        assert_eq!(decoded.graph.edges[0].hash, "edge-hash");
-        assert_eq!(decoded.asset_index[0].hash, "asset-hash");
-        assert_eq!(
-            decoded.patterns["ADR-0001/entrypoint"][0].file,
-            "src/lib.rs"
-        );
     }
 
     #[test]
@@ -270,6 +372,17 @@ mod tests {
         for kind in EdgeKind::iter() {
             assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
         }
+    }
+
+    #[test]
+    fn node_kinds_match_the_editor_fixture() {
+        use strum::IntoEnumIterator;
+
+        let editor_kinds: Vec<String> =
+            serde_json::from_str(include_str!("../../../fixtures/editor/node-kinds.v1.json"))
+                .unwrap();
+        let wire_kinds: Vec<&str> = NodeKind::iter().map(NodeKind::as_str).collect();
+        assert_eq!(wire_kinds, editor_kinds);
     }
 
     #[test]
@@ -286,6 +399,29 @@ mod tests {
                 assert_eq!(left.cmp(&right), left.as_str().cmp(right.as_str()));
             }
         }
+    }
+
+    #[test]
+    fn rows_view_reads_unknown_kinds_as_row_text() {
+        let view: GraphRowsView = serde_json::from_value(serde_json::json!({
+            "graph": {
+                "nodes": [{"id": "note:ADR-0001", "kind": "retired-kind"}],
+                "edges": [
+                    {"from": "note:ADR-0001", "kind": "references", "to": "code:src/lib.rs"},
+                    {"from": "a", "kind": "retired-kind", "to": "b"}
+                ]
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(view.node_ids(), BTreeSet::from(["note:ADR-0001"]));
+        assert_eq!(
+            view.edge_rows(),
+            BTreeSet::from([
+                "note:ADR-0001:references:code:src/lib.rs".to_string(),
+                "a:retired-kind:b".to_string()
+            ])
+        );
     }
 
     #[test]
@@ -308,5 +444,36 @@ mod tests {
 
         let decoded: StateDocument = serde_json::from_str(r#"{"schema":"criv.state.v1"}"#).unwrap();
         assert_eq!(decoded.asset_index, Vec::new());
+    }
+
+    #[test]
+    fn encoded_document_decodes_and_hashes_without_its_final_newline() {
+        let published = encode(&StateDocument::default()).unwrap();
+        let json = published.strip_suffix('\n').unwrap();
+
+        assert!(!json.ends_with('\n'));
+        assert_eq!(decode(&published).unwrap().schema, STATE_SCHEMA);
+        assert_eq!(
+            content_hash::of_document(&published),
+            content_hash::of_bytes(json.as_bytes())
+        );
+    }
+
+    #[test]
+    fn schema_check_ignores_unknown_kinds_that_decoding_rejects() {
+        let future_kind =
+            r#"{"schema":"criv.state.v1","graph":{"nodes":[{"id":"x","kind":"future"}]}}"#;
+        assert!(check_schema(future_kind).is_ok());
+        assert!(matches!(decode(future_kind), Err(StateReadError::Json(_))));
+
+        assert!(matches!(
+            decode(r#"{"schema":"criv.state.v0"}"#),
+            Err(StateReadError::UnsupportedSchema(schema)) if schema == "criv.state.v0"
+        ));
+        assert!(matches!(
+            check_schema("{}"),
+            Err(StateReadError::UnsupportedSchema(schema)) if schema == "<missing>"
+        ));
+        assert!(matches!(check_schema("{"), Err(StateReadError::Json(_))));
     }
 }

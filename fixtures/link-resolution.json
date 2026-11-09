@@ -2,38 +2,221 @@
   "state": {
     "schema": "criv.state.v1",
     "graph": {
+      "root": "34583363d96fbb16b9aa4055bf28a8b4f8aa7df875b1410bab6fb8598c4d7dc7",
       "nodes": [
         {
+          "id": "code:src/helper.rs",
+          "hash": "a1a152eb243eff2a07a3c693277f2eade27a19fac0129bf38d4deefcfa32352d",
+          "kind": "code",
+          "label": "src/helper.rs (rust)",
+          "path": "src/helper.rs"
+        },
+        {
           "id": "code:src/lib.rs",
-          "hash": "fixture",
+          "hash": "e0a4f849c5f2f92b2074d103e9aeae9069f3a06cb0e4cb96ebc423900203705c",
           "kind": "code",
           "label": "src/lib.rs (rust)",
           "path": "src/lib.rs"
         },
         {
+          "id": "code:src/one/shared.rs",
+          "hash": "7b96375c1578fa9ead0369870812d55de72cbcb63b92156726113a1f3ddd37f8",
+          "kind": "code",
+          "label": "src/one/shared.rs (rust)",
+          "path": "src/one/shared.rs"
+        },
+        {
+          "id": "code:src/two/shared.rs",
+          "hash": "6317a94864afaaf3192952dd98b25a7fa72f8b036c2d8a8dc4928b76c182a555",
+          "kind": "code",
+          "label": "src/two/shared.rs (rust)",
+          "path": "src/two/shared.rs"
+        },
+        {
+          "id": "symbol:src/helper.rs#fn:help",
+          "hash": "d2ea005cd6b7e5c3a0c3c648b725e757c5ed449f841e557340f3332a608bc2d4",
+          "kind": "function",
+          "label": "help",
+          "path": "src/helper.rs#L1-L1"
+        },
+        {
+          "id": "symbol:src/lib.rs#fn:run",
+          "hash": "c64e0e6694e91aa027cb9e331a89518ba02928402e97491e0fd20a6190d1dc7b",
+          "kind": "function",
+          "label": "run",
+          "path": "src/lib.rs#L1-L1"
+        },
+        {
+          "id": "symbol:src/one/shared.rs#fn:one",
+          "hash": "7b3fa55f99bfcd6813b4b47db6177e5249d6c54e26edf8cbcca67244d9a441bc",
+          "kind": "function",
+          "label": "one",
+          "path": "src/one/shared.rs#L1-L1"
+        },
+        {
+          "id": "symbol:src/two/shared.rs#fn:two",
+          "hash": "7497ff910589771d814a89bf0db4f7b5100f56cd512b296ef95efe2342a4ee64",
+          "kind": "function",
+          "label": "two",
+          "path": "src/two/shared.rs#L1-L1"
+        },
+        {
           "id": "note:ADR-0001",
-          "hash": "fixture",
+          "hash": "fd02f6e351b5d759cc242963f3a2415cad9946f72131803f342b477ad73f8aa4",
           "kind": "decision",
           "label": "Local CLI vault architecture",
           "path": "docs/adr/0001-local-cli-vault-architecture.md"
+        },
+        {
+          "id": "note:ADR-0001#local-cli-vault-architecture",
+          "hash": "2f794d7b4baa3902bf90bd7f063fb75502c4fbf3a6a10c1dc65569a2fd27e93d",
+          "kind": "doc-heading",
+          "label": "Local CLI vault architecture",
+          "path": "docs/adr/0001-local-cli-vault-architecture.md#L13:H1"
+        },
+        {
+          "id": "pattern:ADR-0001/no-block-on",
+          "hash": "cf1b1a3efb133a48c28d6a37f446b8cf8c412328dbea0194fca9f7dc142ee93a",
+          "kind": "pattern",
+          "label": "ADR-0001/no-block-on",
+          "path": null
+        },
+        {
+          "id": "note:collision-note",
+          "hash": "ccab29d4d2f50dcd6ffd2d4d409113a158c7f39015b5b059bae878363cfcc85b",
+          "kind": "doc",
+          "label": "Collision note",
+          "path": "docs/lib.rs.md"
+        },
+        {
+          "id": "note:collision-note#collision-note",
+          "hash": "f1fbac9e896fa281bbde1528220a1bb225751c83cac2af0a0bfa07594939d660",
+          "kind": "doc-heading",
+          "label": "Collision note",
+          "path": "docs/lib.rs.md#L7:H1"
+        },
+        {
+          "id": "note:collision-note#existing-heading",
+          "hash": "b70d045de256bd23c2262afe3653ea8180918a44bc9a52db499f8d888fd7b761",
+          "kind": "doc-heading",
+          "label": "Existing heading",
+          "path": "docs/lib.rs.md#L9:H2"
         }
       ],
-      "edges": [],
-      "root": "fixture"
-    },
-    "registered-patterns": ["ADR-0001/no-block-on"],
-    "patterns": {
-      "ADR-0001/no-block-on": [
+      "edges": [
         {
-          "file": "src/lib.rs",
-          "range": "L1:C1-L1:C10",
-          "captures": {}
+          "from": "code:src/helper.rs",
+          "to": "symbol:src/helper.rs#fn:help",
+          "kind": "contains",
+          "hash": "5f7f0ddc17bf13cdcc367aa97d75683784fdae58c376cda7af88083c8ead69cb"
+        },
+        {
+          "from": "code:src/lib.rs",
+          "to": "symbol:src/lib.rs#fn:run",
+          "kind": "contains",
+          "hash": "e10ad90ef6f0a858b9d6ee13847041bc7c1875792d607432e14a56f79081fb2a"
+        },
+        {
+          "from": "code:src/one/shared.rs",
+          "to": "symbol:src/one/shared.rs#fn:one",
+          "kind": "contains",
+          "hash": "0b5dc61fd96314a86a22fec388d8c1d6483401b06f1b5405795d20533d00ddb6"
+        },
+        {
+          "from": "code:src/two/shared.rs",
+          "to": "symbol:src/two/shared.rs#fn:two",
+          "kind": "contains",
+          "hash": "0188c625fd9041d9eb3974d45f2eef56802877cc338e7d0f077c0a3ff913af47"
+        },
+        {
+          "from": "note:ADR-0001",
+          "to": "note:ADR-0001#local-cli-vault-architecture",
+          "kind": "contains",
+          "hash": "d854105dbd58efc77159260190c9ff6117effdef2fd2c132b51ac6a3f57819da"
+        },
+        {
+          "from": "note:ADR-0001",
+          "to": "code:src/helper.rs",
+          "kind": "governs",
+          "hash": "0efe6e39b23613ef93a7efb6d6f9f5b5ba588d956505d053049fd636238caa1c"
+        },
+        {
+          "from": "note:ADR-0001",
+          "to": "code:src/lib.rs",
+          "kind": "governs",
+          "hash": "09691ad7fb54ea426bb0a4aaf18a57a9a3f531f2c024436d074aee47b38f9246"
+        },
+        {
+          "from": "note:ADR-0001",
+          "to": "code:src/one/shared.rs",
+          "kind": "governs",
+          "hash": "82370c863933b4754d9d9109968b98d9a68a0833b0ac91998d019823302656c5"
+        },
+        {
+          "from": "note:ADR-0001",
+          "to": "code:src/two/shared.rs",
+          "kind": "governs",
+          "hash": "6867dac0d24645edbdbe4f9a3bf72af639a6d625a05e9f76ceb5f5b210f197a3"
+        },
+        {
+          "from": "note:ADR-0001",
+          "to": "note:collision-note",
+          "kind": "cites",
+          "hash": "b7ce5e8f0ee0fe44e34fd2b63ada47679cfbb3da341d5e61ae4c43fdc94770b1"
+        },
+        {
+          "from": "note:ADR-0001",
+          "to": "pattern:ADR-0001/no-block-on",
+          "kind": "references",
+          "hash": "50c6f625e1449cf195b413669d44a6571e3b6fc74d002c2bc8485711d5d36c91"
+        },
+        {
+          "from": "note:ADR-0001",
+          "to": "code:src/helper.rs",
+          "kind": "references",
+          "hash": "5f98ae781000aba37d06c32bf9a43041391a1c589070286b7019bb444cb042b2"
+        },
+        {
+          "from": "note:ADR-0001",
+          "to": "code:src/lib.rs",
+          "kind": "references",
+          "hash": "6a48ee201e298bd8d8b7bd3f19b4ac8de2923773cc75a05eca4bdf2808eed842"
+        },
+        {
+          "from": "note:collision-note",
+          "to": "note:collision-note#collision-note",
+          "kind": "contains",
+          "hash": "cf5541f681ad88236dc04d46d78eb13c7225160ed4aa22e8319889c1b63d4b38"
+        },
+        {
+          "from": "note:collision-note",
+          "to": "note:collision-note#existing-heading",
+          "kind": "contains",
+          "hash": "e1a2c899d8833799fb39d4f5f992ef7a49e49c03568b8b766835043e2a794ff3"
         }
       ]
     },
+    "registered-patterns": [
+      "ADR-0001/no-block-on"
+    ],
+    "patterns": {
+      "ADR-0001/no-block-on": []
+    },
     "source-index": [
       {
+        "path": "src/helper.rs",
+        "mime": "text/x-rust"
+      },
+      {
         "path": "src/lib.rs",
+        "mime": "text/x-rust"
+      },
+      {
+        "path": "src/one/shared.rs",
+        "mime": "text/x-rust"
+      },
+      {
+        "path": "src/two/shared.rs",
         "mime": "text/x-rust"
       }
     ]

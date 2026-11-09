@@ -3,6 +3,7 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use criv_state_wire::content_hash;
 use serde::{Deserialize, Serialize};
 use usage_rs::Cli;
 
@@ -102,7 +103,7 @@ fn run(args: Args) -> Result<(), String> {
     let receipt = Receipt {
         schema: "criv.discovery-fixture-receipt.v1",
         manifest: &manifest,
-        manifest_digest: bytes_digest(&manifest_bytes),
+        manifest_digest: content_hash::of_bytes(&manifest_bytes),
         generated_files: generated.files,
         generated_directories: generated.directories,
         observed_maximum_depth: generated.maximum_depth,
@@ -321,10 +322,6 @@ fn write_json(path: PathBuf, value: &impl Serialize) -> Result<(), String> {
     let mut output = BufWriter::new(File::create(path).map_err(display_error)?);
     serde_json::to_writer_pretty(&mut output, value).map_err(display_error)?;
     output.write_all(b"\n").map_err(display_error)
-}
-
-fn bytes_digest(bytes: &[u8]) -> String {
-    blake3::hash(bytes).to_hex().to_string()
 }
 
 fn display_error(error: impl std::fmt::Display) -> String {

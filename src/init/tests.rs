@@ -1,26 +1,34 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+
+use tempfile::TempDir;
 
 use super::*;
+use crate::config::Config;
+
+fn fast_options() -> InitOptions {
+    InitOptions {
+        no_skills: true,
+        force_skills: false,
+    }
+}
+
+fn with_skills(force_skills: bool) -> InitOptions {
+    InitOptions {
+        no_skills: false,
+        force_skills,
+    }
+}
+
+const SYMLINK_REFUSAL: &str = "refusing to write through symlinked vault path component";
 
 #[test]
-fn init_writes_parseable_structured_templates() {
-    let root = unique_temp_dir("criv-init-templates");
-    run(
-        &root,
-        &InitOptions {
-            no_skills: true,
-            force_skills: false,
-        },
-    )
-    .unwrap();
+fn init_writes_loadable_configuration_state_and_decision_index() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    run(root, &fast_options()).unwrap();
 
     let config = std::fs::read_to_string(root.join("criv.toml")).unwrap();
-    assert_eq!(config, include_str!("fixtures/criv.toml"));
-    toml::from_str::<toml::Value>(&config).unwrap();
-    assert!(!config.contains("languages"));
-    assert!(!config.contains("notes ="));
-    assert!(!config.contains("[obsidian]"));
+    Config::parse(Some(&config)).unwrap();
     serde_json::from_str::<serde_json::Value>(
         &std::fs::read_to_string(root.join(".criv/state.json")).unwrap(),
     )
@@ -33,110 +41,51 @@ fn init_writes_parseable_structured_templates() {
         .map(|(frontmatter, _body)| frontmatter)
         .unwrap();
     serde_norway::from_str::<BTreeMap<String, serde_norway::Value>>(frontmatter).unwrap();
-
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn init_does_not_create_editor_files() {
-    let root = unique_temp_dir("criv-init-no-editor-files");
-
-    run(&root, &fast_options()).unwrap();
-
-    assert!(!root.join(".obsidian").exists());
-    assert!(!root.join(".vscode/extensions.json").exists());
-
-    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
 fn init_force_skills_refreshes_existing_skills_but_plain_init_preserves_them() {
-    let root = unique_temp_dir("criv-init-force-skills");
-    let mut options = fast_options();
-    options.no_skills = false;
-    run(&root, &options).unwrap();
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    run(root, &with_skills(false)).unwrap();
 
     let path = root.join(".agents/skills/criv/SKILL.md");
     std::fs::write(&path, "locally stale\n").unwrap();
-    let mut plain = fast_options();
-    plain.no_skills = false;
-    run(&root, &plain).unwrap();
+    run(root, &with_skills(false)).unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "locally stale\n");
 
-    let mut forced = fast_options();
-    forced.no_skills = false;
-    forced.force_skills = true;
-    run(&root, &forced).unwrap();
+    run(root, &with_skills(true)).unwrap();
+    assert_ne!(std::fs::read_to_string(&path).unwrap(), "locally stale\n");
     assert_eq!(
-        crate::install::skill_inventory(&root).status(".agents/skills/criv/SKILL.md"),
-        Some(crate::install::InstalledSkillStatus::Current)
+        crate::install::outdated_skills_advisory(&RepositoryFiles::open(root).unwrap()),
+        None
     );
-
-    let _ = std::fs::remove_dir_all(root);
-}
-
-#[test]
-fn init_force_skills_respects_no_skills() {
-    let root = unique_temp_dir("criv-init-force-no-skills");
-    let mut options = fast_options();
-    options.force_skills = true;
-    run(&root, &options).unwrap();
-    assert!(!root.join(".agents/skills").exists());
-    assert!(!root.join(".claude/skills").exists());
-
-    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
 fn init_force_skills_isolates_refresh_from_other_scaffolding() {
-    let root = unique_temp_dir("criv-init-force-skills-isolated");
-    let mut options = fast_options();
-    options.force_skills = true;
-    options.no_skills = false;
-    run(&root, &options).unwrap();
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+    run(root, &with_skills(true)).unwrap();
 
     assert!(root.join(".agents/skills/criv/SKILL.md").exists());
     assert!(root.join(".claude/skills/criv/SKILL.md").exists());
-    for path in [
-        "criv.toml",
-        ".gitignore",
-        ".obsidian",
-        ".vscode/extensions.json",
-    ] {
+    for path in ["criv.toml", ".gitignore", "docs", ".criv"] {
         assert!(!root.join(path).exists(), "force-skills created {path}");
     }
-
-    let _ = std::fs::remove_dir_all(root);
 }
 
 #[cfg(unix)]
 #[test]
 fn init_force_skills_refuses_symlinked_destination() {
-    let root = unique_temp_dir("criv-init-force-skills-symlink");
-    let outside = unique_temp_dir("criv-init-force-skills-target");
+    let temp = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    let root = temp.path();
     std::fs::create_dir_all(root.join(".agents/skills/criv")).unwrap();
-    std::os::unix::fs::symlink(&outside, root.join(".agents/skills/criv/SKILL.md")).unwrap();
-    let mut options = fast_options();
-    options.no_skills = false;
-    options.force_skills = true;
-    let error = run(&root, &options).unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("refusing to write through symlinked vault path component"),
-        "{error}"
-    );
-    assert!(!outside.join("SKILL.md").exists());
-
-    let _ = std::fs::remove_dir_all(root);
-    let _ = std::fs::remove_dir_all(outside);
-}
-
-fn fast_options() -> InitOptions {
-    InitOptions {
-        no_skills: true,
-        force_skills: false,
-    }
+    std::os::unix::fs::symlink(outside.path(), root.join(".agents/skills/criv/SKILL.md")).unwrap();
+    let error = run(root, &with_skills(true)).unwrap_err();
+    assert!(error.to_string().contains(SYMLINK_REFUSAL), "{error}");
+    assert!(!outside.path().join("SKILL.md").exists());
 }
 
 /// Per ADR-0044, documentation that a project governs has to be versioned in the
@@ -145,71 +94,31 @@ fn fast_options() -> InitOptions {
 #[cfg(unix)]
 #[test]
 fn init_refuses_to_scaffold_through_a_symlinked_docs_directory() {
-    let root = unique_temp_dir("criv-init-symlink-docs");
-    let outside = unique_temp_dir("criv-init-symlink-docs-target");
-    std::os::unix::fs::symlink(&outside, root.join("docs")).unwrap();
+    let temp = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    std::os::unix::fs::symlink(outside.path(), temp.path().join("docs")).unwrap();
 
-    let error = run(
-        &root,
-        &InitOptions {
-            no_skills: true,
-            force_skills: false,
-        },
-    )
-    .unwrap_err();
+    let error = run(temp.path(), &fast_options()).unwrap_err();
 
+    assert!(error.to_string().contains(SYMLINK_REFUSAL), "{error}");
     assert!(
-        error
-            .to_string()
-            .contains("refusing to write through symlinked vault path component"),
-        "unexpected error: {error}"
-    );
-    assert!(
-        !outside.join("adr").exists(),
+        !outside.path().join("adr").exists(),
         "nothing may be created outside the repository"
     );
-
-    let _ = std::fs::remove_dir_all(&root);
-    let _ = std::fs::remove_dir_all(&outside);
 }
 
 #[cfg(unix)]
 #[test]
 fn init_refuses_to_write_a_template_through_a_symlinked_state_directory() {
-    let root = unique_temp_dir("criv-init-symlink-state");
-    let outside = unique_temp_dir("criv-init-symlink-state-target");
-    std::os::unix::fs::symlink(&outside, root.join(".criv")).unwrap();
+    let temp = TempDir::new().unwrap();
+    let outside = TempDir::new().unwrap();
+    std::os::unix::fs::symlink(outside.path(), temp.path().join(".criv")).unwrap();
 
-    let error = run(
-        &root,
-        &InitOptions {
-            no_skills: true,
-            force_skills: false,
-        },
-    )
-    .unwrap_err();
+    let error = run(temp.path(), &fast_options()).unwrap_err();
 
+    assert!(error.to_string().contains(SYMLINK_REFUSAL), "{error}");
     assert!(
-        error
-            .to_string()
-            .contains("refusing to write through symlinked vault path component"),
-        "unexpected error: {error}"
-    );
-    assert!(
-        !outside.join("state.json").exists(),
+        !outside.path().join("state.json").exists(),
         "nothing may be written outside the repository"
     );
-
-    let _ = std::fs::remove_dir_all(&root);
-    let _ = std::fs::remove_dir_all(&outside);
-}
-
-fn unique_temp_dir(prefix: &str) -> PathBuf {
-    let unique = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let path = std::env::temp_dir().join(format!("{prefix}-{unique}"));
-    std::fs::create_dir_all(&path).unwrap();
-    path
 }

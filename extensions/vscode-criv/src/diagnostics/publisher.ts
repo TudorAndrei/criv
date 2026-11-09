@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
+import { safeVaultPath } from "@criv/editor-state";
 
 import { diagnosticRange, parseCheckDiagnostics } from "./model";
-import { safeVaultPath } from "../navigation/target";
 
 export class CrivCheckDiagnostics implements vscode.Disposable {
   private readonly collection = vscode.languages.createDiagnosticCollection("criv-check");

@@ -2,238 +2,28 @@
 
 mod filesystem;
 
-use std::ffi::OsString;
-use std::fmt;
 use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use crate::diagnostic::DiagnosticCode;
-use crate::{CrivError, Result};
+pub use filesystem::{RepositoryFiles, RepositoryWriteScope};
 
-#[derive(Clone)]
-pub struct RepositoryFiles {
-    filesystem: Arc<filesystem::FileSystem>,
-}
+const LOCK_RETRY: Duration = Duration::from_millis(25);
 
-impl fmt::Debug for RepositoryFiles {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RepositoryFiles")
-            .field("root", &self.root())
-            .finish_non_exhaustive()
-    }
-}
-
-impl RepositoryFiles {
-    pub(crate) fn open(root: &Path) -> Result<Self> {
-        Ok(Self {
-            filesystem: Arc::new(filesystem::FileSystem::open(root)?),
-        })
-    }
-
-    pub(crate) fn open_vault(root: &Path) -> Result<Self> {
-        let files = Self::open(root)?;
-        files.require_vault()?;
-        Ok(files)
-    }
-
-    fn require_vault(&self) -> Result<()> {
-        if self.read_optional_string(Path::new("criv.toml"))?.is_some() {
-            return Ok(());
+/// Takes the exclusive operating-system lock on `file`, retrying until `wait`
+/// has passed. Returns `false` when another holder keeps the lock.
+pub fn lock_within(file: &fs::File, wait: Duration) -> std::io::Result<bool> {
+    let deadline = Instant::now().checked_add(wait);
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Ok(true),
+            Err(fs::TryLockError::WouldBlock)
+                if deadline.is_some_and(|deadline| Instant::now() < deadline) =>
+            {
+                std::thread::sleep(LOCK_RETRY);
+            }
+            Err(fs::TryLockError::WouldBlock) => return Ok(false),
+            Err(fs::TryLockError::Error(error)) => return Err(error),
         }
-        Err(CrivError::coded(
-            DiagnosticCode::NotAVault,
-            format!(
-                "not a criv vault: no criv.toml in {}",
-                self.root().display()
-            ),
-        ))
-    }
-
-    pub(crate) fn root(&self) -> &Path {
-        self.filesystem.root()
-    }
-
-    pub(crate) fn write_scope<'a>(
-        &'a self,
-        allowed_dir: &Path,
-    ) -> Result<RepositoryWriteScope<'a>> {
-        filesystem::FileSystem::validate_scope(allowed_dir)?;
-        Ok(RepositoryWriteScope {
-            files: self,
-            allowed_dir: allowed_dir.to_path_buf(),
-        })
-    }
-
-    pub(crate) fn read(&self, source: &Path) -> Result<Vec<u8>> {
-        self.filesystem.read(source)
-    }
-
-    pub(crate) fn read_with_permissions(
-        &self,
-        source: &Path,
-    ) -> Result<(Vec<u8>, fs::Permissions)> {
-        self.filesystem.read_with_permissions(source)
-    }
-
-    pub(crate) fn permissions(&self, source: &Path) -> Result<fs::Permissions> {
-        self.filesystem.permissions(source)
-    }
-
-    pub(crate) fn read_optional_with_permissions(
-        &self,
-        source: &Path,
-    ) -> Result<Option<(Vec<u8>, fs::Permissions)>> {
-        self.filesystem.read_optional_with_permissions(source)
-    }
-
-    pub(crate) fn read_with_metadata(&self, source: &Path) -> Result<(Vec<u8>, fs::Metadata)> {
-        self.filesystem.read_with_metadata(source)
-    }
-
-    pub(crate) fn read_bounded(&self, source: &Path, max_bytes: u64) -> Result<Option<Vec<u8>>> {
-        self.filesystem.read_bounded(source, max_bytes)
-    }
-
-    pub(crate) fn read_string(&self, source: &Path) -> Result<String> {
-        self.filesystem.read_string(source)
-    }
-
-    pub(crate) fn read_optional_string(&self, source: &Path) -> Result<Option<String>> {
-        self.filesystem.read_optional_string(source)
-    }
-
-    pub(crate) fn file_exists(&self, source: &Path) -> Result<bool> {
-        self.filesystem.file_exists(source)
-    }
-
-    pub(crate) fn directory_exists(&self, source: &Path) -> Result<bool> {
-        self.filesystem.directory_exists(source)
-    }
-
-    pub(crate) fn entry_exists(&self, source: &Path) -> Result<bool> {
-        self.filesystem.entry_exists(source)
-    }
-
-    pub(crate) fn read_dir_names(&self, source: &Path) -> Result<Option<Vec<OsString>>> {
-        self.filesystem.read_dir_names(source)
-    }
-
-    pub(crate) fn link_layout(&self, destination: &Path, target: &Path) -> Result<LinkLayout> {
-        self.filesystem.link_layout(destination, target)
-    }
-}
-
-pub struct RepositoryWriteScope<'a> {
-    files: &'a RepositoryFiles,
-    allowed_dir: PathBuf,
-}
-
-impl fmt::Debug for RepositoryWriteScope<'_> {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RepositoryWriteScope")
-            .field("root", &self.files.root())
-            .field("allowed_dir", &self.allowed_dir)
-            .finish_non_exhaustive()
-    }
-}
-
-impl RepositoryWriteScope<'_> {
-    pub(crate) fn create_dir(&self, destination: &Path) -> Result<()> {
-        self.files
-            .filesystem
-            .create_dir(&self.allowed_dir, destination)
-    }
-
-    pub(crate) fn write_new(&self, destination: &Path, contents: &str) -> Result<bool> {
-        self.files
-            .filesystem
-            .write_new(&self.allowed_dir, destination, contents)
-    }
-
-    pub(crate) fn append_line_if_missing(&self, destination: &Path, line: &str) -> Result<()> {
-        self.files
-            .filesystem
-            .append_line_if_missing(&self.allowed_dir, destination, line)
-    }
-
-    pub(crate) fn write_atomic(&self, destination: &Path, contents: &str) -> Result<()> {
-        self.files
-            .filesystem
-            .write_atomic(&self.allowed_dir, destination, contents)
-    }
-
-    pub(crate) fn write_atomic_with_permissions(
-        &self,
-        destination: &Path,
-        contents: &str,
-        permissions: fs::Permissions,
-    ) -> Result<()> {
-        self.files.filesystem.write_atomic_with_permissions(
-            &self.allowed_dir,
-            destination,
-            contents,
-            permissions,
-        )
-    }
-
-    pub(crate) fn restore_with_lock(
-        &self,
-        destination: &Path,
-        lock: &Path,
-        contents: Option<(&[u8], fs::Permissions)>,
-    ) -> Result<()> {
-        self.files
-            .filesystem
-            .restore_with_lock(&self.allowed_dir, destination, lock, contents)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn write_atomic_if_changed(
-        &self,
-        destination: &Path,
-        contents: &str,
-    ) -> Result<bool> {
-        self.files
-            .filesystem
-            .write_atomic_if_changed(&self.allowed_dir, destination, contents)
-    }
-
-    pub(crate) fn remove_file(&self, destination: &Path) -> Result<()> {
-        self.files
-            .filesystem
-            .remove_file(&self.allowed_dir, destination)
-    }
-
-    pub(crate) fn rename_file(&self, source: &Path, destination: &Path) -> Result<()> {
-        self.files
-            .filesystem
-            .rename_file(&self.allowed_dir, source, destination)
-    }
-
-    pub(crate) fn open_regular_file(&self, destination: &Path) -> Result<(PathBuf, fs::File)> {
-        self.files
-            .filesystem
-            .open_regular_file(&self.allowed_dir, destination)
-    }
-
-    pub(crate) fn remove_empty_dir(&self, destination: &Path) -> Result<()> {
-        self.files
-            .filesystem
-            .remove_empty_dir(&self.allowed_dir, destination)
-    }
-
-    pub(crate) fn link_dir(
-        &self,
-        destination: &Path,
-        target: &Path,
-        replace_directory: bool,
-    ) -> Result<LinkOutcome> {
-        self.files
-            .filesystem
-            .link_dir(&self.allowed_dir, destination, target, replace_directory)
     }
 }
 
@@ -246,6 +36,17 @@ pub enum LinkOutcome {
     Unsupported,
 }
 
+/// What a repository path names, read without following a link in any
+/// component. A link, a junction, a non-directory ancestor, or an unreadable
+/// entry is `Other`.
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+pub enum EntryKind {
+    Missing,
+    File,
+    Directory,
+    Other,
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum LinkLayout {
     Missing,
@@ -256,6 +57,9 @@ pub enum LinkLayout {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+    use std::path::Path;
+
     use super::*;
 
     #[test]
@@ -355,7 +159,10 @@ mod tests {
         permissions.set_readonly(true);
         std::fs::set_permissions(root.path().join("script"), permissions).unwrap();
         let files = RepositoryFiles::open(root.path()).unwrap();
-        let (contents, permissions) = files.read_with_permissions(Path::new("script")).unwrap();
+        let (contents, permissions) = files
+            .read_optional_with_permissions(Path::new("script"))
+            .unwrap()
+            .unwrap();
 
         assert_eq!(contents, b"old\n");
         assert_eq!(
@@ -365,7 +172,7 @@ mod tests {
         files
             .write_scope(Path::new("."))
             .unwrap()
-            .write_atomic_with_permissions(Path::new("script"), "new\n", permissions)
+            .write_atomic_with_permissions(Path::new("script"), b"new\n", permissions)
             .unwrap();
 
         assert_eq!(files.read_string(Path::new("script")).unwrap(), "new\n");

@@ -1,12 +1,4 @@
-export interface CrivCheckDiagnosticJson {
-  severity?: unknown;
-  code?: unknown;
-  path?: unknown;
-  line?: unknown;
-  message?: unknown;
-  range?: unknown;
-  fix?: unknown;
-}
+import { isRecord } from "@criv/editor-state";
 
 export interface DiagnosticPosition {
   line: number;
@@ -34,7 +26,7 @@ export function parseCheckDiagnostics(raw: string): NormalizedCheckDiagnostic[] 
     throw new Error("Expected criv check JSON output to be an array.");
   }
 
-  return parsed.filter(isDiagnosticRecord).map((diagnostic) => {
+  return parsed.filter(isRecord).map((diagnostic) => {
     const range = rangeValue(diagnostic.range);
     const fix = stringValue(diagnostic.fix);
     return {
@@ -75,10 +67,6 @@ export function diagnosticRange(diagnostic: NormalizedCheckDiagnostic): Diagnost
   };
 }
 
-function isDiagnosticRecord(value: unknown): value is CrivCheckDiagnosticJson {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function stringValue(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
@@ -111,8 +99,4 @@ function nonNegativeInteger(value: unknown): number | undefined {
 
 function comparePositions(left: DiagnosticPosition, right: DiagnosticPosition): number {
   return left.line - right.line || left.character - right.character;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

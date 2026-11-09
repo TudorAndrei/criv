@@ -42,8 +42,12 @@ cargo test --locked --test acceptance -- --name "Refuse vault commands"
 The hk test step also selects `.feature` changes.
 No Node.js runner, browser, or separate Cucumber installation is needed.
 Undefined or skipped steps fail the suite rather than silently passing.
-Each scenario gets its own temporary directory and invokes the built binary;
-shared test setup clears inherited Git-hook and CI context.
+Each scenario gets its own temporary directory and invokes the built binary.
+All integration test targets share `tests/support`: one list of inherited
+Git-hook and CI variables to clear, the `criv` command builders, and one Git
+fixture builder. The Git fixture builder runs the Git CLI, because workflow
+fixtures need moves, stashes, merges, and linked worktrees; criv itself still
+runs without a Git executable.
 
 ## Add or migrate a feature
 
@@ -57,8 +61,10 @@ shared test setup clears inherited Git-hook and CI context.
    after the scenario covers the same assertions. Keep unit and integration
    tests that protect distinct parser, platform, transaction, or lifecycle risks.
 
-The initial suite migrates vault-required command failures, staged checks
-outside Git, and empty staged-scope output formats from `tests/cli_workflows.rs`.
+The suite migrates vault-required command failures and the staged-validation
+flows from `tests/cli_workflows.rs`: staged checks outside Git, empty staged-scope
+output formats, staged notes, renames and deletions, staged-source policies, and
+the read-only staged check.
 Remaining workflow tests stay in place until migrated; this is not a claim that
 all CLI or editor behavior already has a Gherkin specification.
 

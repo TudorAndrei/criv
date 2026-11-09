@@ -6,7 +6,7 @@
 mod generate;
 mod manifest;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{BufWriter, Read, Write};
 #[cfg(unix)]
@@ -15,6 +15,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use criv_state_wire::node_id::{self, NodeIdKind};
+use criv_state_wire::source_identity::SourceIdentity;
+use criv_state_wire::{EdgeKind, NodeKind, StateDocument, content_hash, layout};
 use generate::{GeneratedWorkload, append_source_revision, generate, mutate_sources};
 use manifest::LoadedManifest;
 use serde::Serialize;
@@ -24,6 +27,7 @@ use usage_rs::{Cli, ValueEnum};
 const RUN_SCHEMA: &str = "criv.performance-run.v2";
 const SAMPLE_SCHEMA: &str = "criv.performance-sample.v2";
 const SUMMARY_SCHEMA: &str = "criv.performance-summary.v2";
+const ELIXIR_MIME: &str = "text/x-elixir";
 
 /// Generate isolated criv workloads and preserve repeatable performance evidence
 #[derive(Debug, Cli)]
@@ -378,7 +382,7 @@ fn run(mut args: Args) -> Result<(), String> {
         started_at_utc,
         std::process::id()
     );
-    let run_id = blake3::hash(run_seed.as_bytes()).to_hex()[..16].to_string();
+    let run_id = content_hash::of_bytes(run_seed.as_bytes())[..16].to_string();
     let run_identity = RunIdentity {
         schema: RUN_SCHEMA,
         run_id: run_id.clone(),
@@ -610,14 +614,27 @@ fn measure_sample(
         case,
     )?;
     let real_seconds = start.elapsed().as_secs_f64();
+    let state_digest = optional_file_digest(&root.join(layout::STATE));
+    let snapshot_hash = fs::read_to_string(root.join(layout::LATEST))
+        .ok()
+        .map(|value| value.trim().to_string());
+    let source_graph_digest = optional_file_digest(&root.join(layout::SOURCE_GRAPH));
     let coverage = if case.selects_source() {
-        elixir_coverage(root, generated, loaded.manifest.relationships)?
+        let selected = selected_elixir_files(root, generated)?;
+        if selected.is_empty() {
+            ElixirCoverage::default()
+        } else {
+            if !case.publishes_state() {
+                publish_state(binary, root, &run.run_id, case)?;
+            }
+            elixir_coverage(&read_state(root)?, selected, loaded.manifest.relationships)?
+        }
     } else {
         ElixirCoverage::default()
     };
     let published_relationships = if case.publishes_state() {
         Some(state_relationship_count(
-            root,
+            &read_state(root)?,
             loaded.manifest.relationships,
         )?)
     } else {
@@ -660,15 +677,13 @@ fn measure_sample(
         parsed_relationships: coverage.relationships,
         published_relationships,
         elixir_path_digest: coverage.path_digest,
-        stdout_digest: bytes_digest(&output.stdout),
-        stderr_digest: bytes_digest(&output.stderr),
+        stdout_digest: content_hash::of_bytes(&output.stdout),
+        stderr_digest: content_hash::of_bytes(&output.stderr),
         stdout_path: stdout_path.display().to_string(),
         stderr_path: stderr_path.display().to_string(),
-        state_digest: optional_file_digest(&root.join(".criv/state.json")),
-        snapshot_hash: fs::read_to_string(root.join(".criv/latest"))
-            .ok()
-            .map(|value| value.trim().to_string()),
-        source_graph_digest: optional_file_digest(&root.join(".criv/source-graph.json")),
+        state_digest,
+        snapshot_hash,
+        source_graph_digest,
     })
 }
 
@@ -699,11 +714,10 @@ fn run_criv(
     run_child(command).map_err(|error| format!("failed to execute {}: {error}", binary.display()))
 }
 
-fn elixir_coverage(
+fn selected_elixir_files(
     root: &Path,
     generated: &GeneratedWorkload,
-    expected_relationships: usize,
-) -> Result<ElixirCoverage, String> {
+) -> Result<Vec<(String, u64)>, String> {
     let mut selected = generated
         .source_paths
         .iter()
@@ -719,65 +733,79 @@ fn elixir_coverage(
         })
         .collect::<Result<Vec<_>, String>>()?;
     selected.sort();
-    if selected.is_empty() {
-        return Ok(ElixirCoverage::default());
-    }
+    Ok(selected)
+}
 
-    let cache_path = root.join(".criv/source-graph.json");
-    let cache: serde_json::Value = serde_json::from_slice(
-        &fs::read(&cache_path)
-            .map_err(|error| format!("failed to read {}: {error}", cache_path.display()))?,
+/// Publishes State after a measured command that does not, so Elixir
+/// coverage is read from the published State and never from the private cache.
+fn publish_state(binary: &Path, root: &Path, run_id: &str, case: Case) -> Result<(), String> {
+    let output = run_criv(binary, root, &["watch", "--once"], run_id, "coverage", case)?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "coverage publication failed for {}:\nstdout:\n{}\nstderr:\n{}",
+        case.id(),
+        String::from_utf8_lossy(&output.stdout).trim(),
+        String::from_utf8_lossy(&output.stderr).trim()
+    ))
+}
+
+fn read_state(root: &Path) -> Result<StateDocument, String> {
+    let state_path = root.join(layout::STATE);
+    serde_json::from_slice(
+        &fs::read(&state_path)
+            .map_err(|error| format!("failed to read {}: {error}", state_path.display()))?,
     )
-    .map_err(|error| format!("failed to parse {}: {error}", cache_path.display()))?;
-    let files = cache
-        .get("graph")
-        .and_then(|graph| graph.get("files"))
-        .and_then(serde_json::Value::as_object)
-        .ok_or_else(|| format!("{} has no source file map", cache_path.display()))?;
-    let parsed = selected
+    .map_err(|error| format!("failed to parse {}: {error}", state_path.display()))
+}
+
+fn elixir_coverage(
+    state: &StateDocument,
+    selected: Vec<(String, u64)>,
+    expected_relationships: usize,
+) -> Result<ElixirCoverage, String> {
+    let code_paths = state
+        .graph
+        .nodes
         .iter()
-        .filter(|(path, _)| {
-            files
-                .get(path)
-                .and_then(|file| file.get("language"))
-                .and_then(serde_json::Value::as_str)
-                == Some("Elixir")
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    if parsed.len() != selected.len() {
-        let missing = selected
+        .filter(|node| node.kind == NodeKind::Code)
+        .filter_map(|node| node.path.as_deref())
+        .collect::<BTreeSet<_>>();
+    let elixir_paths = state
+        .source_index
+        .iter()
+        .filter(|entry| entry.mime.as_deref() == Some(ELIXIR_MIME))
+        .map(|entry| entry.path.as_str())
+        .filter(|path| code_paths.contains(path))
+        .collect::<BTreeSet<_>>();
+    let (parsed, missing): (Vec<_>, Vec<_>) = selected
+        .iter()
+        .partition(|(path, _)| elixir_paths.contains(path.as_str()));
+    if !missing.is_empty() {
+        let missing = missing
             .iter()
-            .filter(|item| !parsed.contains(item))
             .map(|(path, _)| path.as_str())
             .collect::<Vec<_>>();
         return Err(format!(
-            "Elixir source graph coverage is incomplete; missing: {}",
+            "published State Elixir coverage is incomplete; missing: {}",
             missing.join(", ")
         ));
     }
-    let relationships = selected
+    let relationships = state
+        .graph
+        .edges
         .iter()
-        .map(|(path, _)| {
-            files[path]
-                .get("symbols")
-                .and_then(serde_json::Value::as_array)
-                .ok_or_else(|| format!("Elixir source graph file {path} has no symbol array"))
+        .filter(|edge| edge.kind != EdgeKind::Contains)
+        .filter_map(|edge| match node_id::parse(&edge.from)? {
+            (NodeIdKind::Symbol, identity) => Some(SourceIdentity::parse(identity)),
+            _ => None,
         })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .map(|symbol| {
-            symbol
-                .get("relationships")
-                .and_then(serde_json::Value::as_array)
-                .map(Vec::len)
-                .unwrap_or(0)
-        })
-        .sum::<usize>();
+        .filter(|identity| elixir_paths.contains(identity.path()))
+        .count();
     if relationships != expected_relationships {
         return Err(format!(
-            "Elixir source graph has {relationships} relationships, expected {expected_relationships}"
+            "published State has {relationships} Elixir relationships, expected {expected_relationships}"
         ));
     }
     let selected_bytes = selected.iter().map(|(_, bytes)| bytes).sum();
@@ -798,20 +826,12 @@ fn elixir_coverage(
     })
 }
 
-fn state_relationship_count(root: &Path, expected: usize) -> Result<usize, String> {
-    let state_path = root.join(".criv/state.json");
-    let state: serde_json::Value = serde_json::from_slice(
-        &fs::read(&state_path)
-            .map_err(|error| format!("failed to read {}: {error}", state_path.display()))?,
-    )
-    .map_err(|error| format!("failed to parse {}: {error}", state_path.display()))?;
+fn state_relationship_count(state: &StateDocument, expected: usize) -> Result<usize, String> {
     let relationships = state
-        .get("graph")
-        .and_then(|graph| graph.get("edges"))
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| format!("{} has no graph edge array", state_path.display()))?
+        .graph
+        .edges
         .iter()
-        .filter(|edge| edge.get("kind").and_then(serde_json::Value::as_str) == Some("calls"))
+        .filter(|edge| edge.kind == EdgeKind::Calls)
         .count();
     if relationships != expected {
         return Err(format!(
@@ -948,7 +968,7 @@ fn machine_identity() -> Result<MachineIdentity, String> {
         architecture,
         processor,
         rustc_verbose,
-        digest: blake3::hash(text.as_bytes()).to_hex().to_string(),
+        digest: content_hash::of_bytes(text.as_bytes()),
     })
 }
 
@@ -982,17 +1002,15 @@ fn write_json(path: PathBuf, value: &impl Serialize) -> Result<(), String> {
 }
 
 fn optional_file_digest(path: &Path) -> Option<String> {
-    fs::read(path).ok().map(|bytes| bytes_digest(&bytes))
+    fs::read(path)
+        .ok()
+        .map(|bytes| content_hash::of_bytes(&bytes))
 }
 
 fn file_digest(path: &Path) -> Result<String, String> {
     fs::read(path)
-        .map(|bytes| bytes_digest(&bytes))
+        .map(|bytes| content_hash::of_bytes(&bytes))
         .map_err(display_error)
-}
-
-fn bytes_digest(bytes: &[u8]) -> String {
-    blake3::hash(bytes).to_hex().to_string()
 }
 
 fn unix_millis() -> u128 {

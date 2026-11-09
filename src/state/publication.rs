@@ -1,22 +1,18 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::path::Path;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use criv_state_wire::layout;
 use serde::{Deserialize, Serialize};
 
 use super::snapshots;
-use crate::repository::RepositoryFiles;
+use crate::repository::{self, RepositoryFiles};
 use crate::{CrivError, Result};
 
-const LOCK_PATH: &str = ".criv/state-publication.lock";
-const TRANSACTION_PATH: &str = ".criv/state-transaction.json";
-const STAGE_DIR: &str = ".criv/state-stage";
-const QUARANTINE_DIR: &str = ".criv/state-quarantine";
 const LOCK_TIMEOUT: Duration = Duration::from_secs(2);
-const LOCK_RETRY: Duration = Duration::from_millis(25);
-const TRANSACTION_SCHEMA: &str = "criv.state-publication.v1";
+const TRANSACTION_SCHEMA: &str = "criv.state-publication.v2";
 
 #[derive(Debug, Serialize, Deserialize)]
 struct TransactionRecord {
@@ -25,19 +21,18 @@ struct TransactionRecord {
     candidate_hash: String,
     candidate_state: String,
     candidate_index: String,
-    keep: usize,
     removals: Vec<String>,
     prior_state: Option<String>,
     prior_latest: Option<String>,
     prior_index: Option<String>,
-    prior_snapshots: BTreeMap<String, String>,
+    prior_hashes: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum TransactionPhase {
+    #[serde(alias = "staged")]
     Prepared,
-    Staged,
     Quarantined,
     Installed,
     Committed,
@@ -52,9 +47,6 @@ struct PublicationLock {
 enum PublicationStep {
     Preflight,
     Record,
-    StageSnapshot,
-    StageIndex,
-    StageLatest,
     Quarantine,
     InstallSnapshot,
     InstallIndex,
@@ -75,19 +67,14 @@ struct RealPublicationControl;
 
 impl PublicationControl for RealPublicationControl {}
 
-#[cfg(test)]
-fn publish(root: &Path, hash: &str, contents: &str, keep: usize) -> Result<()> {
-    publish_with(root, hash, contents, keep, &RealPublicationControl)
-}
-
-pub fn publish_with_precommit_check(
+pub fn publish(
     files: &RepositoryFiles,
     hash: &str,
     contents: &str,
-    keep: usize,
+    keep: NonZeroUsize,
     precommit_check: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
-    publish_with_check(
+    publish_controlled(
         files,
         hash,
         contents,
@@ -97,23 +84,11 @@ pub fn publish_with_precommit_check(
     )
 }
 
-#[cfg(test)]
-fn publish_with(
-    root: &Path,
-    hash: &str,
-    contents: &str,
-    keep: usize,
-    control: &impl PublicationControl,
-) -> Result<()> {
-    let files = RepositoryFiles::open(root)?;
-    publish_with_check(&files, hash, contents, keep, control, || Ok(()))
-}
-
-fn publish_with_check(
+fn publish_controlled(
     files: &RepositoryFiles,
     hash: &str,
     contents: &str,
-    keep: usize,
+    keep: NonZeroUsize,
     control: &impl PublicationControl,
     precommit_check: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
@@ -128,12 +103,11 @@ fn publish_with_check(
         candidate_hash: hash.to_string(),
         candidate_state: contents.to_string(),
         candidate_index: plan.index_contents,
-        keep,
         removals: plan.removals,
-        prior_state: read_optional(files, ".criv/state.json", "State commit record")?,
-        prior_latest: read_optional(files, ".criv/latest", "latest snapshot pointer")?,
-        prior_index: read_optional(files, ".criv/snapshots/index.json", "snapshot index")?,
-        prior_snapshots: capture_snapshots(files)?,
+        prior_state: read_optional(files, layout::STATE, "State commit record")?,
+        prior_latest: read_optional(files, layout::LATEST, "latest snapshot pointer")?,
+        prior_index: read_optional(files, layout::SNAPSHOT_INDEX, "snapshot index")?,
+        prior_hashes: plan.prior_hashes,
     };
     write_record(files, &record)?;
     if let Err(error) = control.checkpoint(PublicationStep::Record) {
@@ -141,9 +115,7 @@ fn publish_with_check(
         return Err(error);
     }
 
-    let result = stage_candidate(files, &record, control)
-        .and_then(|()| set_phase(files, &mut record, TransactionPhase::Staged))
-        .and_then(|()| quarantine_removals(files, &record, control))
+    let result = quarantine_removals(files, &record, control)
         .and_then(|()| set_phase(files, &mut record, TransactionPhase::Quarantined))
         .and_then(|()| install_candidate_controlled(files, &record, control))
         .and_then(|()| set_phase(files, &mut record, TransactionPhase::Installed))
@@ -151,13 +123,13 @@ fn publish_with_check(
         .and_then(|()| precommit_check())
         .and_then(|()| {
             files
-                .write_scope(Path::new(".criv"))?
-                .write_atomic(Path::new(".criv/state.json"), contents)
+                .write_scope(Path::new(layout::DIR))?
+                .write_atomic(Path::new(layout::STATE), contents)
         })
         .and_then(|()| set_phase(files, &mut record, TransactionPhase::Committed))
         .and_then(|()| control.checkpoint(PublicationStep::Commit));
     if let Err(error) = result {
-        let state_committed = read_optional(files, ".criv/state.json", "State commit record")?
+        let state_committed = read_optional(files, layout::STATE, "State commit record")?
             .as_deref()
             == Some(contents);
         if state_committed {
@@ -188,12 +160,11 @@ fn publish_with_check(
 }
 
 fn reject_orphan_transaction_workspace(files: &RepositoryFiles) -> Result<()> {
-    for relative in [STAGE_DIR, QUARANTINE_DIR] {
-        if files.entry_exists(Path::new(relative))? {
-            return Err(CrivError::new(format!(
-                "State transaction workspace `{relative}` exists without a transaction record"
-            )));
-        }
+    if files.entry_exists(Path::new(layout::QUARANTINE))? {
+        return Err(CrivError::new(format!(
+            "State transaction workspace `{}` exists without a transaction record",
+            layout::QUARANTINE
+        )));
     }
     Ok(())
 }
@@ -207,47 +178,43 @@ fn set_phase(
     write_record(files, record)
 }
 
-pub fn load_snapshot(root: &Path, id: &snapshots::SnapshotId) -> Result<Option<String>> {
-    let files = RepositoryFiles::open(root)?;
-    let _lock = PublicationLock::acquire(&files)?;
-    recover_locked(&files)?;
-    snapshots::load_unlocked(&files, id)
+pub fn load_snapshot(
+    files: &RepositoryFiles,
+    id: &snapshots::SnapshotId,
+) -> Result<Option<String>> {
+    let _lock = PublicationLock::acquire(files)?;
+    recover_locked(files)?;
+    snapshots::load_unlocked(files, id)
 }
 
 impl PublicationLock {
     fn acquire(files: &RepositoryFiles) -> Result<Self> {
         let (_, file) = files
-            .write_scope(Path::new(".criv"))?
-            .open_regular_file(Path::new(LOCK_PATH))
+            .write_scope(Path::new(layout::DIR))?
+            .open_regular_file(Path::new(layout::PUBLICATION_LOCK))
             .map_err(|error| {
                 CrivError::new(format!("unsafe State publication lock path: {error}"))
             })?;
-        let deadline = Instant::now()
-            .checked_add(LOCK_TIMEOUT)
-            .ok_or_else(|| CrivError::new("State publication lock timeout overflow"))?;
-        loop {
-            match file.try_lock() {
-                Ok(()) => return Ok(Self { _file: file }),
-                Err(fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
-                    thread::sleep(LOCK_RETRY);
-                }
-                Err(fs::TryLockError::WouldBlock) => {
-                    return Err(CrivError::new(
-                        "timed out waiting 2 seconds for the State publication lock",
-                    ));
-                }
-                Err(error) => {
-                    return Err(CrivError::new(format!(
-                        "failed to acquire operating-system State publication lock: {error}"
-                    )));
-                }
-            }
+        match repository::lock_within(&file, LOCK_TIMEOUT) {
+            Ok(true) => Ok(Self { _file: file }),
+            Ok(false) => Err(CrivError::new(format!(
+                "timed out waiting {} seconds for the State publication lock",
+                LOCK_TIMEOUT.as_secs()
+            ))),
+            Err(error) => Err(CrivError::new(format!(
+                "failed to acquire operating-system State publication lock: {error}"
+            ))),
         }
     }
 }
 
 fn recover_locked(files: &RepositoryFiles) -> Result<()> {
-    let Some(contents) = read_optional(files, TRANSACTION_PATH, "State transaction record")? else {
+    let Some(contents) = read_optional(
+        files,
+        layout::PUBLICATION_TRANSACTION,
+        "State transaction record",
+    )?
+    else {
         return Ok(());
     };
     let record: TransactionRecord = serde_json::from_str(&contents)
@@ -259,7 +226,7 @@ fn recover_locked(files: &RepositoryFiles) -> Result<()> {
         )));
     }
 
-    let current = read_optional(files, ".criv/state.json", "State commit record")?;
+    let current = read_optional(files, layout::STATE, "State commit record")?;
     if current.as_deref() == Some(record.candidate_state.as_str()) {
         install_candidate(files, &record)?;
         cleanup_transaction(files, &record)?;
@@ -279,32 +246,10 @@ fn write_record(files: &RepositoryFiles, record: &TransactionRecord) -> Result<(
     let contents = serde_json::to_string_pretty(record).map_err(|error| {
         CrivError::new(format!("failed to serialize State transaction: {error}"))
     })?;
-    files
-        .write_scope(Path::new(".criv"))?
-        .write_atomic(Path::new(TRANSACTION_PATH), &format!("{contents}\n"))
-}
-
-fn stage_candidate(
-    files: &RepositoryFiles,
-    record: &TransactionRecord,
-    control: &impl PublicationControl,
-) -> Result<()> {
-    let scope = files.write_scope(Path::new(".criv"))?;
-    scope.write_atomic(
-        Path::new(".criv/state-stage/snapshot.json"),
-        &record.candidate_state,
-    )?;
-    control.checkpoint(PublicationStep::StageSnapshot)?;
-    scope.write_atomic(
-        Path::new(".criv/state-stage/index.json"),
-        &record.candidate_index,
-    )?;
-    control.checkpoint(PublicationStep::StageIndex)?;
-    scope.write_atomic(
-        Path::new(".criv/state-stage/latest"),
-        &format!("{}\n", record.candidate_hash),
-    )?;
-    control.checkpoint(PublicationStep::StageLatest)
+    files.write_scope(Path::new(layout::DIR))?.write_atomic(
+        Path::new(layout::PUBLICATION_TRANSACTION),
+        &format!("{contents}\n"),
+    )
 }
 
 fn quarantine_removals(
@@ -312,10 +257,10 @@ fn quarantine_removals(
     record: &TransactionRecord,
     control: &impl PublicationControl,
 ) -> Result<()> {
-    let scope = files.write_scope(Path::new(".criv"))?;
+    let scope = files.write_scope(Path::new(layout::DIR))?;
     for hash in &record.removals {
-        let source = format!(".criv/snapshots/{hash}.json");
-        let destination = format!(".criv/state-quarantine/{hash}.json");
+        let source = layout::snapshot(hash);
+        let destination = layout::quarantined_snapshot(hash);
         if files.file_exists(Path::new(&source))? && !files.file_exists(Path::new(&destination))? {
             scope.rename_file(Path::new(&source), Path::new(&destination))?;
         }
@@ -328,19 +273,16 @@ fn install_candidate_controlled(
     record: &TransactionRecord,
     control: &impl PublicationControl,
 ) -> Result<()> {
-    let snapshots = files.write_scope(Path::new(".criv/snapshots"))?;
+    let snapshots = files.write_scope(Path::new(layout::SNAPSHOTS))?;
     snapshots.write_atomic(
-        Path::new(&format!(".criv/snapshots/{}.json", record.candidate_hash)),
+        Path::new(&layout::snapshot(&record.candidate_hash)),
         &record.candidate_state,
     )?;
     control.checkpoint(PublicationStep::InstallSnapshot)?;
-    snapshots.write_atomic(
-        Path::new(".criv/snapshots/index.json"),
-        &record.candidate_index,
-    )?;
+    snapshots.write_atomic(Path::new(layout::SNAPSHOT_INDEX), &record.candidate_index)?;
     control.checkpoint(PublicationStep::InstallIndex)?;
-    files.write_scope(Path::new(".criv"))?.write_atomic(
-        Path::new(".criv/latest"),
+    files.write_scope(Path::new(layout::DIR))?.write_atomic(
+        Path::new(layout::LATEST),
         &format!("{}\n", record.candidate_hash),
     )?;
     control.checkpoint(PublicationStep::InstallLatest)
@@ -351,36 +293,21 @@ fn install_candidate(files: &RepositoryFiles, record: &TransactionRecord) -> Res
 }
 
 fn restore_prior(files: &RepositoryFiles, record: &TransactionRecord) -> Result<()> {
-    restore_optional(files, ".criv/state.json", record.prior_state.as_deref())?;
-    restore_optional(files, ".criv/latest", record.prior_latest.as_deref())?;
-    restore_optional(
-        files,
-        ".criv/snapshots/index.json",
-        record.prior_index.as_deref(),
-    )?;
+    restore_optional(files, layout::STATE, record.prior_state.as_deref())?;
+    restore_optional(files, layout::LATEST, record.prior_latest.as_deref())?;
+    restore_optional(files, layout::SNAPSHOT_INDEX, record.prior_index.as_deref())?;
 
-    let current = managed_snapshot_paths(files)?;
-    let prior = record
-        .prior_snapshots
-        .keys()
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    for path in current.difference(&prior) {
-        remove_optional(files, path)?;
-    }
-    for (path, contents) in &record.prior_snapshots {
-        files
-            .write_scope(Path::new(".criv/snapshots"))?
-            .write_atomic(Path::new(path), contents)?;
+    for hash in snapshots::stored_hashes(files)?.difference(&record.prior_hashes) {
+        remove_optional(files, &layout::snapshot(hash))?;
     }
     for hash in &record.removals {
-        let quarantined = format!(".criv/state-quarantine/{hash}.json");
-        let restored = format!(".criv/snapshots/{hash}.json");
+        let quarantined = layout::quarantined_snapshot(hash);
+        let restored = layout::snapshot(hash);
         if files.file_exists(Path::new(&quarantined))?
             && !files.file_exists(Path::new(&restored))?
         {
             files
-                .write_scope(Path::new(".criv"))?
+                .write_scope(Path::new(layout::DIR))?
                 .rename_file(Path::new(&quarantined), Path::new(&restored))?;
         }
     }
@@ -389,24 +316,16 @@ fn restore_prior(files: &RepositoryFiles, record: &TransactionRecord) -> Result<
 
 fn cleanup_transaction(files: &RepositoryFiles, record: &TransactionRecord) -> Result<()> {
     for hash in &record.removals {
-        remove_optional(files, &format!(".criv/state-quarantine/{hash}.json"))?;
+        remove_optional(files, &layout::quarantined_snapshot(hash))?;
     }
-    for path in [
-        ".criv/state-stage/snapshot.json",
-        ".criv/state-stage/index.json",
-        ".criv/state-stage/latest",
-    ] {
-        remove_optional(files, path)?;
-    }
-    remove_empty_dir(files, STAGE_DIR)?;
-    remove_empty_dir(files, QUARANTINE_DIR)?;
-    remove_optional(files, TRANSACTION_PATH)
+    remove_empty_dir(files, layout::QUARANTINE)?;
+    remove_optional(files, layout::PUBLICATION_TRANSACTION)
 }
 
 fn restore_optional(files: &RepositoryFiles, path: &str, contents: Option<&str>) -> Result<()> {
     match contents {
         Some(contents) => files
-            .write_scope(Path::new(".criv"))?
+            .write_scope(Path::new(layout::DIR))?
             .write_atomic(Path::new(path), contents),
         None => remove_optional(files, path),
     }
@@ -415,7 +334,7 @@ fn restore_optional(files: &RepositoryFiles, path: &str, contents: Option<&str>)
 fn remove_optional(files: &RepositoryFiles, path: &str) -> Result<()> {
     if files.file_exists(Path::new(path))? {
         files
-            .write_scope(Path::new(".criv"))?
+            .write_scope(Path::new(layout::DIR))?
             .remove_file(Path::new(path))
     } else {
         Ok(())
@@ -424,7 +343,7 @@ fn remove_optional(files: &RepositoryFiles, path: &str) -> Result<()> {
 
 fn remove_empty_dir(files: &RepositoryFiles, relative: &str) -> Result<()> {
     files
-        .write_scope(Path::new(".criv"))?
+        .write_scope(Path::new(layout::DIR))?
         .remove_empty_dir(Path::new(relative))
 }
 
@@ -434,37 +353,12 @@ fn read_optional(files: &RepositoryFiles, path: &str, label: &str) -> Result<Opt
         .map_err(|error| CrivError::new(format!("failed to read {label} `{path}`: {error}")))
 }
 
-fn capture_snapshots(files: &RepositoryFiles) -> Result<BTreeMap<String, String>> {
-    let mut snapshots = BTreeMap::new();
-    for relative in managed_snapshot_paths(files)? {
-        let contents = read_optional(files, &relative, "snapshot")?
-            .ok_or_else(|| CrivError::new(format!("snapshot {relative} disappeared")))?;
-        snapshots.insert(relative, contents);
-    }
-    Ok(snapshots)
-}
-
-fn managed_snapshot_paths(files: &RepositoryFiles) -> Result<BTreeSet<String>> {
-    let Some(names) = files.read_dir_names(Path::new(".criv/snapshots"))? else {
-        return Ok(BTreeSet::new());
-    };
-    let mut paths = BTreeSet::new();
-    for name in names {
-        let name = name.to_string_lossy().to_string();
-        let Some(hash) = name.strip_suffix(".json") else {
-            continue;
-        };
-        if hash.len() == 64 && hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
-            paths.insert(format!(".criv/snapshots/{name}"));
-        }
-    }
-    Ok(paths)
-}
-
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
     use std::sync::{Arc, Barrier};
+
+    use criv_state_wire::content_hash;
 
     use super::*;
 
@@ -488,19 +382,77 @@ mod tests {
     fn state(seed: &str) -> (String, String) {
         let contents =
             format!("{{\n  \"schema\": \"criv.state.v1\",\n  \"seed\": \"{seed}\"\n}}\n");
-        let hash = blake3::hash(contents.trim_end_matches('\n').as_bytes())
-            .to_hex()
-            .to_string();
-        (hash, contents)
+        (content_hash::of_document(&contents), contents)
+    }
+
+    fn publish_root(root: &Path, hash: &str, contents: &str, keep: usize) -> Result<()> {
+        publish(
+            &RepositoryFiles::open(root)?,
+            hash,
+            contents,
+            NonZeroUsize::new(keep).unwrap(),
+            || Ok(()),
+        )
+    }
+
+    fn publish_root_with(
+        root: &Path,
+        hash: &str,
+        contents: &str,
+        keep: usize,
+        control: &FailAt,
+    ) -> Result<()> {
+        publish_controlled(
+            &RepositoryFiles::open(root)?,
+            hash,
+            contents,
+            NonZeroUsize::new(keep).unwrap(),
+            control,
+            || Ok(()),
+        )
+    }
+
+    fn fail_at(step: PublicationStep) -> FailAt {
+        FailAt {
+            step,
+            hits: Cell::new(0),
+            also_fail_rollback: false,
+        }
+    }
+
+    #[test]
+    fn rollback_restores_quarantined_snapshots_and_keeps_a_republished_one() {
+        let root = tempfile::tempdir().unwrap();
+        let first = state("first");
+        let second = state("second");
+        let candidate = state("candidate");
+        publish_root(root.path(), &first.0, &first.1, 20).unwrap();
+        publish_root(root.path(), &second.0, &second.1, 20).unwrap();
+        let before = snapshot_files(root.path());
+
+        for hash_and_contents in [&candidate, &first] {
+            publish_root_with(
+                root.path(),
+                &hash_and_contents.0,
+                &hash_and_contents.1,
+                1,
+                &fail_at(PublicationStep::InstallLatest),
+            )
+            .unwrap_err();
+
+            assert_eq!(snapshot_files(root.path()), before);
+            assert_eq!(
+                fs::read_to_string(root.path().join(layout::snapshot(&first.0))).unwrap(),
+                first.1
+            );
+            assert!(!root.path().join(layout::QUARANTINE).exists());
+        }
     }
 
     #[test]
     fn each_pre_commit_failure_rolls_back_to_the_prior_revision() {
         for step in [
             PublicationStep::Record,
-            PublicationStep::StageSnapshot,
-            PublicationStep::StageIndex,
-            PublicationStep::StageLatest,
             PublicationStep::Quarantine,
             PublicationStep::InstallSnapshot,
             PublicationStep::InstallIndex,
@@ -510,9 +462,9 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             let prior = state("prior");
             let candidate = state("candidate");
-            publish(root.path(), &prior.0, &prior.1, 20).unwrap();
+            publish_root(root.path(), &prior.0, &prior.1, 20).unwrap();
 
-            let error = publish_with(
+            let error = publish_root_with(
                 root.path(),
                 &candidate.0,
                 &candidate.1,
@@ -527,18 +479,18 @@ mod tests {
 
             assert!(error.to_string().contains("controlled failure"));
             assert_eq!(
-                fs::read_to_string(root.path().join(".criv/state.json")).unwrap(),
+                fs::read_to_string(root.path().join(layout::STATE)).unwrap(),
                 prior.1,
                 "failed at {step:?}"
             );
             assert_eq!(
-                fs::read_to_string(root.path().join(".criv/latest"))
+                fs::read_to_string(root.path().join(layout::LATEST))
                     .unwrap()
                     .trim(),
                 prior.0,
                 "failed at {step:?}"
             );
-            assert!(!root.path().join(TRANSACTION_PATH).exists());
+            assert!(!root.path().join(layout::PUBLICATION_TRANSACTION).exists());
         }
     }
 
@@ -547,9 +499,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let prior = state("prior");
         let candidate = state("candidate");
-        publish(root.path(), &prior.0, &prior.1, 20).unwrap();
+        publish_root(root.path(), &prior.0, &prior.1, 20).unwrap();
 
-        publish_with(
+        publish_root_with(
             root.path(),
             &candidate.0,
             &candidate.1,
@@ -561,17 +513,20 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(root.path().join(TRANSACTION_PATH).exists());
+        assert!(root.path().join(layout::PUBLICATION_TRANSACTION).exists());
 
-        let loaded = load_snapshot(root.path(), &snapshots::SnapshotId::Latest)
-            .unwrap()
-            .unwrap();
+        let loaded = load_snapshot(
+            &RepositoryFiles::open(root.path()).unwrap(),
+            &snapshots::SnapshotId::Latest,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(loaded, candidate.1);
         assert_eq!(
-            fs::read_to_string(root.path().join(".criv/state.json")).unwrap(),
+            fs::read_to_string(root.path().join(layout::STATE)).unwrap(),
             candidate.1
         );
-        assert!(!root.path().join(TRANSACTION_PATH).exists());
+        assert!(!root.path().join(layout::PUBLICATION_TRANSACTION).exists());
     }
 
     #[test]
@@ -579,9 +534,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let prior = state("prior");
         let candidate = state("candidate");
-        publish(root.path(), &prior.0, &prior.1, 20).unwrap();
+        publish_root(root.path(), &prior.0, &prior.1, 20).unwrap();
 
-        let error = publish_with(
+        let error = publish_root_with(
             root.path(),
             &candidate.0,
             &candidate.1,
@@ -594,22 +549,22 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("recovery is required"));
-        assert!(root.path().join(TRANSACTION_PATH).exists());
+        assert!(root.path().join(layout::PUBLICATION_TRANSACTION).exists());
 
         let files = RepositoryFiles::open(root.path()).unwrap();
         recover_locked(&files).unwrap();
         assert_eq!(
-            fs::read_to_string(root.path().join(".criv/state.json")).unwrap(),
+            fs::read_to_string(root.path().join(layout::STATE)).unwrap(),
             prior.1
         );
-        assert!(!root.path().join(TRANSACTION_PATH).exists());
+        assert!(!root.path().join(layout::PUBLICATION_TRANSACTION).exists());
     }
 
     #[test]
     fn first_publication_failure_restores_the_no_state_condition() {
         let root = tempfile::tempdir().unwrap();
         let candidate = state("candidate");
-        publish_with(
+        publish_root_with(
             root.path(),
             &candidate.0,
             &candidate.1,
@@ -623,10 +578,10 @@ mod tests {
         .unwrap_err();
 
         for path in [
-            ".criv/state.json",
-            ".criv/latest",
-            ".criv/snapshots/index.json",
-            TRANSACTION_PATH,
+            layout::STATE,
+            layout::LATEST,
+            layout::SNAPSHOT_INDEX,
+            layout::PUBLICATION_TRANSACTION,
         ] {
             assert!(!root.path().join(path).exists(), "unexpected {path}");
         }
@@ -644,19 +599,22 @@ mod tests {
             threads.push(std::thread::spawn(move || {
                 let candidate = state(seed);
                 start.wait();
-                publish(&root, &candidate.0, &candidate.1, 20)
+                publish_root(&root, &candidate.0, &candidate.1, 20)
             }));
         }
         for thread in threads {
             thread.join().unwrap().unwrap();
         }
 
-        let state = fs::read_to_string(root.join(".criv/state.json")).unwrap();
-        let latest = load_snapshot(&root, &snapshots::SnapshotId::Latest)
-            .unwrap()
-            .unwrap();
+        let state = fs::read_to_string(root.join(layout::STATE)).unwrap();
+        let latest = load_snapshot(
+            &RepositoryFiles::open(&root).unwrap(),
+            &snapshots::SnapshotId::Latest,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(state, latest);
-        assert!(!root.join(TRANSACTION_PATH).exists());
+        assert!(!root.join(layout::PUBLICATION_TRANSACTION).exists());
     }
 
     #[test]
@@ -666,20 +624,20 @@ mod tests {
         let _held = PublicationLock::acquire(&files).unwrap();
         let candidate = state("candidate");
 
-        let error = publish(root.path(), &candidate.0, &candidate.1, 20).unwrap_err();
+        let error = publish_root(root.path(), &candidate.0, &candidate.1, 20).unwrap_err();
 
         assert_eq!(
             error.to_string(),
             "timed out waiting 2 seconds for the State publication lock"
         );
-        assert!(!root.path().join(".criv/state.json").exists());
+        assert!(!root.path().join(layout::STATE).exists());
     }
 
     #[test]
     fn cleanup_failure_keeps_the_committed_revision_for_recovery() {
         let root = tempfile::tempdir().unwrap();
         let candidate = state("candidate");
-        publish_with(
+        publish_root_with(
             root.path(),
             &candidate.0,
             &candidate.1,
@@ -691,54 +649,122 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(root.path().join(TRANSACTION_PATH).exists());
+        assert!(root.path().join(layout::PUBLICATION_TRANSACTION).exists());
 
         assert_eq!(
-            load_snapshot(root.path(), &snapshots::SnapshotId::Latest).unwrap(),
+            load_snapshot(
+                &RepositoryFiles::open(root.path()).unwrap(),
+                &snapshots::SnapshotId::Latest
+            )
+            .unwrap(),
             Some(candidate.1)
         );
-        assert!(!root.path().join(TRANSACTION_PATH).exists());
+        assert!(!root.path().join(layout::PUBLICATION_TRANSACTION).exists());
     }
 
     #[test]
     fn orphan_quarantine_fails_before_state_publication() {
         let root = tempfile::tempdir().unwrap();
-        fs::create_dir_all(root.path().join(QUARANTINE_DIR)).unwrap();
+        fs::create_dir_all(root.path().join(layout::QUARANTINE)).unwrap();
         fs::write(
             root.path()
-                .join(QUARANTINE_DIR)
+                .join(layout::QUARANTINE)
                 .join(format!("{}.json", "a".repeat(64))),
             "do not delete\n",
         )
         .unwrap();
         let candidate = state("candidate");
 
-        let error = publish(root.path(), &candidate.0, &candidate.1, 20).unwrap_err();
+        let error = publish_root(root.path(), &candidate.0, &candidate.1, 20).unwrap_err();
 
         assert!(
             error
                 .to_string()
                 .contains("exists without a transaction record")
         );
-        assert!(!root.path().join(".criv/state.json").exists());
-        assert!(root.path().join(QUARANTINE_DIR).exists());
+        assert!(!root.path().join(layout::STATE).exists());
+        assert!(root.path().join(layout::QUARANTINE).exists());
     }
 
     #[test]
     fn orphan_workspace_file_uses_the_transaction_recovery_error() {
         let root = tempfile::tempdir().unwrap();
-        fs::create_dir_all(root.path().join(".criv")).unwrap();
-        fs::write(root.path().join(STAGE_DIR), "stale workspace marker\n").unwrap();
+        fs::create_dir_all(root.path().join(layout::DIR)).unwrap();
+        fs::write(
+            root.path().join(layout::QUARANTINE),
+            "stale workspace marker\n",
+        )
+        .unwrap();
         let candidate = state("candidate");
 
-        let error = publish(root.path(), &candidate.0, &candidate.1, 20).unwrap_err();
+        let error = publish_root(root.path(), &candidate.0, &candidate.1, 20).unwrap_err();
 
         assert!(
             error
                 .to_string()
                 .contains("exists without a transaction record")
         );
-        assert!(!root.path().join(".criv/state.json").exists());
-        assert!(root.path().join(STAGE_DIR).is_file());
+        assert!(!root.path().join(layout::STATE).exists());
+        assert!(root.path().join(layout::QUARANTINE).is_file());
+    }
+
+    fn snapshot_files(root: &Path) -> Vec<String> {
+        let mut names = fs::read_dir(root.join(layout::SNAPSHOTS))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "index.json")
+            .collect::<Vec<_>>();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn retention_keeps_unique_hashes_and_moves_a_repeated_hash_newest() {
+        let root = tempfile::tempdir().unwrap();
+        let first = state("first");
+        let second = state("second");
+        let third = state("third");
+        for candidate in [&first, &second, &first, &third] {
+            publish_root(root.path(), &candidate.0, &candidate.1, 2).unwrap();
+        }
+
+        let mut expected = vec![format!("{}.json", first.0), format!("{}.json", third.0)];
+        expected.sort();
+        assert_eq!(snapshot_files(root.path()), expected);
+        let index: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(root.path().join(layout::SNAPSHOT_INDEX)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(index["order"], serde_json::json!([first.0, third.0]));
+        assert_eq!(
+            load_snapshot(
+                &RepositoryFiles::open(root.path()).unwrap(),
+                &snapshots::SnapshotId::Latest
+            )
+            .unwrap(),
+            Some(third.1)
+        );
+        assert_eq!(
+            load_snapshot(
+                &RepositoryFiles::open(root.path()).unwrap(),
+                &snapshots::SnapshotId::Hash(second.0)
+            )
+            .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn retention_of_one_keeps_only_the_new_latest() {
+        let root = tempfile::tempdir().unwrap();
+        let first = state("first");
+        let second = state("second");
+        publish_root(root.path(), &first.0, &first.1, 20).unwrap();
+        publish_root(root.path(), &second.0, &second.1, 1).unwrap();
+
+        assert_eq!(
+            snapshot_files(root.path()),
+            vec![format!("{}.json", second.0)]
+        );
     }
 }

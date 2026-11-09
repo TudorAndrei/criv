@@ -2,26 +2,18 @@ mod document;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-#[cfg(test)]
-use std::sync::Arc;
-
-#[cfg(test)]
-use std::fs;
 
 use serde::Serialize;
 use usage_rs::{Args as UsageArgs, ValueEnum};
 
-use crate::diagnostic::{DiagnosticCode, LspRange, SourceLocation};
-#[cfg(test)]
-use crate::git::ChangedEntry;
+use crate::config::{CONFIG_FILE, Config};
+use crate::diagnostic::{self, Diagnostic, DiagnosticCode, LspRange, Severity, SourceLocation};
 use crate::git::{ChangeStatus, ChangedSet};
-use crate::identity::{is_adr_id, kebab};
-use crate::policy_scan::{PolicyDiagnostic, PolicyDiagnosticKind, PolicyScanPlan};
+use crate::identity::{adr_filename, is_adr_id, parse_adr_id, parse_adr_stem, slug};
+use crate::markdown::LinkTarget;
+use crate::policy_scan::PolicyScanPlan;
 use crate::repository::RepositoryFiles;
-use crate::vault::{
-    Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault, is_typed_source_target,
-    source_target_body,
-};
+use crate::vault::{LoadOptions, Note, NoteKind, ResolvedLink, SourceTargetResolution, Vault};
 use crate::{CrivError, Result};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -42,23 +34,6 @@ pub struct CheckOptions {
     changed: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Severity {
-    Error,
-    Warning,
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub struct Diagnostic {
-    severity: Severity,
-    code: DiagnosticCode,
-    path: String,
-    line: Option<usize>,
-    message: String,
-    location: Option<SourceLocation>,
-}
-
 #[derive(Serialize)]
 struct JsonDiagnostic<'a> {
     severity: Severity,
@@ -71,37 +46,22 @@ struct JsonDiagnostic<'a> {
     fix: &'static str,
 }
 
-impl Diagnostic {
-    pub(crate) const fn is_error(&self) -> bool {
-        matches!(self.severity, Severity::Error)
-    }
-
-    pub(crate) const fn is_warning(&self) -> bool {
-        matches!(self.severity, Severity::Warning)
-    }
-
-    pub(crate) fn describe(&self) -> String {
-        self.line.map_or_else(
-            || format!("{}: {}", self.path, self.message),
-            |line| format!("{}:{line}: {}", self.path, self.message),
-        )
-    }
-
-    fn json(&self) -> JsonDiagnostic<'_> {
-        JsonDiagnostic {
-            severity: self.severity,
-            code: self.code,
-            path: &self.path,
-            line: self.line,
-            message: &self.message,
-            range: self.location.as_ref().and_then(SourceLocation::lsp_range),
-            fix: self.code.fix(),
+impl<'a> JsonDiagnostic<'a> {
+    fn new(diagnostic: &'a Diagnostic) -> Self {
+        Self {
+            severity: diagnostic.severity(),
+            code: diagnostic.code(),
+            path: diagnostic.path(),
+            line: diagnostic.line(),
+            message: diagnostic.message(),
+            range: diagnostic.location().and_then(SourceLocation::lsp_range),
+            fix: diagnostic.code().fix(),
         }
     }
 }
 
 pub fn run(root: &Path, options: &CheckOptions) -> Result<()> {
-    let files = RepositoryFiles::open_vault(root)?;
+    let files = crate::config::open_vault(root)?;
     let mut diagnostics = if options.changed {
         validate_changed(&files)?
     } else {
@@ -110,30 +70,19 @@ pub fn run(root: &Path, options: &CheckOptions) -> Result<()> {
 
     if let Some(filter) = &options.filter {
         diagnostics.retain(|diag| {
-            diag.path.contains(filter)
-                || diag.message.contains(filter)
-                || diag.code.as_str().contains(filter)
+            diag.path().contains(filter)
+                || diag.message().contains(filter)
+                || diag.code().as_str().contains(filter)
         });
     }
 
     match options.format {
         Format::Text => {
             print_text(&diagnostics);
-            let stale_skills = if options.changed {
-                Vec::new()
-            } else {
-                crate::install::skill_inventory_from(&files).advisory_outdated_paths()
-            };
-            if !stale_skills.is_empty() {
-                let subject = if stale_skills.len() == 1 {
-                    "skill is"
-                } else {
-                    "skills are"
-                };
-                println!(
-                    "note: {} agent {subject} out of date; run `criv init --force-skills`",
-                    stale_skills.len()
-                );
+            if !options.changed
+                && let Some(advisory) = crate::install::outdated_skills_advisory(&files)
+            {
+                println!("{advisory}");
             }
         }
         Format::Json => print_json(&diagnostics)?,
@@ -154,75 +103,46 @@ pub fn run(root: &Path, options: &CheckOptions) -> Result<()> {
 }
 
 pub fn validate_all_from(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
-    let mut diagnostics = Vec::new();
-    let vault = Vault::load_from(files)?;
-    let policy_plan = PolicyScanPlan::new(&vault);
-    diagnostics.extend(validate_vault(&vault, &policy_plan));
-    diagnostics.extend(
-        policy_plan
-            .scan(&vault, None)?
-            .into_iter()
-            .map(|violation| {
-                error_with_location(
-                    DiagnosticCode::PolicyViolation,
-                    &violation.path,
-                    Some(violation.line),
-                    violation.location,
-                    format!(
-                        "{} policy `{}` matched `{}`",
-                        violation.adr_id, violation.pattern_id, violation.text
-                    ),
-                )
-            }),
-    );
+    validate_all(&Vault::load(files, LoadOptions::default())?)
+}
 
+fn validate_all(vault: &Vault) -> Result<Vec<Diagnostic>> {
+    let Validation {
+        mut diagnostics,
+        policies,
+    } = validate_vault(vault);
+    diagnostics.extend(policies.scan(vault, None)?);
+    diagnostic::sort(&mut diagnostics);
     Ok(diagnostics)
 }
 
 fn validate_changed(files: &RepositoryFiles) -> Result<Vec<Diagnostic>> {
-    let root = files.root();
-    let changes = crate::git::staged_changes(root)?;
+    let changes = crate::git::GitRepository::open(files.root())?
+        .changed_set(&crate::git::Comparison::Staged, &[])?;
     if changes.entries.is_empty() {
         return Ok(Vec::new());
     }
 
-    let config = crate::config::Config::load_from(files)?;
-    if changed_scope_requires_full_check(&changes, &config.adr_prefix()) {
-        return validate_all_from(files);
-    }
-
-    let changed_paths = changes
-        .affected_paths()
-        .into_iter()
-        .collect::<BTreeSet<_>>();
-    let mut diagnostics = Vec::new();
-    let vault = Vault::load_from(files)?;
-    let policy_plan = PolicyScanPlan::new(&vault);
-    diagnostics.extend(validate_changed_vault(&vault, &policy_plan, &changed_paths));
-    diagnostics.extend(
-        policy_plan
-            .scan(&vault, Some(&changed_paths))?
-            .into_iter()
-            .map(|violation| {
-                error_with_location(
-                    DiagnosticCode::PolicyViolation,
-                    &violation.path,
-                    Some(violation.line),
-                    violation.location,
-                    format!(
-                        "{} policy `{}` matched `{}`",
-                        violation.adr_id, violation.pattern_id, violation.text
-                    ),
-                )
-            }),
-    );
-    diagnostics.sort_by(|a, b| {
-        (&a.path, a.line.unwrap_or(0), a.code).cmp(&(&b.path, b.line.unwrap_or(0), b.code))
-    });
+    let vault = Vault::load(files, LoadOptions::default())?;
+    let Some(changed_paths) = changed_scope(&changes, vault.config()) else {
+        return validate_all(&vault);
+    };
+    let Validation {
+        mut diagnostics,
+        policies,
+    } = validate_changed_vault(&vault, &changed_paths);
+    diagnostics.extend(policies.scan(&vault, Some(&changed_paths))?);
+    diagnostic::sort(&mut diagnostics);
     Ok(diagnostics)
 }
 
-const SCOPE_INVALIDATING_CONFIG_FILES: [&str; 1] = ["criv.toml"];
+/// The paths a check of `changes` may be limited to, or `None` when the
+/// change can alter what a full check finds beyond its own paths: a deletion
+/// or rename, a decision, or the configuration.
+pub fn changed_scope(changes: &ChangedSet, config: &Config) -> Option<BTreeSet<String>> {
+    (!changed_scope_requires_full_check(changes, &config.adr_prefix()))
+        .then(|| changes.affected_paths())
+}
 
 fn changed_scope_requires_full_check(changes: &ChangedSet, adr_prefix: &str) -> bool {
     changes.entries.iter().any(|entry| {
@@ -234,116 +154,61 @@ fn changed_scope_requires_full_check(changes: &ChangedSet, adr_prefix: &str) -> 
             entry.previous_path.as_ref().unwrap_or(&entry.path),
         ]
         .into_iter()
-        .any(|path| {
-            SCOPE_INVALIDATING_CONFIG_FILES.contains(&path.as_str()) || path.starts_with(adr_prefix)
-        })
+        .any(|path| path == CONFIG_FILE || path.starts_with(adr_prefix))
     })
 }
 
-#[cfg(test)]
-fn validate(vault: &Vault) -> Vec<Diagnostic> {
-    let policy_plan = PolicyScanPlan::new(vault);
-    validate_vault(vault, &policy_plan)
+/// The vault diagnostics and the policy plan they were checked with, which
+/// the caller reuses to scan for violations or to publish State.
+pub struct Validation {
+    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) policies: PolicyScanPlan,
 }
 
-pub fn validate_vault(vault: &Vault, policy_plan: &PolicyScanPlan) -> Vec<Diagnostic> {
+pub fn validate_vault(vault: &Vault) -> Validation {
+    let policies = PolicyScanPlan::new(vault);
     let mut diagnostics = Vec::new();
     validate_notes(vault, &mut diagnostics);
-    diagnostics.extend(
-        policy_plan
-            .definition_diagnostics()
-            .iter()
-            .map(policy_diagnostic),
-    );
-    validate_pattern_collisions(vault, &mut diagnostics);
+    diagnostics.extend_from_slice(policies.definition_diagnostics());
     validate_links(vault, &mut diagnostics);
     validate_supersession(vault, &mut diagnostics);
-    diagnostics.sort_by(|a, b| {
-        (&a.path, a.line.unwrap_or(0), a.code).cmp(&(&b.path, b.line.unwrap_or(0), b.code))
-    });
-    diagnostics
+    diagnostic::sort(&mut diagnostics);
+    Validation {
+        diagnostics,
+        policies,
+    }
 }
 
-fn validate_changed_vault(
-    vault: &Vault,
-    policy_plan: &PolicyScanPlan,
-    changed_paths: &BTreeSet<String>,
-) -> Vec<Diagnostic> {
+fn validate_changed_vault(vault: &Vault, changed_paths: &BTreeSet<String>) -> Validation {
+    let policies = PolicyScanPlan::new(vault);
     let mut diagnostics = Vec::new();
-    let adr_prefix = vault.config.adr_prefix();
-    let adr_readme = format!("{adr_prefix}README.md");
-
     for note in vault
-        .notes
+        .notes()
         .iter()
-        .filter(|note| changed_paths.contains(&note.rel_path))
+        .filter(|note| changed_paths.contains(note.rel_path()))
     {
-        validate_note_local(vault, note, &adr_prefix, &adr_readme, &mut diagnostics);
+        validate_note_local(vault, note, &mut diagnostics);
         validate_note_links(vault, note, &mut diagnostics);
     }
     diagnostics.extend(
-        policy_plan
+        policies
             .definition_diagnostics()
             .iter()
-            .filter(|diagnostic| changed_paths.contains(&diagnostic.path))
-            .map(policy_diagnostic),
+            .filter(|diagnostic| changed_paths.contains(diagnostic.path()))
+            .cloned(),
     );
-    diagnostics.sort_by(|a, b| {
-        (&a.path, a.line.unwrap_or(0), a.code).cmp(&(&b.path, b.line.unwrap_or(0), b.code))
-    });
-    diagnostics
-}
-
-fn policy_diagnostic(diagnostic: &PolicyDiagnostic) -> Diagnostic {
-    let (code, message) = match &diagnostic.kind {
-        PolicyDiagnosticKind::MissingId => (
-            DiagnosticCode::MissingPolicyPatternId,
-            "policy pattern must declare an id".to_string(),
-        ),
-        PolicyDiagnosticKind::EmptyId => (
-            DiagnosticCode::EmptyPolicyPattern,
-            "policy pattern id may not be empty".to_string(),
-        ),
-        PolicyDiagnosticKind::DuplicateId { id } => (
-            DiagnosticCode::DuplicatePolicyPattern,
-            format!("policy pattern id `{id}` is declared more than once"),
-        ),
-        PolicyDiagnosticKind::MissingDefinition { id } => (
-            DiagnosticCode::MissingPolicyPatternDefinition,
-            format!("policy pattern `{id}` must declare language and pattern or rule"),
-        ),
-        PolicyDiagnosticKind::MissingLanguage { id } => (
-            DiagnosticCode::MissingPolicyPatternLanguage,
-            format!("inline policy pattern `{id}` must declare a language"),
-        ),
-        PolicyDiagnosticKind::AmbiguousBody { id } => (
-            DiagnosticCode::AmbiguousPolicyPatternBody,
-            format!("inline policy pattern `{id}` must declare either pattern or rule, not both"),
-        ),
-        PolicyDiagnosticKind::MissingBody { id } => (
-            DiagnosticCode::MissingPolicyPatternBody,
-            format!("inline policy pattern `{id}` must declare pattern or rule"),
-        ),
-        PolicyDiagnosticKind::InvalidPattern { id, error } => (
-            DiagnosticCode::InvalidPolicyPattern,
-            format!("inline policy pattern `{id}` does not compile: {error}"),
-        ),
-        PolicyDiagnosticKind::InvalidRule { id, error } => (
-            DiagnosticCode::InvalidPolicyPattern,
-            format!("inline policy rule `{id}` does not compile: {error}"),
-        ),
-    };
-    error(code, &diagnostic.path, Some(diagnostic.line), message)
+    diagnostic::sort(&mut diagnostics);
+    Validation {
+        diagnostics,
+        policies,
+    }
 }
 
 fn validate_notes(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
     let mut ids: BTreeMap<&str, Vec<&Note>> = BTreeMap::new();
-    let adr_prefix = vault.config.adr_prefix();
-    let adr_readme = format!("{adr_prefix}README.md");
-
-    for note in &vault.notes {
-        validate_note_local(vault, note, &adr_prefix, &adr_readme, diagnostics);
-        if let Some(id) = &note.id {
+    for note in vault.notes() {
+        validate_note_local(vault, note, diagnostics);
+        if let Some(id) = note.id() {
             ids.entry(id).or_default().push(note);
         }
     }
@@ -351,9 +216,9 @@ fn validate_notes(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
     for (id, notes) in ids {
         if notes.len() > 1 {
             for note in notes {
-                diagnostics.push(error(
+                diagnostics.push(Diagnostic::error(
                     DiagnosticCode::DuplicateId,
-                    &note.rel_path,
+                    note.rel_path(),
                     None,
                     format!("duplicate note id `{id}`"),
                 ));
@@ -362,48 +227,45 @@ fn validate_notes(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
     }
 }
 
-fn validate_note_local(
-    vault: &Vault,
-    note: &Note,
-    adr_prefix: &str,
-    adr_readme: &str,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    if let Some(err) = &note.frontmatter_error {
-        diagnostics.push(error_with_location(
-            DiagnosticCode::InvalidFrontmatter,
-            &note.rel_path,
-            None,
-            note.frontmatter_error_location.clone(),
-            err.clone(),
-        ));
+fn validate_note_local(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
+    if let Some(err) = note.frontmatter_error() {
+        diagnostics.push(
+            Diagnostic::error(
+                DiagnosticCode::InvalidFrontmatter,
+                note.rel_path(),
+                None,
+                err,
+            )
+            .at(note.frontmatter_error_location().cloned()),
+        );
+        return;
     }
 
-    if note.id.as_deref().is_none_or(|id| id.trim().is_empty()) {
-        diagnostics.push(error(
+    if note.id().is_none_or(|id| id.trim().is_empty()) {
+        diagnostics.push(Diagnostic::error(
             DiagnosticCode::MissingId,
-            &note.rel_path,
+            note.rel_path(),
             None,
             "note is missing required frontmatter `id`",
         ));
     }
 
-    match note.kind {
+    match note.kind() {
         NoteKind::Doc | NoteKind::Decision => {}
-        NoteKind::Unknown => diagnostics.push(error(
+        NoteKind::Unknown => diagnostics.push(Diagnostic::error(
             DiagnosticCode::InvalidKind,
-            &note.rel_path,
+            note.rel_path(),
             None,
             "note frontmatter `kind` must be `doc` or `decision`",
         )),
     }
 
-    if note.kind == NoteKind::Decision {
-        validate_decision_note(vault, note, adr_prefix, diagnostics);
-    } else if note.rel_path.starts_with(adr_prefix) && note.rel_path != adr_readme {
-        diagnostics.push(error(
+    if note.kind() == NoteKind::Decision {
+        validate_decision_note(vault, note, diagnostics);
+    } else if vault.config().is_adr_path(note.rel_path()) {
+        diagnostics.push(Diagnostic::error(
             DiagnosticCode::AdrDirNonDecision,
-            &note.rel_path,
+            note.rel_path(),
             None,
             "ADR directory may contain only `kind: decision` notes plus README.md",
         ));
@@ -413,85 +275,84 @@ fn validate_note_local(
     validate_targets(vault, note, diagnostics);
 }
 
-fn validate_decision_note(
-    vault: &Vault,
-    note: &Note,
-    adr_prefix: &str,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    let adr_id = note.id.as_deref().filter(|id| is_adr_id(id));
+fn validate_decision_note(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
+    let adr_id = note.id().filter(|id| is_adr_id(id));
     if adr_id.is_none() {
-        diagnostics.push(error(
+        diagnostics.push(Diagnostic::error(
             DiagnosticCode::InvalidAdrId,
-            &note.rel_path,
+            note.rel_path(),
             None,
             "decision id must match ADR-NNNN",
         ));
     }
 
-    if !note.rel_path.starts_with(adr_prefix) {
-        diagnostics.push(error(
+    let config = vault.config();
+    if !note.rel_path().starts_with(&config.adr_prefix()) {
+        diagnostics.push(Diagnostic::error(
             DiagnosticCode::DecisionLocation,
-            &note.rel_path,
+            note.rel_path(),
             None,
             format!(
                 "decision notes must live under {}/{}",
-                vault.config.docs_dir, vault.config.adr_dir
+                config.docs_dir(),
+                config.adr_dir()
             ),
         ));
     }
 
-    if let Some(filename) = note.path.file_name().map(|value| value.to_string_lossy())
-        && let Some(id) = adr_id
+    let title_slug = note.title().map(slug).unwrap_or_default();
+    if let Some(number) = adr_id.and_then(parse_adr_id)
+        && !title_slug.is_empty()
+        && !note
+            .path()
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .and_then(parse_adr_stem)
+            .is_some_and(|(stem_number, stem_slug)| stem_number == number && stem_slug.is_some())
     {
-        let Some(suffix) = id.get(4..) else {
-            return;
-        };
-        let expected_prefix = format!("{suffix}-");
-        let title_kebab = note.title.as_deref().map(kebab).unwrap_or_default();
-        let title_matches = title_kebab.is_empty()
-            || filename == format!("{suffix}-{title_kebab}.md")
-            || filename.starts_with(&expected_prefix);
-
-        if !title_matches {
-            diagnostics.push(error(
-                DiagnosticCode::AdrFilename,
-                &note.rel_path,
-                None,
-                format!(
-                    "ADR filename should start with `{expected_prefix}` and follow NNNN-kebab-case-title.md"
-                ),
-            ));
-        }
+        diagnostics.push(Diagnostic::error(
+            DiagnosticCode::AdrFilename,
+            note.rel_path(),
+            None,
+            format!(
+                "ADR filename should follow NNNN-kebab-case-title.md, as in `{}`",
+                adr_filename(number, &title_slug)
+            ),
+        ));
     }
 }
 
 fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
     if !vault.is_historical_decision(note) {
-        for target in &note.targets_symbols {
-            match vault.resolve_source_target(target) {
-                SourceTargetResolution::Resolved { .. } => {
-                    warn_legacy_source_target(
-                        vault,
-                        diagnostics,
-                        &note.rel_path,
-                        None,
-                        target,
-                        "target symbol",
-                    );
+        for target in note.targets_symbols() {
+            let link = LinkTarget::parse(target);
+            match vault.resolve_source_target(link) {
+                SourceTargetResolution::Resolved { path, .. } => {
+                    if let Some(canonical) = vault.canonical_source_target(link, &path)
+                        && (link.is_source() || link.source_body() != canonical)
+                    {
+                        diagnostics.push(Diagnostic::warning(
+                            DiagnosticCode::LegacySourceTarget,
+                            note.rel_path(),
+                            None,
+                            format!(
+                                "target symbol `{target}` is a legacy source target; use AST-aware source selector `{canonical}`"
+                            ),
+                        ));
+                    }
                 }
                 SourceTargetResolution::MissingFile => {
-                    diagnostics.push(error(
+                    diagnostics.push(Diagnostic::error(
                         DiagnosticCode::UnresolvedTarget,
-                        &note.rel_path,
+                        note.rel_path(),
                         None,
                         format!("target symbol `{target}` does not resolve to a source file"),
                     ));
                 }
                 SourceTargetResolution::MissingFragment { path } => {
-                    diagnostics.push(error(
+                    diagnostics.push(Diagnostic::error(
                         DiagnosticCode::UnresolvedTarget,
-                        &note.rel_path,
+                        note.rel_path(),
                         None,
                         format!(
                             "target symbol `{target}` resolves to `{path}` but does not resolve to a source symbol"
@@ -502,251 +363,201 @@ fn validate_targets(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic
         }
     }
 
-    for pattern in &note.target_pattern_refs {
+    for pattern in note.target_pattern_refs() {
         if vault.resolve_policy_pattern(&pattern.id).is_none() {
-            diagnostics.push(error(
+            diagnostics.push(Diagnostic::error(
                 DiagnosticCode::UnresolvedPattern,
-                &note.rel_path,
+                note.rel_path(),
                 Some(pattern.line),
                 format!("pattern reference `{}` does not resolve", pattern.id),
             ));
         }
     }
 
-    let mut doc_local_patterns = BTreeSet::new();
-    for pattern in &note.target_pattern_ids {
-        if !doc_local_patterns.insert(pattern) {
-            diagnostics.push(error(
-                DiagnosticCode::DuplicateDocPattern,
-                &note.rel_path,
-                None,
-                format!("doc-local pattern id `{pattern}` is declared more than once"),
-            ));
-        }
-    }
-
     if !vault.is_historical_decision(note) {
-        for (scope, has_match) in note
-            .targets_scope
+        for (scope, selection) in note
+            .targets_scope()
             .iter()
-            .zip(vault.source_globs_have_matches(&note.targets_scope))
+            .zip(vault.source_files_per_glob(note.targets_scope()))
         {
-            if !has_match {
-                diagnostics.push(warning(
+            match selection {
+                Ok(files) if files.is_empty() => diagnostics.push(Diagnostic::warning(
                     DiagnosticCode::EmptyTargetScope,
-                    &note.rel_path,
+                    note.rel_path(),
                     None,
                     format!("target scope `{scope}` matches no source files"),
-                ));
+                )),
+                Ok(_) => {}
+                Err(error) => diagnostics.push(invalid_glob(note, "target scope", scope, &error)),
             }
         }
 
-        for governs in unresolved_governs(vault, note) {
-            diagnostics.push(error(
-                DiagnosticCode::UnresolvedGoverns,
-                &note.rel_path,
-                None,
-                format!("governs glob `{governs}` matches no source files"),
-            ));
-        }
+        diagnostics.extend(unresolved_governs(vault, note));
     }
 }
 
-fn unresolved_governs(vault: &Vault, note: &Note) -> Vec<String> {
-    let governs = Vault::effective_governs(note);
+fn unresolved_governs(vault: &Vault, note: &Note) -> Vec<Diagnostic> {
+    let governs = note.effective_governs();
     governs
         .iter()
-        .zip(vault.source_globs_have_matches(&governs))
-        .filter(|(_, has_match)| !has_match)
-        .map(|(governs, _)| governs.clone())
+        .zip(vault.source_files_per_glob(&governs))
+        .filter_map(|(governs, selection)| match selection {
+            Ok(files) if files.is_empty() => Some(Diagnostic::error(
+                DiagnosticCode::UnresolvedGoverns,
+                note.rel_path(),
+                None,
+                format!("governs glob `{governs}` matches no source files"),
+            )),
+            Ok(_) => None,
+            Err(error) => Some(invalid_glob(note, "governs glob", governs, &error)),
+        })
         .collect()
 }
 
-pub fn publication_blocking_diagnostics(vault: &Vault) -> Vec<Diagnostic> {
+fn invalid_glob(note: &Note, label: &str, glob: &str, error: &str) -> Diagnostic {
+    Diagnostic::error(
+        DiagnosticCode::InvalidGlob,
+        note.rel_path(),
+        None,
+        format!("{label} `{glob}` is not a valid glob: {error}"),
+    )
+}
+
+/// The State publication gate. Unresolved effective governance blocks
+/// publication before any policy work; otherwise the full validation, whose
+/// policy plan State publishes.
+pub fn validate_for_publication(vault: &Vault) -> Result<Validation> {
+    let blockers = publication_blocking_diagnostics(vault);
+    if !blockers.is_empty() {
+        return Err(CrivError::new(format!(
+            "state publication blocked by unresolved effective ADR governance:\n{}",
+            blockers
+                .iter()
+                .map(Diagnostic::describe)
+                .collect::<Vec<_>>()
+                .join("\n")
+        )));
+    }
+    Ok(validate_vault(vault))
+}
+
+fn publication_blocking_diagnostics(vault: &Vault) -> Vec<Diagnostic> {
     let mut diagnostics = vault
-        .notes
+        .notes()
         .iter()
         .filter(|note| vault.is_effective_decision(note))
-        .flat_map(|note| {
-            unresolved_governs(vault, note).into_iter().map(|governs| {
-                error(
-                    DiagnosticCode::UnresolvedGoverns,
-                    &note.rel_path,
-                    None,
-                    format!("governs glob `{governs}` matches no source files"),
-                )
-            })
-        })
+        .flat_map(|note| unresolved_governs(vault, note))
         .collect::<Vec<_>>();
-    diagnostics.sort_by(|a, b| (&a.path, a.code).cmp(&(&b.path, b.code)));
+    diagnostic::sort(&mut diagnostics);
     diagnostics
 }
 
-fn validate_pattern_collisions(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
-    let mut declarations: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for note in &vault.notes {
-        for pattern in &note.target_pattern_ids {
-            declarations
-                .entry(pattern.clone())
-                .or_default()
-                .push(note.rel_path.clone());
-        }
-        if let Some(id) = &note.id {
-            for pattern in &note.policy_patterns {
-                if let Some(pattern_id) = pattern.id.as_deref() {
-                    declarations
-                        .entry(format!("{id}/{pattern_id}"))
-                        .or_default()
-                        .push(note.rel_path.clone());
-                }
-            }
-        }
-    }
-
-    for (pattern, locations) in declarations {
-        if locations.len() <= 1 {
-            continue;
-        }
-        for location in &locations {
-            diagnostics.push(error(
-                DiagnosticCode::DuplicatePatternId,
-                location,
-                None,
-                format!(
-                    "pattern id `{pattern}` is declared in multiple places: {}",
-                    locations.join(", ")
-                ),
-            ));
-        }
-    }
-}
-
 fn validate_links(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
-    for note in &vault.notes {
+    for note in vault.notes() {
         validate_note_links(vault, note, diagnostics);
     }
 }
 
 fn validate_note_links(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
-    for link in &note.wiki_links {
-        match vault.resolve_link(&link.target) {
-            ResolvedLink::Broken => diagnostics.push(error_with_location(
-                DiagnosticCode::BrokenLink,
-                &note.rel_path,
-                Some(link.line),
-                link.location.clone(),
-                format!("wiki-link `[[{}]]` does not resolve", link.raw),
-            )),
+    for link in note.wiki_links() {
+        match vault.resolve_link(link.target()) {
+            ResolvedLink::Broken => diagnostics.push(
+                Diagnostic::error(
+                    DiagnosticCode::BrokenLink,
+                    note.rel_path(),
+                    Some(link.line),
+                    format!("wiki-link `[[{}]]` does not resolve", link.raw),
+                )
+                .at(link.location.clone()),
+            ),
             ResolvedLink::Source { path, ambiguous } => {
                 let suggestion = vault
-                    .canonical_source_target_for_path(&link.target, &path)
+                    .canonical_source_target(link.target(), &path)
                     .map(|target| {
                         format!("; use AST-aware source selector `{target}` for code references")
                     })
                     .unwrap_or_default();
-                diagnostics.push(warning_with_location(
+                diagnostics.push(
+                    Diagnostic::warning(
                         DiagnosticCode::SourceWikilink,
-                        &note.rel_path,
+                        note.rel_path(),
                         Some(link.line),
-                        link.location.clone(),
                         format!(
                             "wiki-link `[[{}]]` targets source `{path}`; Wikilinks are reserved for document references{suggestion}",
                             link.raw
                         ),
-                    ));
+                    )
+                    .at(link.location.clone()),
+                );
                 if ambiguous {
-                    diagnostics.push(warning_with_location(
-                        DiagnosticCode::AmbiguousSourceLink,
-                        &note.rel_path,
-                        Some(link.line),
-                        link.location.clone(),
-                        format!(
-                            "wiki-link `[[{}]]` resolves ambiguously; first match is `{path}`",
-                            link.raw
-                        ),
-                    ));
+                    diagnostics.push(
+                        Diagnostic::warning(
+                            DiagnosticCode::AmbiguousSourceLink,
+                            note.rel_path(),
+                            Some(link.line),
+                            format!(
+                                "wiki-link `[[{}]]` resolves ambiguously; first match is `{path}`",
+                                link.raw
+                            ),
+                        )
+                        .at(link.location.clone()),
+                    );
                 }
             }
             ResolvedLink::Pattern { .. } => {}
-            ResolvedLink::Note { .. } => {
-                if !vault.is_file_backed_note_target(&link.target) {
-                    let suggestion = vault
-                        .portable_note_target(&link.target)
+            ResolvedLink::Note {
+                file_backed,
+                portable,
+                ..
+            } => {
+                if !file_backed {
+                    let suggestion = portable
                         .map(|target| format!("; use `[[{target}]]` instead"))
                         .unwrap_or_default();
-                    diagnostics.push(error_with_location(
+                    diagnostics.push(
+                        Diagnostic::error(
                             DiagnosticCode::NonPortableNoteLink,
-                            &note.rel_path,
+                            note.rel_path(),
                             Some(link.line),
-                            link.location.clone(),
                             format!(
                                 "wiki-link `[[{}]]` resolves through note metadata but does not target an existing markdown file{suggestion}",
                                 link.raw
                             ),
-                        ));
+                        )
+                        .at(link.location.clone()),
+                    );
                 }
             }
         }
     }
 }
 
-fn warn_legacy_source_target(
-    vault: &Vault,
-    diagnostics: &mut Vec<Diagnostic>,
-    path: &str,
-    line: Option<usize>,
-    target: &str,
-    label: &str,
-) {
-    let Some(canonical) = vault.canonical_source_target(target) else {
-        return;
-    };
-    let normalized = source_target_body(target);
-    if is_typed_source_target(target) || normalized != canonical {
-        diagnostics.push(warning(
-            DiagnosticCode::LegacySourceTarget,
-            path,
-            line,
-            format!(
-                "{label} `{target}` is a legacy source target; use AST-aware source selector `{canonical}`"
-            ),
-        ));
-    }
-}
-
 fn validate_supersession(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
-    let decisions = vault
-        .notes
-        .iter()
-        .filter(|note| note.kind == NoteKind::Decision)
-        .filter_map(|note| note.id.as_deref().map(|id| (id, note)))
-        .collect::<BTreeMap<_, _>>();
-
-    for (id, note) in &decisions {
-        for old_id in &note.supersedes {
-            if !decisions.contains_key(old_id.as_str()) {
-                diagnostics.push(error(
+    for (id, note) in vault.decisions() {
+        for old_id in note.supersedes() {
+            if vault.decision(old_id).is_none() {
+                diagnostics.push(Diagnostic::error(
                     DiagnosticCode::UnknownSupersedes,
-                    &note.rel_path,
+                    note.rel_path(),
                     None,
                     format!("supersedes references unknown decision `{old_id}`"),
                 ));
             }
         }
 
-        for new_id in &note.superseded_by {
-            match decisions.get(new_id.as_str()) {
-                None => diagnostics.push(error(
+        for new_id in note.superseded_by() {
+            match vault.decision(new_id) {
+                None => diagnostics.push(Diagnostic::error(
                     DiagnosticCode::UnknownSupersededBy,
-                    &note.rel_path,
+                    note.rel_path(),
                     None,
                     format!("superseded_by references unknown decision `{new_id}`"),
                 )),
                 Some(new_note) => {
-                    if !new_note.supersedes.iter().any(|value| value == id) {
-                        diagnostics.push(error(
+                    if !new_note.supersedes().iter().any(|value| value == id) {
+                        diagnostics.push(Diagnostic::error(
                             DiagnosticCode::InconsistentSupersession,
-                            &note.rel_path,
+                            note.rel_path(),
                             None,
                             format!("`{new_id}` must list `{id}` in supersedes"),
                         ));
@@ -756,51 +567,50 @@ fn validate_supersession(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
         }
     }
 
-    for cycle in supersession_cycles(&decisions) {
-        diagnostics.push(error(
+    for (path, cycle) in supersession_cycles(vault) {
+        diagnostics.push(Diagnostic::error(
             DiagnosticCode::SupersessionCycle,
-            decisions
-                .get(cycle.first().map_or("", String::as_str))
-                .map_or("docs", |note| note.rel_path.as_str()),
+            path,
             None,
             format!("supersession chain is cyclic: {}", cycle.join(" -> ")),
         ));
     }
 }
 
-fn supersession_cycles(decisions: &BTreeMap<&str, &Note>) -> Vec<Vec<String>> {
+/// Each supersession cycle, with the path of the decision it starts at.
+fn supersession_cycles(vault: &Vault) -> Vec<(&str, Vec<&str>)> {
     let mut cycles = Vec::new();
-    for id in decisions.keys() {
+    for (id, note) in vault.decisions() {
         let mut seen = BTreeSet::new();
         let mut stack = Vec::new();
-        visit_supersession(id, decisions, &mut seen, &mut stack, &mut cycles);
+        visit_supersession(vault, (id, note), &mut seen, &mut stack, &mut cycles);
     }
     cycles.sort();
     cycles.dedup();
     cycles
 }
 
-fn visit_supersession(
-    id: &str,
-    decisions: &BTreeMap<&str, &Note>,
-    seen: &mut BTreeSet<String>,
-    stack: &mut Vec<String>,
-    cycles: &mut Vec<Vec<String>>,
+fn visit_supersession<'a>(
+    vault: &'a Vault,
+    (id, note): (&'a str, &'a Note),
+    seen: &mut BTreeSet<&'a str>,
+    stack: &mut Vec<&'a str>,
+    cycles: &mut Vec<(&'a str, Vec<&'a str>)>,
 ) {
-    if let Some(position) = stack.iter().position(|value| value == id) {
-        let mut cycle = stack.get(position..).unwrap_or_default().to_vec();
-        cycle.push(id.to_string());
-        cycles.push(cycle);
+    if let Some(position) = stack.iter().position(|value| *value == id) {
+        let mut ids = stack.get(position..).unwrap_or_default().to_vec();
+        ids.push(id);
+        cycles.push((note.rel_path(), ids));
         return;
     }
-    if !seen.insert(id.to_string()) {
+    if !seen.insert(id) {
         return;
     }
 
-    stack.push(id.to_string());
-    if let Some(note) = decisions.get(id) {
-        for next in &note.supersedes {
-            visit_supersession(next, decisions, seen, stack, cycles);
+    stack.push(id);
+    for next in note.supersedes() {
+        if let Some(next_note) = vault.decision(next) {
+            visit_supersession(vault, (next.as_str(), next_note), seen, stack, cycles);
         }
     }
     stack.pop();
@@ -809,7 +619,7 @@ fn visit_supersession(
 fn next_command(diagnostics: &[Diagnostic]) -> &'static str {
     if diagnostics
         .iter()
-        .any(|diag| diag.is_error() && diag.code == DiagnosticCode::UnresolvedTarget)
+        .any(|diag| diag.is_error() && diag.code() == DiagnosticCode::UnresolvedTarget)
     {
         return "criv watch --once";
     }
@@ -823,24 +633,21 @@ fn print_text(diagnostics: &[Diagnostic]) {
     }
 
     for diag in diagnostics {
-        let severity = match diag.severity {
-            Severity::Error => "error",
-            Severity::Warning => "warning",
-        };
-        if let Some(line) = diag.line {
-            println!(
-                "{severity}[{}] {}:{line}: {}",
-                diag.code, diag.path, diag.message
-            );
-        } else {
-            println!("{severity}[{}] {}: {}", diag.code, diag.path, diag.message);
-        }
-        println!("  fix: {}", diag.code.fix());
+        println!(
+            "{}[{}] {}",
+            diag.severity().as_str(),
+            diag.code(),
+            diag.describe()
+        );
+        println!("  fix: {}", diag.code().fix());
     }
 }
 
 fn print_json(diagnostics: &[Diagnostic]) -> Result<()> {
-    let diagnostics = diagnostics.iter().map(Diagnostic::json).collect::<Vec<_>>();
+    let diagnostics = diagnostics
+        .iter()
+        .map(JsonDiagnostic::new)
+        .collect::<Vec<_>>();
     let json = serde_json::to_string_pretty(&diagnostics)
         .map_err(|err| CrivError::new(format!("failed to serialize check diagnostics: {err}")))?;
     println!("{json}");
@@ -854,17 +661,12 @@ fn print_github(diagnostics: &[Diagnostic]) {
 }
 
 fn github_annotation(diag: &Diagnostic) -> String {
-    let command = match diag.severity {
-        Severity::Error => "error",
-        Severity::Warning => "warning",
-    };
     let location = diag
-        .location
-        .as_ref()
+        .location()
         .and_then(SourceLocation::github_location)
         .map_or_else(
             || {
-                diag.line
+                diag.line()
                     .map(|line| format!(",line={line}"))
                     .unwrap_or_default()
             },
@@ -877,11 +679,12 @@ fn github_annotation(diag: &Diagnostic) -> String {
             },
         );
     format!(
-        "::{command} file={}{},title={}::{}",
-        escape_github_property(&diag.path),
+        "::{} file={}{},title={}::{}",
+        diag.severity().as_str(),
+        escape_github_property(diag.path()),
         location,
-        escape_github_property(&format!("criv {}", diag.code)),
-        escape_github_message(&diag.message)
+        escape_github_property(&format!("criv {}", diag.code())),
+        escape_github_message(diag.message())
     )
 }
 
@@ -898,74 +701,23 @@ fn escape_github_property(value: &str) -> String {
         .replace(',', "%2C")
 }
 
-fn error(
-    code: DiagnosticCode,
-    path: &str,
-    line: Option<usize>,
-    message: impl Into<String>,
-) -> Diagnostic {
-    error_with_location(code, path, line, None, message)
-}
-
-fn error_with_location(
-    code: DiagnosticCode,
-    path: &str,
-    line: Option<usize>,
-    location: Option<SourceLocation>,
-    message: impl Into<String>,
-) -> Diagnostic {
-    let line = location.as_ref().and_then(SourceLocation::line).or(line);
-    Diagnostic {
-        severity: Severity::Error,
-        code,
-        path: path.into(),
-        line,
-        message: message.into(),
-        location,
-    }
-}
-
-fn warning(
-    code: DiagnosticCode,
-    path: &str,
-    line: Option<usize>,
-    message: impl Into<String>,
-) -> Diagnostic {
-    warning_with_location(code, path, line, None, message)
-}
-
-fn warning_with_location(
-    code: DiagnosticCode,
-    path: &str,
-    line: Option<usize>,
-    location: Option<SourceLocation>,
-    message: impl Into<String>,
-) -> Diagnostic {
-    let line = location.as_ref().and_then(SourceLocation::line).or(line);
-    Diagnostic {
-        severity: Severity::Warning,
-        code,
-        path: path.into(),
-        line,
-        message: message.into(),
-        location,
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::sync::Arc;
+
     use super::*;
-    use crate::vault::WikiLink;
+    use crate::git::ChangedEntry;
 
     #[test]
     fn next_command_names_the_repair_criv_can_run() {
-        let stale = vec![error(
+        let stale = vec![Diagnostic::error(
             DiagnosticCode::UnresolvedTarget,
             "docs/a.md",
             None,
             "stale",
         )];
-        let other = vec![error(
+        let other = vec![Diagnostic::error(
             DiagnosticCode::BrokenLink,
             "docs/a.md",
             None,
@@ -978,21 +730,47 @@ mod tests {
 
     #[test]
     fn json_diagnostics_carry_the_repair() {
-        let diagnostic = error(DiagnosticCode::DocumentFormat, "docs/a.md", None, "bad");
-        let json = serde_json::to_value(diagnostic.json()).expect("serialize");
+        let diagnostic =
+            Diagnostic::error(DiagnosticCode::DocumentFormat, "docs/a.md", None, "bad");
+        let json = serde_json::to_value(JsonDiagnostic::new(&diagnostic)).expect("serialize");
 
         assert_eq!(json["code"], "document-format");
-        assert_eq!(
-            json["fix"],
-            "Use required frontmatter and one H1 matching title; active ADRs require Context, Decision, and Consequences H2 sections."
+        assert!(json["fix"].as_str().is_some_and(|fix| !fix.is_empty()));
+    }
+
+    #[test]
+    fn json_diagnostics_match_the_editor_fixture() {
+        let source: Arc<str> = "# A\n\nSee [[missing]].\n".into();
+        let start = source.find("[[").unwrap();
+        let located = Diagnostic::error(
+            DiagnosticCode::BrokenLink,
+            "docs/a.md",
+            None,
+            "wiki-link `[[missing]]` does not resolve",
+        )
+        .at(SourceLocation::new(
+            Arc::clone(&source),
+            start..start + "[[missing]]".len(),
+        ));
+        let unlocated = Diagnostic::warning(
+            DiagnosticCode::SourceWikilink,
+            "docs/b.md",
+            None,
+            "wiki-link `[[src/lib.rs]]` targets source `src/lib.rs`; Wikilinks are reserved for document references",
         );
+
+        let output = serde_json::to_value([&located, &unlocated].map(JsonDiagnostic::new)).unwrap();
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/editor/check-diagnostics.v1.json"))
+                .unwrap();
+        assert_eq!(output, fixture);
     }
 
     fn changed_set_fixture(entries: Vec<ChangedEntry>) -> ChangedSet {
         ChangedSet {
             entries,
             old_ref: Some("HEAD".into()),
-            new_ref: Some(":".into()),
+            new: Some(crate::git::Revision::Index),
             basis: "test".into(),
         }
     }
@@ -1007,7 +785,7 @@ mod tests {
             path: path.into(),
             previous_path: previous_path.map(str::to_string),
             old_ref: Some("HEAD".into()),
-            new_ref: Some(":".into()),
+            new: crate::git::Revision::Index,
         }
     }
 
@@ -1038,29 +816,13 @@ mod tests {
     }
 
     #[test]
-    fn affected_paths_include_both_sides_of_a_rename() {
-        let changes = changed_set_fixture(vec![changed_entry(
-            ChangeStatus::Renamed,
-            "docs/new.md",
-            Some("docs/old.md"),
-        )]);
-
-        assert_eq!(
-            changes.affected_paths(),
-            vec!["docs/new.md".to_string(), "docs/old.md".to_string()]
-        );
-    }
-
-    #[test]
     fn github_annotation_escapes_workflow_command_data() {
-        let diag = Diagnostic {
-            severity: Severity::Error,
-            code: DiagnosticCode::BrokenLink,
-            path: "docs/a,b:guide.md".into(),
-            line: Some(7),
-            message: "bad % link\r\ntry again".into(),
-            location: None,
-        };
+        let diag = Diagnostic::error(
+            DiagnosticCode::BrokenLink,
+            "docs/a,b:guide.md",
+            Some(7),
+            "bad % link\r\ntry again",
+        );
 
         assert_eq!(
             github_annotation(&diag),
@@ -1070,20 +832,18 @@ mod tests {
 
     #[test]
     fn github_annotation_omits_missing_line() {
-        let diag = Diagnostic {
-            severity: Severity::Warning,
-            code: DiagnosticCode::MissingId,
-            path: "docs/note.md".into(),
-            line: None,
-            message: "missing id".into(),
-            location: None,
-        };
+        let diag = Diagnostic::warning(
+            DiagnosticCode::MissingId,
+            "docs/note.md",
+            None,
+            "missing id",
+        );
 
         assert_eq!(
             github_annotation(&diag),
             "::warning file=docs/note.md,title=criv missing-id::missing id"
         );
-        let json = serde_json::to_value(diag.json()).unwrap();
+        let json = serde_json::to_value(JsonDiagnostic::new(&diag)).unwrap();
         assert!(json["line"].is_null());
         assert!(json.get("range").is_none());
     }
@@ -1092,15 +852,15 @@ mod tests {
     fn exact_diagnostics_serialize_lsp_ranges_and_github_columns() {
         let source: Arc<str> = Arc::from("é😀bad\n");
         let location = SourceLocation::new(source, 2..6);
-        let diagnostic = error_with_location(
+        let diagnostic = Diagnostic::error(
             DiagnosticCode::DocumentFormat,
             "docs/unicode.md",
             Some(1),
-            location,
             "bad emoji",
-        );
+        )
+        .at(location);
 
-        let json = serde_json::to_value(diagnostic.json()).unwrap();
+        let json = serde_json::to_value(JsonDiagnostic::new(&diagnostic)).unwrap();
         assert_eq!(
             json["range"],
             serde_json::json!({
@@ -1116,15 +876,15 @@ mod tests {
 
     #[test]
     fn invalid_exact_locations_keep_the_line_only_shape() {
-        let diagnostic = error_with_location(
+        let diagnostic = Diagnostic::error(
             DiagnosticCode::DocumentFormat,
             "docs/invalid.md",
             Some(1),
-            SourceLocation::new(Arc::from("short\n"), 20..21),
             "invalid range",
-        );
+        )
+        .at(SourceLocation::new(Arc::from("short\n"), 20..21));
 
-        let json = serde_json::to_value(diagnostic.json()).unwrap();
+        let json = serde_json::to_value(JsonDiagnostic::new(&diagnostic)).unwrap();
         assert!(json.get("range").is_none());
         assert_eq!(
             github_annotation(&diagnostic),
@@ -1136,13 +896,13 @@ mod tests {
     fn multiline_github_annotations_use_lines_without_unsupported_columns() {
         let source: Arc<str> = Arc::from("first\nsecond\n");
         let location = SourceLocation::new(source, 2..9).unwrap();
-        let diagnostic = error_with_location(
+        let diagnostic = Diagnostic::error(
             DiagnosticCode::BrokenLink,
             "docs/multi.md",
             None,
-            Some(location),
             "crosses lines",
-        );
+        )
+        .at(Some(location));
 
         assert_eq!(
             github_annotation(&diagnostic),
@@ -1151,184 +911,207 @@ mod tests {
     }
 
     #[test]
-    fn cycles_are_detected() {
-        let mut a = empty_decision("ADR-0001");
-        let mut b = empty_decision("ADR-0002");
-        a.supersedes.push("ADR-0002".into());
-        b.supersedes.push("ADR-0001".into());
-        let decisions = BTreeMap::from([("ADR-0001", &a), ("ADR-0002", &b)]);
-        assert!(!supersession_cycles(&decisions).is_empty());
+    fn a_supersession_cycle_is_reported() {
+        let (_root, vault) = decisions_vault(&[
+            (
+                "0001-a.md",
+                &decision("ADR-0001", "supersedes: [ADR-0002]", ""),
+            ),
+            (
+                "0002-b.md",
+                &decision("ADR-0002", "supersedes: [ADR-0001]", ""),
+            ),
+        ]);
+
+        let cycles = validate(&vault)
+            .into_iter()
+            .filter(|diag| diag.code() == DiagnosticCode::SupersessionCycle)
+            .collect::<Vec<_>>();
+
+        assert!(!cycles.is_empty());
     }
 
     #[test]
     fn supersedes_does_not_require_old_adr_backlink() {
-        let mut old = empty_decision("ADR-0001");
-        let mut new = empty_decision("ADR-0002");
-        new.supersedes.push("ADR-0001".into());
-        let vault = test_vault(vec![old.clone(), new]);
+        let old = decision("ADR-0001", "", "");
+        let (_root, vault) = decisions_vault(&[
+            ("0001-old.md", &old),
+            (
+                "0002-new.md",
+                &decision("ADR-0002", "supersedes: [ADR-0001]", ""),
+            ),
+        ]);
 
-        let diagnostics = validate(&vault);
-
-        assert!(
-            diagnostics
-                .iter()
-                .all(|diag| diag.code != DiagnosticCode::InconsistentSupersession)
-        );
-        old.superseded_by.push("ADR-0003".into());
-        let vault = test_vault(vec![old]);
         assert!(
             validate(&vault)
                 .iter()
-                .any(|diag| diag.code == DiagnosticCode::UnknownSupersededBy)
+                .all(|diag| diag.code() != DiagnosticCode::InconsistentSupersession)
+        );
+        let (_root, vault) = decisions_vault(&[(
+            "0001-old.md",
+            &decision("ADR-0001", "superseded_by: [ADR-0003]", ""),
+        )]);
+        assert!(
+            validate(&vault)
+                .iter()
+                .any(|diag| diag.code() == DiagnosticCode::UnknownSupersededBy)
         );
     }
 
     #[test]
     fn metadata_only_note_links_are_non_portable() {
-        let target = decision_note("ADR-0001", "docs/adr/0001-local-cli-vault-architecture.md");
-        let mut source = decision_note("ADR-0002", "docs/adr/0002-context.md");
-        source.wiki_links.push(wiki_link("ADR-0001"));
-        let vault = test_vault(vec![target, source]);
-
-        let diagnostics = validate(&vault);
+        let (_root, vault) = decisions_vault(&[
+            (
+                "0001-local-cli-vault-architecture.md",
+                &decision("ADR-0001", "", ""),
+            ),
+            ("0002-context.md", &decision("ADR-0002", "", "[[ADR-0001]]")),
+        ]);
 
         assert!(
-            diagnostics
+            validate(&vault)
                 .iter()
-                .any(|diag| diag.code == DiagnosticCode::NonPortableNoteLink)
+                .any(|diag| diag.code() == DiagnosticCode::NonPortableNoteLink)
         );
     }
 
     #[test]
     fn file_backed_note_links_are_portable() {
-        let target = decision_note("ADR-0001", "docs/adr/0001-local-cli-vault-architecture.md");
-        let mut source = decision_note("ADR-0002", "docs/adr/0002-context.md");
-        source
-            .wiki_links
-            .push(wiki_link("0001-local-cli-vault-architecture|ADR-0001"));
-        let vault = test_vault(vec![target, source]);
-
-        let diagnostics = validate(&vault);
+        let (_root, vault) = decisions_vault(&[
+            (
+                "0001-local-cli-vault-architecture.md",
+                &decision("ADR-0001", "", ""),
+            ),
+            (
+                "0002-context.md",
+                &decision(
+                    "ADR-0002",
+                    "",
+                    "[[0001-local-cli-vault-architecture|ADR-0001]]",
+                ),
+            ),
+        ]);
 
         assert!(
-            diagnostics
+            validate(&vault)
                 .iter()
-                .all(|diag| diag.code != DiagnosticCode::NonPortableNoteLink)
+                .all(|diag| diag.code() != DiagnosticCode::NonPortableNoteLink)
         );
     }
 
     #[test]
     fn source_wikilinks_are_reported_as_document_portability_issues() {
-        let vault = source_note_vault("[[src/main.rs#fn:run]]", &[]);
+        let (_root, vault) = source_note_vault("[[src/main.rs#fn:run]]", &[]);
 
         let diagnostics = validate(&vault);
 
         assert!(diagnostics.iter().any(|diag| {
-            diag.code == DiagnosticCode::SourceWikilink
+            diag.code() == DiagnosticCode::SourceWikilink
                 && diag
-                    .message
+                    .message()
                     .contains("AST-aware source selector `src/main.rs#fn:run`")
         }));
         assert!(
             diagnostics
                 .iter()
-                .all(|diag| diag.code != DiagnosticCode::BrokenLink)
+                .all(|diag| diag.code() != DiagnosticCode::BrokenLink)
         );
     }
 
     #[test]
     fn adr_0033_source_wikilinks_remain_compatible_but_warn() {
-        let vault = source_note_vault("[[source:src/main.rs#run]]", &[]);
+        let (_root, vault) = source_note_vault("[[source:src/main.rs#run]]", &[]);
 
         let diagnostics = validate(&vault);
 
         assert!(diagnostics.iter().any(|diag| {
-            diag.code == DiagnosticCode::SourceWikilink
+            diag.code() == DiagnosticCode::SourceWikilink
                 && diag
-                    .message
+                    .message()
                     .contains("AST-aware source selector `src/main.rs#fn:run`")
         }));
         assert!(
             diagnostics
                 .iter()
-                .all(|diag| diag.code != DiagnosticCode::BrokenLink)
+                .all(|diag| diag.code() != DiagnosticCode::BrokenLink)
         );
     }
 
     #[test]
     fn typed_source_wikilinks_with_missing_fragments_remain_broken() {
-        let vault = source_note_vault("[[source:src/main.rs#missing]]", &[]);
+        let (_root, vault) = source_note_vault("[[source:src/main.rs#missing]]", &[]);
 
         let diagnostics = validate(&vault);
 
         assert!(
             diagnostics
                 .iter()
-                .any(|diag| diag.code == DiagnosticCode::BrokenLink)
+                .any(|diag| diag.code() == DiagnosticCode::BrokenLink)
         );
         assert!(
             diagnostics
                 .iter()
-                .all(|diag| diag.code != DiagnosticCode::SourceWikilink)
+                .all(|diag| diag.code() != DiagnosticCode::SourceWikilink)
         );
     }
 
     #[test]
     fn ambiguous_legacy_source_wikilinks_retain_both_diagnostics() {
-        let vault = source_note_vault("[[shared.rs]]", &[]);
+        let (_root, vault) = source_note_vault("[[shared.rs]]", &[]);
 
         let diagnostics = validate(&vault);
 
         assert!(
             diagnostics
                 .iter()
-                .any(|diag| diag.code == DiagnosticCode::SourceWikilink),
+                .any(|diag| diag.code() == DiagnosticCode::SourceWikilink),
             "{diagnostics:#?}"
         );
         assert!(
             diagnostics
                 .iter()
-                .any(|diag| diag.code == DiagnosticCode::AmbiguousSourceLink
-                    && diag.message.contains("first match is `")),
+                .any(|diag| diag.code() == DiagnosticCode::AmbiguousSourceLink
+                    && diag.message().contains("first match is `")),
             "{diagnostics:#?}"
         );
         assert!(
             diagnostics
                 .iter()
-                .all(|diag| diag.code != DiagnosticCode::BrokenLink)
+                .all(|diag| diag.code() != DiagnosticCode::BrokenLink)
         );
     }
 
     #[test]
     fn legacy_target_symbols_suggest_ast_aware_selectors() {
-        let vault = source_note_vault("", &["src/main.rs#run"]);
+        let (_root, vault) = source_note_vault("", &["src/main.rs#run"]);
 
         let diagnostics = validate(&vault);
 
         assert!(diagnostics.iter().any(|diag| {
-            diag.code == DiagnosticCode::LegacySourceTarget
+            diag.code() == DiagnosticCode::LegacySourceTarget
                 && diag
-                    .message
+                    .message()
                     .contains("AST-aware source selector `src/main.rs#fn:run`")
         }));
     }
 
     #[test]
     fn canonical_ast_aware_target_symbols_do_not_warn() {
-        let vault = source_note_vault("", &["src/main.rs#fn:run"]);
+        let (_root, vault) = source_note_vault("", &["src/main.rs#fn:run"]);
 
         let diagnostics = validate(&vault);
 
         assert!(
             diagnostics
                 .iter()
-                .all(|diag| diag.code != DiagnosticCode::LegacySourceTarget)
+                .all(|diag| diag.code() != DiagnosticCode::LegacySourceTarget)
         );
     }
 
     #[test]
     fn ast_aware_governs_selectors_resolve() {
-        let root = unique_temp_dir("criv-governs-selector-check");
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path();
         fs::create_dir_all(root.join("src")).unwrap();
         fs::create_dir_all(root.join("docs/adr")).unwrap();
         fs::write(
@@ -1355,20 +1138,88 @@ governs:
 "#,
         )
         .unwrap();
-        let vault = Vault::load(&root).unwrap();
+        let vault = load(root);
 
         let diagnostics = validate(&vault);
 
         assert!(
             diagnostics
                 .iter()
-                .all(|diag| diag.code != DiagnosticCode::UnresolvedGoverns)
+                .all(|diag| diag.code() != DiagnosticCode::UnresolvedGoverns)
         );
     }
 
     #[test]
+    fn invalid_frontmatter_is_the_only_metadata_diagnostic_of_its_note() {
+        let (_root, vault) =
+            decisions_vault(&[("0001-broken.md", "---\nid: [unclosed\n---\n\n# Broken\n")]);
+
+        let codes = validate(&vault)
+            .iter()
+            .map(Diagnostic::code)
+            .collect::<Vec<_>>();
+
+        assert_eq!(codes, [DiagnosticCode::InvalidFrontmatter]);
+    }
+
+    #[test]
+    fn pattern_id_collisions_are_reported_across_notes_only() {
+        let policy = "policy:\n  patterns:\n    - id: same\n      language: rust\n      pattern: \"fn $NAME() {}\"\n    - id: same\n      language: rust\n      pattern: \"fn $NAME() {}\"";
+        let (_root, vault) = decisions_vault(&[
+            ("0001-a.md", &decision("ADR-0001", policy, "")),
+            ("0001-b.md", &decision("ADR-0001", policy, "")),
+        ]);
+
+        let collisions = validate(&vault)
+            .into_iter()
+            .filter(|diag| diag.code() == DiagnosticCode::DuplicatePatternId)
+            .map(|diag| (diag.path().to_string(), diag.message().to_string()))
+            .collect::<Vec<_>>();
+
+        let message = "pattern id `ADR-0001/same` is declared in multiple notes: docs/adr/0001-a.md, docs/adr/0001-b.md";
+        assert_eq!(
+            collisions,
+            [
+                ("docs/adr/0001-a.md".to_string(), message.to_string()),
+                ("docs/adr/0001-b.md".to_string(), message.to_string()),
+            ]
+        );
+
+        let (_root, vault) = decisions_vault(&[("0001-a.md", &decision("ADR-0001", policy, ""))]);
+        assert!(
+            validate(&vault)
+                .iter()
+                .all(|diag| diag.code() != DiagnosticCode::DuplicatePatternId)
+        );
+    }
+
+    #[test]
+    fn an_invalid_governs_glob_is_reported_as_invalid_not_unmatched() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("docs/adr")).unwrap();
+        fs::write(root.join("criv.toml"), "[source]\nroots = [\"src\"]\n").unwrap();
+        fs::write(root.join("src/main.rs"), "fn run() {}\n").unwrap();
+        fs::write(
+            root.join("docs/adr/0001-invalid-glob.md"),
+            "---\nid: ADR-0001\nkind: decision\ntitle: Invalid Glob\nstatus: accepted\ngoverns:\n  - \"src/[\"\n---\n\n# Invalid Glob\n",
+        )
+        .unwrap();
+
+        let codes = validate(&load(root))
+            .iter()
+            .map(Diagnostic::code)
+            .collect::<Vec<_>>();
+
+        assert!(codes.contains(&DiagnosticCode::InvalidGlob));
+        assert!(!codes.contains(&DiagnosticCode::UnresolvedGoverns));
+    }
+
+    #[test]
     fn historical_accepted_adrs_do_not_require_current_source_bindings() {
-        let root = unique_temp_dir("criv-historical-source-bindings");
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path();
         fs::create_dir_all(root.join("src")).unwrap();
         fs::create_dir_all(root.join("docs/adr")).unwrap();
         fs::write(
@@ -1416,21 +1267,22 @@ governs:
 "#,
         )
         .unwrap();
-        let vault = Vault::load(&root).unwrap();
+        let vault = load(root);
 
         let diagnostics = validate(&vault);
 
         assert!(diagnostics.iter().all(|diagnostic| {
-            diagnostic.code != DiagnosticCode::UnresolvedGoverns
-                && diagnostic.code != DiagnosticCode::UnresolvedTarget
-                && diagnostic.code != DiagnosticCode::EmptyTargetScope
+            diagnostic.code() != DiagnosticCode::UnresolvedGoverns
+                && diagnostic.code() != DiagnosticCode::UnresolvedTarget
+                && diagnostic.code() != DiagnosticCode::EmptyTargetScope
         }));
         assert!(publication_blocking_diagnostics(&vault).is_empty());
     }
 
     #[test]
     fn draft_successor_does_not_suppress_active_governance_failure() {
-        let root = unique_temp_dir("criv-draft-successor-governance");
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path();
         fs::create_dir_all(root.join("src")).unwrap();
         fs::create_dir_all(root.join("docs/adr")).unwrap();
         fs::write(
@@ -1473,18 +1325,47 @@ governs:
 "#,
         )
         .unwrap();
-        let vault = Vault::load(&root).unwrap();
+        let vault = load(root);
 
         let blockers = publication_blocking_diagnostics(&vault);
 
         assert_eq!(blockers.len(), 1);
-        assert_eq!(blockers[0].code, DiagnosticCode::UnresolvedGoverns);
-        assert_eq!(blockers[0].path, "docs/adr/0001-old.md");
+        assert_eq!(blockers[0].code(), DiagnosticCode::UnresolvedGoverns);
+        assert_eq!(blockers[0].path(), "docs/adr/0001-old.md");
+    }
+
+    #[test]
+    fn check_compiles_each_policy_once_for_definitions_and_violations() {
+        let temp = tempfile::TempDir::new().unwrap();
+        crate::test_support::copy_fixture_tree(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/policy-scan/two-policies"),
+            temp.path(),
+        );
+        let files = RepositoryFiles::open(temp.path()).unwrap();
+        crate::work::reset();
+
+        let diagnostics = validate_all_from(&files).unwrap();
+
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|diag| diag.code() == DiagnosticCode::PolicyViolation)
+                .count(),
+            4
+        );
+        assert_eq!(
+            crate::work::counts([
+                crate::work::Work::PolicyCompilation,
+                crate::work::Work::AstParse
+            ]),
+            [2, 2]
+        );
     }
 
     #[test]
     fn broken_link_diagnostics_report_the_real_file_line() {
-        let root = unique_temp_dir("criv-broken-link-line");
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path();
         fs::create_dir_all(root.join("docs")).unwrap();
         let note = r#"---
 id: DOC-LINE
@@ -1496,9 +1377,9 @@ title: Line Check
 
 See [[does-not-exist]].
 "#;
-        fs::write(root.join("criv.toml"), "[source]\nindex = false\n").unwrap();
+        fs::write(root.join("criv.toml"), "[index]\nsource = false\n").unwrap();
         fs::write(root.join("docs/line-check.md"), note).unwrap();
-        let vault = Vault::load(&root).unwrap();
+        let vault = load(root);
 
         let diagnostics = validate(&vault);
 
@@ -1509,76 +1390,52 @@ See [[does-not-exist]].
             + 1;
         let broken = diagnostics
             .iter()
-            .find(|diag| diag.code == DiagnosticCode::BrokenLink)
+            .find(|diag| diag.code() == DiagnosticCode::BrokenLink)
             .expect("the dangling wiki link must be reported");
         assert_eq!(
-            broken.line,
+            broken.line(),
             Some(expected),
             "the diagnostic must point at the real file line, not a body-relative one"
         );
-
-        let _ = fs::remove_dir_all(root);
     }
 
-    fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
-        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "{prefix}-{}-{unique}-{counter}",
-            std::process::id()
-        ))
+    fn validate(vault: &Vault) -> Vec<Diagnostic> {
+        validate_vault(vault).diagnostics
     }
 
-    fn empty_decision(id: &str) -> Note {
-        Note {
-            path: id.into(),
-            rel_path: format!("adr/{id}.md"),
-            id: Some(id.into()),
-            kind: NoteKind::Decision,
-            title: None,
-            status: None,
-            body: String::new(),
-            headings: Vec::new(),
-            targets_symbols: Vec::new(),
-            targets_scope: Vec::new(),
-            target_pattern_refs: Vec::new(),
-            target_pattern_ids: Vec::new(),
-            policy_patterns: Vec::new(),
-            governs: Vec::new(),
-            supersedes: Vec::new(),
-            superseded_by: Vec::new(),
-            wiki_links: Vec::new(),
-            frontmatter_error: None,
-            frontmatter_error_location: None,
+    fn load(root: &Path) -> Vault {
+        Vault::load(
+            &RepositoryFiles::open(root).unwrap(),
+            LoadOptions::default(),
+        )
+        .unwrap()
+    }
+
+    fn decision(id: &str, frontmatter: &str, body: &str) -> String {
+        format!("---\nid: {id}\nkind: decision\nstatus: draft\n{frontmatter}\n---\n\n{body}\n")
+    }
+
+    /// A documents-only vault with each `(file name, contents)` under `docs/adr`.
+    fn decisions_vault(notes: &[(&str, &str)]) -> (tempfile::TempDir, Vault) {
+        let root = tempfile::TempDir::new().unwrap();
+        fs::create_dir_all(root.path().join("docs/adr")).unwrap();
+        for (name, contents) in notes {
+            fs::write(root.path().join("docs/adr").join(name), contents).unwrap();
         }
+        let vault = Vault::load(
+            &RepositoryFiles::open(root.path()).unwrap(),
+            LoadOptions {
+                source: crate::vault::SourceLoad::Skip,
+                ..LoadOptions::default()
+            },
+        )
+        .unwrap();
+        (root, vault)
     }
 
-    fn decision_note(id: &str, rel_path: &str) -> Note {
-        let mut note = empty_decision(id);
-        note.path = rel_path.into();
-        note.rel_path = rel_path.into();
-        note
-    }
-
-    fn wiki_link(target: &str) -> WikiLink {
-        WikiLink {
-            raw: target.into(),
-            target: target.into(),
-            line: 1,
-            location: None,
-        }
-    }
-
-    fn test_vault(notes: Vec<Note>) -> Vault {
-        Vault::from_parts_for_test(notes)
-    }
-
-    fn source_note_vault(body: &str, target_symbols: &[&str]) -> Vault {
-        let root = unique_temp_dir("criv-source-link-check");
+    fn source_note_vault(body: &str, target_symbols: &[&str]) -> (tempfile::TempDir, Vault) {
+        let temp = tempfile::TempDir::new().unwrap();
+        let root = temp.path();
         fs::create_dir_all(root.join("src")).unwrap();
         fs::create_dir_all(root.join("docs")).unwrap();
         fs::write(
@@ -1622,6 +1479,7 @@ title: Source Note
             ),
         )
         .unwrap();
-        Vault::load(&root).unwrap()
+        let vault = load(root);
+        (temp, vault)
     }
 }

@@ -165,20 +165,10 @@ jobs:
         run: npm run check:editor-contracts
 
       - name: Check Obsidian companion
-        run: |
-          npm audit --workspace criv-obsidian-plugin --audit-level=high
-          npm --prefix .obsidian/plugins/criv run format:check
-          npm --prefix .obsidian/plugins/criv run lint
-          npm --prefix .obsidian/plugins/criv test
-          npm --prefix .obsidian/plugins/criv run build:plugin
+        run: npm run check:obsidian
 
       - name: Check VS Code companion
-        run: |
-          npm audit --workspace vscode-criv --audit-level=high
-          npm --prefix extensions/vscode-criv run format:check
-          npm --prefix extensions/vscode-criv run lint
-          npm --prefix extensions/vscode-criv test
-          xvfb-run -a npm --prefix extensions/vscode-criv run test:integration
+        run: xvfb-run -a npm run check:vscode
 
       - name: Package VS Code companion
         run: npm --prefix extensions/vscode-criv run package

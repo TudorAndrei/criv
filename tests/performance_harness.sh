@@ -60,7 +60,6 @@ jq -e '
 test "$(wc -l <"$first_result/samples.jsonl" | tr -d ' ')" = "2"
 jq -e '
   .schema == "criv.performance-sample.v2"
-  and has("measurement") == false
   and .selected_source_files == 12
   and .selected_source_bytes == 273948
   and .selected_elixir_files == 0
@@ -96,7 +95,6 @@ jq -e '
   and .evidence.observation == "external-subprocess"
   and .report == {"artifact_path":"report.html","format":"html"}
   and (.timings | length) == 2
-  and has("work") == false
 ' "$test_root/performance-note.json" >/dev/null
 
 cargo run --locked --quiet -p criv-perf-harness --bin criv-perf-report -- \

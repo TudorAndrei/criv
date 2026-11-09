@@ -15,6 +15,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use criv_state_wire::{content_hash, layout};
 use serde::{Deserialize, Serialize};
 use usage_rs::{Cli, ValueEnum};
 
@@ -349,14 +350,14 @@ fn run(mut args: Args) -> Result<(), String> {
         started_at_utc,
         std::process::id()
     );
-    let run_id = blake3::hash(run_seed.as_bytes()).to_hex()[..16].to_string();
+    let run_id = content_hash::of_bytes(run_seed.as_bytes())[..16].to_string();
     let operating_system = command_text(Path::new("."), "uname", &["-sr"])
         .unwrap_or_else(|_| std::env::consts::OS.into());
     let architecture = std::env::consts::ARCH.to_string();
     let processor = processor_identity(Path::new("."));
     let rustc_verbose = command_text(Path::new("."), "rustc", &["--version", "--verbose"])
         .unwrap_or_else(|_| "unavailable".into());
-    let machine_digest = bytes_digest(
+    let machine_digest = content_hash::of_bytes(
         format!("{operating_system}\0{architecture}\0{processor}\0{rustc_verbose}").as_bytes(),
     );
     let run_identity = RunIdentity {
@@ -398,7 +399,7 @@ fn run(mut args: Args) -> Result<(), String> {
         args.minimum_free_gib,
         args.maximum_snapshot_allocation_gib,
     )?;
-    let snapshot_receipt_digest = bytes_digest(&snapshot_receipt);
+    let snapshot_receipt_digest = content_hash::of_bytes(&snapshot_receipt);
     write_json(result_dir.join("run.json"), &run_identity)?;
     let mut raw =
         BufWriter::new(File::create(result_dir.join("samples.jsonl")).map_err(display_error)?);
@@ -647,8 +648,8 @@ fn run_attempt(
             system_seconds: outcome.system_seconds,
             peak_rss_bytes: outcome.peak_rss_bytes,
             ready_rss_bytes: outcome.ready_rss_bytes,
-            stdout_digest: bytes_digest(&outcome.stdout),
-            stderr_digest: bytes_digest(&outcome.stderr),
+            stdout_digest: content_hash::of_bytes(&outcome.stdout),
+            stderr_digest: content_hash::of_bytes(&outcome.stderr),
             stdout_path: stdout_path.display().to_string(),
             stderr_path: stderr_path.display().to_string(),
             snapshot_receipt_digest: snapshot_receipt_digest.into(),
@@ -768,7 +769,7 @@ fn prepare_case(args: &Args, binary: &Path, root: &Path, case: Case) -> Result<(
 }
 
 fn remove_local_state(root: &Path) -> Result<(), String> {
-    let path = root.join(".criv");
+    let path = root.join(layout::DIR);
     match fs::remove_dir_all(&path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -822,7 +823,7 @@ fn execute_case(
     let staged_patch_digest = matches!(case, Case::CheckChangedSource | Case::CheckChangedMarkdown)
         .then(|| command_bytes(root, "git", &["diff", "--cached", "--binary"]))
         .transpose()?
-        .map(|bytes| bytes_digest(&bytes));
+        .map(|bytes| content_hash::of_bytes(&bytes));
     let start = Instant::now();
     let output = run_short(binary, root, command_args)?;
     let elapsed = start.elapsed().as_secs_f64();
@@ -1218,16 +1219,15 @@ fn read_state_identity(root: &Path) -> Result<StateIdentity, String> {
 }
 
 fn read_state_observation(root: &Path) -> Result<StateObservation, String> {
-    let criv_dir = root.join(".criv");
     for _ in 0..8 {
-        let latest_snapshot = fs::read_to_string(criv_dir.join("latest"))
+        let latest_snapshot = fs::read_to_string(root.join(layout::LATEST))
             .map_err(display_error)?
             .trim()
             .to_string();
-        let snapshot_path = criv_dir.join(format!("snapshots/{latest_snapshot}.json"));
+        let snapshot_path = root.join(layout::snapshot(&latest_snapshot));
         let snapshot_bytes = fs::read(&snapshot_path).map_err(display_error)?;
-        let state_bytes = fs::read(criv_dir.join("state.json")).map_err(display_error)?;
-        let confirmed_latest = fs::read_to_string(criv_dir.join("latest"))
+        let state_bytes = fs::read(root.join(layout::STATE)).map_err(display_error)?;
+        let confirmed_latest = fs::read_to_string(root.join(layout::LATEST))
             .map_err(display_error)?
             .trim()
             .to_string();
@@ -1265,9 +1265,9 @@ fn state_observation(
     let source_path_set = source_paths.iter().cloned().collect();
     let vault_markdown = sorted_unique(vault_markdown);
     let identity = StateIdentity {
-        state_digest: bytes_digest(&state_bytes),
-        snapshot_digest: Some(bytes_digest(&state_bytes)),
-        source_graph_digest: optional_file_digest(&root.join(".criv/source-graph.json")),
+        state_digest: content_hash::of_bytes(&state_bytes),
+        snapshot_digest: Some(content_hash::of_bytes(&state_bytes)),
+        source_graph_digest: optional_file_digest(&root.join(layout::SOURCE_GRAPH)),
         source_paths: source_paths.len(),
         source_path_digest: path_digest("source", &source_paths),
         vault_markdown_paths: vault_markdown.len(),
@@ -1771,17 +1771,15 @@ fn command_text(root: &Path, program: &str, args: &[&str]) -> Result<String, Str
 }
 
 fn optional_file_digest(path: &Path) -> Option<String> {
-    fs::read(path).ok().map(|bytes| bytes_digest(&bytes))
+    fs::read(path)
+        .ok()
+        .map(|bytes| content_hash::of_bytes(&bytes))
 }
 
 fn file_digest(path: &Path) -> Result<String, String> {
     fs::read(path)
-        .map(|bytes| bytes_digest(&bytes))
+        .map(|bytes| content_hash::of_bytes(&bytes))
         .map_err(display_error)
-}
-
-fn bytes_digest(bytes: &[u8]) -> String {
-    blake3::hash(bytes).to_hex().to_string()
 }
 
 fn unix_millis() -> u128 {
@@ -1861,8 +1859,8 @@ mod tests {
                 .unwrap()
                 .success()
         );
-        fs::create_dir(root.path().join(".criv")).unwrap();
-        fs::write(root.path().join(".criv/state.json"), "state\n").unwrap();
+        fs::create_dir(root.path().join(layout::DIR)).unwrap();
+        fs::write(root.path().join(layout::STATE), "state\n").unwrap();
         fs::write(
             root.path().join("src/criv_discovery_watch_probe.rs"),
             "probe\n",
@@ -1890,7 +1888,7 @@ mod tests {
         restore_snapshot(&args, root.path()).unwrap();
 
         assert_eq!(fs::read(root.path().join("src/file.rs")).unwrap(), original);
-        assert!(!root.path().join(".criv").exists());
+        assert!(!root.path().join(layout::DIR).exists());
         assert!(
             !root
                 .path()
@@ -1907,7 +1905,7 @@ mod tests {
     #[test]
     fn state_identity_separates_profile_paths() {
         let root = tempfile::TempDir::new().unwrap();
-        fs::create_dir_all(root.path().join(".criv/snapshots")).unwrap();
+        fs::create_dir_all(root.path().join(layout::SNAPSHOTS)).unwrap();
         let state = serde_json::json!({
             "source-index": [{"path": "src/lib.rs"}],
             "graph": {"nodes": [
@@ -1916,14 +1914,10 @@ mod tests {
             ]}
         });
         let bytes = serde_json::to_vec(&state).unwrap();
-        let snapshot = blake3::hash(&bytes).to_hex().to_string();
-        fs::write(root.path().join(".criv/state.json"), &bytes).unwrap();
-        fs::write(root.path().join(".criv/latest"), &snapshot).unwrap();
-        fs::write(
-            root.path().join(format!(".criv/snapshots/{snapshot}.json")),
-            &bytes,
-        )
-        .unwrap();
+        let snapshot = content_hash::of_bytes(&bytes);
+        fs::write(root.path().join(layout::STATE), &bytes).unwrap();
+        fs::write(root.path().join(layout::LATEST), &snapshot).unwrap();
+        fs::write(root.path().join(layout::snapshot(&snapshot)), &bytes).unwrap();
 
         let observation = read_state_observation(root.path()).unwrap();
         let identity = observation.identity;
