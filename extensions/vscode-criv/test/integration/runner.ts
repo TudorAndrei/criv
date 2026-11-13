@@ -38,7 +38,13 @@ async function assertNoManifestDiagnostics(relativePath: string): Promise<void> 
       preview: false,
     });
   }
-  await diagnosticsReported(control, "Expected VS Code to report the broken control manifest.");
+  assert.ok(
+    await diagnosticsSatisfy(control, (diagnostics) => diagnostics.length > 0),
+    "Expected VS Code to report the broken control manifest.",
+  );
+  // VS Code registers some built-in schemas after startup. The JSON service
+  // watches each one and validates again when it appears, so wait for that.
+  await diagnosticsSatisfy(manifest, (diagnostics) => !diagnostics.some(isPendingBuiltInSchema));
 
   const problems = vscode.languages
     .getDiagnostics(manifest)
@@ -50,21 +56,29 @@ async function assertNoManifestDiagnostics(relativePath: string): Promise<void> 
   assert.deepEqual(problems, [], "Expected VS Code manifest diagnostics to be clean.");
 }
 
-async function diagnosticsReported(uri: vscode.Uri, message: string): Promise<void> {
-  const reported = () => vscode.languages.getDiagnostics(uri).length > 0;
-  if (reported()) {
-    return;
+function isPendingBuiltInSchema(diagnostic: vscode.Diagnostic): boolean {
+  return diagnostic.message.startsWith("Unable to load schema from 'vscode://");
+}
+
+/** Resolve whether the diagnostics of `uri` satisfy `accept` within 30 seconds. */
+async function diagnosticsSatisfy(
+  uri: vscode.Uri,
+  accept: (diagnostics: readonly vscode.Diagnostic[]) => boolean,
+): Promise<boolean> {
+  const satisfied = () => accept(vscode.languages.getDiagnostics(uri));
+  if (satisfied()) {
+    return true;
   }
-  await new Promise<void>((resolve, reject) => {
+  return new Promise<boolean>((resolve) => {
     const timeout = setTimeout(() => {
       subscription.dispose();
-      reject(new assert.AssertionError({ message }));
+      resolve(false);
     }, 30_000);
     const subscription = vscode.languages.onDidChangeDiagnostics(() => {
-      if (reported()) {
+      if (satisfied()) {
         clearTimeout(timeout);
         subscription.dispose();
-        resolve();
+        resolve(true);
       }
     });
   });

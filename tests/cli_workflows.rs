@@ -2554,7 +2554,7 @@ fn long_running_watch_rebuilds_docs_sources_bursts_and_recovers() {
     });
 
     let last_good_state = fs::read_to_string(root.join(".criv/state.json")).unwrap();
-    fs::write(root.join("criv.toml"), "[source\nroots = [\"src\"]\n").unwrap();
+    replace_config(root, "[source\nroots = [\"src\"]\n");
     fs::write(
         root.join("src/lib.rs"),
         "pub fn invalid_config_change() {}\n",
@@ -2563,7 +2563,7 @@ fn long_running_watch_rebuilds_docs_sources_bursts_and_recovers() {
     assert_state_kept_after_rejection(&mut watch, root, &last_good_state, "a failed rebuild");
 
     fs::write(root.join("src/lib.rs"), "pub fn recovered() {}\n").unwrap();
-    fs::write(root.join("criv.toml"), config).unwrap();
+    replace_config(root, &config);
     assert_next_state_recovers(
         &mut watch,
         root,
@@ -3005,7 +3005,15 @@ fn write_criv_config_with_docs(
         [enforce]
         stages = ["commit", "push", "ci"]
     };
-    fs::write(root.join("criv.toml"), config.to_string()).unwrap();
+    replace_config(root, &config.to_string());
+}
+
+/// Replaces `criv.toml` in one rename. A plain write truncates the file first,
+/// and a running watch can read that empty file as the valid default config.
+fn replace_config(root: &Path, contents: &str) {
+    let staged = root.join("criv.toml.tmp");
+    fs::write(&staged, contents).unwrap();
+    fs::rename(staged, root.join("criv.toml")).unwrap();
 }
 
 fn source_governance_adr(governs: &str) -> String {
