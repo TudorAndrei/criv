@@ -20,8 +20,12 @@ The CLI is the reference for commands and flags, as
 
 | Key    | Type   | Default | Meaning                                     |
 | ------ | ------ | ------- | ------------------------------------------- |
-| `docs` | string | `docs`  | The directory that holds vault notes.       |
+| `docs` | string | `docs`  | The parent directory of the ADR folder.     |
 | `adr`  | string | `adr`   | The decision directory, relative to `docs`. |
+
+criv selects documents only from `docs/adr` with the defaults above. General
+documents elsewhere are outside criv validation and state. To use a
+repository-root `decisions/` folder, set `docs = "."` and `adr = "decisions"`.
 
 Both paths stay inside the repository. An absolute path or a `..` component is
 refused.

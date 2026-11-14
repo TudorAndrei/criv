@@ -63,8 +63,8 @@ changes.
 - Get the next number from `criv query next-adr-id`, never by guessing.
 - ADRs carry `governs:` path globs, and may carry inline `policy.patterns`
   ast-grep rules that `criv check` and `criv enforce` evaluate.
-- Everything under `docs/` is a criv vault note and needs frontmatter with at
-  least `id`, `kind`, and `title`, or `criv check` fails and blocks the commit.
+- Records under `docs/adr/` need frontmatter with `id`, `kind`, and `title`.
+  General documents outside the ADR folder are maintained separately.
 
 ## Use the project's vocabulary
 

@@ -461,6 +461,7 @@ fn validate_links(vault: &Vault, diagnostics: &mut Vec<Diagnostic>) {
 fn validate_note_links(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
     for link in note.wiki_links() {
         match vault.resolve_link(link.target()) {
+            ResolvedLink::Broken if vault.external_document_exists(link.target()) => {}
             ResolvedLink::Broken => diagnostics.push(
                 Diagnostic::error(
                     DiagnosticCode::BrokenLink,
@@ -1366,7 +1367,7 @@ governs:
     fn broken_link_diagnostics_report_the_real_file_line() {
         let temp = tempfile::TempDir::new().unwrap();
         let root = temp.path();
-        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::create_dir_all(root.join("docs/adr")).unwrap();
         let note = r#"---
 id: DOC-LINE
 kind: doc
@@ -1378,7 +1379,7 @@ title: Line Check
 See [[does-not-exist]].
 "#;
         fs::write(root.join("criv.toml"), "[index]\nsource = false\n").unwrap();
-        fs::write(root.join("docs/line-check.md"), note).unwrap();
+        fs::write(root.join("docs/adr/README.md"), note).unwrap();
         let vault = load(root);
 
         let diagnostics = validate(&vault);
@@ -1437,7 +1438,7 @@ See [[does-not-exist]].
         let temp = tempfile::TempDir::new().unwrap();
         let root = temp.path();
         fs::create_dir_all(root.join("src")).unwrap();
-        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::create_dir_all(root.join("docs/adr")).unwrap();
         fs::write(
             root.join("criv.toml"),
             r#"
@@ -1464,7 +1465,7 @@ roots = ["src"]
             )
         };
         fs::write(
-            root.join("docs/note.md"),
+            root.join("docs/adr/README.md"),
             format!(
                 r#"---
 id: source-note

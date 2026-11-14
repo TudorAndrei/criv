@@ -23,16 +23,16 @@ Feature: Validate staged documentation changes
       | json    | []\n             |
       | github  |                  |
 
-  Scenario: Report problems in a staged note but not in committed notes
+  Scenario: Check all decisions after a staged decision is added
     Given a committed vault
     And a committed note "unchanged-broken" that links to "missing-global"
     And a staged note "guide" that links to "missing-added"
     When I run criv check --changed --filter broken-link
     Then the command fails
-    And stdout contains "docs/guide.md"
-    And stdout does not contain "docs/unchanged-broken.md"
+    And stdout contains "docs/adr/0002-guide.md"
+    And stdout contains "docs/adr/0001-unchanged-broken.md"
 
-  Scenario: Report a problem in a staged edit of a committed note
+  Scenario: Check all decisions after a staged decision is edited
     Given a committed vault
     And a committed note "unchanged-broken" that links to "missing-global"
     And a committed note "guide" without links
@@ -40,7 +40,7 @@ Feature: Validate staged documentation changes
     When I run criv check --changed --format json
     Then the command fails
     And stdout contains "missing-modified"
-    And stdout does not contain "missing-global"
+    And stdout contains "missing-global"
 
   Scenario Outline: Validate the whole vault after a staged <change>
     Given a committed vault
@@ -49,7 +49,7 @@ Feature: Validate staged documentation changes
     And the note "change-me" is <change> and staged
     When I run criv check --changed --filter broken-link
     Then the command fails
-    And stdout contains "docs/unchanged-broken.md"
+    And stdout contains "docs/adr/0001-unchanged-broken.md"
 
     Examples:
       | change   |
@@ -58,6 +58,7 @@ Feature: Validate staged documentation changes
 
   Scenario: Check decision policies on staged sources
     Given a committed vault
+    And general documentation outside the ADR folder
     And a committed decision that forbids println in Rust sources
     And a staged Rust source that calls println
     When I run criv check --changed --filter policy-violation
