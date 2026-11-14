@@ -63,7 +63,7 @@ runs without a Git executable.
 
 The suite migrates vault-required command failures and the staged-validation
 flows from `tests/cli_workflows.rs`: staged checks outside Git, empty staged-scope
-output formats, staged notes, renames and deletions, staged-source policies, and
+output formats, ADR edits that require a full check, renames and deletions, staged-source policies, and
 the read-only staged check.
 Remaining workflow tests stay in place until migrated; this is not a claim that
 all CLI or editor behavior already has a Gherkin specification.
@@ -71,3 +71,7 @@ all CLI or editor behavior already has a Gherkin specification.
 This is development-time acceptance testing for criv itself. It adds no Gherkin
 parser, feature graph, or Cucumber runtime dependency to the shipped CLI and does
 not change the separate Concord integration described in the repository README.
+
+The ADR scope scenarios cover general documentation alongside decisions,
+external Markdown references, ADR heading validation, and initialization of a
+configured decision directory.

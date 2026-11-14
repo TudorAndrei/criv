@@ -149,22 +149,22 @@ mod tests {
 
     #[test]
     fn path_identity_is_domain_separated() {
-        let paths = ["docs/a.md".into()];
+        let paths = ["docs/adr/0001-a.md".into()];
         assert_ne!(path_digest("markdown", &paths), path_digest("c4", &paths));
     }
 
     #[test]
     fn probe_output_keeps_group_identities() {
         let root = tempfile::TempDir::new().unwrap();
-        fs::create_dir(root.path().join("docs")).unwrap();
-        fs::write(root.path().join("docs/a.md"), "# A\n").unwrap();
+        fs::create_dir_all(root.path().join("docs/adr")).unwrap();
+        fs::write(root.path().join("docs/adr/0001-a.md"), "# A\n").unwrap();
         fs::write(root.path().join("docs/b.md"), "# B\n").unwrap();
 
         let output = output(
             root.path(),
             "vault",
             vec![
-                ("markdown", vec!["docs/a.md".into()]),
+                ("markdown", vec!["docs/adr/0001-a.md".into()]),
                 ("other", vec!["docs/b.md".into()]),
             ],
             false,
@@ -179,12 +179,12 @@ mod tests {
     #[test]
     fn vault_profile_selects_markdown_through_criv() {
         let root = tempfile::TempDir::new().unwrap();
-        fs::create_dir(root.path().join("docs")).unwrap();
-        fs::write(root.path().join("docs/a.md"), "# A\n").unwrap();
+        fs::create_dir_all(root.path().join("docs/adr")).unwrap();
+        fs::write(root.path().join("docs/adr/0001-a.md"), "# A\n").unwrap();
 
         assert_eq!(
             criv::selection::vault_markdown(root.path()).unwrap(),
-            vec!["docs/a.md".to_string()]
+            vec!["docs/adr/0001-a.md".to_string()]
         );
     }
 }

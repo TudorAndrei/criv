@@ -202,3 +202,5 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0194-check-editor-companions-through-shared-scripts-and-fixtures|ADR-0194]] - Check editor companions through shared scripts and fixtures
 - [[0195-fallow-dead-code-and-duplication-analysis-for-typescript|ADR-0195]] - Fallow dead-code and duplication analysis for TypeScript
 - [[0196-bump-the-major-version-for-every-breaking-change|ADR-0196]] - Bump the major version for every breaking change
+
+- [[0197-limit-document-processing-to-the-adr-folder|ADR-0197]] - Limit document processing to the ADR folder

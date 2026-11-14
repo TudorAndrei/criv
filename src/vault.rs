@@ -332,7 +332,7 @@ impl Vault {
         let config = options
             .config
             .map_or_else(|| Config::load_from(files), Ok)?;
-        let discovered = discover_vault(root, config.docs_dir())?;
+        let discovered = discover_vault(root, &config.adr_root())?;
         let notes = discovered
             .markdown
             .iter()
@@ -426,6 +426,32 @@ impl Vault {
             .or_else(|| self.filenames.get(&key))
             .or_else(|| self.titles.get(&key))
             .and_then(|index| self.notes.get(*index))
+    }
+
+    /// External documentation is checked for existence, without reading its
+    /// frontmatter, headings, or links into the decision graph.
+    pub(crate) fn external_document_exists(&self, target: LinkTarget<'_>) -> bool {
+        if target.is_source()
+            || target.pattern_id().is_some()
+            || self.resolve_note(target.path()).is_some()
+            || self.resolve_source_path(target).is_some()
+        {
+            return false;
+        }
+        let path = Path::new(target.path());
+        let markdown = if path.extension().is_none() {
+            path.with_extension("md")
+        } else if path.extension().is_some_and(|extension| extension == "md") {
+            path.to_path_buf()
+        } else {
+            return false;
+        };
+        [Path::new(self.config.docs_dir()).join(&markdown), markdown]
+            .iter()
+            .any(|candidate| {
+                !candidate.starts_with(self.config.adr_root())
+                    && self.files.entry_kind(candidate) == crate::repository::EntryKind::File
+            })
     }
 
     pub(crate) const fn repository_files(&self) -> &RepositoryFiles {
@@ -965,17 +991,21 @@ mod tests {
     #[test]
     fn documentation_assets_are_verified_bounded_and_separate_from_source() {
         let root = tempfile::TempDir::new().unwrap();
-        std::fs::create_dir_all(root.path().join("docs/assets")).unwrap();
+        std::fs::create_dir_all(root.path().join("docs/adr/assets")).unwrap();
         let png = b"\x89PNG\r\n\x1a\npreview";
-        std::fs::write(root.path().join("docs/assets/b.png"), png).unwrap();
-        std::fs::write(root.path().join("docs/assets/a.png"), png).unwrap();
-        std::fs::write(root.path().join("docs/assets/wrong.jpg"), png).unwrap();
+        std::fs::write(root.path().join("docs/adr/assets/b.png"), png).unwrap();
+        std::fs::write(root.path().join("docs/adr/assets/a.png"), png).unwrap();
+        std::fs::write(root.path().join("docs/adr/assets/wrong.jpg"), png).unwrap();
         std::fs::write(
-            root.path().join("docs/assets/0-oversized.png"),
+            root.path().join("docs/adr/assets/0-oversized.png"),
             sized_png(asset::MAX_BYTES + 1),
         )
         .unwrap();
-        std::fs::write(root.path().join("docs/assets/active.svg"), b"<svg></svg>").unwrap();
+        std::fs::write(
+            root.path().join("docs/adr/assets/active.svg"),
+            b"<svg></svg>",
+        )
+        .unwrap();
 
         let vault = docs_only(root.path());
 
@@ -985,7 +1015,7 @@ mod tests {
                 .iter()
                 .map(|asset| asset.path.as_str())
                 .collect::<Vec<_>>(),
-            ["docs/assets/a.png", "docs/assets/b.png"]
+            ["docs/adr/assets/a.png", "docs/adr/assets/b.png"]
         );
         assert_eq!(assets[0].mime, "image/png");
         assert_eq!(assets[0].bytes, u64::try_from(png.len()).unwrap());
@@ -996,7 +1026,7 @@ mod tests {
     #[test]
     fn documentation_asset_total_bound_counts_verified_assets_and_stops_at_the_first_overflow() {
         let root = tempfile::TempDir::new().unwrap();
-        let assets = root.path().join("docs/assets");
+        let assets = root.path().join("docs/adr/assets");
         std::fs::create_dir_all(&assets).unwrap();
         let largest = sized_png(asset::MAX_BYTES);
         let fitting = asset::MAX_TOTAL_BYTES / asset::MAX_BYTES;
@@ -1018,7 +1048,7 @@ mod tests {
                 .map(|asset| asset.path.as_str())
                 .collect::<Vec<_>>(),
             (0..fitting)
-                .map(|index| format!("docs/assets/{index:02}.png"))
+                .map(|index| format!("docs/adr/assets/{index:02}.png"))
                 .collect::<Vec<_>>()
         );
     }
@@ -1033,19 +1063,22 @@ mod tests {
     #[test]
     fn documentation_assets_support_the_passive_format_set() {
         let root = tempfile::TempDir::new().unwrap();
-        std::fs::create_dir_all(root.path().join("docs")).unwrap();
+        std::fs::create_dir_all(root.path().join("docs/adr")).unwrap();
         for (path, contents) in [
-            ("docs/a.png", b"\x89PNG\r\n\x1a\npreview".as_slice()),
+            ("docs/adr/a.png", b"\x89PNG\r\n\x1a\npreview".as_slice()),
             (
-                "docs/b.jpg",
+                "docs/adr/b.jpg",
                 b"\xff\xd8\xff\xe0\x00\x10JFIF\x00preview".as_slice(),
             ),
-            ("docs/c.gif", b"GIF89a\x01\x00\x01\x00preview".as_slice()),
             (
-                "docs/d.webp",
+                "docs/adr/c.gif",
+                b"GIF89a\x01\x00\x01\x00preview".as_slice(),
+            ),
+            (
+                "docs/adr/d.webp",
                 b"RIFF\x10\x00\x00\x00WEBPVP8 preview".as_slice(),
             ),
-            ("docs/e.pdf", b"%PDF-1.7\npreview".as_slice()),
+            ("docs/adr/e.pdf", b"%PDF-1.7\npreview".as_slice()),
         ] {
             std::fs::write(root.path().join(path), contents).unwrap();
         }
@@ -1058,11 +1091,11 @@ mod tests {
                 .map(|asset| (asset.path.as_str(), asset.mime.as_str()))
                 .collect::<Vec<_>>(),
             [
-                ("docs/a.png", "image/png"),
-                ("docs/b.jpg", "image/jpeg"),
-                ("docs/c.gif", "image/gif"),
-                ("docs/d.webp", "image/webp"),
-                ("docs/e.pdf", "application/pdf"),
+                ("docs/adr/a.png", "image/png"),
+                ("docs/adr/b.jpg", "image/jpeg"),
+                ("docs/adr/c.gif", "image/gif"),
+                ("docs/adr/d.webp", "image/webp"),
+                ("docs/adr/e.pdf", "application/pdf"),
             ]
         );
     }
@@ -1070,8 +1103,8 @@ mod tests {
     #[test]
     fn documentation_asset_hash_changes_for_same_size_content() {
         let root = tempfile::TempDir::new().unwrap();
-        std::fs::create_dir_all(root.path().join("docs")).unwrap();
-        let path = root.path().join("docs/preview.png");
+        std::fs::create_dir_all(root.path().join("docs/adr")).unwrap();
+        let path = root.path().join("docs/adr/preview.png");
         std::fs::write(&path, b"\x89PNG\r\n\x1a\na").unwrap();
         let before = docs_only(root.path());
         let before_hash = before.documentation_assets()[0].hash.clone();
@@ -1317,7 +1350,7 @@ roots = ["src"]
         std::fs::write(root.join("src/one/shared.rs"), "fn one() {}\n").unwrap();
         std::fs::write(root.join("src/two/shared.rs"), "fn two() {}\n").unwrap();
         std::fs::write(
-            root.join("docs/lib.rs.md"),
+            root.join("docs/adr/lib.rs.md"),
             r#"---
 id: collision-note
 kind: doc
@@ -1521,12 +1554,16 @@ roots = ["src"]
         .unwrap()
     }
 
-    /// A documents-only vault with one `docs/note-N.md` per entry.
+    /// A documents-only vault with one `docs/adr/note-N.md` per entry.
     fn notes_vault(notes: &[&str]) -> (tempfile::TempDir, Vault) {
         let root = tempfile::TempDir::new().unwrap();
-        std::fs::create_dir_all(root.path().join("docs")).unwrap();
+        std::fs::create_dir_all(root.path().join("docs/adr")).unwrap();
         for (index, contents) in notes.iter().enumerate() {
-            std::fs::write(root.path().join(format!("docs/note-{index}.md")), contents).unwrap();
+            std::fs::write(
+                root.path().join(format!("docs/adr/note-{index}.md")),
+                contents,
+            )
+            .unwrap();
         }
         let vault = docs_only(root.path());
         (root, vault)

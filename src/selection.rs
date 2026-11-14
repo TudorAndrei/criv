@@ -34,12 +34,12 @@ pub fn source_candidates(root: &Path) -> Result<Vec<String>> {
     discovery::discover_source_candidates(&files, &SourceScope::new(&config)?)
 }
 
-/// Markdown notes in the configured vault.
+/// Markdown records in the configured ADR directory.
 ///
 /// # Errors
 ///
 /// Returns an error when the configuration or the vault cannot be read.
 pub fn vault_markdown(root: &Path) -> Result<Vec<String>> {
     let config = Config::load_from(&RepositoryFiles::open(root)?)?;
-    Ok(discovery::discover_vault(root, config.docs_dir())?.markdown)
+    Ok(discovery::discover_vault(root, &config.adr_root())?.markdown)
 }
