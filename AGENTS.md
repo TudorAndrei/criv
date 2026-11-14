@@ -1,10 +1,9 @@
 # Agent Guide
 
 This file is for agents developing criv itself. criv is a Rust CLI under
-`src/` that validates a `docs/` vault, with TypeScript companions in
+`src/` that validates a `docs/adr/` vault, with TypeScript companions in
 `.obsidian/plugins/criv` and `extensions/vscode-criv`, plus the
-`crates/criv-wasm` helper. This repository is also a criv vault, so docs and
-ADR changes are checked by criv. The runtime skills installed by `criv init`
+`crates/criv-wasm` helper. This repository is also a criv vault, so ADR changes and their source policies are checked by criv. The runtime skills installed by `criv init`
 are for agents using criv in another repository; this file is for work on this
 repository.
 
@@ -27,7 +26,7 @@ above only for targeted development or diagnosis.
 
 - Use conventional commits, for example `perf(search): limit unfiltered file search candidates`.
 - `.criv/` is generated local state and stays ignored by git.
-- Files under `docs/` are vault notes; include frontmatter and keep
+- Files under `docs/adr/` are vault records; include frontmatter and keep
   `criv check` passing.
 - Declare user-facing features and flows as executable Gherkin scenarios in
   `tests/features/*.feature`, with Rust steps in `tests/acceptance.rs`. See

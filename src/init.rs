@@ -35,7 +35,7 @@ pub fn run(root: &Path, options: &InitOptions) -> Result<()> {
         Some(publish_skills(&files, InstallMode::Refresh, &mut written)?)
     } else {
         let scope = files.write_scope(Path::new("."))?;
-        let config = Config::default();
+        let config = Config::load_from(&files)?;
         scope.create_dir(Path::new(&config.adr_prefix()))?;
         scope.create_dir(Path::new(layout::SNAPSHOTS))?;
         for (path, contents) in [

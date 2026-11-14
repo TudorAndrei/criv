@@ -194,14 +194,14 @@ enum WatchedRole {
     Source,
 }
 
-/// The configured locations a watch generation observes: the docs root and
+/// The configured locations a watch generation observes: the ADR root and
 /// each Source root, relative to the repository root.
-fn watched_locations(config: &Config) -> impl Iterator<Item = (WatchedRole, &str)> {
-    std::iter::once((WatchedRole::Docs, config.docs_dir())).chain(
+fn watched_locations(config: &Config) -> impl Iterator<Item = (WatchedRole, String)> {
+    std::iter::once((WatchedRole::Docs, config.adr_root())).chain(
         config
             .source_roots()
             .iter()
-            .map(|source_root| (WatchedRole::Source, source_root.as_str())),
+            .map(|source_root| (WatchedRole::Source, source_root.clone())),
     )
 }
 
@@ -216,7 +216,7 @@ impl WatchSet {
         Self::from_targets(targets)
     }
 
-    /// While a generation is suspended, watch the docs root as an active
+    /// While a generation is suspended, watch the ADR root as an active
     /// generation does, and only the nearest existing directory of each
     /// missing Source root.
     fn recovery(files: &RepositoryFiles, config: Option<&Config>) -> Self {
@@ -406,7 +406,7 @@ impl ActiveWatchGeneration {
         factory: &dyn WatcherFactory,
     ) -> std::result::Result<Self, CandidateFailure> {
         let root = files.root();
-        require_real_docs_root(files, &config.docs_path(root))
+        require_real_adr_root(files, &config.adr_path(root))
             .map_err(CandidateFailure::candidate)?;
         let topology = WatchTopology::observe(files, &config);
         let watcher = WatchBinding::start(factory, WatchSet::active(files, &config))
@@ -602,7 +602,10 @@ impl WatchTopology {
     fn observe(files: &RepositoryFiles, config: &Config) -> Self {
         let root = files.root();
         let mut paths = watched_locations(config)
-            .map(|(_, location)| (location.to_string(), path_kind(files, &root.join(location))))
+            .map(|(_, location)| {
+                let kind = path_kind(files, &root.join(&location));
+                (location, kind)
+            })
             .collect::<Vec<_>>();
         paths.sort();
         Self { paths }
@@ -616,15 +619,15 @@ fn path_kind(files: &RepositoryFiles, path: &Path) -> EntryKind {
         .map_or(EntryKind::Other, |relative| files.entry_kind(relative))
 }
 
-fn require_real_docs_root(files: &RepositoryFiles, path: &Path) -> Result<()> {
+fn require_real_adr_root(files: &RepositoryFiles, path: &Path) -> Result<()> {
     match path_kind(files, path) {
         EntryKind::Directory => Ok(()),
         EntryKind::File | EntryKind::Other => Err(CrivError::new(format!(
-            "configured docs root {} must be a real directory",
+            "configured ADR root {} must be a real directory",
             path.display()
         ))),
         EntryKind::Missing => Err(CrivError::new(format!(
-            "configured docs root {} does not exist",
+            "configured ADR root {} does not exist",
             path.display()
         ))),
     }
@@ -859,7 +862,7 @@ mod tests {
     fn active_watch_set_covers_config_docs_and_source_topology() {
         let temp = TempDir::new().unwrap();
         let root = temp.path();
-        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::create_dir_all(root.join("docs/adr")).unwrap();
         fs::create_dir_all(root.join("src")).unwrap();
         fs::create_dir_all(root.join("generated")).unwrap();
         let config = Config::parse(Some(
@@ -875,7 +878,7 @@ mod tests {
             set.targets,
             vec![
                 flat(root.to_path_buf()),
-                recursive(root.join("docs")),
+                recursive(root.join("docs/adr")),
                 flat(root.join("generated")),
                 recursive(root.join("src")),
             ]
@@ -886,7 +889,7 @@ mod tests {
     fn recovery_watch_set_keeps_only_candidate_recovery_paths() {
         let temp = TempDir::new().unwrap();
         let root = temp.path();
-        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::create_dir_all(root.join("docs/adr")).unwrap();
         fs::create_dir_all(root.join("src")).unwrap();
         fs::create_dir_all(root.join("generated")).unwrap();
         let config = Config::parse(Some(
@@ -902,7 +905,7 @@ mod tests {
             set.targets,
             vec![
                 flat(root.to_path_buf()),
-                recursive(root.join("docs")),
+                recursive(root.join("docs/adr")),
                 flat(root.join("generated")),
             ]
         );
@@ -988,7 +991,7 @@ mod tests {
         fs::create_dir_all(root.join("src")).unwrap();
         fs::write(root.join("src/lib.rs"), "pub fn initial() {}\n").unwrap();
         fs::write(
-            root.join("docs/note.md"),
+            root.join("docs/adr/note.md"),
             "---\nid: note\nkind: doc\ntitle: Note\n---\n\nInitial note.\n",
         )
         .unwrap();
@@ -1047,7 +1050,7 @@ mod tests {
         let (_temp, files, mut session) = refresh_fixture();
         let before = published_snapshot(files.root());
         fs::write(
-            files.root().join("docs/note.md"),
+            files.root().join("docs/adr/note.md"),
             "---\nid: note\nkind: doc\ntitle: Changed\n---\n",
         )
         .unwrap();
@@ -1149,7 +1152,9 @@ mod tests {
     fn session_suspends_on_invalid_configuration_and_recovers() {
         let (_temp, files, initial) = refresh_fixture();
         let factory = Arc::new(ScriptedWatcherFactory::new(vec![
-            vec![WatcherPoll::Paths(vec![files.root().join("docs/note.md")])],
+            vec![WatcherPoll::Paths(vec![
+                files.root().join("docs/adr/note.md"),
+            ])],
             vec![],
             vec![],
         ]));
@@ -1157,7 +1162,7 @@ mod tests {
         let before = published_artifacts(files.root());
         let previous = published_snapshot(files.root());
         fs::write(
-            files.root().join("docs/note.md"),
+            files.root().join("docs/adr/note.md"),
             "---\nid: note\nkind: doc\ntitle: Recovered\n---\n",
         )
         .unwrap();
@@ -1195,7 +1200,7 @@ mod tests {
     fn event_paths_choose_docs_reuse_or_source_refresh() {
         let (_temp, files, _initial) = refresh_fixture();
         let factory = Arc::new(ScriptedWatcherFactory::new(vec![vec![
-            WatcherPoll::Paths(vec![files.root().join("docs/note.md")]),
+            WatcherPoll::Paths(vec![files.root().join("docs/adr/note.md")]),
             WatcherPoll::Paths(vec![files.root().join("src/lib.rs")]),
         ]]));
         let mut session = LiveWatchSession::start(&files, factory).unwrap();
@@ -1205,7 +1210,7 @@ mod tests {
         )
         .unwrap();
         fs::write(
-            files.root().join("docs/note.md"),
+            files.root().join("docs/adr/note.md"),
             "---\nid: note\nkind: doc\ntitle: Docs Event Title\n---\n",
         )
         .unwrap();
@@ -1331,13 +1336,13 @@ mod tests {
 
         let repository = TempDir::new().unwrap();
         let outside = TempDir::new().unwrap();
-        fs::create_dir(outside.path().join("docs")).unwrap();
+        fs::create_dir_all(outside.path().join("docs/adr")).unwrap();
         symlink(outside.path(), repository.path().join("linked")).unwrap();
         let files = RepositoryFiles::open(repository.path()).unwrap();
         let linked_docs = files.root().join("linked/docs");
 
         assert_eq!(path_kind(&files, &linked_docs), EntryKind::Other);
-        assert!(require_real_docs_root(&files, &linked_docs).is_err());
+        assert!(require_real_adr_root(&files, &linked_docs).is_err());
     }
 
     fn lock(root: &Path, mode: WatchMode) -> Result<WatchSessionLock> {
