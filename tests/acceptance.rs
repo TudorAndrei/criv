@@ -93,10 +93,10 @@ fn staged_note_with_link(world: &mut VaultWorld, id: String, link: String) {
 
 #[given(expr = "the note {string} is {word} and staged")]
 fn staged_note_change(world: &mut VaultWorld, id: String, change: String) {
-    let note = format!("docs/{id}.md");
+    let note = note_path(&id);
     let root = world.directory.path();
     match change.as_str() {
-        "renamed" => support::git(root, &["mv", &note, "docs/renamed-note.md"]),
+        "renamed" => support::git(root, &["mv", &note, "docs/adr/0003-renamed-note.md"]),
         "deleted" => support::git(root, &["rm", &note]),
         other => panic!("unknown staged change {other}"),
     }
@@ -168,7 +168,11 @@ fn staged_legacy_decision(world: &mut VaultWorld, number: u32, title: String) {
 fn topic_branch_note(world: &mut VaultWorld) {
     let root = world.directory.path();
     support::git(root, &["checkout", "-q", "-b", "topic"]);
-    write_note(root, "topic-note", "Valid content.");
+    std::fs::write(
+        root.join("docs/topic-note.md"),
+        "# Topic note\n\nValid content.\n",
+    )
+    .expect("write external topic note");
     commit_all(root, "topic note");
 }
 
@@ -221,12 +225,77 @@ fn write_decision(root: &Path, file: &str, id: &str, title: &str) {
     .expect("write decision");
 }
 
-fn write_note(root: &Path, id: &str, body: &str) {
+#[given("general documentation outside the ADR folder")]
+fn external_documentation(world: &mut VaultWorld) {
+    let root = world.directory.path();
     std::fs::write(
-        root.join(format!("docs/{id}.md")),
-        format!("---\nid: {id}\nkind: doc\ntitle: {id}\n---\n\n# {id}\n\n{body}\n"),
+        root.join("docs/external-guide.md"),
+        "---\ninvalid: [\n---\n\nSee [[missing]].\n",
     )
-    .expect("write note");
+    .expect("write external document");
+    std::fs::create_dir_all(root.join("lat.md")).expect("create lat directory");
+    std::fs::write(
+        root.join("lat.md/domain.md"),
+        "# Domain\n\nSee [[other]].\n",
+    )
+    .expect("write lat document");
+}
+
+#[given("a decision that links to an external document")]
+fn decision_with_external_link(world: &mut VaultWorld) {
+    write_note(
+        world.directory.path(),
+        "guide",
+        "See [[external-guide#External heading]].",
+    );
+}
+
+#[given("a decision that links to a missing ADR heading")]
+fn decision_with_missing_heading(world: &mut VaultWorld) {
+    write_note(
+        world.directory.path(),
+        "guide",
+        "See [[0002-guide#Missing heading]].",
+    );
+}
+
+#[given(expr = "configuration that puts decisions in {string}")]
+fn configured_decision_directory(world: &mut VaultWorld, directory: String) {
+    let config = toml::toml! {
+        [vault]
+        docs = "."
+        adr = directory
+    };
+    std::fs::write(world.directory.path().join("criv.toml"), config.to_string())
+        .expect("write configuration");
+}
+
+fn note_path(id: &str) -> String {
+    let number = match id {
+        "unchanged-broken" => 1,
+        "guide" => 2,
+        "change-me" => 3,
+        "topic-note" => 4,
+        other => panic!("unknown scenario decision {other}"),
+    };
+    format!("docs/adr/{number:04}-{id}.md")
+}
+
+fn write_note(root: &Path, id: &str, body: &str) {
+    std::fs::create_dir_all(root.join("src")).expect("create source directory");
+    std::fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").expect("write governed source");
+    let path = note_path(id);
+    let number = path
+        .split('/')
+        .next_back()
+        .expect("decision filename")
+        .get(..4)
+        .expect("decision number");
+    std::fs::write(
+        root.join(&path),
+        format!("---\nid: ADR-{number}\nkind: decision\ntitle: {id}\nstatus: draft\n---\n\n# {id}\n\n## Context\n\nA decision is needed.\n\n## Decision\n\n{body}\n\n## Consequences\n\nThe decision is recorded.\n"),
+    )
+    .expect("write decision");
 }
 
 fn commit_all(root: &Path, message: &str) {

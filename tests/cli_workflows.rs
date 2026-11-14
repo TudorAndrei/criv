@@ -91,11 +91,11 @@ fn changed_check_does_not_walk_unselected_markdown_directories() {
     let outside = TempDir::new().unwrap();
     init_git_vault(root);
     fs::write(
-        root.join("docs/guide.md"),
+        root.join("docs/adr/README.md"),
         "---\nid: guide\nkind: doc\ntitle: Guide\n---\n\n# Guide\n\nClean.\n",
     )
     .unwrap();
-    git(root, &["add", "docs/guide.md"]);
+    git(root, &["add", "docs/adr/README.md"]);
     std::os::unix::fs::symlink(outside.path(), root.join("unselected-link")).unwrap();
 
     criv(root)
@@ -474,7 +474,7 @@ fn check_accepts_valid_crlf_frontmatter() {
     let root = temp.path();
     init(root);
     fs::write(
-        root.join("docs/crlf.md"),
+        root.join("docs/adr/README.md"),
         "---\r\nid: crlf\r\nkind: doc\r\ntitle: CRLF note\r\n---\r\n\r\n# CRLF note\r\n",
     )
     .unwrap();
@@ -537,12 +537,12 @@ fn query_subcommands_cover_docs_sources_and_governance() {
         .success()
         .stdout(predicate::str::contains("src/lib.rs#fn:run"));
     criv(root)
-        .args(["query", "targets", "guide"])
+        .args(["query", "targets", "ADR-0002"])
         .assert()
         .success()
         .stdout(predicate::str::contains("src/lib.rs"));
     criv(root)
-        .args(["query", "cites", "guide"])
+        .args(["query", "cites", "ADR-0002"])
         .assert()
         .success()
         .stdout(predicate::str::contains("ADR-0001"))
@@ -551,7 +551,7 @@ fn query_subcommands_cover_docs_sources_and_governance() {
         .args(["query", "cited-by", "ADR-0001"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("guide"));
+        .stdout(predicate::str::contains("ADR-0002"));
     criv(root)
         .args(["query", "governs", "ADR-0001"])
         .assert()
@@ -566,13 +566,13 @@ fn query_subcommands_cover_docs_sources_and_governance() {
         .args(["query", "references", "src/lib.rs#fn:run"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("guide"));
+        .stdout(predicate::str::contains("ADR-0002"));
     criv(root)
         .args(["query", "orphan-docs"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("orphan"))
-        .stdout(predicate::str::contains("guide").not());
+        .stdout(predicate::str::contains("ADR-README"))
+        .stdout(predicate::str::contains("ADR-0002").not());
 
     let callers = criv(root)
         .args([
@@ -948,15 +948,15 @@ fn reverse_queries_keep_exact_public_rows() {
     for (args, expected) in [
         (
             vec!["query", "cited-by", "ADR-0001", "--format", "json"],
-            vec!["guide"],
+            vec!["ADR-0002"],
         ),
         (
-            vec!["query", "cited-by", "guide", "--format", "json"],
+            vec!["query", "cited-by", "ADR-0002", "--format", "json"],
             vec![],
         ),
         (
             vec!["query", "orphan-docs", "--format", "json"],
-            vec!["ADR-README", "orphan"],
+            vec!["ADR-README"],
         ),
         (
             vec![
@@ -966,7 +966,7 @@ fn reverse_queries_keep_exact_public_rows() {
                 "--format",
                 "json",
             ],
-            vec!["guide"],
+            vec!["ADR-0002"],
         ),
         (
             vec![
@@ -1344,7 +1344,7 @@ fn check_json_output_is_valid_for_special_characters() {
 
     init(root);
     fs::write(
-        root.join("docs/broken.md"),
+        root.join("docs/adr/README.md"),
         r#"---
 id: broken
 kind: doc
@@ -1370,7 +1370,7 @@ file.rs]]
         .find(|diagnostic| diagnostic["code"] == "broken-link")
         .expect("broken-link diagnostic");
     assert_eq!(diagnostic["severity"], "error");
-    assert_eq!(diagnostic["path"], "docs/broken.md");
+    assert_eq!(diagnostic["path"], "docs/adr/README.md");
     assert!(
         diagnostic["message"]
             .as_str()
@@ -1386,7 +1386,7 @@ fn check_github_output_emits_workflow_annotation() {
 
     init(root);
     fs::write(
-        root.join("docs/broken.md"),
+        root.join("docs/adr/README.md"),
         r"---
 id: broken
 kind: doc
@@ -1405,7 +1405,7 @@ Missing [[missing-target]]
         .assert()
         .failure()
         .stdout(
-            "::error file=docs/broken.md,line=9,col=9,endLine=9,endColumn=26,title=criv broken-link::wiki-link `[[missing-target]]` does not resolve\n",
+            "::error file=docs/adr/README.md,line=9,col=9,endLine=9,endColumn=26,title=criv broken-link::wiki-link `[[missing-target]]` does not resolve\n",
         );
 }
 
@@ -1414,7 +1414,7 @@ fn check_owns_document_structure_without_formatting_or_external_tools() {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
     init(root);
-    let path = root.join("docs/guide.md");
+    let path = root.join("docs/adr/README.md");
     fs::write(root.join(".rumdl.toml"), "invalid = [").unwrap();
     fs::write(root.join(".oxfmtrc.json"), "invalid json").unwrap();
     for (title, body, expected_error) in [
@@ -2205,7 +2205,7 @@ fn adr_enforcement_preserves_text_json_repairs_and_failure_priority() {
     )
     .unwrap();
     fs::write(
-        root.join("docs/broken.md"),
+        root.join("docs/adr/README.md"),
         "---\nid: broken\nkind: doc\ntitle: Broken\n---\n\nSee [[missing]].\n",
     )
     .unwrap();
@@ -2525,15 +2525,15 @@ fn long_running_watch_rebuilds_docs_sources_bursts_and_recovers() {
     watch.wait_until_running();
 
     fs::write(
-        root.join("docs/live.md"),
-        "---\nid: live\nkind: doc\ntitle: Live note\n---\n\n# Live note\n",
+        root.join("docs/adr/0001-live-note.md"),
+        "---\nid: ADR-0001\nkind: decision\nstatus: draft\ntitle: Live note\n---\n\n# Live note\n",
     )
     .unwrap();
     wait_for_state(&mut watch, root, "the docs update", |state| {
         state["graph"]["nodes"].as_array().is_some_and(|nodes| {
             nodes
                 .iter()
-                .any(|node| node["id"].as_str() == Some("note:live"))
+                .any(|node| node["id"].as_str() == Some("note:ADR-0001"))
         })
     });
 
@@ -2617,7 +2617,7 @@ fn live_watch_replaces_configuration_source_catalog_and_docs_root_together() {
     fs::create_dir_all(root.join("knowledge/adr")).unwrap();
     fs::write(root.join("generated/new.rs"), "pub fn new_source() {}\n").unwrap();
     fs::write(
-        root.join("knowledge/new.md"),
+        root.join("knowledge/adr/README.md"),
         "---\nid: new-doc\nkind: doc\ntitle: New docs root\n---\n\n# New docs root\n",
     )
     .unwrap();
@@ -2657,7 +2657,7 @@ fn live_watch_rebuilds_each_configuration_dimension_and_matches_one_shot() {
     fs::write(root.join("alt/visible.rs"), "pub fn visible() {}\n").unwrap();
     fs::write(root.join("alt/hidden.rs"), "pub fn hidden() {}\n").unwrap();
     fs::write(
-        root.join("knowledge/configured.md"),
+        root.join("knowledge/adr/README.md"),
         "---\nid: configured-docs\nkind: doc\ntitle: Configured docs\n---\n\n# Configured docs\n",
     )
     .unwrap();
@@ -2706,19 +2706,19 @@ fn live_watch_recovers_when_the_configured_docs_root_appears() {
     watch.wait_until_running();
     let last_good_state = fs::read_to_string(root.join(".criv/state.json")).unwrap();
 
-    fs::create_dir(root.join("knowledge")).unwrap();
+    fs::create_dir_all(root.join("knowledge")).unwrap();
     write_criv_config_with_docs(root, "knowledge/docs", vec![], vec![], false);
     assert_state_kept_after_rejection(
         &mut watch,
         root,
         &last_good_state,
-        "a missing configured docs root",
+        "a missing configured ADR root",
     );
 
     let staged = TempDir::new().unwrap();
     fs::create_dir_all(staged.path().join("docs/adr")).unwrap();
     fs::write(
-        staged.path().join("docs/recovered.md"),
+        staged.path().join("docs/adr/README.md"),
         "---\nid: recovered-docs\nkind: doc\ntitle: Recovered docs\n---\n\n# Recovered docs\n",
     )
     .unwrap();
@@ -3057,14 +3057,27 @@ governs:
 ---
 
 # Test decision
+
+## Context
+
+A decision is needed.
+
+## Decision
+
+Govern the source.
+
+## Consequences
+
+The source is governed.
 ",
     )
     .unwrap();
     fs::write(
-        root.join("docs/guide.md"),
+        root.join("docs/adr/0002-guide.md"),
         r"---
-id: guide
-kind: doc
+id: ADR-0002
+kind: decision
+status: accepted
 title: Guide
 targets:
   symbols:
@@ -3073,19 +3086,42 @@ targets:
 
 # Guide
 
-This cites [[ADR-0001]] and mentions [[src/lib.rs#fn:helper]].
+## Context
+
+A guide is needed.
+
+## Decision
+
+This cites [[0001-test-decision]] and mentions [[src/lib.rs#fn:helper]].
+
+## Consequences
+
+The source is documented.
 ",
     )
     .unwrap();
     fs::write(
-        root.join("docs/orphan.md"),
+        root.join("docs/adr/0003-orphan.md"),
         r"---
-id: orphan
-kind: doc
+id: ADR-0003
+kind: decision
+status: accepted
 title: Orphan
 ---
 
 # Orphan
+
+## Context
+
+A record is needed.
+
+## Decision
+
+Keep this record.
+
+## Consequences
+
+The record has no citations.
 ",
     )
     .unwrap();
@@ -3248,7 +3284,7 @@ fn source_reconcile_rolls_back_validation_failure() {
     source_reconcile_fixture(root, "src/old.rs");
     git(root, &["mv", "src/old.rs", "src/new.rs"]);
     fs::write(
-        root.join("docs/broken.md"),
+        root.join("docs/adr/README.md"),
         doc("broken", "Broken", "See [[missing-note]]."),
     )
     .unwrap();

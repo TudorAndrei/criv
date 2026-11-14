@@ -2,18 +2,20 @@
 name: criv
 description: Use when working in a criv vault, refreshing criv state, looking for undocumented code, or choosing which criv skill covers a task.
 metadata:
-  criv-template: blake3:e5027931e3608b1c
+  criv-template: blake3:f6afc69a8f9f55b4
 ---
 
 # criv
 
-criv keeps repository documentation connected to source code. A vault is
+criv checks the configured ADR folder and enforces its source policies.
+General documentation outside that folder belongs to its documentation tool.
+A vault is
 **green** when `criv check` prints `criv check: ok`. Every criv workflow ends
 green.
 
 ## The loop
 
-- `criv watch --once` refreshes `.criv/state.json` after a code, docs, or ADR change.
+- `criv watch --once` refreshes `.criv/state.json` after a source or ADR change.
 - `criv check` reports drift.
 - `criv enforce --stage ci` gates a change to ADR-governed source.
 
@@ -21,7 +23,7 @@ The `checking-drift` skill owns the flags and the failure paths.
 
 ## Finding what is undocumented
 
-- `criv query nodes --kind code --without-docs` lists code that no document claims.
+- `criv query nodes --kind code --without-docs` lists code that no ADR or decision index claims.
 - `criv query coverage --by module` and `criv query coverage --by adr` report coverage.
 - `criv query --help` holds the full query surface. Add `--limit <N>` to bound a
   large answer, and `--format ndjson` to read one row per line.

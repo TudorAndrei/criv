@@ -208,4 +208,5 @@ a legacy name, per
 - [[0194-check-editor-companions-through-shared-scripts-and-fixtures|ADR-0194]] - Check editor companions through shared scripts and fixtures
 - [[0195-fallow-dead-code-and-duplication-analysis-for-typescript|ADR-0195]] - Fallow dead-code and duplication analysis for TypeScript
 - [[0196-bump-the-major-version-for-every-breaking-change|ADR-0196]] - Bump the major version for every breaking change
+- [[20261115-limit-document-processing-to-the-adr-folder|ADR-20261115-limit-document-processing-to-the-adr-folder]] - Limit document processing to the ADR folder
 - [[20261117-date-and-slug-decision-identifiers|ADR-20261117-date-and-slug-decision-identifiers]] - Date and Slug Decision Identifiers
