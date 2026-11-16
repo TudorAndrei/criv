@@ -51,7 +51,8 @@ and why it was rejected, then close with a link to it.
 
 Both cases follow the normal ADR workflow:
 
-- `criv query next-adr-id` for the number; never guess it.
+- `criv adr new "<title>"` to create the draft with its id and file name;
+  never guess them.
 - Required frontmatter is `id`, `kind: decision`, `title`, `status`, `date`.
 - Use `governs:` for the path globs the decision controls.
 - Accepted ADRs are immutable under ADR-0012. To change a past decision, write a

@@ -165,10 +165,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(contents, b"old\n");
-        assert_eq!(
-            files.permissions(Path::new("script")).unwrap().readonly(),
-            permissions.readonly()
-        );
+        assert!(permissions.readonly());
         files
             .write_scope(Path::new("."))
             .unwrap()

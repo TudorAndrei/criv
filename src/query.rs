@@ -4,8 +4,6 @@ use std::path::Path;
 use criv_state_wire::{GraphRowsView, layout};
 use usage_rs::{Args as UsageArgs, Subcommands, ValueEnum};
 
-use crate::diagnostic::DiagnosticCode;
-use crate::identity::{MAX_ADR_NUMBER, format_adr_id, parse_adr_id};
 use crate::markdown::LinkTarget;
 use crate::repository::RepositoryFiles;
 use crate::source::SymbolKind;
@@ -34,8 +32,6 @@ pub struct QueryOptions {
 
 #[derive(Debug, Subcommands)]
 enum QueryCommand {
-    /// Print the next ADR id after the highest existing ADR id.
-    NextAdrId(OutputOptions),
     /// List source symbols that call the requested symbol.
     Callers(SymbolOptions),
     /// List source symbols called by the requested symbol.
@@ -74,10 +70,6 @@ impl QueryCommand {
     fn answer(self, files: &RepositoryFiles) -> Result<(Vec<String>, OutputOptions)> {
         Ok(match self {
             Self::Diff(options) => (diff(files, &options.ref_a, &options.ref_b)?, options.output),
-            Self::NextAdrId(output) => (
-                vec![next_adr_id(&load_vault(files, SourceLoad::Skip)?)?],
-                output,
-            ),
             Self::Callers(options) => (
                 load_vault(files, SourceLoad::Refresh)?
                     .source_graph()
@@ -374,31 +366,6 @@ fn load_vault(files: &RepositoryFiles, source: SourceLoad) -> Result<Vault> {
             source,
             ..LoadOptions::default()
         },
-    )
-}
-
-fn next_adr_id(vault: &Vault) -> Result<String> {
-    let highest = vault
-        .notes()
-        .iter()
-        .filter_map(|note| note.id())
-        .filter_map(parse_adr_id)
-        .max()
-        .unwrap_or(0);
-    let next = highest
-        .checked_add(1)
-        .filter(|next| *next <= MAX_ADR_NUMBER);
-    next.map_or_else(
-        || {
-            Err(CrivError::coded(
-                DiagnosticCode::AdrIdExhausted,
-                format!(
-                    "no free ADR id after {}; ids are four digits",
-                    format_adr_id(highest)
-                ),
-            ))
-        },
-        |next| Ok(format_adr_id(next)),
     )
 }
 
@@ -746,7 +713,6 @@ mod tests {
         let temp = TempDir::new().unwrap();
         write_query_fixture(temp.path());
         let commands = [
-            QueryCommand::NextAdrId(query_output_options()),
             QueryCommand::CitedBy(query_note_options()),
             QueryCommand::OrphanDocs(query_output_options()),
             query_nodes_command(Some(NodeKind::Doc), false),

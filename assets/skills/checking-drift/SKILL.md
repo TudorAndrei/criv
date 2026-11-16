@@ -42,7 +42,7 @@ Correct the file the diagnostic names, or correct the code that made the claim
 false. Treat a diagnostic that misreads the repository as a criv bug worth
 reporting.
 
-A governs or policy diagnostic names an ADR. Run `criv check --filter ADR-NNNN`
+A governs or policy diagnostic names an ADR. Run `criv check --filter <ADR-ID>`
 to isolate its current diagnostics. The `writing-decisions` skill owns the ADR
 side of that fix.
 
@@ -66,10 +66,9 @@ Key recovery on the code when there is one. These are the coded failures:
 | `policy-violation`           | An ADR policy pattern matched. Change the code, or supersede the ADR.                       |
 | `import-policy-violation`    | An import broke a rule in `criv.toml`.                                                      |
 | `adr-immutability-violation` | An accepted ADR changed. Restore it and write a successor.                                  |
-| `adr-id-conflict`            | A branch ADR id is taken on the base ref. Run `criv adr reconcile --base <ref>`.            |
+| `legacy-adr-id`              | A new ADR file has a legacy `NNNN-` name. Rename it to the file `criv adr new` creates.     |
 | `enforcement-failed`         | Validation errors blocked the stage. Run `criv check`.                                      |
 | `vault-outside-git-root`     | The vault is not the root of the Git worktree. Run criv from the worktree root.             |
-| `adr-id-exhausted`           | No free four-digit ADR id remains.                                                          |
 
 Exit codes are the fast signal: `0` succeeded, `1` the command failed, `2` the
 command line was wrong.

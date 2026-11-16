@@ -81,13 +81,6 @@ impl RepositoryFiles {
         Ok(contents)
     }
 
-    pub(crate) fn permissions(&self, source: &Path) -> Result<fs::Permissions> {
-        let file = self.for_read(source)?.open_required_regular()?;
-        let permissions = file.metadata()?.permissions();
-        let file = file.into_std();
-        Ok(permissions.into_std(&file)?)
-    }
-
     pub(crate) fn read_optional_with_permissions(
         &self,
         source: &Path,

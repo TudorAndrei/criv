@@ -112,7 +112,7 @@ impl PolicyPattern {
 pub struct PolicyDeclaration<'a> {
     pub(crate) note: &'a Note,
     pub(crate) policy: &'a PolicyPattern,
-    /// The full `ADR-NNNN/local-id`; none without a note id or local id.
+    /// The full `<ADR id>/local-id`; none without a note id or local id.
     pub(crate) id: Option<&'a str>,
     /// The first declaration of `id` in the vault, which `id` resolves to.
     pub(crate) first: bool,
@@ -640,7 +640,7 @@ impl Vault {
     }
 
     /// The first declaration of an inline ADR policy pattern, by its full
-    /// `ADR-NNNN/local-id`, in any decision status.
+    /// `<ADR id>/local-id`, in any decision status.
     pub(crate) fn resolve_policy_pattern(&self, full_id: &str) -> Option<(&Note, &PolicyPattern)> {
         let (adr_id, local_id) = split_pattern_id(full_id)?;
         let declaration = self

@@ -8,7 +8,7 @@ use criv_state_wire::content_hash;
 
 use super::governs;
 use super::receipt::{self, SourceFile, SourceMapping, SourceReceipt};
-use super::reconcile_transaction::{Context, FileWrite, Reconciliation, Writes};
+use super::reconcile_transaction::{Context, Reconciliation, Writes};
 use crate::git::{ChangeStatus, ChangedEntry};
 use crate::vault::{LoadOptions, Vault};
 use crate::{CrivError, Result};
@@ -112,31 +112,15 @@ impl Reconciliation for SourceReconciliation {
         "governed source paths require reconciliation".into()
     }
 
-    fn resumes(_plan: &Plan) -> bool {
-        false
+    fn writes(plan: &Plan) -> Writes {
+        plan.files
+            .iter()
+            .map(|file| (file.path.clone(), file.after.clone()))
+            .collect()
     }
 
-    fn writes(_context: &Context<'_>, plan: &Plan) -> Result<Writes> {
-        Ok(Writes {
-            files: plan
-                .files
-                .iter()
-                .map(|file| {
-                    (
-                        file.path.clone(),
-                        FileWrite {
-                            contents: file.after.clone(),
-                            permissions: None,
-                        },
-                    )
-                })
-                .collect(),
-            deletions: Vec::new(),
-        })
-    }
-
-    fn receipt(context: &Context<'_>, plan: &Plan, _writes: &Writes) -> Result<SourceReceipt> {
-        Ok(SourceReceipt {
+    fn receipt(context: &Context<'_>, plan: &Plan) -> SourceReceipt {
+        SourceReceipt {
             header: context.receipt_header::<SourceReceipt>(),
             mappings: plan.mappings.clone(),
             files: plan
@@ -148,7 +132,7 @@ impl Reconciliation for SourceReconciliation {
                     after_hash: content_hash::of_bytes(file.after.as_bytes()),
                 })
                 .collect(),
-        })
+        }
     }
 }
 

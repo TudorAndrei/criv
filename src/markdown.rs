@@ -90,8 +90,8 @@ pub fn split_fragment(target: &str) -> (&str, Option<&str>) {
 }
 
 /// The grammar of a wiki-link body: `target[#fragment][|alias]`, where the
-/// target may be `source:path[#symbol]`, `path#Lx-Ly`, `match:ADR-NNNN/id`,
-/// or `note#match:ADR-NNNN/id`.
+/// target may be `source:path[#symbol]`, `path#Lx-Ly`, `match:<ADR id>/id`,
+/// or `note#match:<ADR id>/id`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LinkTarget<'a> {
     target: &'a str,
