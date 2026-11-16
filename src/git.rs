@@ -110,7 +110,7 @@ impl fmt::Display for Comparison<'_> {
 pub struct GitFile {
     pub(crate) bytes: Vec<u8>,
     /// The Git file mode in octal, such as `100644`.
-    pub(crate) mode: String,
+    mode: String,
 }
 
 /// A repository opened from an explicit vault root. Its `git2` handle remains

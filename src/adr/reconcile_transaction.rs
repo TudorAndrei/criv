@@ -23,11 +23,11 @@ pub enum Mode {
 /// One reconcile run's repository and the commits it compares.
 pub(super) struct Context<'a> {
     pub(super) files: &'a RepositoryFiles,
-    pub(super) git: &'a GitRepository,
+    git: &'a GitRepository,
     base_ref: &'a str,
-    pub(super) target_sha: String,
-    pub(super) head_sha: String,
-    pub(super) merge_base: String,
+    target_sha: String,
+    head_sha: String,
+    merge_base: String,
     /// Every change from `merge_base` to `head_sha`.
     pub(super) history: ChangedSet,
 }
