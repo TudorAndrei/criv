@@ -245,7 +245,6 @@ criv watch --once
 Ask the graph focused questions:
 
 ```sh
-criv query next-adr-id
 criv query coverage
 criv query nodes --kind code --without-docs
 criv query governs ADR-0001
@@ -277,35 +276,32 @@ violations, and the failure code with its repair, instead of prose.
 `criv.toml` configures which stages run, and the import policies that
 `criv enforce` gates on. See [docs/configuration.md](docs/configuration.md).
 
-## Reconciling branch-local ADR IDs
+## Creating a new ADR
 
-An ADR number is provisional until it exists on the integration target. When
-two branches add the same next number, check the target allocation before
-merging:
-
-```sh
-criv adr reconcile --base origin/main --check
-```
-
-The command prints the exact resolved target SHA and any deterministic mapping.
-If it reports a collision, run the same command without `--check`; it renames
-the branch-local ADRs, rewrites branch-owned references, validates the vault,
-and writes an ignored `.criv/adr-reconcile.json` receipt. The receipt is local
-commit proof for that exact generated transaction; it is not allocation state
-and never makes a later reconciliation check succeed. The command creates the
-dedicated commit itself. Review it and validate the result:
+A new ADR takes its id from its UTC creation date and its title. Create it
+with:
 
 ```sh
-criv adr reconcile --base origin/main
-cargo run -- check
-git show --stat --oneline HEAD
+criv adr new "Cache compiled policies"
 ```
 
-Before merging, compare the target SHA printed by the command with the current
-target. If it moved, rerun reconciliation against the new SHA. The merge queue
-or coordinator serializes this loop; criv does not reserve IDs, push, or merge.
-`criv query next-adr-id` remains checkout-local and is not an allocation
-authority.
+This writes the draft `docs/adr/20261117-cache-compiled-policies.md` with the
+id `ADR-20261117-cache-compiled-policies`, the title, `status: draft`, and
+empty Context, Decision, and Consequences sections, and prints its path. Fill
+in the sections, add `governs:`, and set the status. The slug is the title in
+lowercase, with its words joined by `-`; it must use only ASCII letters and
+digits. Add `--date YYYYMMDD` to use another date. The command fails, and
+writes nothing, when an ADR with that id already exists.
+
+The path makes the id unique, so two branches need no coordination. They clash
+only when they add an ADR with the same date and title, and Git then reports an
+add/add conflict at the merge. criv does not allocate, reserve, or renumber ids.
+
+ADRs created before this rule keep their `ADR-NNNN` ids and `NNNN-slug.md`
+names. `criv enforce` rejects an added ADR file with a legacy `NNNN-` name and
+reports the `legacy-adr-id` code; rename the file to the one that
+`criv adr new <title>` creates, and update its links. See
+[ADR-20261117-date-and-slug-decision-identifiers](docs/adr/20261117-date-and-slug-decision-identifiers.md).
 
 ## Reconciling ADR source governance
 

@@ -126,6 +126,13 @@ fn staged_println_source(world: &mut VaultWorld) {
     support::git(root, &["add", "src/lib.rs"]);
 }
 
+#[given("a Rust source")]
+fn rust_source(world: &mut VaultWorld) {
+    let root = world.directory.path();
+    std::fs::create_dir_all(root.join("src")).expect("create source directory");
+    std::fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").expect("write source");
+}
+
 #[given("a committed Rust source that calls println")]
 fn committed_println_source(world: &mut VaultWorld) {
     let root = world.directory.path();
@@ -142,20 +149,19 @@ fn committed_println_source(world: &mut VaultWorld) {
 fn staged_println_policy(world: &mut VaultWorld) {
     let root = world.directory.path();
     std::fs::write(
-        root.join("docs/adr/0999-no-println.md"),
-        "---\nid: ADR-0999\nkind: decision\ntitle: No println\nstatus: accepted\ndate: 2026-08-03\ngoverns:\n  - src/**/*.rs\npolicy:\n  patterns:\n    - id: no-println\n      language: rust\n      pattern: \"println!($$$ARGS)\"\n---\n\n# No println\n",
+        root.join("docs/adr/20261117-no-println.md"),
+        "---\nid: ADR-20261117-no-println\nkind: decision\ntitle: No println\nstatus: accepted\ndate: 2026-11-17\ngoverns:\n  - src/**/*.rs\npolicy:\n  patterns:\n    - id: no-println\n      language: rust\n      pattern: \"println!($$$ARGS)\"\n---\n\n# No println\n",
     )
     .expect("write decision");
     support::git(root, &["add", "docs"]);
 }
 
-#[given(expr = "a target branch that adds decision {int} {string}")]
-fn target_branch_decision(world: &mut VaultWorld, number: u32, title: String) {
+#[given(expr = "a staged legacy decision {int} {string}")]
+fn staged_legacy_decision(world: &mut VaultWorld, number: u32, title: String) {
     let root = world.directory.path();
-    support::git(root, &["checkout", "-q", "-b", "target"]);
-    write_decision(root, number, &title);
-    commit_all(root, "target decision");
-    support::git(root, &["checkout", "-q", "main"]);
+    let (file, id) = legacy_decision(number, &title);
+    write_decision(root, &file, &id, &title);
+    support::git(root, &["add", "docs"]);
 }
 
 #[given("a topic branch that adds a note")]
@@ -166,20 +172,50 @@ fn topic_branch_note(world: &mut VaultWorld) {
     commit_all(root, "topic note");
 }
 
-#[given(expr = "a topic branch that adds decision {int} {string}")]
-fn topic_branch_decision(world: &mut VaultWorld, number: u32, title: String) {
+#[given(expr = "a topic branch that adds legacy decision {int} {string}")]
+fn topic_branch_legacy_decision(world: &mut VaultWorld, number: u32, title: String) {
     let root = world.directory.path();
     support::git(root, &["checkout", "-q", "-b", "topic"]);
-    write_decision(root, number, &title);
+    let (file, id) = legacy_decision(number, &title);
+    write_decision(root, &file, &id, &title);
     commit_all(root, "topic decision");
 }
 
-fn write_decision(root: &Path, number: u32, title: &str) {
-    let slug = title.to_lowercase().replace(' ', "-");
+#[given(expr = "a topic branch that adds dated decision {string}")]
+fn topic_branch_dated_decision(world: &mut VaultWorld, title: String) {
+    let root = world.directory.path();
+    support::git(root, &["checkout", "-q", "-b", "topic"]);
+    let file = format!("20261117-{}", slug(&title));
+    write_decision(root, &file, &format!("ADR-{file}"), &title);
+    commit_all(root, "topic decision");
+}
+
+#[given(expr = "a decision {string} in the file {string} with id {string}")]
+fn decision_file(world: &mut VaultWorld, title: String, file: String, id: String) {
+    write_decision(world.directory.path(), &file, &id, &title);
+}
+
+fn slug(title: &str) -> String {
+    title.to_lowercase().replace(' ', "-")
+}
+
+/// The file stem and id of a legacy `NNNN` decision.
+fn legacy_decision(number: u32, title: &str) -> (String, String) {
+    (
+        format!("{number:04}-{}", slug(title)),
+        format!("ADR-{number:04}"),
+    )
+}
+
+/// A complete accepted decision at `docs/adr/<file>.md` and the source it
+/// governs.
+fn write_decision(root: &Path, file: &str, id: &str, title: &str) {
+    std::fs::create_dir_all(root.join("src")).expect("create source directory");
+    std::fs::write(root.join("src/lib.rs"), "pub fn run() {}\n").expect("write source");
     std::fs::write(
-        root.join(format!("docs/adr/{number:04}-{slug}.md")),
+        root.join(format!("docs/adr/{file}.md")),
         format!(
-            "---\nid: ADR-{number:04}\nkind: decision\ntitle: {title}\nstatus: accepted\ndate: 2026-11-06\n---\n\n# {title}\n\n## Context\n\n{title} needs a context.\n\n## Decision\n\nChoose {title}.\n\n## Consequences\n\n{title} follows.\n"
+            "---\nid: {id}\nkind: decision\ntitle: {title}\nstatus: accepted\ndate: 2026-11-06\ngoverns:\n  - src/lib.rs\n---\n\n# {title}\n\n## Context\n\n{title} needs a context.\n\n## Decision\n\nChoose {title}.\n\n## Consequences\n\n{title} follows.\n"
         ),
     )
     .expect("write decision");
@@ -240,14 +276,24 @@ fn run_command(world: &mut VaultWorld, arguments: String) {
     );
 }
 
-#[when(expr = "I enforce the CI stage in JSON against the target branch named by {word}")]
-fn enforce_ci_against_target(world: &mut VaultWorld, variable: String) {
+#[when(expr = "I enforce the CI stage in JSON against the main branch named by {word}")]
+fn enforce_ci_against_main(world: &mut VaultWorld, variable: String) {
     world.output = Some(
         support::criv(world.directory.path())
-            .env(variable, "target")
+            .env(variable, "main")
             .args(["enforce", "--stage", "ci", "--format", "json"])
             .output()
             .expect("run CI enforcement"),
+    );
+}
+
+#[when(expr = "I create the decision {string} on {word}")]
+fn create_decision(world: &mut VaultWorld, title: String, date: String) {
+    world.output = Some(
+        support::criv(world.directory.path())
+            .args(["adr", "new", &title, "--date", &date])
+            .output()
+            .expect("run criv adr new"),
     );
 }
 
@@ -309,6 +355,46 @@ fn stderr_contains(world: &mut VaultWorld, expected: String) {
 #[then(expr = "stdout is {string}")]
 fn stdout_is(world: &mut VaultWorld, expected: String) {
     assert_eq!(String::from_utf8_lossy(&world.output().stdout), expected);
+}
+
+#[then(expr = "stdout is the line {string}")]
+fn stdout_is_line(world: &mut VaultWorld, expected: String) {
+    assert_eq!(
+        String::from_utf8_lossy(&world.output().stdout),
+        format!("{expected}\n")
+    );
+}
+
+/// The docstring is the whole file. The Gherkin parser keeps the newline
+/// after the opening delimiter, which is not file content.
+#[then(expr = "the file {string} is:")]
+fn file_is(world: &mut VaultWorld, path: String, step: &cucumber::gherkin::Step) {
+    let docstring = step
+        .docstring
+        .as_deref()
+        .expect("give the file as a docstring");
+    let expected = docstring.strip_prefix('\n').unwrap_or(docstring);
+    let actual = std::fs::read_to_string(world.directory.path().join(path)).expect("read file");
+    assert_eq!(actual, expected);
+}
+
+/// `expected` is a comma-separated list of the ADR file names other than the
+/// index.
+#[then(expr = "the ADR files are {string}")]
+fn adr_files_are(world: &mut VaultWorld, expected: String) {
+    let mut files = std::fs::read_dir(world.directory.path().join("docs/adr"))
+        .expect("read the ADR directory")
+        .map(|entry| entry.expect("read an ADR entry").file_name())
+        .filter_map(|name| name.into_string().ok())
+        .filter(|name| name != "README.md")
+        .collect::<Vec<_>>();
+    files.sort();
+    let expected = expected
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .collect::<Vec<_>>();
+    assert_eq!(files, expected);
 }
 
 /// An empty `code` names a passing report.

@@ -17,7 +17,7 @@ pub fn adr_readme() -> Result<String> {
         ))
     })?;
     Ok(format!(
-        "---\n{frontmatter}---\n\n# Architectural Decisions\n\nAccepted decisions live in this directory as MADR-style notes named `NNNN-kebab-title.md`.\n"
+        "---\n{frontmatter}---\n\n# Architectural Decisions\n\nAccepted decisions live in this directory as MADR-style notes named `YYYYMMDD-kebab-title.md`, with the id `ADR-YYYYMMDD-kebab-title`. Run `criv adr new <title>` to create the draft of a new decision.\n"
     ))
 }
 

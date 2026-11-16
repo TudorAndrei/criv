@@ -206,7 +206,7 @@ impl RawConfig {
         let docs_dir = relative_path("vault.docs", &self.vault.docs.unwrap_or(defaults.docs_dir))?;
         if !self.patterns.is_empty() {
             return Err(CrivError::new(format!(
-                "{CONFIG_FILE} [patterns.*] is no longer supported; move persistent patterns into an ADR policy.patterns entry and use its ADR-NNNN/local-id",
+                "{CONFIG_FILE} [patterns.*] is no longer supported; move persistent patterns into an ADR policy.patterns entry and use its <ADR-ID>/local-id",
             )));
         }
         let source_roots = self
@@ -476,7 +476,7 @@ pattern = "println!($$$ARGS)"
         let message = error.to_string();
         assert!(message.contains("[patterns.*]"));
         assert!(message.contains("ADR policy.patterns"));
-        assert!(message.contains("ADR-NNNN/local-id"));
+        assert!(message.contains("<ADR-ID>/local-id"));
     }
 
     #[test]

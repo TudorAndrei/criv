@@ -50,18 +50,7 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
         )));
     }
     let repository = GitRepository::discover(root)?;
-    let Selection {
-        changes,
-        ci_base_ref,
-    } = changed_entries(repository.as_ref(), options)?;
-    let identity_conflicts = match (&repository, ci_base_ref) {
-        (Some(repository), Some(base_ref)) => {
-            crate::adr::identity_conflict(&files, repository, &base_ref)?
-                .into_iter()
-                .collect()
-        }
-        _ => Vec::new(),
-    };
+    let changes = changed_entries(repository.as_ref(), options)?;
 
     let check::Validation {
         diagnostics,
@@ -83,6 +72,7 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
         .map(Diagnostic::describe)
         .collect();
     let import_violations = import_policy_violations(&vault, scanned_files.as_ref())?;
+    let legacy_ids = crate::adr::legacy_id_violations(vault.config(), changes.as_ref());
     let adr_violations = crate::adr::change_violations(
         &files,
         repository.as_ref(),
@@ -91,7 +81,7 @@ pub fn run(root: &Path, options: &EnforceOptions) -> Result<()> {
         options.stage,
     );
     let failures = Failure::in_priority_order(
-        identity_conflicts,
+        legacy_ids,
         policy_violations,
         import_violations,
         adr_violations,
@@ -173,18 +163,14 @@ struct Failure {
 impl Failure {
     /// Every failing category; the first sets the exit status.
     fn in_priority_order(
-        identity_conflicts: Vec<String>,
+        legacy_ids: Vec<String>,
         policy_violations: Vec<String>,
         import_violations: Vec<String>,
         adr_violations: Vec<String>,
         errors: usize,
     ) -> Vec<Self> {
         [
-            Self::new(
-                DiagnosticCode::AdrIdConflict,
-                "ADR ID conflict",
-                identity_conflicts,
-            ),
+            Self::new(DiagnosticCode::LegacyAdrId, "legacy ADR id", legacy_ids),
             Self::new(
                 DiagnosticCode::PolicyViolation,
                 "policy violation",
@@ -329,42 +315,23 @@ impl DenyRule {
     }
 }
 
-/// The changes a stage selects and, in CI, the base ref they compare with.
-#[derive(Debug)]
-struct Selection {
-    changes: Option<ChangedSet>,
-    ci_base_ref: Option<String>,
-}
-
-impl Selection {
-    const fn of(changes: Option<ChangedSet>) -> Self {
-        Self {
-            changes,
-            ci_base_ref: None,
-        }
-    }
-}
-
+/// The changes a stage selects.
 fn changed_entries(
     repository: Option<&GitRepository>,
     options: &EnforceOptions,
-) -> Result<Selection> {
+) -> Result<Option<ChangedSet>> {
     match options.stage {
         Stage::Commit => repository
             .map(|repo| repo.changed_set(&Comparison::Staged, &[]))
-            .transpose()
-            .map(Selection::of),
+            .transpose(),
         Stage::Push => match options.remote_name.as_deref() {
             Some(remote_name) => pre_push_changed_entries(
                 required_repository(repository)?,
                 remote_name,
                 &read_pre_push_updates()?,
             )
-            .map(|changes| Selection::of(Some(changes))),
-            None => repository
-                .map(manual_push_changed_set)
-                .transpose()
-                .map(Selection::of),
+            .map(Some),
+            None => repository.map(manual_push_changed_set).transpose(),
         },
         Stage::Ci => ci_changed_entries(
             repository,
@@ -411,22 +378,20 @@ fn ci_changed_entries(
     criv_base_ref: Option<&str>,
     github_base_ref: Option<String>,
     ci_environment: bool,
-) -> Result<Selection> {
-    let against = |repository: &GitRepository, base_ref: String| {
-        let changes = repository.changed_set(
-            &Comparison::Trees {
-                old_ref: &base_ref,
-                new_ref: "HEAD",
-            },
-            &[],
-        )?;
-        Ok(Selection {
-            changes: Some(changes),
-            ci_base_ref: Some(base_ref),
-        })
+) -> Result<Option<ChangedSet>> {
+    let against = |repository: &GitRepository, base_ref: &str| {
+        repository
+            .changed_set(
+                &Comparison::Trees {
+                    old_ref: base_ref,
+                    new_ref: "HEAD",
+                },
+                &[],
+            )
+            .map(Some)
     };
     if let Some(base_ref) = criv_base_ref {
-        return against(required_repository(repository)?, base_ref.to_owned());
+        return against(required_repository(repository)?, base_ref);
     }
 
     let mut failures = Vec::new();
@@ -434,8 +399,8 @@ fn ci_changed_entries(
         && let Some(repository) = repository
     {
         for old_ref in [format!("origin/{base_ref}"), base_ref] {
-            match against(repository, old_ref) {
-                Ok(selection) => return Ok(selection),
+            match against(repository, &old_ref) {
+                Ok(changes) => return Ok(changes),
                 Err(error) => failures.push(error.to_string()),
             }
         }
@@ -459,7 +424,6 @@ fn ci_changed_entries(
             Ok(changes)
         })
         .transpose()
-        .map(Selection::of)
 }
 
 fn required_repository(repository: Option<&GitRepository>) -> Result<&GitRepository> {
@@ -658,10 +622,10 @@ mod tests {
         let base = git(root.path(), &["rev-parse", "HEAD~1"]);
 
         let repository = GitRepository::open(root.path()).unwrap();
-        let selection = ci_changed_entries(Some(&repository), Some(&base), None, true).unwrap();
-        let changes = selection.changes.expect("changes from explicit base ref");
+        let changes = ci_changed_entries(Some(&repository), Some(&base), None, true)
+            .unwrap()
+            .expect("changes from explicit base ref");
 
-        assert_eq!(selection.ci_base_ref.as_deref(), Some(base.as_str()));
         assert_eq!(changes.old_ref.as_deref(), Some(base.as_str()));
         assert_eq!(
             changes.new,

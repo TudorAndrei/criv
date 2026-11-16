@@ -60,7 +60,10 @@ changes.
 
 - Accepted ADRs are **immutable** under ADR-0012. Never edit, delete, or rename
   one to change a decision. Write a new ADR with `supersedes:` instead.
-- Get the next number from `criv query next-adr-id`, never by guessing.
+- Create a new ADR with `criv adr new "<title>"`. It writes the draft
+  `docs/adr/YYYYMMDD-slug.md` with the id `ADR-YYYYMMDD-slug` and prints its
+  path. Never create a new `NNNN-` file: `criv enforce` rejects it as
+  `legacy-adr-id`.
 - ADRs carry `governs:` path globs, and may carry inline `policy.patterns`
   ast-grep rules that `criv check` and `criv enforce` evaluate.
 - Everything under `docs/` is a criv vault note and needs frontmatter with at

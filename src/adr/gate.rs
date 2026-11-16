@@ -1,12 +1,33 @@
-//! The ADR immutability gate that enforcement runs on a changed set.
+//! The ADR gate that enforcement runs on a changed set: new decisions take
+//! dated ids, and published decisions are immutable.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
-use super::receipt::{self, IdentityReceipt, Receipt, SourceReceipt};
+use super::receipt::{self, Receipt, SourceReceipt};
 use crate::config::{CONFIG_FILE, Config, Stage};
 use crate::git::{ChangeStatus, ChangedEntry, ChangedSet, GitRepository, Revision};
+use crate::identity::{self, AdrId};
+use crate::markdown;
 use crate::repository::RepositoryFiles;
-use crate::{identity, markdown};
+
+/// Every ADR file the selected transaction adds or copies under a legacy
+/// `NNNN-slug.md` name. Only published decisions keep legacy numbers.
+pub fn legacy_id_violations(config: &Config, changes: Option<&ChangedSet>) -> Vec<String> {
+    changes
+        .into_iter()
+        .flat_map(|changes| &changes.entries)
+        .filter(|entry| matches!(entry.status, ChangeStatus::Added | ChangeStatus::Copied))
+        .filter(|entry| {
+            config.is_adr_path(&entry.path) && identity::is_legacy_adr_path(&entry.path)
+        })
+        .map(|entry| {
+            format!(
+                "new ADR `{}` uses a legacy number; new ADRs are named YYYYMMDD-slug.md",
+                entry.path
+            )
+        })
+        .collect()
+}
 
 /// Validate the complete selected ADR transaction in enforcement order.
 pub fn change_violations(
@@ -19,8 +40,6 @@ pub fn change_violations(
     let Some(git) = git else {
         return immutability_violations(config, changes, |_| false);
     };
-    let identity = IdentityReceipt::read(files);
-    let source = SourceReceipt::read(files);
     let gate = Gate {
         git,
         changes,
@@ -28,20 +47,14 @@ pub fn change_violations(
         renames: changes
             .and_then(|changes| receipt::composed_renames(&changes.entries).ok())
             .unwrap_or_default(),
-        identity: identity
-            .as_ref()
-            .ok()
-            .and_then(Option::as_ref)
-            .map(|receipt| IdentityProof::new(receipt, git, changes)),
     };
-    let proofs = [gate.proof(&identity), gate.proof(&source)];
-    let staged = proofs.iter().any(|proof| proof.staged);
+    let proof = gate.proof(&SourceReceipt::read(files));
     let mut violations = immutability_violations(config, changes, |entry| {
-        staged
+        proof.staged
             || gate.allows(entry)
             || (stage == Stage::Ci && gate.is_branch_local_ci_change(entry))
     });
-    violations.extend(proofs.into_iter().filter_map(|proof| proof.failure));
+    violations.extend(proof.failure);
     violations.extend(gate.scope_violation(config));
     violations
 }
@@ -52,48 +65,13 @@ struct Gate<'a> {
     stage: Stage,
     /// The Git renames composed across the compared history.
     renames: BTreeMap<String, String>,
-    identity: Option<IdentityProof<'a>>,
 }
 
-/// What one receipt proves about the selected transaction.
+/// What a receipt proves about the selected transaction.
 struct Proof {
     /// The receipt is exactly the staged commit transaction.
     staged: bool,
     failure: Option<String>,
-}
-
-/// The identity receipt's proofs, each computed once for the gate.
-struct IdentityProof<'a> {
-    receipt: &'a IdentityReceipt,
-    index: bool,
-    history: bool,
-    /// The compared commits that are exactly the receipt's transaction.
-    commits: BTreeSet<&'a str>,
-}
-
-impl<'a> IdentityProof<'a> {
-    fn new(
-        receipt: &'a IdentityReceipt,
-        git: &GitRepository,
-        changes: Option<&'a ChangedSet>,
-    ) -> Self {
-        let entries = changes.map_or(&[][..], |changes| changes.entries.as_slice());
-        Self {
-            receipt,
-            index: receipt.proves_index(git),
-            history: changes.is_some_and(|changes| receipt.proves_history(git, changes)),
-            commits: entries
-                .iter()
-                .filter_map(|entry| match &entry.new {
-                    Revision::Commit(commit) => Some(commit.as_str()),
-                    _ => None,
-                })
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .filter(|commit| receipt.allows_commit(git, commit))
-                .collect(),
-        }
-    }
 }
 
 impl Gate<'_> {
@@ -130,27 +108,10 @@ impl Gate<'_> {
         }
     }
 
-    /// Accept receipt-proven changes or an exact portable-link migration.
+    /// Accept a proven source rename or an exact portable-link migration.
     fn allows(&self, entry: &ChangedEntry) -> bool {
-        if receipt::source_history_allows(self.git, &self.renames, entry) {
-            return true;
-        }
-        if let Some(proof) = &self.identity {
-            // A committed receipt proves the entire tree transition, including
-            // paths that Git reports as modifications when ADR mappings overlap.
-            if let Revision::Commit(commit) = &entry.new
-                && proof.commits.contains(commit.as_str())
-            {
-                return true;
-            }
-            if proof.history && proof.receipt.covers(entry) {
-                return true;
-            }
-            if proof.index && proof.receipt.records_move(entry) {
-                return true;
-            }
-        }
-        entry.status == ChangeStatus::Modified && self.is_portable_link_migration(entry)
+        receipt::source_history_allows(self.git, &self.renames, entry)
+            || (entry.status == ChangeStatus::Modified && self.is_portable_link_migration(entry))
     }
 
     fn is_portable_link_migration(&self, entry: &ChangedEntry) -> bool {
@@ -283,13 +244,9 @@ fn portable_adr_link_alias(body: &str) -> Option<&str> {
     let (target, alias) = markdown::split_alias(body);
     let alias = alias?.trim();
     let (alias_base, alias_fragment) = markdown::split_fragment(alias);
-    let number = identity::parse_adr_id(alias_base)?;
+    let id = AdrId::parse(alias_base)?;
     let (target_base, target_fragment) = markdown::split_fragment(target);
-    if target_fragment != alias_fragment {
-        return None;
-    }
-    identity::parse_adr_path(target_base.trim())
-        .is_some_and(|(target_number, _)| target_number == number)
+    (target_fragment == alias_fragment && AdrId::of_path(target_base.trim()) == Some(id))
         .then_some(alias)
 }
 
@@ -363,13 +320,10 @@ mod tests {
         let files = RepositoryFiles::open(root.path()).unwrap();
         let head = git(root.path(), &["rev-parse", "HEAD"]);
         fs::create_dir_all(root.path().join(".criv")).unwrap();
-        let mut receipt = serde_json::json!({
-            "schema": IdentityReceipt::SCHEMA, "base_ref": "missing", "target_sha": head,
-            "head_sha": head, "merge_base": head, "mappings": [], "sources": [],
-            "deletions": [], "files": []
+        let receipt = serde_json::json!({
+            "schema": SourceReceipt::SCHEMA, "base_ref": "missing", "target_sha": head,
+            "head_sha": head, "merge_base": head, "mappings": [], "files": []
         });
-        fs::write(root.path().join(IdentityReceipt::PATH), receipt.to_string()).unwrap();
-        receipt["schema"] = SourceReceipt::SCHEMA.into();
         fs::write(root.path().join(SourceReceipt::PATH), receipt.to_string()).unwrap();
         fs::write(root.path().join("docs/adr/0001-base.md"), "Edited\n").unwrap();
         fs::write(root.path().join("criv.toml"), "# Changed scope\n").unwrap();
@@ -382,21 +336,17 @@ mod tests {
         let config = Config::parse(Some("[vault]\ndocs = \"other\"\n")).unwrap();
         for stage in [Stage::Commit, Stage::Push] {
             let violations = gate_violations(&files, &config, Some(&changes), stage);
-            assert_eq!(violations.len(), 4);
+            assert_eq!(violations.len(), 3);
             assert!(violations[0].starts_with("other/adr/0002-existing.md:"));
             assert_eq!(
                 violations[1],
-                "ADR reconciliation receipt does not prove the complete staged transaction"
-            );
-            assert_eq!(
-                violations[2],
                 "source reconciliation receipt does not prove the complete staged transaction"
             );
-            assert!(violations[3].starts_with("criv.toml moves the decision scope"));
+            assert!(violations[2].starts_with("criv.toml moves the decision scope"));
         }
         assert_eq!(
             gate_violations(&files, &config, None, Stage::Commit).len(),
-            2
+            1
         );
         git(root.path(), &["add", "."]);
         git(root.path(), &["commit", "-m", "advance beyond receipts"]);
@@ -409,9 +359,8 @@ mod tests {
         let root = decision_repository();
         let files = RepositoryFiles::open(root.path()).unwrap();
         fs::create_dir_all(root.path().join(".criv")).unwrap();
-        fs::write(root.path().join(IdentityReceipt::PATH), "invalid receipt").unwrap();
-        let malformed =
-            "ADR reconciliation receipt is malformed; remove it only after recovering the worktree";
+        fs::write(root.path().join(SourceReceipt::PATH), "invalid receipt").unwrap();
+        let malformed = "source reconciliation receipt is malformed; remove it only after recovering the worktree";
         for stage in [Stage::Commit, Stage::Push, Stage::Ci] {
             assert_eq!(
                 gate_violations(&files, &Config::default(), None, stage),
@@ -540,6 +489,30 @@ mod tests {
     }
 
     #[test]
+    fn new_adrs_must_not_take_a_legacy_number() {
+        let changes = changes(vec![
+            entry(ChangeStatus::Added, "docs/adr/0012-new.md", None),
+            entry(
+                ChangeStatus::Copied,
+                "docs/adr/0013-copy.md",
+                Some("docs/adr/0012-new.md"),
+            ),
+            entry(ChangeStatus::Added, "docs/adr/20261117-new.md", None),
+            entry(ChangeStatus::Added, "docs/adr/README.md", None),
+            entry(ChangeStatus::Added, "docs/0014-guide.md", None),
+            entry(ChangeStatus::Modified, "docs/adr/0002-existing.md", None),
+        ]);
+        assert_eq!(
+            legacy_id_violations(&Config::default(), Some(&changes)),
+            [
+                "new ADR `docs/adr/0012-new.md` uses a legacy number; new ADRs are named YYYYMMDD-slug.md",
+                "new ADR `docs/adr/0013-copy.md` uses a legacy number; new ADRs are named YYYYMMDD-slug.md",
+            ]
+        );
+        assert!(legacy_id_violations(&Config::default(), None).is_empty());
+    }
+
+    #[test]
     fn working_tree_migration_requires_regular_readable_content() {
         let root = tempfile::TempDir::new().unwrap();
         git(root.path(), &["init"]);
@@ -593,6 +566,22 @@ mod tests {
         let new = "See [[0010-criv-init-installs-agent-runtime-skills|ADR-0010]] and [[docs/adr/0001-local-cli-vault-architecture#Context|ADR-0001#Context]].\n";
 
         assert!(is_portable_link_migration(old, new));
+    }
+
+    #[test]
+    fn portable_link_migrations_accept_dated_ids_only_for_their_exact_file() {
+        let old = "See [[ADR-20261117-use-dated-ids#Decision]].\n";
+        let migrated = |target: &str| {
+            is_portable_link_migration(
+                old,
+                &format!("See [[{target}#Decision|ADR-20261117-use-dated-ids#Decision]].\n"),
+            )
+        };
+
+        assert!(migrated("20261117-use-dated-ids"));
+        assert!(migrated("docs/adr/20261117-use-dated-ids.md"));
+        assert!(!migrated("20261117-other-decision"));
+        assert!(!migrated("20261118-use-dated-ids"));
     }
 
     #[test]

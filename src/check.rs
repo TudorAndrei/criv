@@ -9,7 +9,7 @@ use usage_rs::{Args as UsageArgs, ValueEnum};
 use crate::config::{CONFIG_FILE, Config};
 use crate::diagnostic::{self, Diagnostic, DiagnosticCode, LspRange, Severity, SourceLocation};
 use crate::git::{ChangeStatus, ChangedSet};
-use crate::identity::{adr_filename, is_adr_id, parse_adr_id, parse_adr_stem, slug};
+use crate::identity::{AdrId, slug};
 use crate::markdown::LinkTarget;
 use crate::policy_scan::PolicyScanPlan;
 use crate::repository::RepositoryFiles;
@@ -276,14 +276,28 @@ fn validate_note_local(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnos
 }
 
 fn validate_decision_note(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diagnostic>) {
-    let adr_id = note.id().filter(|id| is_adr_id(id));
-    if adr_id.is_none() {
-        diagnostics.push(Diagnostic::error(
+    let adr_id = note.id().and_then(AdrId::parse);
+    let title_slug = note.title().map(slug);
+    match adr_id {
+        None => diagnostics.push(Diagnostic::error(
             DiagnosticCode::InvalidAdrId,
             note.rel_path(),
             None,
-            "decision id must match ADR-NNNN",
-        ));
+            "decision id must match ADR-YYYYMMDD-kebab-case-title, or ADR-NNNN for a published legacy ADR",
+        )),
+        Some(AdrId::Dated { date, slug }) => {
+            if let Some(title_slug) = title_slug.as_deref().filter(|title| *title != slug) {
+                diagnostics.push(Diagnostic::error(
+                    DiagnosticCode::InvalidAdrId,
+                    note.rel_path(),
+                    None,
+                    format!(
+                        "decision id must end with the title slug, as in `ADR-{date}-{title_slug}`"
+                    ),
+                ));
+            }
+        }
+        Some(AdrId::Legacy(_)) => {}
     }
 
     let config = vault.config();
@@ -300,23 +314,22 @@ fn validate_decision_note(vault: &Vault, note: &Note, diagnostics: &mut Vec<Diag
         ));
     }
 
-    let title_slug = note.title().map(slug).unwrap_or_default();
-    if let Some(number) = adr_id.and_then(parse_adr_id)
+    let title_slug = title_slug.unwrap_or_default();
+    if let Some(adr_id) = adr_id
         && !title_slug.is_empty()
         && !note
             .path()
             .file_stem()
             .and_then(|stem| stem.to_str())
-            .and_then(parse_adr_stem)
-            .is_some_and(|(stem_number, stem_slug)| stem_number == number && stem_slug.is_some())
+            .is_some_and(|stem| adr_id.names_file(stem))
     {
         diagnostics.push(Diagnostic::error(
             DiagnosticCode::AdrFilename,
             note.rel_path(),
             None,
             format!(
-                "ADR filename should follow NNNN-kebab-case-title.md, as in `{}`",
-                adr_filename(number, &title_slug)
+                "ADR filename must be the id without `ADR-`: YYYYMMDD-kebab-case-title.md, or NNNN-kebab-case-title.md for a legacy ADR, as in `{}`",
+                adr_id.filename(&title_slug)
             ),
         ));
     }

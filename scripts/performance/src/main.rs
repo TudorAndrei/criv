@@ -70,7 +70,6 @@ enum Case {
     WatchOnceSemanticChanged,
     Check,
     EnforceCi,
-    QueryNextAdrId,
     QueryOrphanDocs,
     QueryNodesDocs,
     QueryNodesCodeWithoutDocs,
@@ -86,7 +85,6 @@ impl Case {
             Self::WatchOnceSemanticChanged => "watch_once_semantic_changed",
             Self::Check => "check",
             Self::EnforceCi => "enforce_ci",
-            Self::QueryNextAdrId => "query_next_adr_id",
             Self::QueryOrphanDocs => "query_orphan_docs",
             Self::QueryNodesDocs => "query_nodes_docs",
             Self::QueryNodesCodeWithoutDocs => "query_nodes_code_without_docs",
@@ -112,7 +110,6 @@ impl Case {
             | Self::WatchOnceSemanticChanged => &["watch", "--once"],
             Self::Check => &["check"],
             Self::EnforceCi => &["enforce", "--stage", "ci"],
-            Self::QueryNextAdrId => &["query", "next-adr-id"],
             Self::QueryOrphanDocs => &["query", "orphan-docs"],
             Self::QueryNodesDocs => &["query", "nodes", "--kind", "doc"],
             Self::QueryNodesCodeWithoutDocs => {
@@ -168,14 +165,13 @@ impl Case {
     }
 }
 
-const ALL_CASES: [Case; 11] = [
+const ALL_CASES: [Case; 10] = [
     Case::WatchOnceCold,
     Case::WatchOnceWarm,
     Case::WatchOnceChanged,
     Case::WatchOnceSemanticChanged,
     Case::Check,
     Case::EnforceCi,
-    Case::QueryNextAdrId,
     Case::QueryOrphanDocs,
     Case::QueryNodesDocs,
     Case::QueryNodesCodeWithoutDocs,
@@ -1271,7 +1267,6 @@ mod tests {
             assert!(case.selects_source(), "{} must select Source", case.id());
         }
         for case in [
-            Case::QueryNextAdrId,
             Case::QueryOrphanDocs,
             Case::QueryNodesDocs,
             Case::DiffLatest,

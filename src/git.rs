@@ -7,7 +7,6 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::fs;
 use std::io::Write;
-use std::ops::Range;
 use std::path::Path;
 
 use crate::diagnostic::DiagnosticCode;
@@ -319,13 +318,6 @@ impl GitRepository {
         })
     }
 
-    /// Commits reachable from `new_ref` and not from `old_ref`, oldest first.
-    pub(crate) fn commits_between(&self, old_ref: &str, new_ref: &str) -> Result<Vec<String>> {
-        let old = self.commit_at(old_ref)?;
-        let new = self.commit_at(new_ref)?;
-        self.walk(new.id(), &[old.id()])
-    }
-
     fn walk(&self, start: git2::Oid, hidden: &[git2::Oid]) -> Result<Vec<String>> {
         let failed = || git_error("Git revision walk failed");
         let mut walk = self.repository.revwalk().map_err(failed())?;
@@ -349,14 +341,6 @@ impl GitRepository {
             .map(|commit| commit.id().to_string())
     }
 
-    pub(crate) fn first_parent(&self, commit: &str) -> Result<Option<String>> {
-        Ok(self
-            .commit_at(commit)?
-            .parent_id(0)
-            .ok()
-            .map(|oid| oid.to_string()))
-    }
-
     pub(crate) fn merge_base(&self, first: &str, second: &str) -> Result<String> {
         let first_commit = self.commit_at(first)?;
         let second_commit = self.commit_at(second)?;
@@ -366,34 +350,6 @@ impl GitRepository {
             .map_err(git_error(format!(
                 "Git found no merge base for `{first}` and `{second}`"
             )))
-    }
-
-    /// Every file path at `reference` below `prefix`; `.` or an empty prefix
-    /// lists the whole tree.
-    pub(crate) fn tree_paths(&self, reference: &str, prefix: &str) -> Result<Vec<String>> {
-        let tree = self.tree_at(reference)?;
-        let prefix = prefix.trim_start_matches("./").trim_end_matches('/');
-        let mut paths = Vec::new();
-        tree.walk(git2::TreeWalkMode::PreOrder, |parent, entry| {
-            let mut candidate = parent.as_bytes().to_vec();
-            candidate.extend_from_slice(entry.name_bytes());
-            let Ok(candidate) = String::from_utf8(candidate) else {
-                return -1;
-            };
-            if (prefix == "."
-                || prefix.is_empty()
-                || candidate == prefix
-                || candidate.starts_with(&format!("{prefix}/")))
-                && entry.kind() != Some(git2::ObjectType::Tree)
-            {
-                paths.push(candidate);
-            }
-            0
-        })
-        .map_err(git_error(
-            "Git tree path is not valid UTF-8; criv cannot represent it",
-        ))?;
-        Ok(paths)
     }
 
     /// The file at `path` in `revision`, or `None` when the revision has no
@@ -459,62 +415,6 @@ impl GitRepository {
             .ok_or_else(|| CrivError::new(format!("Git {revision} does not contain `{path}`")))?;
         String::from_utf8(file.bytes)
             .map_err(|_| CrivError::new(format!("Git blob `{revision}:{path}` is not valid UTF-8")))
-    }
-
-    /// Line ranges of `new_path` at `new_ref` that are additions relative to
-    /// `old_path` at `old_ref`; a missing side compares as empty.
-    pub(crate) fn added_lines(
-        &self,
-        old_ref: &str,
-        old_path: &str,
-        new_ref: &str,
-        new_path: &str,
-    ) -> Result<Vec<Range<usize>>> {
-        let old_blob = self.tree_blob(old_ref, old_path)?;
-        let new_blob = self.tree_blob(new_ref, new_path)?;
-        let mut ranges = Vec::new();
-        let mut line_callback =
-            |_: git2::DiffDelta<'_>, _: Option<git2::DiffHunk<'_>>, line: git2::DiffLine<'_>| {
-                if let Some(line_no) = line.new_lineno().filter(|_| line.origin() == '+')
-                    && let Ok(start) = usize::try_from(line_no)
-                    && let Some(end) = start.checked_add(1)
-                {
-                    ranges.push(start..end);
-                }
-                true
-            };
-        self.repository
-            .diff_blobs(
-                old_blob.as_ref(),
-                Some(old_path),
-                new_blob.as_ref(),
-                Some(new_path),
-                None,
-                None,
-                None,
-                None,
-                Some(&mut line_callback),
-            )
-            .map_err(git_error(format!("cannot diff Git blobs for `{new_path}`")))?;
-        Ok(coalesce_ranges(ranges))
-    }
-
-    fn tree_blob(&self, reference: &str, path: &str) -> Result<Option<git2::Blob<'_>>> {
-        let entry = match self.tree_at(reference)?.get_path(Path::new(path)) {
-            Ok(entry) => entry,
-            Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
-            Err(error) => {
-                return Err(CrivError::new(format!(
-                    "git ref `{reference}` cannot read `{path}`: {error}"
-                )));
-            }
-        };
-        self.repository
-            .find_blob(entry.id())
-            .map(Some)
-            .map_err(git_error(format!(
-                "git ref `{reference}` does not contain blob `{path}`"
-            )))
     }
 
     /// Every path that differs between `HEAD`, the index, and the worktree,
@@ -758,20 +658,6 @@ pub fn is_object_id(value: &str) -> bool {
 
 pub fn is_zero_oid(oid: &str) -> bool {
     oid.bytes().all(|byte| byte == b'0')
-}
-
-fn coalesce_ranges(ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
-    let mut result: Vec<Range<usize>> = Vec::new();
-    for range in ranges {
-        if let Some(previous) = result.last_mut()
-            && previous.end == range.start
-        {
-            previous.end = range.end;
-        } else {
-            result.push(range);
-        }
-    }
-    result
 }
 
 /// Git CLI fixture builders shared by unit tests.

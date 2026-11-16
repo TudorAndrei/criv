@@ -12,8 +12,6 @@ use crate::markdown::line_index;
 pub enum DiagnosticCode {
     AdrDirNonDecision,
     AdrFilename,
-    AdrIdConflict,
-    AdrIdExhausted,
     AdrImmutabilityViolation,
     AmbiguousPolicyPatternBody,
     AmbiguousSourceLink,
@@ -33,6 +31,7 @@ pub enum DiagnosticCode {
     InvalidGlob,
     InvalidKind,
     InvalidPolicyPattern,
+    LegacyAdrId,
     LegacySourceTarget,
     DocumentFormat,
     MissingId,
@@ -58,8 +57,6 @@ impl DiagnosticCode {
         match self {
             Self::AdrDirNonDecision => "adr-dir-non-decision",
             Self::AdrFilename => "adr-filename",
-            Self::AdrIdConflict => "adr-id-conflict",
-            Self::AdrIdExhausted => "adr-id-exhausted",
             Self::AdrImmutabilityViolation => "adr-immutability-violation",
             Self::AmbiguousPolicyPatternBody => "ambiguous-policy-pattern-body",
             Self::AmbiguousSourceLink => "ambiguous-source-link",
@@ -79,6 +76,7 @@ impl DiagnosticCode {
             Self::InvalidGlob => "invalid-glob",
             Self::InvalidKind => "invalid-kind",
             Self::InvalidPolicyPattern => "invalid-policy-pattern",
+            Self::LegacyAdrId => "legacy-adr-id",
             Self::LegacySourceTarget => "legacy-source-target",
             Self::DocumentFormat => "document-format",
             Self::MissingId => "missing-id",
@@ -105,9 +103,8 @@ impl DiagnosticCode {
             Self::AdrDirNonDecision => {
                 "Set `kind: decision` in the frontmatter, or move the file out of the ADR directory."
             }
-            Self::AdrFilename => "Rename the file to `NNNN-kebab-title.md`.",
-            Self::AdrIdConflict => {
-                "Run `criv adr reconcile --base <ref>` to renumber the branch-local ADRs."
+            Self::AdrFilename => {
+                "Rename the file to its id without `ADR-`, as in `YYYYMMDD-kebab-title.md`."
             }
             Self::AdrImmutabilityViolation => {
                 "Restore the accepted ADR, and record the change in a new ADR with `supersedes:`."
@@ -135,11 +132,14 @@ impl DiagnosticCode {
             Self::InconsistentSupersession => {
                 "Make `supersedes` and `superseded_by` agree in both decisions."
             }
-            Self::InvalidAdrId => "Take a free id from `criv query next-adr-id`.",
+            Self::InvalidAdrId => {
+                "Use the id and file name that `criv adr new <title>` creates for the title."
+            }
             Self::InvalidFrontmatter => "Correct the YAML frontmatter block.",
             Self::InvalidGlob => "Correct the glob syntax, as in `src/**/*.rs`.",
             Self::InvalidKind => "Set `kind` to `doc` or to `decision`.",
             Self::InvalidPolicyPattern => "Correct the ast-grep pattern or rule syntax.",
+            Self::LegacyAdrId => "Rename it to the file that `criv adr new <title>` creates.",
             Self::LegacySourceTarget | Self::SourceWikilink => {
                 "Rewrite the target as an AST-aware selector, as in `src/main.rs#fn:run`."
             }
@@ -170,9 +170,6 @@ impl DiagnosticCode {
             Self::UnresolvedPattern => "Correct the pattern reference, or declare the pattern.",
             Self::UnresolvedTarget => {
                 "Correct the target, or run `criv watch --once` to refresh the state."
-            }
-            Self::AdrIdExhausted => {
-                "Retire or renumber the highest ADR ids, or widen the id format in a new ADR."
             }
             Self::VaultOutsideGitRoot => {
                 "Run criv from the worktree root, or make the vault its own repository."

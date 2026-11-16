@@ -1,5 +1,5 @@
-//! The transaction that both reconcile commands run: plan, check, write,
-//! validate, stage, prove, and commit, restoring the start state on failure.
+//! The transaction a reconcile command runs: plan, check, write, validate,
+//! stage, prove, and commit, restoring the start state on failure.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -73,32 +73,10 @@ impl<'a> Context<'a> {
     }
 }
 
-/// The files a transaction writes and the paths it deletes.
-#[derive(Default)]
-pub(super) struct Writes {
-    pub(super) files: BTreeMap<String, FileWrite>,
-    pub(super) deletions: Vec<String>,
-}
+/// The contents a transaction writes, by repository path.
+pub(super) type Writes = BTreeMap<String, String>;
 
-pub(super) struct FileWrite {
-    pub(super) contents: String,
-    /// The permissions to publish with; `None` keeps the current ones.
-    pub(super) permissions: Option<fs::Permissions>,
-}
-
-impl Writes {
-    fn paths(&self) -> Vec<String> {
-        self.files
-            .keys()
-            .chain(&self.deletions)
-            .cloned()
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect()
-    }
-}
-
-/// What differs between the two reconcile commands.
+/// What a reconcile command plans, reports, and records.
 pub(super) trait Reconciliation {
     type Plan;
     type Receipt: Receipt;
@@ -112,27 +90,9 @@ pub(super) trait Reconciliation {
     fn print(plan: &Self::Plan);
     /// The `--check` failure for a plan that is not current.
     fn conflict(context: &Context<'_>, plan: &Self::Plan) -> String;
-    /// Whether a dirty worktree is this plan's own materialized transaction.
-    fn resumes(plan: &Self::Plan) -> bool;
-    fn writes(context: &Context<'_>, plan: &Self::Plan) -> Result<Writes>;
+    fn writes(plan: &Self::Plan) -> Writes;
     /// The receipt of the written transaction.
-    fn receipt(context: &Context<'_>, plan: &Self::Plan, writes: &Writes) -> Result<Self::Receipt>;
-    /// Checks the written worktree before its staged proof.
-    fn verify_written(_context: &Context<'_>) -> Result<()> {
-        Ok(())
-    }
-}
-
-/// The `--check` failure for `base_ref`, or `None` when nothing needs
-/// reconciliation. Nothing is printed.
-pub(super) fn conflict<R: Reconciliation>(
-    files: &RepositoryFiles,
-    git: &GitRepository,
-    base_ref: &str,
-) -> Result<Option<String>> {
-    let context = Context::open(files, git, base_ref)?;
-    let plan = R::plan(&context)?;
-    Ok((!R::is_current(&plan)).then(|| check_failure::<R>(&context, &plan)))
+    fn receipt(context: &Context<'_>, plan: &Self::Plan) -> Self::Receipt;
 }
 
 fn check_failure<R: Reconciliation>(context: &Context<'_>, plan: &R::Plan) -> String {
@@ -165,7 +125,7 @@ pub(super) fn run<R: Reconciliation>(
         return Err(CrivError::new(check_failure::<R>(&context, &plan)));
     }
     let dirty = git.dirty_paths()?;
-    if !dirty.is_empty() && !R::resumes(&plan) {
+    if !dirty.is_empty() {
         return Err(CrivError::new(format!(
             "refusing to reconcile a dirty worktree; commit or stash: {}",
             dirty.join(", ")
@@ -174,8 +134,8 @@ pub(super) fn run<R: Reconciliation>(
     git.preflight_commit_identity()
         .map_err(|error| CrivError::new(format!("{error}; {name} commits its own transaction")))?;
     ensure_stable(&context, &format!("before {name}"))?;
-    let writes = R::writes(&context, &plan)?;
-    let paths = writes.paths();
+    let writes = R::writes(&plan);
+    let paths = writes.keys().cloned().collect::<Vec<_>>();
     let snapshot = Snapshot::capture(
         files,
         git,
@@ -188,7 +148,7 @@ pub(super) fn run<R: Reconciliation>(
     let committed = (|| {
         apply(files, &writes)?;
         validate(files, name)?;
-        let receipt = R::receipt(&context, &plan, &writes)?;
+        let receipt = R::receipt(&context, &plan);
         let contents = serde_json::to_string_pretty(&receipt)
             .map_err(|error| CrivError::new(format!("cannot serialize {name} receipt: {error}")))?
             + "\n";
@@ -197,7 +157,6 @@ pub(super) fn run<R: Reconciliation>(
             .write_atomic(Path::new(<R::Receipt as Receipt>::PATH), &contents)?;
         ensure_stable(&context, &format!("during {name}"))?;
         git.stage_paths(&paths)?;
-        R::verify_written(&context)?;
         let staged = git.changed_set(&Comparison::Staged, &[])?;
         if !receipt.allows_transaction(git, &staged.entries) {
             return Err(CrivError::new(format!(
@@ -239,21 +198,8 @@ fn ensure_stable(context: &Context<'_>, moment: &str) -> Result<()> {
 
 fn apply(files: &RepositoryFiles, writes: &Writes) -> Result<()> {
     let scope = files.write_scope(Path::new("."))?;
-    for (path, write) in &writes.files {
-        match &write.permissions {
-            Some(permissions) => scope.write_atomic_with_permissions(
-                Path::new(path),
-                write.contents.as_bytes(),
-                permissions.clone(),
-            )?,
-            None => scope.write_atomic(Path::new(path), &write.contents)?,
-        }
-    }
-    for path in &writes.deletions {
-        // A retry may find a path its earlier materialized receipt removed.
-        if files.file_exists(Path::new(path))? {
-            scope.remove_file(Path::new(path))?;
-        }
+    for (path, contents) in writes {
+        scope.write_atomic(Path::new(path), contents)?;
     }
     Ok(())
 }

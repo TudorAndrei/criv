@@ -12,7 +12,6 @@ pub const WATCH_LOCK: &str = ".criv/watch.lock";
 pub const PUBLICATION_LOCK: &str = ".criv/state-publication.lock";
 pub const PUBLICATION_TRANSACTION: &str = ".criv/state-transaction.json";
 pub const QUARANTINE: &str = ".criv/state-quarantine";
-pub const ADR_RECEIPT: &str = ".criv/adr-reconcile.json";
 pub const SOURCE_RECEIPT: &str = ".criv/source-reconcile.json";
 
 #[must_use]

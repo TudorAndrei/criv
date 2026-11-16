@@ -1,9 +1,10 @@
-//! Architecture decision records: the immutability gate that enforcement
-//! runs, and the commands that reconcile a branch with its target.
+//! Architecture decision records: the command that creates a new decision,
+//! the gate that enforcement runs, and the command that reconciles governed
+//! source renames with a target.
 
+mod create;
 mod gate;
 mod governs;
-mod identity_reconcile;
 mod receipt;
 mod reconcile_transaction;
 mod source_reconcile;
@@ -13,10 +14,8 @@ use std::path::Path;
 use usage_rs::{Args as UsageArgs, Subcommands};
 
 use crate::Result;
-use crate::git::GitRepository;
-use crate::repository::RepositoryFiles;
 
-pub use gate::change_violations;
+pub use gate::{change_violations, legacy_id_violations};
 use reconcile_transaction::Mode;
 
 #[derive(Debug, UsageArgs)]
@@ -27,10 +26,24 @@ pub struct AdrOptions {
 
 #[derive(Debug, Subcommands)]
 enum AdrCommand {
-    /// Reconcile provisional ADR IDs against an integration target.
-    Reconcile(ReconcileOptions),
+    /// Create the draft of a new decision and print its path.
+    ///
+    /// The draft is `<adr dir>/YYYYMMDD-<slug>.md` with the id
+    /// `ADR-YYYYMMDD-<slug>`, the title, `status: draft`, and empty Context,
+    /// Decision, and Consequences sections. The command fails, and writes
+    /// nothing, when the vault already holds that id.
+    New(NewOptions),
     /// Reconcile exact governed source renames against an integration target.
     ReconcileSources(ReconcileOptions),
+}
+
+#[derive(Debug, UsageArgs)]
+struct NewOptions {
+    /// Decision title; its slug ends the id and the file name.
+    title: String,
+    /// Decision date as YYYYMMDD; defaults to today's UTC date.
+    #[usage(long)]
+    date: Option<String>,
 }
 
 #[derive(Debug, UsageArgs)]
@@ -46,25 +59,15 @@ struct ReconcileOptions {
 pub fn run(root: &Path, options: &AdrOptions) -> Result<()> {
     let files = crate::config::open_vault(root)?;
     match &options.command {
-        AdrCommand::Reconcile(options) => reconcile_transaction::run::<
-            identity_reconcile::IdentityReconciliation,
-        >(&files, &options.base, options.mode()),
+        AdrCommand::New(options) => {
+            let path = create::create(&files, &options.title, options.date.as_deref())?;
+            println!("{path}");
+            Ok(())
+        }
         AdrCommand::ReconcileSources(options) => reconcile_transaction::run::<
             source_reconcile::SourceReconciliation,
         >(&files, &options.base, options.mode()),
     }
-}
-
-/// Why the branch's ADR IDs collide with `base_ref`, or `None` when the
-/// allocation is current. CI enforcement asks this before it scans.
-pub fn identity_conflict(
-    files: &RepositoryFiles,
-    git: &GitRepository,
-    base_ref: &str,
-) -> Result<Option<String>> {
-    reconcile_transaction::conflict::<identity_reconcile::IdentityReconciliation>(
-        files, git, base_ref,
-    )
 }
 
 impl ReconcileOptions {

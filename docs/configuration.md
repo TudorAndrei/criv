@@ -110,7 +110,8 @@ carries the code and the repair as fields.
 ## Removed keys
 
 `[patterns.*]` is refused. Persistent named patterns belong in an ADR
-`policy.patterns` entry, addressed as `ADR-NNNN/local-id`. criv reports the
+`policy.patterns` entry, addressed as `<ADR-ID>/local-id`, such as
+`ADR-20261117-cache-compiled-policies/local-id`. criv reports the
 replacement when it finds the old table.
 
 Other unknown keys are ignored, in every table.

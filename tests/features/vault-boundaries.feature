@@ -12,6 +12,7 @@ Feature: Commands require an initialized vault
     Examples:
       | command            |
       | check              |
-      | query next-adr-id  |
+      | query orphan-docs  |
+      | adr new Topic      |
       | watch --once       |
       | enforce --stage ci |

@@ -7,7 +7,13 @@ tags: [criv]
 
 # Architectural Decisions
 
-Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-title.md`.
+Accepted decisions live in this directory as MADR-style notes. A new ADR is
+named `YYYYMMDD-slug.md` with the id `ADR-YYYYMMDD-slug`: the UTC creation date
+and the slug of its title. Create its draft with
+`criv adr new "<title>"`. Earlier ADRs keep their legacy
+`NNNN-slug.md` names and `ADR-NNNN` ids, and enforcement rejects a new file with
+a legacy name, per
+[[20261117-date-and-slug-decision-identifiers|ADR-20261117-date-and-slug-decision-identifiers]].
 
 ## Index
 
@@ -202,3 +208,4 @@ Accepted decisions live in this directory as MADR-style notes named `NNNN-kebab-
 - [[0194-check-editor-companions-through-shared-scripts-and-fixtures|ADR-0194]] - Check editor companions through shared scripts and fixtures
 - [[0195-fallow-dead-code-and-duplication-analysis-for-typescript|ADR-0195]] - Fallow dead-code and duplication analysis for TypeScript
 - [[0196-bump-the-major-version-for-every-breaking-change|ADR-0196]] - Bump the major version for every breaking change
+- [[20261117-date-and-slug-decision-identifiers|ADR-20261117-date-and-slug-decision-identifiers]] - Date and Slug Decision Identifiers
