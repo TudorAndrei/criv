@@ -1,0 +1,12 @@
+name: Stop the run on failure
+description: Cancel every other job of this workflow run after one job fails
+runs:
+  using: composite
+  steps:
+    - name: Cancel the workflow run
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RUN_ID: ${{ github.run_id }}
+        REPOSITORY: ${{ github.repository }}
+      run: gh run cancel "$RUN_ID" --repo "$REPOSITORY" || echo "Could not cancel run $RUN_ID." >&2
