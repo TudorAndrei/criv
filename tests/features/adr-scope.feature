@@ -21,6 +21,25 @@ Feature: ADR folder scope
     Then the command fails
     And stdout contains "broken-link"
 
+  Scenario Outline: Keep ADR heading checks for every spelling of an ADR path
+    Given an initialized vault
+    And a decision whose body is "See [[<target>#Missing heading]]."
+    When I run criv check
+    Then the command fails
+    And stdout contains "broken-link"
+
+    Examples:
+      | target                     |
+      | docs/adr/0002-guide.md     |
+      | ./docs/adr/0002-guide.md   |
+
+  Scenario: Resolve an external document with a dot in its name
+    Given an initialized vault
+    And an external document at "docs/guides/api.v2.md"
+    And a decision whose body is "See [[guides/api.v2]]."
+    When I run criv check
+    Then the command succeeds
+
   Scenario: Initialize the configured ADR folder
     Given an empty directory
     And configuration that puts decisions in "decisions"
@@ -29,3 +48,10 @@ Feature: ADR folder scope
     And stdout contains "created decisions/README.md"
     When I run criv check
     Then the command succeeds
+
+  Scenario: Initialize decisions at the repository root
+    Given an empty directory
+    And configuration that puts decisions in "."
+    When I run criv init --no-skills
+    Then the command succeeds
+    And stdout contains "created README.md"

@@ -8,7 +8,7 @@ use serde::Deserialize;
 use crate::Result;
 use crate::config::Config;
 use crate::diagnostic::SourceLocation;
-use crate::discovery::discover_vault;
+use crate::discovery::{discover_vault, join_normal_components};
 use crate::glob::GlobMatcher;
 use crate::identity::{pattern_id, slug, split_pattern_id};
 use crate::markdown::{
@@ -438,18 +438,23 @@ impl Vault {
         {
             return false;
         }
-        let path = Path::new(target.path());
-        let markdown = if path.extension().is_none() {
-            path.with_extension("md")
-        } else if path.extension().is_some_and(|extension| extension == "md") {
-            path.to_path_buf()
+        let path = target.path();
+        let markdown = if Path::new(path)
+            .extension()
+            .is_some_and(|extension| extension == "md")
+        {
+            PathBuf::from(path)
         } else {
-            return false;
+            PathBuf::from(format!("{path}.md"))
         };
+        let adr_root = self.config.adr_root();
         [Path::new(self.config.docs_dir()).join(&markdown), markdown]
             .iter()
+            .filter_map(|candidate| join_normal_components(candidate))
             .any(|candidate| {
-                !candidate.starts_with(self.config.adr_root())
+                let candidate = Path::new(&candidate);
+                let in_adr_root = adr_root == "." || candidate.starts_with(&adr_root);
+                !in_adr_root
                     && self.files.entry_kind(candidate) == crate::repository::EntryKind::File
             })
     }

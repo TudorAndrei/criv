@@ -259,6 +259,19 @@ fn decision_with_missing_heading(world: &mut VaultWorld) {
     );
 }
 
+#[given(expr = "a decision whose body is {string}")]
+fn decision_with_body(world: &mut VaultWorld, body: String) {
+    write_note(world.directory.path(), "guide", &body);
+}
+
+#[given(expr = "an external document at {string}")]
+fn external_document_at(world: &mut VaultWorld, path: String) {
+    let path = world.directory.path().join(path);
+    std::fs::create_dir_all(path.parent().expect("document parent"))
+        .expect("create document directory");
+    std::fs::write(path, "# External\n").expect("write external document");
+}
+
 #[given(expr = "configuration that puts decisions in {string}")]
 fn configured_decision_directory(world: &mut VaultWorld, directory: String) {
     let config = toml::toml! {

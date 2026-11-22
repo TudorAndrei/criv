@@ -609,7 +609,7 @@ fn relative_utf8(root: &Path, path: &Path) -> Result<String> {
 
 /// The `/`-joined normal components of `relative`, or `None` when a
 /// component leaves it. A component that is not UTF-8 joins in lossy form.
-fn join_normal_components(relative: &Path) -> Option<String> {
+pub fn join_normal_components(relative: &Path) -> Option<String> {
     let mut parts = Vec::new();
     for component in relative.components() {
         match component {
