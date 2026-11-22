@@ -198,11 +198,11 @@ impl VaultEventFilter {
     pub(crate) fn new(root: &Path, config: &Config) -> Self {
         Self {
             root: root.to_path_buf(),
-            docs: config.docs_dir().to_string(),
+            docs: config.adr_root(),
         }
     }
 
-    /// Whether a change at `event` is below the docs root and outside every
+    /// Whether a change at `event` is below the ADR root and outside every
     /// directory that the vault walk prunes. A path that is not valid UTF-8
     /// is judged by its lossy form.
     pub(crate) fn relevant(&self, event: &Path) -> bool {
@@ -216,7 +216,7 @@ impl VaultEventFilter {
     }
 }
 
-/// The notes and assets under `docs_dir`, as [`Config::docs_dir`] normalizes it.
+/// The notes and assets under the selected repository-relative ADR directory.
 pub fn discover_vault(root: &Path, docs_relative: &str) -> Result<VaultPaths> {
     let profile = Arc::new(Profile::Vault);
     if profile_prunes_path(profile.as_ref(), docs_relative) {
@@ -609,7 +609,7 @@ fn relative_utf8(root: &Path, path: &Path) -> Result<String> {
 
 /// The `/`-joined normal components of `relative`, or `None` when a
 /// component leaves it. A component that is not UTF-8 joins in lossy form.
-fn join_normal_components(relative: &Path) -> Option<String> {
+pub fn join_normal_components(relative: &Path) -> Option<String> {
     let mut parts = Vec::new();
     for component in relative.components() {
         match component {
@@ -806,15 +806,15 @@ mod tests {
         let root = Path::new("/repository");
         let filter = VaultEventFilter::new(root, &Config::default());
 
-        assert!(filter.relevant(&root.join("docs")));
-        assert!(filter.relevant(&root.join("docs/note.md")));
-        assert!(filter.relevant(&root.join("docs/sub")));
-        assert!(!filter.relevant(&root.join("docs/node_modules/pkg/readme.md")));
-        assert!(!filter.relevant(&root.join("docs/target")));
-        assert!(!filter.relevant(&root.join("docs/.criv/state.json")));
+        assert!(filter.relevant(&root.join("docs/adr")));
+        assert!(filter.relevant(&root.join("docs/adr/note.md")));
+        assert!(filter.relevant(&root.join("docs/adr/sub")));
+        assert!(!filter.relevant(&root.join("docs/adr/node_modules/pkg/readme.md")));
+        assert!(!filter.relevant(&root.join("docs/adr/target")));
+        assert!(!filter.relevant(&root.join("docs/adr/.criv/state.json")));
         assert!(!filter.relevant(&root.join("docsite/note.md")));
         assert!(!filter.relevant(&root.join("src/lib.rs")));
-        assert!(!filter.relevant(Path::new("/elsewhere/docs/note.md")));
+        assert!(!filter.relevant(Path::new("/elsewhere/docs/adr/note.md")));
     }
 
     #[test]

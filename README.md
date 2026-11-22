@@ -1,7 +1,7 @@
 # criv
 
 `criv` is a local ADR system of record and policy enforcement tool. It keeps
-architectural decisions connected to the documents and code they govern, with
+architectural decisions connected to the code they govern, with
 validated source references, structural policies, queries, and local State that
 other tools can read.
 
@@ -12,10 +12,10 @@ the breaking changes.
 
 ## What
 
-`criv` gives a codebase an executable documentation layer:
+`criv` checks the configured ADR folder and enforces its source policies:
 
 - `criv init` creates the vault files, ADR directory, and agent skills.
-- `criv check` validates documentation, source references, and ADR rules.
+- `criv check` validates ADRs, source references, and ADR rules.
 - `criv watch --once` writes the local state used by tools and editors.
 - `criv query` and `criv enforce` inspect and protect the graph.
 
@@ -109,10 +109,18 @@ This creates the default vault layout:
 ```text
 criv.toml
 docs/
-  adr/
+  adr/  # The document folder criv reads
 .criv/
 .agents/skills/
 ```
+
+Only the configured ADR folder enters criv checks, queries, and local state.
+Other documentation can use lat.md or another tool and needs no criv metadata.
+ADRs retain their structure, history, source references, and policy checks.
+Links from ADRs to external Markdown documents check file existence only;
+external headings and contents belong to the other documentation tool.
+Existing `criv.toml` settings also control the folder created by `criv init`.
+See [ADR-20261115-limit-document-processing-to-the-decision-folder](docs/adr/20261115-limit-document-processing-to-the-decision-folder.md).
 
 `criv init` does not create Git hooks and does not touch `core.hooksPath`.
 Setting that config replaces the hook directory wholesale, which would silently

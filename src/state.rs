@@ -146,7 +146,7 @@ mod tests {
         std::fs::write(root.join("src/lib.rs"), "fn run() {}\n").unwrap();
         std::fs::write(root.join("src/helper.rs"), "fn help() {}\n").unwrap();
         std::fs::write(
-            root.join("docs/lib.rs.md"),
+            root.join("docs/adr/lib.rs.md"),
             "---\nid: collision-note\nkind: doc\ntitle: Collision note\n---\n\n# Collision note\n",
         )
         .unwrap();
@@ -245,15 +245,15 @@ source = false
     #[test]
     fn state_publishes_verified_documentation_assets() {
         let root = unique_temp_dir("criv-documentation-asset-state");
-        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::fs::create_dir_all(root.join("docs/adr")).unwrap();
         let contents = b"\x89PNG\r\n\x1a\npreview";
-        std::fs::write(root.join("docs/diagram.png"), contents).unwrap();
+        std::fs::write(root.join("docs/adr/diagram.png"), contents).unwrap();
 
         let vault = load(&root).unwrap();
         let state = build(&vault).unwrap();
         let json = serde_json::to_value(&state.wire).unwrap();
 
-        assert_eq!(json["asset-index"][0]["path"], "docs/diagram.png");
+        assert_eq!(json["asset-index"][0]["path"], "docs/adr/diagram.png");
         assert_eq!(json["asset-index"][0]["mime"], "image/png");
         assert_eq!(json["asset-index"][0]["bytes"], contents.len());
         assert_eq!(json["asset-index"][0]["hash"].as_str().unwrap().len(), 64);

@@ -151,8 +151,19 @@ impl Config {
         &self.import_policies
     }
 
-    pub(crate) fn docs_path(&self, root: &Path) -> PathBuf {
-        root.join(&self.docs_dir)
+    pub(crate) fn adr_path(&self, root: &Path) -> PathBuf {
+        root.join(self.adr_root())
+    }
+
+    /// The repository-relative directory criv reads for decision records.
+    pub(crate) fn adr_root(&self) -> String {
+        let prefix = self.adr_prefix();
+        let path = prefix.trim_end_matches('/');
+        if path.is_empty() {
+            ".".into()
+        } else {
+            path.into()
+        }
     }
 
     /// The repository-relative ADR directory with a trailing `/`, as Git and

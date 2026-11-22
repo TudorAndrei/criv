@@ -6,6 +6,9 @@ version = 2
 yanked = "deny"
 unmaintained = "all"
 unsound = "all"
+ignore = [
+  { id = "RUSTSEC-2026-0542", reason = "humantime is unmaintained with no safe upgrade; only the cucumber dev-dependency (latest 0.23.0) uses it, never the shipped binary." },
+]
 
 [licenses]
 version = 2

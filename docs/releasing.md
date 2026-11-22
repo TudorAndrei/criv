@@ -36,10 +36,6 @@ publication, and operation without a Git executable. The workflow then pushes
 both tags atomically, uploads a draft, adds provenance attestations, and
 publishes it.
 
-Performance notes are separate, non-gating observations. Automatic release
-does not generate large synthetic workloads, compare a baseline, or collect
-repeated build samples. Use `mise run perf` for an explicit performance study.
-
 Workspace and CI tests require default Elixir support to read and parse the
 complete selected `.ex` and `.exs` coverage set. There is no Elixir speed limit.
 

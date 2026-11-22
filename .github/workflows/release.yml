@@ -158,7 +158,7 @@ jobs:
 
       - name: Run repository checks
         env:
-          CRIV_BASE_REF: ${{ github.event.workflow_run.head_sha || needs.prepare.outputs.commit }}
+          CRIV_BASE_REF: ${{ needs.prepare.outputs.commit }}^
         run: hk check --all
 
       - name: Check shared editor contracts

@@ -845,7 +845,7 @@ mod tests {
     fn write_query_fixture(root: &Path) {
         fs::create_dir_all(root.join("src")).unwrap();
         fs::create_dir_all(root.join("other")).unwrap();
-        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::create_dir_all(root.join("docs/adr")).unwrap();
         fs::write(
             root.join("criv.toml"),
             r#"
@@ -895,7 +895,7 @@ exclude = []
         )
         .unwrap();
         fs::write(
-            root.join("docs/guide.md"),
+            root.join("docs/adr/guide.md"),
             r#"---
 id: guide
 kind: doc
