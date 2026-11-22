@@ -49,7 +49,7 @@ impl NodeIdKind {
 }
 
 #[must_use]
-pub fn parse(id: &str) -> Option<(NodeIdKind, &str)> {
+fn parse(id: &str) -> Option<(NodeIdKind, &str)> {
     let (prefix, body) = id.split_once(':')?;
     NodeIdKind::ALL
         .into_iter()
