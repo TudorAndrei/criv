@@ -266,7 +266,10 @@ fn write_notes(
     source_paths: &[PathBuf],
 ) -> Result<(), String> {
     let decision_ids = (1..=manifest.decisions)
-        .map(|index| format!("{index:04}-decision-{index:04}|ADR-{index:04}"))
+        .map(|index| {
+            let stem = decision_stem(index);
+            format!("{stem}|ADR-{stem}")
+        })
         .collect::<Vec<_>>();
     let doc_ids = (1..=manifest.docs)
         .map(|index| format!("document-{index:04}|doc-{index:04}"))
@@ -284,7 +287,8 @@ fn write_notes(
     }
 
     for index in 1..=manifest.decisions {
-        let id = format!("ADR-{index:04}");
+        let stem = decision_stem(index);
+        let id = format!("ADR-{stem}");
         let mut frontmatter = format!(
             "---\nid: {id}\nkind: decision\ntitle: Decision {index:04}\nstatus: accepted\n"
         );
@@ -299,8 +303,7 @@ fn write_notes(
             note_body(&format!("Decision {index:04}"), &links[index - 1])
         );
         fs::write(
-            root.join("docs/adr")
-                .join(format!("{index:04}-decision-{index:04}.md")),
+            root.join("docs/adr").join(format!("{stem}.md")),
             format!("{frontmatter}{body}"),
         )
         .map_err(display_error)?;
@@ -325,6 +328,13 @@ fn write_notes(
         .map_err(display_error)?;
     }
     Ok(())
+}
+
+/// The `YYYYMMDD-slug` stem of a generated decision titled `Decision NNNN`.
+/// The workload adds every decision in its last commit, so each one is new
+/// and must take a dated id.
+fn decision_stem(index: usize) -> String {
+    format!("20260101-decision-{index:04}")
 }
 
 fn note_body(title: &str, links: &[String]) -> String {
