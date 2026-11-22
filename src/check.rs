@@ -23,13 +23,23 @@ enum Format {
     Github,
 }
 
+/// Validate the decisions, their source references, and their policies.
+///
+/// Every diagnostic prints the `fix:` that repairs it, and a failed run ends
+/// with one `next:` command. The check is read-only.
 #[derive(Debug, UsageArgs)]
 pub struct CheckOptions {
+    /// Print text, one JSON object per diagnostic, or GitHub annotations.
     #[usage(long, value_enum, default = "text")]
     format: Format,
+    /// Keep only diagnostics that contain this text; the exit status follows.
     #[usage(long)]
     filter: Option<String>,
     /// Validate safely scoped facts for the staged Git transaction.
+    ///
+    /// Renames, deletions, decision edits, and configuration edits run the full
+    /// check. A passing changed check is a pre-commit fast path; plain
+    /// `criv check` stays the authority for CI.
     #[usage(long)]
     changed: bool,
 }

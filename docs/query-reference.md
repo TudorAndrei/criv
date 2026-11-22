@@ -35,6 +35,15 @@ the full one.
 
 ## Generated reference material
 
-To make a Markdown page or a manpage from the same command tree, pipe the
-exported spec into the `usage` CLI. `README.md` holds those commands and the
-version rule they need.
+To make shell completions, a Markdown page, or a manpage from the same command
+tree, pipe the exported spec into the `usage` CLI:
+
+```sh
+criv --usage | usage generate completion --file - zsh criv
+criv --usage | usage generate markdown --file - --out-file docs/cli.md
+criv --usage | usage generate manpage --file - --out-file criv.1
+```
+
+The `usage` CLI must have the same major version as the `usage-rs` crate that
+criv builds with. The spec dialect changes between major versions, so an older
+reader cannot parse a newer spec.
