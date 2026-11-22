@@ -84,7 +84,7 @@ impl CrivError {
     }
 }
 
-/// Local docs-to-code knowledge graph validator and query tool
+/// Connect architectural decisions to the code they govern, and enforce them
 #[derive(Debug, Cli)]
 #[usage(bin = "criv", version, unknown_flags = "error")]
 struct CrivCli {

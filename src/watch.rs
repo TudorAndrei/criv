@@ -33,8 +33,13 @@ enum Format {
     Json,
 }
 
+/// Write the local State in `.criv/` that editors and tools read.
+///
+/// Keep `.criv/` out of Git. `[state] keep` in `criv.toml` sets how many
+/// State publications stay; `criv query diff` compares them.
 #[derive(Debug, Default, UsageArgs)]
 pub struct WatchOptions {
+    /// Refresh the State one time, then exit.
     #[usage(long)]
     once: bool,
     /// Select the human summary or a JSON refresh report. `--once` only.

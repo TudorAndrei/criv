@@ -13,10 +13,17 @@ use crate::config::{CONFIG_FILE, Config};
 use crate::install::{self, InstallMode, SkillPublication};
 use crate::repository::RepositoryFiles;
 
+/// Create the vault configuration, the decision folder, and the agent skills.
+///
+/// Existing `criv.toml` settings choose the decision folder. `init` does not
+/// install Git hooks, set `core.hooksPath`, or change editor files; wire criv
+/// into your own hook runner and use `criv install-editor` for the viewer.
 #[derive(Debug, Default, UsageArgs)]
 pub struct InitOptions {
+    /// Do not write the agent skills.
     #[usage(long, conflicts = "--force-skills")]
     no_skills: bool,
+    /// Replace only the criv-owned agent skills, including local edits to them.
     #[usage(long)]
     force_skills: bool,
 }

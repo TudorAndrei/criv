@@ -18,6 +18,7 @@ use crate::Result;
 pub use gate::{change_violations, legacy_id_violations};
 use reconcile_transaction::Mode;
 
+/// Create and maintain decision records.
 #[derive(Debug, UsageArgs)]
 pub struct AdrOptions {
     #[usage(subcommand)]

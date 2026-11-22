@@ -20,8 +20,12 @@ enum Format {
     Json,
 }
 
+/// Block a commit, push, or CI run that breaks a decision.
+///
+/// `criv.toml` sets the stages that run and the import policies they enforce.
 #[derive(Debug, UsageArgs)]
 pub struct EnforceOptions {
+    /// The Git transaction to enforce.
     #[usage(long, value_enum)]
     stage: Stage,
     /// Select the human report or a JSON enforcement report.
