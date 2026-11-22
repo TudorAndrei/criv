@@ -85,6 +85,52 @@ checksum = "sha256:975a22143262fd27476d19ee00c7af67978426e40e1dee94eed6bbade1cf8
 url = "https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-pc-windows-msvc.tar.gz"
 url_api = "https://api.github.com/repos/EmbarkStudios/cargo-deny/releases/assets/471599057"
 
+[[tools."aqua:drager/wasm-pack"]]
+version = "0.15.1"
+backend = "aqua:drager/wasm-pack"
+
+[tools."aqua:drager/wasm-pack"."platforms.linux-arm64"]
+checksum = "sha256:7004853c7925ae1984033b5f25866ec604bbc921ef956d5e6c5595bc5af6d30c"
+checksum_source = "mise-versions"
+url = "https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.1/wasm-pack-v0.15.1-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/wasm-bindgen/wasm-pack/releases/assets/691077493"
+
+[tools."aqua:drager/wasm-pack"."platforms.linux-arm64-musl"]
+checksum = "sha256:7004853c7925ae1984033b5f25866ec604bbc921ef956d5e6c5595bc5af6d30c"
+checksum_source = "mise-versions"
+url = "https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.1/wasm-pack-v0.15.1-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/wasm-bindgen/wasm-pack/releases/assets/691077493"
+
+[tools."aqua:drager/wasm-pack"."platforms.linux-x64"]
+checksum = "sha256:410101009739b9d01c7d5affaaad6e9c9a24b4cba6791a4805db8e89b9bf7af2"
+checksum_source = "mise-versions"
+url = "https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.1/wasm-pack-v0.15.1-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/wasm-bindgen/wasm-pack/releases/assets/691077448"
+
+[tools."aqua:drager/wasm-pack"."platforms.linux-x64-musl"]
+checksum = "sha256:410101009739b9d01c7d5affaaad6e9c9a24b4cba6791a4805db8e89b9bf7af2"
+checksum_source = "mise-versions"
+url = "https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.1/wasm-pack-v0.15.1-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/wasm-bindgen/wasm-pack/releases/assets/691077448"
+
+[tools."aqua:drager/wasm-pack"."platforms.macos-arm64"]
+checksum = "sha256:bcaf2a418ae39c874b072ea122fec58e11970862cbd8fd4eca2f00a17f76c536"
+checksum_source = "mise-versions"
+url = "https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.1/wasm-pack-v0.15.1-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/wasm-bindgen/wasm-pack/releases/assets/691077688"
+
+[tools."aqua:drager/wasm-pack"."platforms.macos-x64"]
+checksum = "sha256:9387715ad345a1fe58751d60c80f49d9139957540728bafd0668d005a37cef62"
+checksum_source = "mise-versions"
+url = "https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.1/wasm-pack-v0.15.1-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/wasm-bindgen/wasm-pack/releases/assets/691077649"
+
+[tools."aqua:drager/wasm-pack"."platforms.windows-x64"]
+checksum = "sha256:80afe1f95aaa3f7442917c4457c8316bd1a383c1f27eb0e40601ff3ee3217583"
+checksum_source = "mise-versions"
+url = "https://github.com/wasm-bindgen/wasm-pack/releases/download/v0.15.1/wasm-pack-v0.15.1-x86_64-pc-windows-msvc.tar.gz"
+url_api = "https://api.github.com/repos/wasm-bindgen/wasm-pack/releases/assets/691077516"
+
 [[tools."aqua:gitleaks/gitleaks"]]
 version = "8.30.1"
 backend = "aqua:gitleaks/gitleaks"
@@ -169,6 +215,44 @@ checksum_source = "mise-versions"
 url = "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.150/cargo-nextest-0.9.150-x86_64-pc-windows-msvc.tar.gz"
 url_api = "https://api.github.com/repos/nextest-rs/nextest/releases/assets/679074355"
 
+[[tools."aqua:rust-lang/mdBook"]]
+version = "0.5.4"
+backend = "aqua:rust-lang/mdBook"
+unsupported_platforms = [
+    "linux-arm64",
+    "linux-arm64-musl",
+]
+
+[tools."aqua:rust-lang/mdBook"."platforms.linux-x64"]
+checksum = "sha256:3f28de05dafca9d0f2eab99c662116b0e37b89b1d96a08f8f430b9eeae958cd7"
+checksum_source = "mise-versions"
+url = "https://github.com/rust-lang/mdBook/releases/download/v0.5.4/mdbook-v0.5.4-x86_64-unknown-linux-gnu.tar.gz"
+url_api = "https://api.github.com/repos/rust-lang/mdBook/releases/assets/468209394"
+
+[tools."aqua:rust-lang/mdBook"."platforms.linux-x64-musl"]
+checksum = "sha256:5222beabd3e37dc5be0d18ff99b79058469354db5c220153a1b92db5ba12be89"
+checksum_source = "mise-versions"
+url = "https://github.com/rust-lang/mdBook/releases/download/v0.5.4/mdbook-v0.5.4-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/rust-lang/mdBook/releases/assets/468209670"
+
+[tools."aqua:rust-lang/mdBook"."platforms.macos-arm64"]
+checksum = "sha256:a47d7bf0d5d670cff9ee6cce95537cbeb62dc10704d9e7131ffbd13e2b59a5de"
+checksum_source = "mise-versions"
+url = "https://github.com/rust-lang/mdBook/releases/download/v0.5.4/mdbook-v0.5.4-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/rust-lang/mdBook/releases/assets/468210169"
+
+[tools."aqua:rust-lang/mdBook"."platforms.macos-x64"]
+checksum = "sha256:a47d7bf0d5d670cff9ee6cce95537cbeb62dc10704d9e7131ffbd13e2b59a5de"
+checksum_source = "mise-versions"
+url = "https://github.com/rust-lang/mdBook/releases/download/v0.5.4/mdbook-v0.5.4-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/rust-lang/mdBook/releases/assets/468210169"
+
+[tools."aqua:rust-lang/mdBook"."platforms.windows-x64"]
+checksum = "sha256:8a6b2421aa522de06d746871d2b8fff9c8d71773467e310a4516d2566e7f2de4"
+checksum_source = "mise-versions"
+url = "https://github.com/rust-lang/mdBook/releases/download/v0.5.4/mdbook-v0.5.4-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/rust-lang/mdBook/releases/assets/468210971"
+
 [[tools."aqua:zizmorcore/zizmor"]]
 version = "1.31.1"
 backend = "aqua:zizmorcore/zizmor"
@@ -214,18 +298,6 @@ checksum = "sha256:4de30371c8a3b483aecbcf0dec1fd6a2b6aae65051ca226b4f6527baac6a8
 url = "https://github.com/zizmorcore/zizmor/releases/download/v1.31.1/zizmor-x86_64-pc-windows-msvc.zip"
 url_api = "https://api.github.com/repos/zizmorcore/zizmor/releases/assets/645467286"
 provenance = "github-attestations"
-
-[[tools."cargo:cargo-release"]]
-version = "1.1.7"
-backend = "cargo:cargo-release"
-
-[[tools."cargo:mdbook"]]
-version = "0.5.4"
-backend = "cargo:mdbook"
-
-[[tools."cargo:wasm-pack"]]
-version = "0.15.1"
-backend = "cargo:wasm-pack"
 
 [[tools.cocogitto]]
 version = "7.0.0"
@@ -310,9 +382,56 @@ url = "https://github.com/astral-sh/hawk/releases/download/0.1.17/cargo-hawk-x86
 url_api = "https://api.github.com/repos/astral-sh/hawk/releases/assets/692225617"
 provenance = "github-attestations"
 
+[[tools."github:crate-ci/cargo-release"]]
+version = "1.1.7"
+backend = "github:crate-ci/cargo-release"
+
+[tools."github:crate-ci/cargo-release"."platforms.linux-arm64"]
+checksum = "sha256:5fe8e87ad62dcb5e517f1504aa79b81022599b19b0cadb066af07d0996b0b90a"
+url = "https://github.com/crate-ci/cargo-release/releases/download/v1.1.7/cargo-release-v1.1.7-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/crate-ci/cargo-release/releases/assets/662701046"
+provenance = "github-attestations"
+
+[tools."github:crate-ci/cargo-release"."platforms.linux-arm64-musl"]
+checksum = "sha256:5fe8e87ad62dcb5e517f1504aa79b81022599b19b0cadb066af07d0996b0b90a"
+url = "https://github.com/crate-ci/cargo-release/releases/download/v1.1.7/cargo-release-v1.1.7-aarch64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/crate-ci/cargo-release/releases/assets/662701046"
+provenance = "github-attestations"
+
+[tools."github:crate-ci/cargo-release"."platforms.linux-x64"]
+checksum = "sha256:9e04ae8b068f52788ce301cabaf34c4b3f0c945793d02c88442b561073f6bdb1"
+url = "https://github.com/crate-ci/cargo-release/releases/download/v1.1.7/cargo-release-v1.1.7-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/crate-ci/cargo-release/releases/assets/662700706"
+provenance = "github-attestations"
+
+[tools."github:crate-ci/cargo-release"."platforms.linux-x64-musl"]
+checksum = "sha256:9e04ae8b068f52788ce301cabaf34c4b3f0c945793d02c88442b561073f6bdb1"
+url = "https://github.com/crate-ci/cargo-release/releases/download/v1.1.7/cargo-release-v1.1.7-x86_64-unknown-linux-musl.tar.gz"
+url_api = "https://api.github.com/repos/crate-ci/cargo-release/releases/assets/662700706"
+provenance = "github-attestations"
+
+[tools."github:crate-ci/cargo-release"."platforms.macos-arm64"]
+checksum = "sha256:39e1121c5e9671b0ff4703692b7ce2d9576c540118869091b7ad85a15187d129"
+url = "https://github.com/crate-ci/cargo-release/releases/download/v1.1.7/cargo-release-v1.1.7-aarch64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/crate-ci/cargo-release/releases/assets/662705905"
+provenance = "github-attestations"
+
+[tools."github:crate-ci/cargo-release"."platforms.macos-x64"]
+checksum = "sha256:9abd1bb84a581e982e4ae00a4c4413c14657b4cba8cd76b0eb003e00fe361a7a"
+url = "https://github.com/crate-ci/cargo-release/releases/download/v1.1.7/cargo-release-v1.1.7-x86_64-apple-darwin.tar.gz"
+url_api = "https://api.github.com/repos/crate-ci/cargo-release/releases/assets/662704962"
+provenance = "github-attestations"
+
+[tools."github:crate-ci/cargo-release"."platforms.windows-x64"]
+checksum = "sha256:7b67996840ec6d2fd8e78c67281d8807950818869f6d09e0c9678897b48f9837"
+url = "https://github.com/crate-ci/cargo-release/releases/download/v1.1.7/cargo-release-v1.1.7-x86_64-pc-windows-msvc.zip"
+url_api = "https://api.github.com/repos/crate-ci/cargo-release/releases/assets/662704668"
+provenance = "github-attestations"
+
 [[tools."github:jdx/mr-boxington"]]
 version = "1.29.0"
 backend = "github:jdx/mr-boxington"
+unsupported_platforms = ["macos-x64"]
 
 [tools."github:jdx/mr-boxington"."platforms.linux-arm64"]
 checksum = "sha256:eeee519621082424fae16799949514b6000ba733a2d809c709a3d3ae4a0b18f7"
@@ -392,6 +511,7 @@ url_api = "https://api.github.com/repos/rust-secure-code/cargo-auditable/release
 [[tools.hk]]
 version = "2.10.0"
 backend = "aqua:jdx/hk"
+unsupported_platforms = ["macos-x64"]
 
 [tools.hk."platforms.linux-arm64"]
 checksum = "sha256:98772b6290cad5ba5fe77a203fd717c82f47bde2a9aa5b295bea22139ba4f602"

@@ -114,7 +114,8 @@ Then run `mise reshim`. Existing
 `target/` directories remain valid Cargo output directories. The mbx tool pin
 and shared cache can be removed separately.
 
-[[0154-cache-hosted-toolchains-with-mise-and-compiler-results-with-mbx|ADR-0154]] records the current local and hosted policy.
+[[20261122-cache-hosted-tools-without-a-compiler-cache|ADR-20261122-cache-hosted-tools-without-a-compiler-cache]]
+records the current local and hosted policy.
 [Issue #196](https://github.com/TudorAndrei/criv/issues/196) holds the proposed
 performance comparison. A local trial on 8 September 2026 used three runs per
 case on macOS/APFS, Rust 1.97.1, and mbx 1.9.0, before integration with PR #197.
@@ -126,7 +127,7 @@ times showed no clear gain. Disk estimates used free-space changes after
 deleting isolated trial outputs; they do not predict long-term cache growth.
 Use `MBX_DISABLE=1` when build speed is the priority for these workloads.
 
-## Hosted tool and compiler caches
+## Hosted tool caches
 
 All hosted tool installation uses the shared setup action in
 `.github/actions/setup-build-tools`. It stores the actual Rust toolchains,
@@ -136,17 +137,17 @@ The setup handles Linux, macOS, and native Windows paths. Windows uses its OS
 `TEMP` directory rather than GitHub's work-volume `RUNNER_TEMP`, keeping the
 mise installer and cached tools on the same volume.
 
-Ordinary correctness lanes use mbx objects caching,
-not full target archives or a second compiler wrapper. Compiler keys distinguish
-OS, architecture, compiler, revision, and job. Tool caches publish after a
-successful installation on a main-branch push; compiler outputs publish after
-successful main-branch jobs. Pull requests restore only. Core owns Linux Cargo
-and npm downloads; Windows and macOS watch jobs own their Cargo download caches.
+Install tools from prebuilt release files with the `aqua:` or `github:` mise
+backends. A `cargo:` tool compiles from source in every job that misses the
+tool cache.
 
-Exact release validation and native artifact builds use mbx's local backend,
-without importing or exporting shared compiler outputs. Tool installations and
-source downloads may still be restored. No cache speedup is claimed without
-hosted timings and cache-hit evidence.
+Hosted jobs have no compiler-result cache. The setup action sets
+`MBX_DISABLE=1` and `CARGO_INCREMENTAL=0`, and each Rust job compiles from
+clean. Tool caches publish after a successful installation on a main-branch
+push. For each tool set and platform, only the job with
+`save-tool-cache: "true"` publishes, so parallel jobs do not race for one key.
+Pull requests restore only. Core owns Linux Cargo and npm downloads; Windows
+and macOS watch jobs own their Cargo download caches.
 
 Workflows use GitHub's `$/` action references, so the setup code comes from the
 workflow revision rather than the checked-out release source. Pinned actionlint

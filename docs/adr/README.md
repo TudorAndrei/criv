@@ -210,5 +210,6 @@ a legacy name, per
 - [[0196-bump-the-major-version-for-every-breaking-change|ADR-0196]] - Bump the major version for every breaking change
 - [[20261115-limit-document-processing-to-the-decision-folder|ADR-20261115-limit-document-processing-to-the-decision-folder]] - Limit document processing to the decision folder
 - [[20261117-date-and-slug-decision-identifiers|ADR-20261117-date-and-slug-decision-identifiers]] - Date and Slug Decision Identifiers
+- [[20261122-cache-hosted-tools-without-a-compiler-cache|ADR-20261122-cache-hosted-tools-without-a-compiler-cache]] - Cache hosted tools without a compiler cache
 - [[20261122-remove-the-performance-tooling|ADR-20261122-remove-the-performance-tooling]] - Remove the performance tooling
 - [[20261122-stop-a-workflow-run-at-its-first-failure|ADR-20261122-stop-a-workflow-run-at-its-first-failure]] - Stop a workflow run at its first failure

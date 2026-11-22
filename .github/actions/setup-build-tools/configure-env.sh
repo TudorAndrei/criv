@@ -18,4 +18,8 @@ fi
   printf 'RUSTUP_HOME=%s/rustup\n' "$data_dir"
   printf 'MISE_CARGO_HOME=%s\n' "$cargo_home"
   printf 'CARGO_HOME=%s\n' "$cargo_home"
+  # Hosted builds compile from clean: the mise cargo wrapper passes through to
+  # Cargo, and incremental state would only be thrown away.
+  printf 'MBX_DISABLE=1\n'
+  printf 'CARGO_INCREMENTAL=0\n'
 } >> "${GITHUB_ENV:?}"

@@ -58,7 +58,7 @@ jobs:
       - name: Set up release tools
         uses: $/.github/actions/setup-build-tools
         with:
-          compiler-cache: "false"
+          cargo-cache: "false"
 
       - name: Configure release identity
         env:
@@ -149,9 +149,6 @@ jobs:
 
       - name: Set up release build tools
         uses: $/.github/actions/setup-build-tools
-        with:
-          # Published artifacts must not consume shared compiler outputs.
-          compiler-cache-backend: local
 
       - name: Install JavaScript dependencies
         run: npm ci
@@ -219,7 +216,6 @@ jobs:
         uses: $/.github/actions/setup-build-tools
         with:
           tools: rust github:rust-secure-code/cargo-auditable github:jdx/mr-boxington
-          compiler-cache-backend: local
 
       - name: Build exact release binary
         env:
