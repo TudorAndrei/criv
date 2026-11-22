@@ -25,8 +25,6 @@ mod markdown;
 mod policy_scan;
 mod query;
 mod repository;
-#[cfg(feature = "selection")]
-pub mod selection;
 mod source;
 mod state;
 mod structural;

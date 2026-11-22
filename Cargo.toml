@@ -9,8 +9,7 @@ repository = "https://github.com/TudorAndrei/criv"
 homepage = "https://github.com/TudorAndrei/criv"
 
 [workspace]
-members = ["crates/criv-state-wire", "crates/criv-wasm", "scripts/performance"]
-exclude = ["scripts/performance/state-store-prototype"]
+members = ["crates/criv-state-wire", "crates/criv-wasm"]
 
 [profile.release]
 strip = true
@@ -83,9 +82,6 @@ usage-rs = "7.1.4"
 
 [target.'cfg(windows)'.dependencies]
 junction = "2"
-
-[features]
-selection = []
 
 [[test]]
 name = "acceptance"
