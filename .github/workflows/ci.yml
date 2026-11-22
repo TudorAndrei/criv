@@ -22,7 +22,7 @@ jobs:
     name: Classify changed paths
     runs-on: ubuntu-24.04
     outputs:
-      performance: ${{ steps.classify.outputs.performance }}
+      release-tooling: ${{ steps.classify.outputs.release-tooling }}
       site: ${{ steps.classify.outputs.site }}
     steps:
       - name: Checkout
@@ -38,11 +38,11 @@ jobs:
         shell: bash
         run: |
           site=false
-          performance=false
+          release_tooling=false
           zero=0000000000000000000000000000000000000000
           if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "$zero" ] || ! git cat-file -e "$BASE_SHA^{commit}"; then
             site=true
-            performance=true
+            release_tooling=true
           else
             while IFS= read -r path; do
               case "$path" in
@@ -51,14 +51,14 @@ jobs:
                   ;;
               esac
               case "$path" in
-                Cargo.toml|Cargo.lock|crates/criv-state-wire/*|scripts/measure-performance.sh|scripts/package-release-assets.sh|scripts/release-auto.sh|scripts/release-version.sh|scripts/performance/*|tests/ci-cache.sh|tests/hosted_release_scripts.sh|tests/performance_*|tests/fixtures/performance/*|fixtures/performance/*|.github/actions/setup-build-tools/*|.github/workflows/ci.yml|.github/workflows/performance-notes.yml|.github/workflows/release.yml)
-                  performance=true
+                Cargo.toml|Cargo.lock|scripts/package-release-assets.sh|scripts/release-auto.sh|scripts/release-version.sh|tests/ci-cache.sh|tests/hosted_release_scripts.sh|.github/actions/setup-build-tools/*|.github/workflows/ci.yml|.github/workflows/release.yml)
+                  release_tooling=true
                   ;;
               esac
             done < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
           fi
           echo "site=$site" >> "$GITHUB_OUTPUT"
-          echo "performance=$performance" >> "$GITHUB_OUTPUT"
+          echo "release-tooling=$release_tooling" >> "$GITHUB_OUTPUT"
 
   core:
     name: Core repository checks
@@ -241,31 +241,27 @@ jobs:
       - name: Check commit messages since the latest tag
         run: cog check --from-latest-tag
 
-  performance-smoke:
-    name: Performance tooling smoke tests
+  release-tooling:
+    name: Release tooling smoke tests
     needs: changes
     runs-on: ubuntu-24.04
     steps:
-      - name: Skip performance smoke tests for unrelated changes
-        if: needs.changes.outputs.performance != 'true'
-        run: echo "No performance tooling input changed."
+      - name: Skip release tooling smoke tests for unrelated changes
+        if: needs.changes.outputs.release-tooling != 'true'
+        run: echo "No release tooling input changed."
       - name: Checkout
-        if: needs.changes.outputs.performance == 'true'
+        if: needs.changes.outputs.release-tooling == 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - name: Set up build tools
-        if: needs.changes.outputs.performance == 'true'
+        if: needs.changes.outputs.release-tooling == 'true'
         uses: $/.github/actions/setup-build-tools
-      - name: Test performance tooling
-        if: needs.changes.outputs.performance == 'true'
+      - name: Test release tooling
+        if: needs.changes.outputs.release-tooling == 'true'
         run: |
           bash tests/ci-cache.sh
-          bash tests/performance_harness.sh
-          bash tests/performance_elixir_workloads.sh
-          bash tests/performance_git_note.sh
           bash tests/hosted_release_scripts.sh
-          node --test scripts/performance/measure-state-wasm.test.mjs
 
   check:
     name: Repository checks
@@ -277,7 +273,7 @@ jobs:
       - discovery-contracts
       - editor-contracts
       - obsidian
-      - performance-smoke
+      - release-tooling
       - site
       - vale
       - vscode
@@ -293,7 +289,7 @@ jobs:
           DISCOVERY_CONTRACTS_RESULT: ${{ needs.discovery-contracts.result }}
           EDITOR_CONTRACTS_RESULT: ${{ needs.editor-contracts.result }}
           OBSIDIAN_RESULT: ${{ needs.obsidian.result }}
-          PERFORMANCE_SMOKE_RESULT: ${{ needs.performance-smoke.result }}
+          RELEASE_TOOLING_RESULT: ${{ needs.release-tooling.result }}
           SITE_RESULT: ${{ needs.site.result }}
           VALE_RESULT: ${{ needs.vale.result }}
           VSCODE_RESULT: ${{ needs.vscode.result }}
@@ -306,7 +302,7 @@ jobs:
           test "$DISCOVERY_CONTRACTS_RESULT" = success
           test "$EDITOR_CONTRACTS_RESULT" = success
           test "$OBSIDIAN_RESULT" = success
-          test "$PERFORMANCE_SMOKE_RESULT" = success
+          test "$RELEASE_TOOLING_RESULT" = success
           test "$SITE_RESULT" = success
           test "$VALE_RESULT" = success
           test "$VSCODE_RESULT" = success

@@ -65,14 +65,6 @@ run = "bash scripts/release-version.sh"
 description = "Prepare a Cocogitto release commit for the hosted release workflow"
 run = "bash scripts/release-auto.sh"
 
-[tasks.perf]
-description = "Measure criv performance with canonical generated workloads"
-run = "bash scripts/measure-performance.sh"
-
-[tasks.perf-container]
-description = "Smoke-test the performance harness in a pinned Docker environment"
-run = "cargo nextest run --locked --manifest-path scripts/performance/container-test/Cargo.toml --test performance_container --run-ignored only --no-capture performance_harness_runs_in_pinned_container"
-
 [tasks.vscode-build]
 description = "Build the VS Code-compatible companion extension"
 run = "npm --prefix extensions/vscode-criv run build"

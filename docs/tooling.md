@@ -9,7 +9,6 @@ targets:
     - .fallowrc.json
     - mise.toml
     - hk.pkl
-    - scripts/measure-performance.sh
 ---
 
 # Tooling and Git Hooks
@@ -137,7 +136,7 @@ The setup handles Linux, macOS, and native Windows paths. Windows uses its OS
 `TEMP` directory rather than GitHub's work-volume `RUNNER_TEMP`, keeping the
 mise installer and cached tools on the same volume.
 
-Ordinary correctness and performance-evidence lanes use mbx objects caching,
+Ordinary correctness lanes use mbx objects caching,
 not full target archives or a second compiler wrapper. Compiler keys distinguish
 OS, architecture, compiler, revision, and job. Tool caches publish after a
 successful installation on a main-branch push; compiler outputs publish after
@@ -236,7 +235,6 @@ mise run commit-msg -- .git/COMMIT_EDITMSG
 mise run pre-commit
 mise run pre-push
 mise run fix
-mise run perf
 mise run vscode-build
 mise run vscode-package
 mise run release-plan
@@ -271,42 +269,6 @@ select the hk test step. See [[testing]] for feature authoring and migration.
 Pre-push runs Clippy, workspace tests, Hawk, and criv push enforcement. Hawk is
 kept in both pre-push and the hosted CI profile so unnecessary public Rust APIs
 fail before hosted CI during normal local development.
-
-`mise run perf` generates isolated vaults from the checked-in `barrs-small`
-and `criv-medium` manifests, then measures an explicit release binary. Build
-that binary first and identify its profile at the command line:
-
-```sh
-cargo build --release
-mise run perf -- --binary target/release/criv --profile release
-```
-
-The script records repeated samples for cold, warm, and changed `watch --once`,
-validation, CI enforcement, docs-only `orphan-docs` and
-`nodes --kind doc` queries, the source-backed
-`nodes --kind code --without-docs` query, and a no-op snapshot diff. Five
-samples are collected by default; use `--samples` to change the count or repeat
-`--case` to select cases:
-
-```sh
-mise run perf -- --binary target/release/criv --profile release --samples 9
-mise run perf -- --binary target/release/criv --profile release --case check
-```
-
-Every recorded sample receives a fresh generated vault. Warm cases perform an
-untimed state-building run inside that vault before the recorded command, and
-the changed case mutates the manifest's declared number of supported source
-files without changing their sizes. A unique result directory preserves the
-run identity, exact manifest copies, raw JSONL samples, stdout/stderr, and a
-JSON summary with min/median/max and median absolute deviation. Failed samples
-remain in the raw evidence and make the harness fail.
-
-`mise run perf-container` runs one ignored smoke case through Testcontainers.
-It builds criv and the harness inside a digest-pinned Rust Linux image. Docker
-is only an optional execution environment: the same checked-in manifests and
-generator define the vaults, results have their own container machine identity,
-and this task is not part of hooks or hosted CI. A Docker-API-compatible runtime
-is required. Large-workload measurement remains deferred.
 
 Obsidian and VS Code validation are hosted-CI suites rather than automatic hk
 steps. Contributors changing a companion should run its package scripts

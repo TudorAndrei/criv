@@ -1,6 +1,4 @@
 /target
-/scripts/performance/container-test/target/
-/scripts/performance/state-store-prototype/target/
 /node_modules/
 packages/*/node_modules/
 .criv/
