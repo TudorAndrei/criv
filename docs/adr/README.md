@@ -213,3 +213,4 @@ a legacy name, per
 - [[20261122-cache-hosted-tools-without-a-compiler-cache|ADR-20261122-cache-hosted-tools-without-a-compiler-cache]] - Cache hosted tools without a compiler cache
 - [[20261122-remove-the-performance-tooling|ADR-20261122-remove-the-performance-tooling]] - Remove the performance tooling
 - [[20261122-stop-a-workflow-run-at-its-first-failure|ADR-20261122-stop-a-workflow-run-at-its-first-failure]] - Stop a workflow run at its first failure
+- [[20261122-use-thin-lto-for-the-windows-release-binary|ADR-20261122-use-thin-lto-for-the-windows-release-binary]] - Use thin LTO for the Windows release binary

@@ -137,6 +137,8 @@ are stripped, size optimization is enabled, LTO runs at link time, codegen uses
 one unit, and release panics abort. This keeps downloadable artifacts smaller
 without requiring nightly Rust or post-build binary packing. The profile
 decision is captured in [[0015-size-optimized-release-profile|ADR-0015]].
+The Windows x86_64 release build uses thin LTO instead of fat LTO, per
+[[20261122-use-thin-lto-for-the-windows-release-binary|ADR-20261122-use-thin-lto-for-the-windows-release-binary]].
 
 The CLI embeds local Git repository access through its Rust dependency graph;
 the release artifact does not require a `git` executable for query-diff or
