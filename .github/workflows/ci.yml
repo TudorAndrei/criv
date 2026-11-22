@@ -8,7 +8,7 @@ on:
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -20,6 +20,9 @@ env:
 jobs:
   changes:
     name: Classify changed paths
+    permissions:
+      actions: write
+      contents: read
     runs-on: ubuntu-24.04
     outputs:
       release-tooling: ${{ steps.classify.outputs.release-tooling }}
@@ -59,9 +62,15 @@ jobs:
           fi
           echo "site=$site" >> "$GITHUB_OUTPUT"
           echo "release-tooling=$release_tooling" >> "$GITHUB_OUTPUT"
+      - name: Stop the other jobs
+        if: failure()
+        uses: $/.github/actions/stop-run-on-failure
 
   core:
     name: Core repository checks
+    permissions:
+      actions: write
+      contents: read
     runs-on: ubuntu-24.04
     env:
       CARGO_BUILD_JOBS: "2"
@@ -115,9 +124,15 @@ jobs:
         with:
           path: ~/.npm
           key: ${{ steps.npm-cache.outputs.cache-primary-key }}
+      - name: Stop the other jobs
+        if: failure()
+        uses: $/.github/actions/stop-run-on-failure
 
   editor-contracts:
     name: Shared editor contracts
+    permissions:
+      actions: write
+      contents: read
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -137,9 +152,15 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Check shared editor contracts
         run: npm run check:editor-contracts
+      - name: Stop the other jobs
+        if: failure()
+        uses: $/.github/actions/stop-run-on-failure
 
   obsidian:
     name: Obsidian companion
+    permissions:
+      actions: write
+      contents: read
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -159,9 +180,15 @@ jobs:
         run: npm ci
       - name: Check Obsidian companion
         run: npm run check:obsidian
+      - name: Stop the other jobs
+        if: failure()
+        uses: $/.github/actions/stop-run-on-failure
 
   vscode:
     name: VS Code companion
+    permissions:
+      actions: write
+      contents: read
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -181,9 +208,15 @@ jobs:
         run: npm ci
       - name: Check VS Code companion
         run: xvfb-run -a npm run check:vscode
+      - name: Stop the other jobs
+        if: failure()
+        uses: $/.github/actions/stop-run-on-failure
 
   site:
     name: Site build
+    permissions:
+      actions: write
+      contents: read
     needs: changes
     runs-on: ubuntu-24.04
     steps:
@@ -206,9 +239,15 @@ jobs:
       - name: Build site
         if: needs.changes.outputs.site == 'true'
         run: npm run build:site
+      - name: Stop the other jobs
+        if: failure()
+        uses: $/.github/actions/stop-run-on-failure
 
   vale:
     name: Vale prose lint
+    permissions:
+      actions: write
+      contents: read
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -223,9 +262,15 @@ jobs:
           sync: false
           filter_mode: nofilter
           fail_on_error: true
+      - name: Stop the other jobs
+        if: failure()
+        uses: $/.github/actions/stop-run-on-failure
 
   commits:
     name: Conventional commits
+    permissions:
+      actions: write
+      contents: read
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -240,9 +285,15 @@ jobs:
           compiler-cache: "false"
       - name: Check commit messages since the latest tag
         run: cog check --from-latest-tag
+      - name: Stop the other jobs
+        if: failure()
+        uses: $/.github/actions/stop-run-on-failure
 
   release-tooling:
     name: Release tooling smoke tests
+    permissions:
+      actions: write
+      contents: read
     needs: changes
     runs-on: ubuntu-24.04
     steps:
@@ -262,6 +313,9 @@ jobs:
         run: |
           bash tests/ci-cache.sh
           bash tests/hosted_release_scripts.sh
+      - name: Stop the other jobs
+        if: failure()
+        uses: $/.github/actions/stop-run-on-failure
 
   check:
     name: Repository checks
@@ -311,6 +365,9 @@ jobs:
 
   discovery-contracts:
     name: Discovery contracts (${{ matrix.name }})
+    permissions:
+      actions: write
+      contents: read
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -335,9 +392,15 @@ jobs:
           tools: rust github:jdx/mr-boxington aqua:nextest-rs/nextest/cargo-nextest
       - name: Run shared discovery contract corpus
         run: "cargo nextest run --locked --lib discovery::tests::"
+      - name: Stop the other jobs
+        if: failure()
+        uses: $/.github/actions/stop-run-on-failure
 
   windows:
     name: Windows build and tests
+    permissions:
+      actions: write
+      contents: read
     runs-on: windows-2025
     steps:
       - name: Checkout
@@ -353,9 +416,15 @@ jobs:
         run: cargo build --locked --workspace
       - name: Test
         run: cargo nextest run --locked --workspace
+      - name: Stop the other jobs
+        if: failure()
+        uses: $/.github/actions/stop-run-on-failure
 
   macos-watch-lock:
     name: macOS watch lock tests
+    permissions:
+      actions: write
+      contents: read
     runs-on: macos-15
     steps:
       - name: Checkout
@@ -372,3 +441,6 @@ jobs:
           cargo nextest run --locked --lib watch::tests::
           cargo nextest run --locked --test cli_workflows watch_once
           cargo nextest run --locked --test cli_workflows long_running_watch_takes_lock_before_startup_rebuild
+      - name: Stop the other jobs
+        if: failure()
+        uses: $/.github/actions/stop-run-on-failure
