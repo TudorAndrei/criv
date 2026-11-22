@@ -27,9 +27,8 @@ mise run release-plan
 Each native build lane builds the exact release commit once and uploads that
 binary. Tool versions come from that commit's mise configuration through the
 shared setup action. Tool installations and source downloads may be restored;
-release validation and native builds use mbx's local backend and never restore
-or publish shared compiler outputs, per
-[[0154-cache-hosted-toolchains-with-mise-and-compiler-results-with-mbx|ADR-0154]]. The package job does not rebuild it. It records the commit, version,
+release validation and native builds compile from clean with no compiler cache, per
+[[20261122-cache-hosted-tools-without-a-compiler-cache|ADR-20261122-cache-hosted-tools-without-a-compiler-cache]]. The package job does not rebuild it. It records the commit, version,
 target, archive, byte size, and SHA-256 digest in `release-manifest.json`.
 Native jobs verify each archive, the binary digest and version, one-shot State
 publication, and operation without a Git executable. The workflow then pushes
@@ -138,6 +137,8 @@ are stripped, size optimization is enabled, LTO runs at link time, codegen uses
 one unit, and release panics abort. This keeps downloadable artifacts smaller
 without requiring nightly Rust or post-build binary packing. The profile
 decision is captured in [[0015-size-optimized-release-profile|ADR-0015]].
+The Windows x86_64 release build uses thin LTO instead of fat LTO, per
+[[20261122-use-thin-lto-for-the-windows-release-binary|ADR-20261122-use-thin-lto-for-the-windows-release-binary]].
 
 The CLI embeds local Git repository access through its Rust dependency graph;
 the release artifact does not require a `git` executable for query-diff or

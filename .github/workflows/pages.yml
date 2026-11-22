@@ -48,7 +48,7 @@ jobs:
       - name: Set up site tools
         uses: $/.github/actions/setup-build-tools
         with:
-          compiler-cache: "false"
+          cargo-cache: "false"
 
       - name: Install JavaScript dependencies
         run: npm ci --ignore-scripts

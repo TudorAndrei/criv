@@ -34,6 +34,8 @@ for platform in Linux macOS; do
       printf 'RUSTUP_HOME=%s/criv-mise/rustup\n' "$runner_temp"
       printf 'MISE_CARGO_HOME=%s\n' "$cargo_home"
       printf 'CARGO_HOME=%s\n' "$cargo_home"
+      printf 'MBX_DISABLE=1\n'
+      printf 'CARGO_INCREMENTAL=0\n'
     } > "$expected"
     diff -u "$expected" "$environment"
   done
@@ -50,7 +52,8 @@ printf '%s\n' \
   '      - name: Set up tools' \
   '        uses: $/.github/actions/setup-build-tools' \
   '        with:' \
-  '          compiler-cache: "false"' > "$workflow"
+  '          cargo-cache: "false"' \
+  '          save-tool-cache: "true"' > "$workflow"
 bash "$repository_root/scripts/lint-workflows.sh" "$workflow"
 printf '          unknown-cache-input: "true"\n' >> "$workflow"
 if bash "$repository_root/scripts/lint-workflows.sh" "$workflow" > "$test_root/lint-error" 2>&1; then

@@ -58,7 +58,7 @@ jobs:
       - name: Set up release tools
         uses: $/.github/actions/setup-build-tools
         with:
-          compiler-cache: "false"
+          cargo-cache: "false"
 
       - name: Configure release identity
         env:
@@ -149,9 +149,6 @@ jobs:
 
       - name: Set up release build tools
         uses: $/.github/actions/setup-build-tools
-        with:
-          # Published artifacts must not consume shared compiler outputs.
-          compiler-cache-backend: local
 
       - name: Install JavaScript dependencies
         run: npm ci
@@ -195,18 +192,22 @@ jobs:
             runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             executable_suffix: ""
+            lto: fat
           - name: Linux ARM64
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             executable_suffix: ""
+            lto: fat
           - name: macOS ARM64
             runner: macos-15
             target: aarch64-apple-darwin
             executable_suffix: ""
+            lto: fat
           - name: Windows x86_64
             runner: windows-2025
             target: x86_64-pc-windows-msvc
             executable_suffix: .exe
+            lto: thin
 
     steps:
       - name: Checkout exact release commit
@@ -219,10 +220,10 @@ jobs:
         uses: $/.github/actions/setup-build-tools
         with:
           tools: rust github:rust-secure-code/cargo-auditable github:jdx/mr-boxington
-          compiler-cache-backend: local
 
       - name: Build exact release binary
         env:
+          CARGO_PROFILE_RELEASE_LTO: ${{ matrix.lto }}
           EXECUTABLE_SUFFIX: ${{ matrix.executable_suffix }}
           RELEASE_TARGET: ${{ matrix.target }}
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
